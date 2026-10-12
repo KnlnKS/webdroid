@@ -96,6 +96,8 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?
   | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure"; done?: boolean };
 /** what ensure()'s body uses of the module it is compiled into (World.emitEnsure) */
 interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
+/** the most methods a first-tier unit holds (World.batch) */
+const BATCH = 32;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
 type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
@@ -919,12 +921,31 @@ export class World {
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
     const clock = this.unitClock();
     if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, clock)) return;
-    const cx = new Compiler(this);
-    if (s.k === "method") this.demand.methods.add(s.m);
-    const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
+    const cx = new Compiler(this), batch = s.k === "method" ? this.batch(s.m) : [];
+    for (const m of batch) this.demand.methods.add(m);
+    const built = s.k === "method" ? cx.buildUnit(batch) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
-    this.stats.units++; this.stats.methods += 1;
-    this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, clock);
+    this.stats.units++; this.stats.methods += Math.max(1, batch.length);
+    this.install(batch.map((m) => this.slotOf(m)), false, cx, this.unitImports(cx), built, slot, clock);
+  }
+  /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
+   *  it rather than in a module each, which costs the engine far more than the functions */
+  private batch(m: MethodInfo): MethodInfo[] {
+    const out = [m];
+    for (let i = 0; i < out.length && out.length < BATCH; i++) {
+      const c = out[i];
+      if (!c.codeOff || this.intrinsic(c)) continue;
+      for (const ins of this.planning(c).entry) {
+        if (out.length >= BATCH) break;
+        if (needsSymbolicSite(this, c, ins)) continue;
+        const mr = c.dex.method(ins.b), t = this.prog.resolve(descToName(c.dex.type(mr.cls)), mr.name, c.dex.methodDesc(ins.b));
+        if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) continue;
+        const at = this.slotOf(t), ts = this.slotAt(at);
+        if (ts?.k !== "method" || ts.done || ts.pending || this.aot?.install(at) && ts.done) continue;
+        out.push(t);
+      }
+    }
+    return out;
   }
   /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
   private linkEnsure(slot: number): void {
@@ -1537,20 +1558,25 @@ export class World {
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
-  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
+  /** a method's call sites, its static and direct calls that every run makes (before its first branch), and the classes it allocates and refers to */
+  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; entry: PreparedInstruction[]; allocations: string[]; references: string[] }>();
   private planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [], entry: PreparedInstruction[] = [];
+      let branched = false;
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
         if (name) references.add(name);
         if (ins.op === 0x22) allocations.add(descToName(m.dex.type(ins.b)));
+        // return, throw, goto, switch and if
+        branched ||= ins.op >= 0x0e && ins.op <= 0x11 || ins.op >= 0x27 && ins.op <= 0x2c || ins.op >= 0x32 && ins.op <= 0x3d;
         if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
+        if (!branched && (ins.op === 0x70 || ins.op === 0x71 || ins.op === 0x76 || ins.op === 0x77)) entry.push(ins);
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
-      this.planningSites.set(m, sites = { calls, allocations: [...allocations], references: [...references] });
+      this.planningSites.set(m, sites = { calls, entry, allocations: [...allocations], references: [...references] });
     }
     return sites;
   }
