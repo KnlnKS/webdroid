@@ -20,20 +20,25 @@ const meet = (a: Facts, b: Facts): boolean => {
   return changed;
 };
 
-/** the register an instruction null-checks (every translation of it throws NullPointerException when the register is null), or -1 */
+/** the operand an instruction null-checks (every translation of it throws NullPointerException when it is null): 1 b, 2 a, 3 the receiver */
+const CHECKED = new Uint8Array(256);
+CHECKED.fill(1, 0x44, 0x60); // aget, aput, iget, iput
+CHECKED[0x21] = 1; // array-length
+for (const op of [0x1d, 0x1e, 0x26, 0x27]) CHECKED[op] = 2; // monitor-enter, monitor-exit, fill-array-data, throw
+for (let op = 0; op < 0xfa; op++) if (isInstanceInvoke(op)) CHECKED[op] = 3;
 function checkedReg(ins: Ins): number {
-  const n = ins.name;
-  if (n.startsWith("iget") || n.startsWith("iput") || n.startsWith("aget") || n.startsWith("aput")) return ins.b;
-  if (n === "array-length") return ins.b;
-  if (n === "monitor-enter" || n === "monitor-exit" || n === "throw" || n === "fill-array-data") return ins.a;
-  if (isInstanceInvoke(ins.op) && !n.startsWith("invoke-polymorphic") && ins.regs.length) return ins.regs[0];
-  return -1;
+  switch (CHECKED[ins.op]) {
+    case 1: return ins.b;
+    case 2: return ins.a;
+    case 3: return ins.regs.length ? ins.regs[0] : -1;
+    default: return -1;
+  }
 }
 
 /** applies the effect of `ins` to `f`, once it has been emitted */
 export function step(mc: MC, ins: Ins, f: Facts): void {
   const reg = checkedReg(ins);
-  if (reg >= 0 && !(ins.name.startsWith("invoke-direct") && mc.isStringInit(ins))) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
+  if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && mc.isStringInit(ins))) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
   const d = mc.typing.def(ins.pc);
   for (const c of mc.initedBy(ins)) f.inited.add(c);
   const shadow = mc.shadowKey(ins);
@@ -54,17 +59,21 @@ export function analyze(mc: MC): Facts[] {
   const handlers = new Set<number>();
   for (const t of mc.item.tries) { for (const [, h] of t.handlers) handlers.add(flow.blockAt[h]); if (t.catchAllAddr >= 0) handlers.add(flow.blockAt[t.catchAllAddr]); }
   for (const h of handlers) entry[h] = newFacts();
+  // blocks whose entry facts changed since they were last stepped
+  const dirty = new Uint8Array(n).fill(1);
+  let changed = true;
   const push = (s: number, out: Facts) => {
-    if (handlers.has(s)) return false;
+    if (handlers.has(s)) return;
     const cur = entry[s];
-    if (!cur) { entry[s] = cloneFacts(out); return true; }
-    return meet(cur, out);
+    if (!cur) entry[s] = cloneFacts(out); else if (!meet(cur, out)) return;
+    dirty[s] = 1; changed = true;
   };
-  for (let changed = true; changed;) {
+  while (changed) {
     changed = false;
     for (let b = 0; b < n; b++) {
       const inf = entry[b], inss = mc.blockIns[b];
-      if (!inf || !inss) continue;
+      if (!dirty[b] || !inf || !inss) continue;
+      dirty[b] = 0;
       const out = cloneFacts(inf);
       for (const ins of inss) step(mc, ins, out);
       const last = inss[inss.length - 1], fall = last.pc + last.len;
@@ -75,7 +84,7 @@ export function analyze(mc: MC): Facts[] {
       const edge = (t: number, taken: boolean) => {
         let o = out;
         if (test >= 0 && mc.typing.kind[test] === KR && nonNullEdge(taken) && !out.nonNull.has(test)) { o = cloneFacts(out); o.nonNull.add(test); }
-        if (push(flow.blockAt[t], o)) changed = true;
+        push(flow.blockAt[t], o);
       };
       for (const t of targets) edge(t, true);
       if (!endsBlock(last.op) && flow.blockAt[fall] >= 0) edge(fall, false);
