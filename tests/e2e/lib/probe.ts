@@ -186,7 +186,7 @@ function installProbe(cfg: ProbeConfig): void {
     return btoa(s);
   };
 
-  let lastPresent = 0, presentation = 0, wantSample = false, lastHash = -1;
+  let lastPresent = 0, presentation = 0, wantSample = false, lastHash = -1, readbackMs = 0;
   const sampled = new Map<number, ImageData>();
   const shots: ImageData[] = [];
   let shotHash = -1, shooting = false;
@@ -200,8 +200,9 @@ function installProbe(cfg: ProbeConfig): void {
     lastPresent = at;
     presentation++;
     if (wantSample || shooting) {
-      const img = readDisplay(canvases);
+      const start = performance.now(), img = readDisplay(canvases);
       const h = hashOf(img);
+      readbackMs = performance.now() - start;
       if (wantSample) {
         wantSample = false;
         lastHash = h;
@@ -365,10 +366,11 @@ function installProbe(cfg: ProbeConfig): void {
         if (hashes.length > q.stableFrames * 2) hashes.shift();
         wantSample = true;
         if (lastHash < 0) g.wd.redraw();
-        // each sample is a synchronous GPU readback, which under SwiftShader can take most of a
-        // busy app's main thread: a screen whose every sample differs (a spinner) is sampled less
-        // often until a frame repeats
-        interval = hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs;
+        // each sample is a synchronous GPU readback. Under SwiftShader one waits seconds for an animating
+        // app's backlog of frames, on the page's thread, where the broker answers the app's IPC: what a
+        // readback takes beyond a few frames is kept to a fifth of the thread. A screen whose every
+        // sample differs (a spinner) is sampled less often until a frame repeats
+        interval = Math.max(4 * (readbackMs - 150), hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs);
       }
       const b = await busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
