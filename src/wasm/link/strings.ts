@@ -90,12 +90,13 @@ export class StructStrings implements StringRepr {
   // ---------- functions of the module
   /** a function of this module, defined on first use under `key` */
   private fn(key: string, params: VT[], results: VT[], body: (c: Code) => void): number {
+    const mb = this.cx.mb;
     return this.cx.memo("s:" + key, () => {
-      const mb = this.cx.mb, f = mb.reserveFunc(mb.addFuncType(params, results), "$s:" + key), c = new Code(params.length);
+      const f = mb.reserveFunc(mb.addFuncType(params, results), "$s:" + key), c = new Code(params.length);
       body(c);
       mb.setBody(f, c.finish());
       return f;
-    });
+    }, () => mb.addFuncType(params, results));
   }
   private get st(): number { return this.cx.tStr; }
   private get chars(): number { return this.cx.tData.i16; }

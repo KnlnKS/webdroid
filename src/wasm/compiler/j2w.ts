@@ -81,6 +81,8 @@ const HOST_IMPORTS = {
 } satisfies Record<string, FunctionType>;
 const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as (keyof typeof HOST_IMPORTS)[];
 
+/** the module-local functions of Compiler.local that are the same in every module */
+const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
@@ -124,10 +126,14 @@ export class Compiler implements Base {
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
   private helpers = new Map<string, number>();
+  /** the helpers a first-tier unit shares with others (shareHelpers): those it imports, and those it exports for later units */
+  private sharing?: { imports: Map<string, number>; out: [string, FunctionType][] };
+  private baseTypes: number;
   readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; captureIndexed: number; beginCapture: number; endCapture: number; target: number; epoch: number; enabled: number };
   constructor(public w: World, deopt = !!w.opts.cold || !!w.opts.deopt) {
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
+    this.baseTypes = mb.types.length;
     this.classStruct.set("java/lang/Object", this.tObj);
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
@@ -260,10 +266,26 @@ export class Compiler implements Base {
     this.mb.importMemory("rt", "gmem", 1, shared ? 65535 : undefined, shared);
     this.memory = this.guestMemory = true;
   }
-  /** a function of this module defined on first use under `key` */
-  memo(key: string, make: () => number): number {
+  /** a function of this module defined on first use under `key`; one that is the same in every module (of `type`) a sharing unit imports or exports */
+  memo(key: string, make: () => number, type?: () => number): number {
     let f = this.helpers.get(key);
-    if (f === undefined) this.helpers.set(key, f = make());
+    if (f === undefined) this.helpers.set(key, f = type && this.sharing ? this.shared(key, type(), make) : make());
+    return f;
+  }
+  /** Shares the helpers that are the same in every module with other first-tier units: each costs the engine about as much in every module as the
+   *  unit's own code. A helper an earlier unit exports is imported (World.sharedHelpers); one none does is defined here and exported */
+  shareHelpers(): void {
+    const imports = new Map<string, number>();
+    for (const [key, sig] of this.w.sharedHelpers) imports.set(key, this.mb.importFunc("h", key, sig));
+    this.sharing = { imports, out: [] };
+  }
+  get sharedOut(): readonly [string, FunctionType][] { return this.sharing?.out ?? []; }
+  private shared(key: string, type: number, make: () => number): number {
+    const s = this.sharing!, imported = s.imports.get(key);
+    if (imported !== undefined) return imported;
+    const f = make(), { params, results } = this.mb.types[type].def as FunctionType;
+    // a signature with a type of this module's own cannot be named by another
+    if ([...params, ...results].every((t) => typeof t === "number" || t.ht < this.baseTypes)) { this.mb.export(key, "func", f); s.out.push([key, { params, results }]); }
     return f;
   }
   get prog(): Program { return this.w.prog; }
@@ -449,13 +471,13 @@ export class Compiler implements Base {
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {
     // a function of this module that makes the indirect call keeps each failing arm a plain call, which the engine inlines and sizes more cheaply
-    const f = this.memo("throw:" + name, () => {
-      const params = THROWERS[name].params, fn = this.mb.reserveFunc(this.sig(params, "V"), "$throw_" + name), t = new Code(params.length);
+    const params = THROWERS[name].params, f = this.memo("throw:" + name, () => {
+      const fn = this.mb.reserveFunc(this.sig(params, "V"), "$throw_" + name), t = new Code(params.length);
       params.forEach((_, i) => t.lget(i));
       t.i32(SLOT[name]).callIndirect(this.sig(params, "V")).unreachable();
       this.mb.setBody(fn, t.finish());
       return fn;
-    });
+    }, () => this.sig(params, "V"));
     c.call(f).unreachable();
   }
 
@@ -466,13 +488,13 @@ export class Compiler implements Base {
   }
   /** a function of this module with the given body: a call is much shorter than the sequence, which keeps the callers small for the engine's inliner */
   private local(key: string, params: Kind[], ret: Kind | "V", body: (c: Code) => void, result?: VT): number {
+    const type = () => result ? this.mb.addFuncType(params.map((k) => this.vtOf(k)), [result]) : this.sig(params, ret);
     return this.memo(key, () => {
-      const type = result ? this.mb.addFuncType(params.map((k) => this.vtOf(k)), [result]) : this.sig(params, ret);
-      const f = this.mb.reserveFunc(type, "$" + key), c = new Code(params.length);
+      const f = this.mb.reserveFunc(type(), "$" + key), c = new Code(params.length);
       body(c);
       this.mb.setBody(f, c.finish());
       return f;
-    });
+    }, GENERIC_LOCALS.has(key) ? type : undefined);
   }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
@@ -520,14 +542,14 @@ export class Compiler implements Base {
 
   // ---------- module-local helpers, defined on first use
   helper(name: string): number {
-    let f = this.helpers.get(name);
-    if (f !== undefined) return f;
-    const mb = this.mb, L = T.anyref, t = (p: VT[], r: VT[]) => mb.addFuncType(p, r);
-    const [sigIdx, body] = this.helperBody(name, L, t);
-    f = mb.reserveFunc(sigIdx, "$" + name);
-    this.helpers.set(name, f);
-    mb.setBody(f, body());
-    return f;
+    const mb = this.mb, t = (p: VT[], r: VT[]) => mb.addFuncType(p, r);
+    return this.memo(name, () => {
+      const [sigIdx, body] = this.helperBody(name, T.anyref, t), f = mb.reserveFunc(sigIdx, "$" + name);
+      // a helper may call itself
+      this.helpers.set(name, f);
+      mb.setBody(f, body());
+      return f;
+    }, () => this.helperBody(name, T.anyref, t)[0]);
   }
   private helperBody(name: string, L: VT, t: (p: VT[], r: VT[]) => number): [number, () => number[]] {
     const { tVT, tObj } = this, vtR = refNull(tVT);

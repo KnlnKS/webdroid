@@ -15,7 +15,7 @@ import { ColdSlowOps } from "../cold/slowops";
 import { resumeUnit, type ResumeState } from "../compiler/resume";
 import type { ColdSnapshot } from "../cold/state";
 import { coldUnit, supportsColdBody } from "../cold/runtime";
-import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
+import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
@@ -926,6 +926,7 @@ export class World {
     const clock = this.unitClock();
     if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, clock)) return;
     const cx = new Compiler(this), batch = s.k === "method" ? this.batch(s.m) : [];
+    cx.shareHelpers();
     for (const m of batch) this.demand.methods.add(m);
     const built = s.k === "method" ? cx.buildUnit(batch) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
@@ -988,7 +989,9 @@ export class World {
     const cls = this.blockClass[this.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
     const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slotAt(at);
     const own = clinit?.k === "method" && !clinit.done && !this.opts.cold && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
-    const cx = new Compiler(this), built = cx.buildUnit(own ? [own] : [], [], false, false, [cls]);
+    const cx = new Compiler(this);
+    cx.shareHelpers();
+    const built = cx.buildUnit(own ? [own] : [], [], false, false, [cls]);
     if (own) { this.demand.methods.add(own); this.stats.methods++; }
     this.stats.units++;
     this.install(own ? [at!] : [], false, cx, this.unitImports(cx), built, slot, clock);
@@ -1443,6 +1446,7 @@ export class World {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.accountCompilation(clock);
     const exports = this.instantiate(built.bytes, imports).exports;
+    if (cx instanceof Compiler) for (const [key, sig] of cx.sharedOut) if (!this.sharedHelpers.has(key)) { this.sharedHelpers.set(key, sig); this.sharedFns[key] = exports[key] as Function; }
     this.recordUnit(cx, built.traces, slot);
     return exports;
   }
@@ -1481,8 +1485,11 @@ export class World {
     const m = methodOf(this.prog, /#(?:s|p)$/.test(id) ? id.slice(0, -2) : id);
     return !!m && this.natives.prepare(m);
   }
+  /** the helpers first-tier units share (Compiler.shareHelpers): their signatures, and the functions the unit that defined them exports */
+  sharedHelpers = new Map<string, FunctionType>();
+  private sharedFns: Record<string, Function> = {};
   private unitImports(cx: Compiler): Record<string, any> {
-    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
+    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host, h: this.sharedFns,
       n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)), deopt: this.deoptImports };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
