@@ -9,18 +9,17 @@ class Index {
   private classes: JClass[] = [];
   /** the classes by dex and type id; classes no dex defines (stubs, host and proxy classes) under null */
   private byType?: Map<DexFile | null, Map<number, JClass>>;
-  private implementors = new Map<string, string[]>();
+  /** each list with the number of classes it was scanned over: an app's classes keep arriving */
+  private implementors = new Map<string, { names: string[]; of: number }>();
   add(c: JClass): void {
     this.classes.push(c);
     if (this.byType) this.note(c);
     for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
-    // the lists already made gain the class where it declares their method, as a scan would find it; an app's classes keep arriving
-    if (this.implementors.size) for (const [key, flags] of declaredKeys(c)) if (!(flags & (ACC.STATIC | ACC.ABSTRACT))) this.implementors.get(key)?.push(c.name);
   }
   declaring(key: string): Iterable<string> {
     let found = this.implementors.get(key);
-    if (!found) this.implementors.set(key, found = [...this.scan(key)]);
-    return found;
+    if (found?.of !== this.classes.length) this.implementors.set(key, found = { names: [...this.scan(key)], of: this.classes.length });
+    return found.names;
   }
   private note(c: JClass): void {
     const i = classDefIdx(c), dex = i < 0 ? null : c.dex!;
@@ -47,14 +46,6 @@ class Index {
       }
     }
   }
-}
-
-/** the keys and flags of the methods `c` declares, as its dex names them (Index.scan reads the same) */
-function declaredKeys(c: JClass): [string, number][] {
-  const i = classDefIdx(c);
-  if (i < 0) return c.methods.map((m) => [m.key, m.flags]);
-  const def = c.dex!.classDef(i);
-  return [...def.directMethods, ...def.virtualMethods].map((m) => [c.dex!.methodKey(m.methodIdx), m.flags]);
 }
 
 /** Class-hierarchy analysis over every class the Program knows, so a decision stays valid for classes that are linked later;
