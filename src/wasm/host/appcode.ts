@@ -58,6 +58,8 @@ export interface Built { kept: boolean; methods: number; modules: number; ms: nu
 
 /** the least new on-demand work that is worth a new build, how often the launch is looked at, and for how long */
 export const MIN_FRESH = 8;
+/** a refine rebuilds all the build holds, so it waits for the new demand to be this share of it */
+const REFINE_SHARE = 1 / 8;
 const TICK_MS = 2000, WATCH_MS = 120_000, MAX_REFINES = 3;
 
 export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
@@ -155,7 +157,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       const now = fresh(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
       if (now === last) recordLaunch(world);
-      if (now >= MIN_FRESH && now === last) {
+      if (now >= Math.max(MIN_FRESH, covered * REFINE_SHARE) && now === last) {
         building = true;
         refine(world, 1).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
           .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(undefined, false); else again(); });
