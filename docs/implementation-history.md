@@ -6903,6 +6903,11 @@ Holding the first launch until a one-Worker build is ready would make it slower,
 about 5 s against 3.2 s. M4's install-time build pays only when it is split across Workers. Each of those
 Workers holds the app's Program, which TikTok's size rules out.
 
+The shared opcode interpreter (`?cold=1`, with its own platform build) is no cheaper first tier for these
+launches: Feeder takes 14.4 s and Markor 3.1 s with it, against 3.15 s and 1.37 s compiled on demand. Feeder's
+first launch is busy 3.1 s, of which on-demand compiling is 2.0 s: 1.4 s in the compiler's front end, 0.3 s
+compiling the modules and 0.5 s instantiating one per method.
+
 ### TikTok's renderer OOM and the late-class index (2026-10-11)
 
 `e2e --full` on the Wasm tier crashes the renderer in TikTok's launch with `V8 javascript OOM (CALL_AND_RETRY_LAST)`.
