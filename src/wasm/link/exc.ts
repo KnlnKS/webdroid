@@ -16,6 +16,8 @@ export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. Scratch for natives starts after them. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
+/** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: World.warm calls methods to have the engine compile them. */
+export const WARM_AT = 0;
 /** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is
  *  its size in the engine's baseline code to within 10% (8,700 frames of 1 parameter (weight 11) or 2,030 of 10 parameters and 20 locals (weight 53) fill node's 984 KB stack: about 100,000).
  *  V8 does not let Wasm catch its own stack overflow, so a Java handler for StackOverflowError sees only the one this limit throws; the limit is half of what

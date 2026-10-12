@@ -34,7 +34,7 @@ import { hostObject } from "./annotations";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
@@ -1473,6 +1473,40 @@ export class World {
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
+  /** the platform build's methods that have run here (a method's count restarts once a unit replaces its code): what a zygote has the engine compile before an
+   *  app needs them (warm) */
+  calledMethods(): string[] {
+    const counts = new Int32Array(this.mem.buffer, COUNT_BASE, COUNT_SLOTS), out: string[] = [];
+    for (let slot = 0; slot < COUNT_SLOTS; slot++) {
+      if (!counts[slot] && !this.groupOf.has(slot)) continue;
+      const s = this.slotAt(slot);
+      if (s?.k === "method" && this.aot?.seeded(s.m.cls)) out.push(mid(s.m));
+    }
+    return out;
+  }
+  /** Has the engine compile the build's code of methods `ids` before they first run, as a zygote does with what launches use: each is installed and called
+   *  while the warm word makes first-tier code trap on entry, before it does anything. Methods whose code is elsewhere are left to their first call. Goes from `ids[from]` until `until`
+   *  and returns where it stopped. */
+  warm(ids: string[], from = 0, until = Infinity): number {
+    const word = new Int32Array(this.mem.buffer, WARM_AT, 1), zero = (k: Kind) => k === "J" ? 0n : k === "L" ? null : 0;
+    let n = from;
+    word[0] = 1;
+    try {
+      for (; n < ids.length && performance.now() < until; n++) {
+        const id = ids[n];
+        const m = methodOf(this.prog, id);
+        if (!m?.codeOff || !this.aot?.seeded(m.cls) || this.intrinsic(m)) continue;
+        const slot = this.slotOf(m), s = this.slotAt(slot);
+        // only first-tier code counts its calls, and with them traps on entry
+        if (slot >= COUNT_SLOTS || s?.k !== "method" || s.hot || !this.aot.install(slot) || !s.done) continue;
+        const f = this.table.get(slot) as ((...args: unknown[]) => unknown) | null;
+        if (!f) continue;
+        try { f(...(m.isStatic ? [] : [null]), ...m.params.map((p) => zero(kindOf(p)))); } catch (e) { if (e instanceof WebAssembly.RuntimeError) continue; throw e; }
+        throw new Error(`warming ${id} ran it`);
+      }
+    } finally { word[0] = 0; }
+    return n;
+  }
   /** Direct callees followed by guarded implementations, preserving their planning order. */
   private callees(m: MethodInfo): MethodInfo[] {
     const direct: MethodInfo[] = [], guarded: MethodInfo[] = [], dex = m.dex;

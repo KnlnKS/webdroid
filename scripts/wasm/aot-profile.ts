@@ -1,6 +1,6 @@
 // Profiles every process World through first frames.
 // --classes records called classes with platform code withheld; rebuild AOT to group those classes.
-// Then run without --classes to record startup modules and export saved app builds.
+// Then run without --classes to record startup modules and the methods a zygote warms, and export saved app builds.
 // WEBDROID_URL=http://localhost:4090 bun run wasm aot-profile [--classes] [apk ...]
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { COMPILED_CODE_DIR } from "../../src/shell/hostfs";
@@ -24,6 +24,8 @@ const policy = (JSON.parse(readFileSync(join(AOT_ROOT, key, "index.json"), "utf8
 if (![0, DEOPT_ABI].includes(policy)) throw new Error("unknown AOT activation policy");
 const ordered = new Set<string>();
 const uses = { linked: new Map<string, number>(), called: new Map<string, number>() };
+/** the platform methods the launches' realms ran: what a zygote has the engine compile ahead (World.warm) */
+const warm = new Set<string>();
 const failures: string[] = [];
 for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon-v0.20.4.apk"]) {
   const profile = mkdtempSync(join(tmpdir(), "wdprof-"));
@@ -59,6 +61,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       });
       await page.waitForTimeout(SETTLE_MS);
       const {processes,profiles} = await collectLaunch(page, deadline, errors);
+      for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const id of await realm.evaluate(() => globalThis.__wdCold?.called?.() ?? []).catch(() => [] as string[])) warm.add(id);
       console.log(`${apk} ${launch}: ${processes.length} healthy process diagnostics, ${url.href}`);
       const wanted = [...new Set(profiles.flatMap(profile => profile.wanted))];
       const used = profiles.flatMap(profile => profile.worlds);
@@ -88,7 +91,8 @@ if (classes) {
   writeFileSync(join(AOT_ROOT, "hot.json"), JSON.stringify({ linked: byUse(uses.linked), called: hot.called }));
   const files = [...ordered].filter((f) => /^[cd]\d+\.wasm$/.test(f));
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
-  console.log(`${files.length} files in ${key}/startup.json`);
+  writeFileSync(join(AOT_ROOT, key, "warm.json"), JSON.stringify([...warm]));
+  console.log(`${files.length} files in ${key}/startup.json, ${warm.size} methods in warm.json`);
 }
 
 /** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */

@@ -6790,3 +6790,43 @@ The bundled app builds were re-exported (`APP_VERSION` 17); every Mihon realm, t
 saved build. The e2e quick gate's two Mihon flows now fail on any commit: upstream published v0.21.0, and
 Mihon's launch-time release check shows a "New version available!" dialog over every later step. The Calculator
 flow's endless redraw fails on the JS tier too (1 of 4 passed at the starting commit, 2 of 7 with this change).
+
+### The engine's lazy compilation, and a zygote that warms it (2026-10-11)
+
+With the launch's own work cut, V8's lazy Liftoff compilation is the largest launch cost. Measured from
+`wd.boot()`, Calculator launches in 784 ms by default and in 569 ms with `--js-flags=--no-wasm-lazy-compilation`.
+That flag cannot ship, and shipping Chrome does not parse compilation hints. `--trace-wasm-compilation-times`
+over the launch window shows about 20k lazy compiles taking 259 ms. They cover 5.7 MB of function bodies and
+emit 44 MB of machine code. Liftoff compiles about 23 MB/s, so the cost follows body size: functions of 300 B or
+more take 70% of the time. The platform's code takes 116 ms of it and the app's 106 ms.
+
+Over about 220k framework methods, the Wasm/DEX size ratio is 5.72. `i32.const` is 18% of the bytes and local
+gets and sets are 26%. Every first-tier method opens with its call counter (about 34 B and 14 instructions,
+inline) and the stack-overflow check (about 12 instructions). The counter stays: without the second tier,
+steady state falls from 1.59× to 0.82× Node. It and the frame check are now calls to per-module helpers
+(`count`, `countLoop`, `enter`). Module c537 shrinks from 976,577 to 831,982 code bytes and from 431,625 to
+361,757 instructions. The launch's lazy compile shrinks only slightly, from 259 to 245 ms.
+
+The zygote instead compiles in advance what launches use. Engine code is per `WebAssembly.Module`, and Modules
+are shared tab-wide, so code compiled in one realm serves every other realm, including the page's
+system_server. `aot-profile` records the AOT methods whose counters a profiled launch moved, in the page and in
+every Worker, and writes the list to `warm.json` beside `startup.json` (18,117 methods). While the spare Worker's
+zygote waits for a package, `World.warm` installs each listed method and calls it with zero arguments. A word
+in linear memory, which the `count` helper reads first, makes the method trap on entry, so nothing runs.
+Numbering is unchanged, so app builds still attach. The warm runs in 10 ms slices and stops when `bootApk`
+starts, because methods it has not reached compile on first call as before.
+
+Measured from `wd.boot()`, without the warm then with it:
+
+| App | Without | With |
+|---|---|---|
+| Calculator | 786–797 ms | 615–620 ms |
+| FitNotes | 735–743 ms | 541–544 ms |
+| Mihon | 1,336–1,356 ms | 1,145–1,155 ms |
+
+A list built from Calculator and Mihon alone took FitNotes from 735–743 to 626–630 ms, so the gain is not limited
+to the profiled apps. On the full list, the warm completes about 1.3 s before the user boots an app.
+
+`lat` boots from `?apk=` and so reaches `bootApk` with the warm barely begun. When the warm ran to completion,
+FitNotes took 1,746 ms against 1,578 and Calculator 1,801 ms against 1,630. Sliced, they take 1,605 and 1,600 ms,
+and FitNotes' scroll shows no present interval over 25 ms.

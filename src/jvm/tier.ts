@@ -25,6 +25,8 @@ export interface TierBackend {
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
   appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
+  /** has the engine compile the platform code launches use while `stop` says no app is starting (World.warm) */
+  warm?(stop: () => boolean): Promise<void>;
   /** the app has shown its first frame */
   launched?(): void;
 }
@@ -50,6 +52,8 @@ export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint
 export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
 /** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
 export function appLaunched(): void { backend?.launched?.(); }
+/** the zygote's warm-up of the platform code launches use */
+export const warmCode = (stop: () => boolean): Promise<void> => backend?.warm?.(stop) ?? Promise.resolve();
 
 /** `dex` made known to the Java that runs: to `runtime` on the JS tier, to the one Wasm World on the Wasm tier, whose loaders share a namespace */
 export function loadDex(runtime: Runtime, dex: DexFile, platform = false): void {

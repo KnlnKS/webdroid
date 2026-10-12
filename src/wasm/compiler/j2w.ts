@@ -13,7 +13,7 @@ import type { ClassRt, World } from "../link/world";
 import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
 import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
 import { emitStoreCheck } from "../link/classes";
 import type { NativeBinder } from "../link/hostapi";
@@ -381,7 +381,10 @@ export class Compiler implements Base {
     };
     c.i32(slot);
     if (iterations === undefined) {
-      c.call(this.local("count", ["I"], "V", (b) => count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq))));
+      c.call(this.local("count", ["I"], "V", (b) => {
+        b.i32(0).mem(OP.i32_load, 2, WARM_AT).if_().unreachable().end();
+        count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
+      }));
       return;
     }
     // the budget is reached by this activation's iterations when the count crosses it

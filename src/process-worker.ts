@@ -33,7 +33,7 @@ async function prepare({ clock, aot, jars }: Prestart) {
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
   jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
-  void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
+  void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }), true)).catch(() => {});
   return { control, port, jentry, core, coverage, packages, device, config, runtime };
 }
 

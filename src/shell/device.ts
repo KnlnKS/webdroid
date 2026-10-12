@@ -3,7 +3,7 @@
 
 import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
-import { appLaunched, loadAppCode, loadDex, tier, tierReady } from "../jvm/tier";
+import { appLaunched, loadAppCode, loadDex, tier, tierReady, warmCode } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -99,13 +99,13 @@ function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: s
 /** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
-let zygote: Promise<void> | null = null;
+let zygote: Promise<void> | null = null, booting = false;
 /** What a device's zygote holds before it forks an app: the framework package, the boot class
  *  path indexed and the natives linked. It needs no app, so a page starts it while the app
  *  downloads. Natives link after the platform is indexed, never before: a native whose super or
  *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed.
  *  `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
-export function startZygote(host?: Promise<unknown>): Promise<void> {
+export function startZygote(host?: Promise<unknown>, warm = false): Promise<void> {
   return zygote ??= (async () => {
     // the JS tier's link table and persisted bodies; the Wasm tier links and persists its own code (wasm/host/appcode.ts)
     const table = tier === "js" ? fetchLinkTable() : null;
@@ -119,6 +119,8 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await Promise.all([processBitness, host, tier === "wasm" && tierReady()]);
     await zygoteInit();
+    // what launches run is compiled while the zygote waits for one
+    if (warm && tier === "wasm") await warmCode(() => booting);
   })();
 }
 
@@ -126,7 +128,7 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
 export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<string> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  mark("bootApk"); onStatus("Reading package…");
+  mark("bootApk"); onStatus("Reading package…"); booting = true;
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";

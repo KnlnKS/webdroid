@@ -38,7 +38,7 @@ import { onProcessExit, processExited } from "../../process-exit";
 const TAB_HEAP = 2048 * 1024 * 1024;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type ColdStatus = { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string };
+type ColdStatus = { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
 declare global {
   var __wdCold: ColdStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -94,7 +94,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
-    if (globalThis.__wdCold) globalThis.__wdCold.aotKey = store?.key;
+    if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { aotKey: store?.key, called: () => made.calledMethods() });
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     return made;
@@ -143,6 +143,15 @@ export async function bootWasmTier(): Promise<TierBackend> {
       world?.addDexes([dex]);
     },
     launched,
+    async warm(stop) {
+      // a build without the list (or the guarded build) leaves the platform's code to its first calls
+      const list = await store?.fetchBytes("warm.json").catch(() => undefined);
+      if (!list) return;
+      const ids = JSON.parse(new TextDecoder().decode(list)) as string[], w = current();
+      // in slices, so that a package arriving ends it: the code of what its launch runs is compiled as it runs either way
+      for (let at = 0; at < ids.length && !stop(); await new Promise((resolve) => setTimeout(resolve))) at = w.warm(ids, at, performance.now() + 10);
+      mark("warmed");
+    },
     async appCode(roots) {
       if (code || !store) return;
       // System realms have no app DEX, but their first Java entry still needs the
