@@ -7097,3 +7097,23 @@ instantiate it), and in Node about 7.5 µs for its types and imports plus about 
   Against shared helpers alone (3 runs each), Komikku's launch went from 8,289–8,431 ms to 8,140–8,226 ms. Launch
   modules fell from about 23,000 to 17,700–18,000, module time from 1,040–1,059 ms to 977–994 ms, and the whole flow's
   modules from about 34,300 to about 27,600.
+
+### Play services modules re-resolved their loader once per class (2026-10-12)
+
+The live matrix on both tiers, serial: Wasm reached 11 of 14 flows' checkpoints and JS 10. Resy failed only on Wasm.
+At its location-permission step the app thread was busy for 11–30 s, and the main loop was reported wedged.
+- **Cause.** The step loads Firebase Analytics' measurement module from microG. It is loaded by a `PathClassLoader`
+  whose parent is microG's `FilteredClassLoader`, which hands only some names to the app's loader. That parent
+  opens no dex files, so the Program modelled the app's loader as the module loader's parent. The module bundles
+  its own Kotlin and Play services classes, so each class Java defined there contradicted the parent-first
+  prediction. Each contradiction (`initiateClass`) re-resolved the loader's dex files, rebuilt the CHA index and
+  rechecked every assumption against every late class: 324 corrections of 9,000–38,000 classes each, 21 s in all.
+- **Fix.** A loader now predicts its own classes first, after the boot classes, in two cases: it is the platform's
+  `DelegateLastClassLoader` (Play services' other dynamite path), or a `ClassLoader` of the app's sits between it
+  and its nearest defining ancestor. Java's resolutions still correct a wrong guess either way.
+- **Result.** Resy completes its 15 steps in 32.1–32.6 s against 61–66 s, and no step wedges. The JS tier takes
+  27 s.
+
+On a later Komikku launch, an app build's class-hierarchy update when the app's dexes load fell from
+137–139 ms to 41 ms. Implementor lists now rescan when classes have been added since they were made. Launch is
+unchanged (2,514–2,639 against 2,508–2,647 ms over five pairs), because those dexes load after the first frame.
