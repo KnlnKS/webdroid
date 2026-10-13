@@ -21,6 +21,8 @@ import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio";
 
 type Fn = (...a: any[]) => any;
 type Caller = { cls: string; key: string; call: Fn; rk: Kind | "V" };
+/** the host's copy of a primitive array */
+type HostView = ArrayBufferView & { length: number; BYTES_PER_ELEMENT: number };
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const REF = Symbol("java reference");
 const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Float64Array(1), i64 = new BigInt64Array(f64.buffer);
@@ -281,14 +283,14 @@ export class Bridge implements HostBridge {
     return entry;
   }
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
-   *  method's class is initialized first. A primitive array passed is copied for the call, and what the method wrote to it is read back. */
+   *  method's class is initialized first. An array passed is copied for the call, and what the method wrote to it is read back. */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m);
     const nested = this.saved.length > 0, mark = nested ? 0 : this.begin();
     try {
       const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i]));
       const r = call(...(m.isStatic ? [] : [recv]), ...given);
-      args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
+      this.readBackAll(args, given);
       return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r, m.ret);
     } finally { if (!nested) this.end(mark); }
   }
@@ -299,7 +301,7 @@ export class Bridge implements HostBridge {
     const { call, rk } = this.caller(m, true);
     const given = this.scoped(() => args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i])));
     const finish = (r: unknown) => this.scoped(() => {
-      args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
+      this.readBackAll(args, given);
       return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r as number | bigint, m.ret);
     });
     const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);
@@ -362,7 +364,13 @@ export class Bridge implements HostBridge {
     if (v === null || v === undefined) return null;
     if (typeof v === "string") return this.w.javaString(v);
     const o = v as object, known = this.owners.get(o);
-    if (known) return known;
+    if (known) {
+      // the host's copy of a Java array in this scope, which it may have written since it got it (a copy whose scope ended stores nothing back)
+      if (this.live.get(known) !== o) return known;
+      if (ArrayBuffer.isView(o)) this.sync(known, o as HostView, true);
+      else if (Array.isArray(o)) { const elem = this.w.classNameOf(known).slice(1); o.forEach((e, i) => this.op.aset(known, i, this.toJava(e, elem))); }
+      return known;
+    }
     if (ArrayBuffer.isView(o)) return this.newPrimArray(o as ArrayBufferView & { length: number });
     if (Array.isArray(o)) return this.newRefArray(o as unknown[] & { $t?: string }, desc);
     const java = this.shellOf(o);
@@ -373,10 +381,20 @@ export class Bridge implements HostBridge {
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
     throw new Error(`a native returned a host value of no Java class (${(o as { constructor?: { name?: string } }).constructor?.name}) where ${desc} was expected`);
   }
-  private readBack(j: object, host: ArrayBufferView): void {
-    const bytes = host.byteLength, at = this.region(bytes);
-    this.op.acopy(j, at, 1, 0, (host as unknown as { length: number }).length);
-    new Uint8Array(host.buffer, host.byteOffset, bytes).set(new Uint8Array(this.w.mem.buffer, at, bytes));
+  /** what the method wrote to the arrays the host passed, into the host's copies: those made for the call and those of this scope */
+  private readBackAll(args: unknown[], given: unknown[]): void {
+    args.forEach((a, i) => {
+      if (!given[i] || typeof a !== "object" || this.owners.has(a!) && this.live.get(given[i] as object) !== a) return;
+      if (ArrayBuffer.isView(a)) this.sync(given[i] as object, a as HostView, false);
+      else if (Array.isArray(a)) for (let k = 0; k < a.length; k++) a[k] = this.toHost(this.op.aget(given[i] as object, k));
+    });
+  }
+  /** copies the elements of the host copy `host` of the Java array `j` (the range from its base, when it holds one) into the array, or the array's into it */
+  private sync(j: object, host: HostView, toJava: boolean): void {
+    const base = this.bases.get(host) ?? 0, size = host.BYTES_PER_ELEMENT, at = this.region((base + host.length) * size);
+    const scratch = new Uint8Array(this.w.mem.buffer, at + base * size, host.byteLength), bytes = new Uint8Array(host.buffer, host.byteOffset, host.byteLength);
+    if (toJava) { scratch.set(bytes); this.op.acopy(j, at, 0, base, host.length); }
+    else { this.op.acopy(j, at, 1, base, host.length); bytes.set(scratch); }
   }
   private newArrayOf(name: string): Fn {
     return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));

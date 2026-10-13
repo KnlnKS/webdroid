@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vcall, newObj } from "../src/jvm/natives/jentry";
-import { scall, mountApexData } from "./java";
+import { scall, mountApexData, thrown } from "./java";
 
 rt.linkNatives();
 const hex = (b: Int8Array) => Buffer.from(b).toString("hex");
@@ -32,10 +32,11 @@ describe("conscrypt-natives", () => {
     const sealed: Int8Array = await vcall(c, "doFinal", "([B)[B", new Int8Array(data));
     const web = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: Uint8Array.of(1, 2, 3) }, await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt"]), data);
     expect(hex(sealed)).toBe(Buffer.from(web).toString("hex"));
-    sealed[5] ^= 1;
+    const changed = Int8Array.from(sealed);
+    changed[5] ^= 1;
     await vcall(c, "init", "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V", 2, key, spec);
     await vcall(c, "updateAAD", "([B)V", Int8Array.of(1, 2, 3));
-    await expect((async () => vcall(c, "doFinal", "([B)[B", sealed))()).rejects.toMatchObject({ constructor: rt.link("javax/crypto/AEADBadTagException").ctor });
+    expect(await thrown(() => vcall(c, "doFinal", "([B)[B", changed))).toStartWith("javax/crypto/AEADBadTagException:");
   });
 
   test("a certificate parses, names its subject and verifies its own signature", async () => {

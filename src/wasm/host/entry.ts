@@ -191,7 +191,8 @@ export function wasmEntry(w: World): Entry {
 
   return {
     vcall(obj, name, desc, ...args) {
-      const recv = receiver(obj, name), cls = w.classNameOf(recv), m = prog.dispatchFor(cls, name, desc);
+      // an array's methods are Object's
+      const recv = receiver(obj, name), cls = w.classNameOf(recv), m = prog.dispatchFor(cls[0] === "[" ? "java/lang/Object" : cls, name, desc);
       if (m && failed(m)) return enter(() => call("e:conflict:" + cls + "." + name + desc, [], "V", (cx, c) => cx.linkError(c, m)));
       if (!m) throw missing(`vcall ${cls}.${name}${desc}`);
       return enter(() => invoke(m, recv, args));
