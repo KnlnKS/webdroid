@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { rt, type JObj } from "../src/jvm/runtime";
-import { scall } from "../src/jvm/natives/jentry";
+import { classNameOf, scall } from "../src/jvm/natives/jentry";
 import type { AppHost } from "../src/android/apphost";
 import type { Resources } from "../src/android/res";
 
@@ -7,7 +8,15 @@ export { scall } from "../src/jvm/natives/jentry";
 
 /** the Java exception `call` throws, synchronously or as a rejection, as "class: message", or null */
 export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
-  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
+  .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
+
+/** a fixture process that stalls prints the Java threads' states and exits rather than outliving its test */
+export function fixtureDeadline(ms = 90_000): void {
+  setTimeout(async () => {
+    console.log(JSON.stringify({ stalled: (await import("../src/jvm/tier")).wasmThreads() }));
+    process.exit(1);
+  }, ms).unref();
+}
 
 /** the AppHost a booted page sets for `pkg`, over its resources */
 export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
@@ -84,7 +93,7 @@ export async function loadPlatform(): Promise<void> {
   await loadFrameworkJar();
   const fetch = globalThis.fetch;
   globalThis.fetch = (async (url: string) => url === "/vendor/aosp/framework-res.apk"
-    ? new Response(Bun.file(new URL("../vendor/aosp/framework-res.apk", import.meta.url))) : fetch(url)) as typeof fetch;
+    ? new Response(readFileSync(new URL("../vendor/aosp/framework-res.apk", import.meta.url))) : fetch(url)) as typeof fetch;
   try { await loadFramework(); } finally { globalThis.fetch = fetch; }
   const { deviceConfiguration, initDeviceLocales } = await import("../src/android/resnative");
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();

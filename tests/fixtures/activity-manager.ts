@@ -1,31 +1,30 @@
-// bun tests/fixtures/activity-manager.ts: what the activity manager asks of a
+// bun scripts/wasm/undernode.ts tests/fixtures/activity-manager.ts: what the activity manager asks of a
 // process's IApplicationThread as its services and receivers are driven, as one JSON object.
-const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
-await import(W + "/tests/platform");
-const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
-await import(W + "/src/natives");
-const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jentry");
-const { setAppHost } = await import(W + "/src/android/apphost");
-const { testAppHost } = await import(W + "/tests/java");
-const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
-const { Resources } = await import(W + "/src/android/res");
-const { TV } = await import(W + "/src/android/axml");
-const { setProcessIdentity, setProcessName } = await import(W + "/src/android/os");
-const { hostedService } = await import(W + "/src/android/binder");
-const { newIntent, mkComponentName } = await import(W + "/src/android/intent");
-const { deliverBroadcast } = await import(W + "/src/android/server/broadcastqueue");
-const { startMainLooper } = await import(W + "/src/android/mainloop");
-type JObj = InstanceType<typeof JObj>;
+import "../../tests/platform";
+import "../../src/natives";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime";
+import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry";
+import { setAppHost } from "../../src/android/apphost";
+import { testAppHost, fixtureDeadline } from "../../tests/java";
+import { packages, PackageRecord, packageUid } from "../../src/android/packages";
+import { Resources } from "../../src/android/res";
+import { TV } from "../../src/android/axml";
+import { setProcessIdentity, setProcessName } from "../../src/android/os";
+import { hostedService } from "../../src/android/binder";
+import { newIntent, mkComponentName } from "../../src/android/intent";
+import { deliverBroadcast } from "../../src/android/server/broadcastqueue";
+import { startMainLooper } from "../../src/android/mainloop";
+import { serviceTransport } from "../../src/android/server/activeservices";
+import { serveCalls,callProxy } from "../../src/shell/process-port";
 console.warn = () => {};
+fixtureDeadline();
 // Exercise the real Java lifecycle with delayed owner replies, not a synchronous replica.
-const {serviceTransport} = await import(W + "/src/android/server/activeservices");
-const {serveCalls,callProxy} = await import(W + "/src/shell/process-port");
 let creationGate: { entered: () => void; wait: Promise<void> } | undefined;
 const starts = serviceTransport.starts(), ports = new MessageChannel();
 const stopStarts = serveCalls(ports.port1,Object.fromEntries(Object.entries(starts).map(([name,method]) =>
   [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); if (name === "created" && creationGate) { creationGate.entered(); await creationGate.wait; } return (method as (...args:unknown[])=>unknown)(...args); }])));
 const remoteStarts = callProxy(ports.port2,Object.keys(starts));
-serviceTransport.starts = () => remoteStarts.endpoint;
+serviceTransport.starts = () => remoteStarts.endpoint as unknown as typeof starts;
 
 
 const PKG = "org.webdroid.test.am", SERVICE = PKG + ".Svc";
@@ -59,6 +58,8 @@ rt.register({ name: "webdroid/test/AppThread", ctor: class extends JObj {}, sup:
 rt.register({ name: "webdroid/test/Connection", ctor: class extends JObj {}, sup: "android/app/IServiceConnection$Stub", methods: {
   "connected(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V": (_name: JObj, binder: JObj | null, dead: number) => { connected.push(`${binder ? Reflect.get(binder, "tag") : null} ${dead}`); },
 } });
+// a binder of the host's, which carries the tag the test reads back
+rt.register({ name: "webdroid/test/Binder", ctor: class extends JObj {}, sup: "android/os/Binder" });
 rt.register({ name: "webdroid/test/Receiver", ctor: class extends JObj {}, sup: "android/content/IIntentReceiver$Stub", methods: {
   "performReceive(Landroid/content/Intent;ILjava/lang/String;Landroid/os/Bundle;ZZI)V": () => {},
 } });
@@ -91,7 +92,7 @@ const first = await newObj("webdroid/test/Connection"), second = await newObj("w
 out.bound = await vcall(am, "bindServiceInstance", BIND, app, null, await serviceIntent(), null, first, 1n, null, PKG, 0);
 await settle();
 out.up = calls.splice(0);
-await vcall(am, "publishService", `(${BINDER}${INTENT}${BINDER})V`, token, await serviceIntent(), await tagged("android/os/Binder", "published"));
+await vcall(am, "publishService", `(${BINDER}${INTENT}${BINDER})V`, token, await serviceIntent(), await tagged("webdroid/test/Binder", "published"));
 await vcall(am, "bindServiceInstance", BIND, app, null, await serviceIntent(), null, second, 1n, null, PKG, 0);
 await settle();
 out.connected = connected.splice(0);
@@ -156,11 +157,11 @@ await vcall(proxy, "startService", START, app, withList, null, 0, PKG, null, 0);
 await vcall(list, "add", "(Ljava/lang/Object;)Z", "late");
 await settle();
 const copy = await vcall(delivered!, "getStringArrayListExtra", `(${S})Ljava/util/ArrayList;`, "list") as JObj;
-out.copied = { proxy: (proxy.constructor as unknown as { $i: { name: string } }).$i.name, same: copy === list, size: await vcall(copy, "size", "()I") };
+out.copied = { proxy: classNameOf(proxy), same: copy === list, size: await vcall(copy, "size", "()I") };
 const big = await serviceIntent();
 await vcall(big, "putExtra", `(${S}[B)${INTENT}`, "big", new Int8Array(2 << 20));
 out.tooLarge = await Promise.resolve().then(() => vcall(proxy, "startService", START, app, big, null, 0, PKG, null, 0))
-  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
+  .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
 remoteStarts.close();stopStarts();
 console.log(JSON.stringify(out));
 process.exit(0);

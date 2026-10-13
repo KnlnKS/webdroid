@@ -1,26 +1,23 @@
-// bun tests/fixtures/remote-provider.ts: another process's provider as the
+// bun scripts/wasm/undernode.ts tests/fixtures/remote-provider.ts: another process's provider as the
 // activity manager hands it out and AOSP's ContentProviderProxy reaches it, as one JSON object. The
 // "other process" is this realm behind a loopback binder transport that renames its binders' pid.
-const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
-await import(W + "/tests/platform");
-const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
-await import(W + "/src/natives");
-const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jentry");
-const { setAppHost } = await import(W + "/src/android/apphost");
-const { testAppHost, loadPlatform } = await import(W + "/tests/java");
-const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
-const { Resources } = await import(W + "/src/android/res");
-const { TV } = await import(W + "/src/android/axml");
-const { setProcessIdentity, setProcessName, mkPfd, pfdContents } = await import(W + "/src/android/os");
-const { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder } = await import(W + "/src/android/binder");
-const { providerProcesses } = await import(W + "/src/android/server/am");
-const { mkUri } = await import(W + "/src/android/net");
-const { startMainLooper } = await import(W + "/src/android/mainloop");
-const { box } = await import(W + "/src/jvm/natives/jbox");
-type JObj = InstanceType<typeof JObj>;
-type Handle = { pid: number; id: number };
-type Data = { bytes: Uint8Array; objects: [number, Handle | { bytes: Uint8Array; writer: Handle | null } | null][] };
+import "../../tests/platform";
+import "../../src/natives";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime";
+import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry";
+import { setAppHost } from "../../src/android/apphost";
+import { testAppHost, fixtureDeadline, loadPlatform } from "../../tests/java";
+import { packages, PackageRecord, packageUid } from "../../src/android/packages";
+import { Resources } from "../../src/android/res";
+import { TV } from "../../src/android/axml";
+import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os";
+import { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder, type ParcelData } from "../../src/android/binder";
+import { providerProcesses } from "../../src/android/server/am";
+import { mkUri } from "../../src/android/net";
+import { startMainLooper } from "../../src/android/mainloop";
+import { box } from "../../src/jvm/natives/jbox";
 console.warn = () => {};
+fixtureDeadline();
 
 const CLIENT = "org.webdroid.test.client", OWNER = "org.webdroid.test.owner", AUTHORITY = OWNER + ".data", HERE = 4322, REMOTE = 4400;
 const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
@@ -57,12 +54,12 @@ setAppHost(testAppHost(client));
 
 // the owner's process: its published binder, reached through the broker's transport with the
 // caller's identity; binders it hands back are its own, so they cross as REMOTE's
-const rename = (data: Data, from: number, to: number): Data => {
-  const swap = (h: Handle | null) => h && h.pid === from ? { ...h, pid: to } : h;
+const rename = (data: ParcelData, from: number, to: number): ParcelData => {
+  const swap = <T>(h: T): T => h && typeof h === "object" && "pid" in h && h.pid === from ? { ...h, pid: to } : h;
   return { ...data, objects: data.objects.map(([at, o]) => [at, o && "bytes" in o ? { ...o, writer: swap(o.writer) } : swap(o)]) };
 };
 binderTransport.alive = () => true;
-binderTransport.transact = async (request: { handle: Handle; code: number; flags: number; data: Data }) => {
+binderTransport.transact = async (request: Parameters<typeof binderTransport.transact>[0]) => {
   const reply = await receiveTransaction({ ...request, handle: { pid: HERE, id: request.handle.id }, data: rename(request.data, REMOTE, HERE) }, { pid: HERE, uid: client.uid });
   return { ...reply, data: rename(reply.data, HERE, REMOTE) };
 };
@@ -77,7 +74,7 @@ const am = await hostedService("activity") as JObj, out: Record<string, unknown>
 const holder = await vcall(am, "getContentProvider", `(Landroid/app/IApplicationThread;${S}${S}IZ)Landroid/app/ContentProviderHolder;`, null, CLIENT, AUTHORITY, 0, 1);
 const remote = Reflect.get(holder, declaredField("android/app/ContentProviderHolder", "provider")) as JObj;
 out.asked = asked;
-out.proxy = (remote.constructor as { $i?: { name: string } }).$i?.name;
+out.proxy = classNameOf(remote);
 const source = await newObj("android/content/AttributionSource", "(IILjava/lang/String;Ljava/lang/String;)V", client.uid, HERE, CLIENT, null);
 const uri = await mkUri(`content://${AUTHORITY}/rows`);
 

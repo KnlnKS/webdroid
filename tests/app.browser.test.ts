@@ -16,15 +16,24 @@ beforeAll(async () => {
   ]);
   browser = launched;
   if (!build.success) throw new AggregateError(build.logs, "browser fixture build failed");
-  // Direct BuildArtifact responses have duplicated chunks under concurrent browser load.
+  // Streamed responses (a BuildArtifact's, a Bun.file's) intermittently arrive duplicated or fail under concurrent
+  // browser load: each file is served from memory, read once.
   const bundle = await build.outputs[0].text(), fontIndex = Bun.spawnSync(["bun", "scripts/font-index.ts"]).stdout.toString();
+  const files = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
+    const file = async (at: string, headers: Record<string, string> = {}) => {
+      if (!files.has(at)) files.set(at, Bun.file(`${import.meta.dir}/..${at}`).bytes() as Promise<Uint8Array<ArrayBuffer>>);
+      const bytes = await files.get(at)!, range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+      if (!range) return new Response(bytes, { headers });
+      const end = Math.min(range[2] ? +range[2] + 1 : bytes.length, bytes.length);
+      return new Response(bytes.subarray(+range[1], end), { status: 206, headers: { ...headers, "content-range": `bytes ${range[1]}-${end - 1}/${bytes.length}` } });
+    };
+    if (path === "/framework.apk") return file("/vendor/aosp/framework-res.apk");
     if (path === "/font-index.json") return new Response(fontIndex, { headers: { "content-type": "application/json" } });
-    if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/harfbuzzjs/dist${path}`));
-    if (path === "/canvaskit.wasm") return new Response(Bun.file(`${import.meta.dir}/../node_modules/canvaskit-wasm/bin/canvaskit.wasm`), { headers: { "content-type": "application/wasm" } });
-    if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return new Response(Bun.file(`${import.meta.dir}/..${path}`));
+    if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return file(`/node_modules/harfbuzzjs/dist${path}`);
+    if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm", { "content-type": "application/wasm" });
+    if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return file(path);
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
 }, PAGE_TIMEOUT);
@@ -131,7 +140,7 @@ test.concurrent("framework drawables resolve dimensions, tint, enabled states an
 
 test.concurrent("drawable spans align suspended virtual drawing and text shadows preserve state", async () => {
   const result = await probe("drawableSpan");
-  for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, loads: 1, draws: 1, aligned: true, restored: true, hierarchy: 1 });
+  for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, loads: 1, draws: 1, aligned: true, restored: true, hierarchy: true });
   expect(result).toMatchObject({ getters: [1, 10, 2, 0xffff0000 | 0], red: true, shadowRestored: true });
 }, PAGE_TIMEOUT);
 
