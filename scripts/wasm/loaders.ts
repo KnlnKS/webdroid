@@ -722,7 +722,6 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
       if (!init?.sync) throw new Error("pending control has no actual initialization numbering");
       const worker = world(files, { compileOnly: true }), units = new UnitCompiler(worker), job = request();
       if (!units.sync(init.sync, true)) throw new Error("pending worker initialization mismatch");
-      init.initialized?.forEach(key => worker.preInitialized.add(key));
       if (!units.sync(job.sync, job.keep)) throw new Error("pending worker job numbering mismatch");
       const result = units.upgrade(job.job);
       if (typeof result === "string") throw new Error(result);

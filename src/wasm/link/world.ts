@@ -107,6 +107,8 @@ type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees (size in code units) that ran at least COPY_MIN times, and guards for at most MAX_GUARDS
  *  implementations per virtual call. A small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, LEAF_WAITS = 3, COPY_MIN = 64;
+/** a virtual call with more implementations than this gets no guards: the busiest few of the whole app rarely are a given site's */
+const MEGAMORPHIC = 32;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
  *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
@@ -183,8 +185,6 @@ export class World {
   tail: Tail[] = [];
   /** the blocks of classes a replayed numbering (`adopt`) gave slots before their modules were made */
   preassigned = new Map<string, number>();
-  /** the classes a worker is told are initialized (the World that compiles for another never runs them) */
-  preInitialized = new Set<string>();
   /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
   epoch = 0;
   private deoptEpoch = new WebAssembly.Global({ value: "i32", mutable: true }, 0);
@@ -448,7 +448,7 @@ export class World {
   /** the init word of the class with id `id` (0 before its module is built) */
   initWord(id: number): number { const rt = this.loadedClass(this.names[id]); return rt ? (rt.exports[id + ":init"] as WebAssembly.Global).value as number : 0; }
   /** whether class initialization has finished, for a class whose module is already built */
-  initialized(n: string): boolean { if (this.preInitialized.has(n)) return true; const rt = this.loadedClass(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
+  initialized(n: string): boolean { const rt = this.loadedClass(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** the record of a class whose module is built or loaded; a platform module loaded for the classes beside it gives its other classes theirs here */
   private loadedClass(name: string): ClassRt | undefined { return this.classes.get(name) ?? (this.aot?.hasLoaded(name) ? this.link(name) : undefined); }
   /** Binary DEX method keys in slot order. Resolving signature Class identities must not renumber published dispatch slots. */
@@ -756,7 +756,7 @@ export class World {
     let rt = this.classes.get(name);
     if (rt) return rt;
     const aot = this.aot?.linkClass(name);
-    if (aot) { this.classes.set(name, aot); this.noteInit(aot); this.repairVtable(name); return aot; }
+    if (aot) { this.classes.set(name, aot); this.repairVtable(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
@@ -788,7 +788,7 @@ export class World {
       const t1 = performance.now(), bytes = this.classModule(rts, true);
       this.stats.phase.classBuild += performance.now() - t1;
       const exports = this.instantiate(bytes, {}).exports;
-      for (const rt of rts) { rt.exports = exports; this.noteInit(rt); }
+      for (const rt of rts) rt.exports = exports;
     }
     this.stats.classMs += performance.now() - t0;
   }
@@ -1194,7 +1194,7 @@ export class World {
     if (s?.k !== "method" || !s.done || s.hot) return;
     this.requested.add(slot);
     // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
-    const reset = () => { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; };
+    const reset = () => { this.counts()[slot] = 0; };
     if (s.pending) { reset(); return; }
     // a small method without a loop is worth most copied into the units of the callers that run it in their loops: alone it waits a few budgets for them
     if (this.leaf(s.m)) {
@@ -1301,7 +1301,7 @@ export class World {
     return refs.units.length ? this.job(installed, copies, refs, s.hot ? refresh!.generation : undefined) : undefined;
   }
   private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, refresh?: number, merge?: boolean): UpgradeJob {
-    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** what a compile worker must be told of this World's class loading to compile `units` as it would: the initiating identities their code resolves, and the
    *  hierarchies of those classes. A unit that reaches a class whose definition is not ready is left out */
@@ -1346,23 +1346,6 @@ export class World {
   usage(): { linked: string[]; called: string[] } {
     const called = this.blockClass.filter((name, b) => { const n = this.prog.get(name)?.methods.length ?? 0; for (let i = 0; i < n; i++) if ((this.slots[this.blockBase[b] + i] as { done?: boolean } | undefined)?.done) return true; return false; });
     return { linked: [...this.classes.keys()], called };
-  }
-  /** the classes linked whose initialization has not finished or not been reported yet, with their init words: a class with nothing to initialize starts initialized and is not one */
-  private unreported: { rt: ClassRt; init: WebAssembly.Global }[] = [];
-  private noteInit(rt: ClassRt): void {
-    const init = rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined;
-    if (init && init.value !== INIT_DONE) this.unreported.push({ rt, init });
-  }
-  /** the classes whose initialization finished since the last job */
-  newlyInitialized(): string[] {
-    const out: string[] = [];
-    this.unreported = this.unreported.filter((u) => {
-      if (this.classes.get(u.rt.name) !== u.rt) return false;
-      if (u.init.value !== INIT_DONE) return true;
-      out.push(u.rt.name);
-      return false;
-    });
-    return out;
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
   release(slot: number): void { const s = this.slotAt(slot); if (s?.k === "method") s.pending = false; }
@@ -1455,7 +1438,7 @@ export class World {
       this.table.set(at, exports[name]);
     };
     if (s.k === "method" || s.k === "ensure") {
-      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) this.counts()[x] = 0; }
       if (hot) {
         const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
         const unit = this.hotUnits.publish(group, names, this.table);
@@ -1634,7 +1617,7 @@ export class World {
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
   private group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[] } {
-    const out = [...members], installed = [...members], copies: MethodInfo[] = [];
+    const out = [...members], installed = [...members], copies: MethodInfo[] = [], ids = new Set(out.map(mid));
     this.plan = new Map();
     if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
     this.noteAllocations(m);
@@ -1642,12 +1625,18 @@ export class World {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
       // the callees that have run often, busiest first: code the first tier saw run a few times is not worth compiling into the unit
-      const callees = this.callees(out[i]).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) >= COPY_MIN);
-      callees.sort((a, b) => this.ran(b) - this.ran(a));
-      for (const t of callees) {
+      const callees: { t: MethodInfo; id: string; ran: number }[] = [];
+      for (const t of this.callees(out[i])) {
+        const id = mid(t);
+        if (ids.has(id) || this.slotAt(this.slotOf(t))?.k !== "method") continue;
+        const ran = this.ran(t);
+        if (ran >= COPY_MIN) callees.push({ t, id, ran });
+      }
+      callees.sort((a, b) => b.ran - a.ran);
+      for (const { t, id } of callees) {
         if (out.length >= MAX_GROUP) break;
-        if (out.some((o) => mid(o) === mid(t))) continue;
-        out.push(t);
+        if (ids.has(id)) continue;
+        out.push(t); ids.add(id);
         (this.slotAt(this.slotOf(t)) as { done: boolean }).done ? copies.push(t) : installed.push(t);
       }
     }
@@ -1690,11 +1679,17 @@ export class World {
     return sites;
   }
   /** calls and loop iterations counted so far for the method in `slot` */
-  count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
+  count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }
+  private countView?: Int32Array;
+  /** the call and loop counters, a view kept until the memory grows */
+  private counts(): Int32Array {
+    if (this.countView?.buffer !== this.mem.buffer) this.countView = new Int32Array(this.mem.buffer, COUNT_BASE, COUNT_SLOTS);
+    return this.countView;
+  }
   /** the platform build's methods that have run here (a method's count restarts once a unit replaces its code): what a zygote has the engine compile before an
    *  app needs them (warm) */
   calledMethods(): string[] {
-    const counts = new Int32Array(this.mem.buffer, COUNT_BASE, COUNT_SLOTS), out: string[] = [];
+    const counts = this.counts(), out: string[] = [];
     for (let slot = 0; slot < COUNT_SLOTS; slot++) {
       if (!counts[slot] && !this.groupOf.has(slot)) continue;
       const s = this.slotAt(slot);
@@ -1750,8 +1745,9 @@ export class World {
   }
   /** the busiest small implementations, bounded by the number of guards emitted */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
-    const chosen: MethodInfo[] = [], scores: number[] = [];
-    for (const t of this.implementations(decl, name, desc)) {
+    const chosen: MethodInfo[] = [], scores: number[] = [], targets = this.implementations(decl, name, desc);
+    if (!targets) return chosen;
+    for (const t of targets) {
       // Asking for a count would link a class that has not run.
       if (!this.classes.has(t.cls) && !this.aot?.hasLoaded(t.cls)) continue;
       const score = this.ran(t);
@@ -1764,7 +1760,7 @@ export class World {
     }
     return chosen;
   }
-  private implemented = new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> }>>();
+  private implemented = new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> | null }>>();
   private allocatedIndex?: { seen: number; cursor: SetIterator<string>; types: Map<string, string | string[]> };
   /** Index each allocation once across its supertypes, preserving allocation order. */
   private allocatedSubtypes(decl: string): readonly string[] {
@@ -1785,19 +1781,20 @@ export class World {
     if (typeof classes === "string") index.types.set(decl, classes = [classes]);
     return classes ?? [];
   }
-  private implementations(decl: string, name: string, desc: string): Set<MethodInfo> {
+  /** the implementations of a virtual call among the allocated classes, null once there are more than MEGAMORPHIC */
+  private implementations(decl: string, name: string, desc: string): Set<MethodInfo> | null {
     const classes = this.allocatedSubtypes(decl);
     let methods = this.implemented.get(decl);
     if (!methods) this.implemented.set(decl, methods = new Map());
     const key = name + desc;
     let memo = methods.get(key);
     if (!memo) methods.set(key, memo = { seen: 0, targets: new Set() });
-    if (memo.seen === classes.length) return memo.targets;
+    if (memo.seen === classes.length || !memo.targets) return memo.targets;
     const declared = this.prog.resolve(decl, name, desc);
     for (let i = memo.seen; i < classes.length; i++) {
       const cls = classes[i];
       const t = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED)) ? symbolicOverride(this.prog, cls, declared) : this.prog.implFor(cls, name, desc);
-      if (t) memo.targets.add(t);
+      if (t && memo.targets.add(t).size > MEGAMORPHIC) { memo.targets = null; break; }
     }
     memo.seen = classes.length;
     return memo.targets;

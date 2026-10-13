@@ -33,7 +33,7 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; prefix?: Numbering; initialized?: string[]; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; prefix?: Numbering; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
   | { type: "add"; dexes: Containers; loader?: LoaderId; loaders?: LoaderSnapshot }
   | { type: "proxy"; definition: ProxyDefinition; loaders: LoaderSnapshot }
   | { type: "namespaces"; loaders: LoaderSnapshot }
@@ -106,7 +106,6 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     measureCompile("residual.wasmSetup", () => {
       units = new UnitCompiler(w!);
       if (req.sync && !units.sync(req.sync, true)) throw new Error("the page's numbering is not the worker's at the start");
-      req.initialized?.forEach((c) => w!.preInitialized.add(c));
     });
     return performance.now() - t0;
   }

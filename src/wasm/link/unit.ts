@@ -22,8 +22,6 @@ export interface UpgradeJob {
   installed: string[]; copies: string[];
   /** per virtual call (declaring class, name, descriptor), the implementations worth a guarded direct call (method ids) */
   plan: [string, string[]][];
-  /** the classes whose initialization has finished since the previous job */
-  initialized: string[];
   /** Successful, prepared initiating identities needed by these methods. */
   resolved?: [referrer: string, name: string, key: string][];
   /** Declaration hierarchies prepared by Java loading in the source World. */
@@ -68,7 +66,6 @@ export class UnitCompiler {
       if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
     }
     for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
-    job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.longLoops = new Set(job.long);
     w.stats.units = job.unit;

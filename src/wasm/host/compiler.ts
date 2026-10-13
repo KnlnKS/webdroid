@@ -73,7 +73,7 @@ export class CompileClient implements CompileService {
     this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(groups.get(0) ?? []);
     this.marks = w.numbering();
-    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized(), hostClasses: w.hostClassNames(), loaders, scopes, proxies: [...w.proxies.values()] }, [list, ...scopes.map(([, list]) => list)].flatMap(list => list.map(([, b]) => b.buffer as ArrayBuffer)));
+    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, hostClasses: w.hostClassNames(), loaders, scopes, proxies: [...w.proxies.values()] }, [list, ...scopes.map(([, list]) => list)].flatMap(list => list.map(([, b]) => b.buffer as ArrayBuffer)));
     this.stats.startMs = t0;
   }
   private loaded = false;
