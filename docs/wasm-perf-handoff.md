@@ -1,6 +1,7 @@
 # Wasm-tier performance: handoff (2026-10-13)
 
-Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`; M7's series ends at `c6b28ec3`.
+Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`. M7's series ends at `c6b28ec3`, and
+the tap-latency series after it at `de7ba895`.
 The branch is about 2,070 commits ahead of `main`, because it carries the whole `knlnks/bytecode-wasm` backend.
 Nothing is pushed or open as a PR.
 
@@ -8,10 +9,21 @@ Nothing is pushed or open as a PR.
 150 ms, and scroll present intervals. Since M7 (2026-10-13) Wasm is the only tier; there is no JS tier to compare
 against or fall back to.
 
-**Last session (M7).** The JS tier and its tools are deleted. The series also fixed several defects that predate it
-(history, "The JS tier removed"). The one that matters for measurement: from `66978ee6` until `06f9ceb4`, the dev
-server answered 500 for the platform build, so any page or gate run in that window compiled the whole platform on
-demand. Numbers measured in that window are not comparable.
+**Last session (after M7).** Its subject was tap latency; see the history, "Where a tap's time goes". What it
+did:
+- removed the cold interpreter;
+- fixed warm launches that hung at "Starting app…";
+- made `Math`'s transcendental functions direct host imports;
+- added a Komikku `lat` scenario;
+- added compiling ahead in idle time.
+
+What it found:
+- **Warm taps** are bound by the app's screen transitions and the harness's state probes, not by guest compute.
+- **Cold taps** are mostly on-demand compiling, one module per method. Chrome charges about four times what Node
+  does for each module, so the lever is fewer modules.
+
+**M7** deleted the JS tier (history, "The JS tier removed"). From `66978ee6` until `06f9ceb4` the dev server
+answered 500 for the platform build. Numbers measured in that window are not comparable.
 
 **Read first.**
 - [AGENTS.md](../AGENTS.md): the working and verification rules.
@@ -98,22 +110,46 @@ delta. The JS columns are historical.
 - **Komikku's first launch.** It compiles about 15,600 methods in 3.2 s (emit 1.5 s), at about 115 µs per method in
   Node and 200 µs in the browser. It creates about 17,900 modules. The cost is spread thin, with no single hotspot
   left.
+- **Taps** (`lat calculatorm komikku --gpu`, medians at `de7ba895`):
+  - Warm: Calculator 20–70 ms, Komikku 160–230 ms.
+  - Cold (no saved build): Calculator `7` 127 ms, the other Calculator taps 43–101 ms, and Komikku 190–290 ms.
+  - Komikku's warm taps last as long as Compose's screen transition. The probe adds 5–10 ms after every frame.
 - **Komikku's later launch.** About 280 ms goes to `loadC`, which instantiates C modules with about 172 global imports
   each. Most of the rest is `addDexes` and `linkSlot`.
 
 ## Gate state
 
-At `c6b28ec3`:
+At `de7ba895`:
 - **Quick gate** (`e2e --jobs 1`): 7 of 7 flows, with no new missing APIs, errors, required natives, draw errors,
   settle timeouts or wedges.
-- **Unit tests:** 1,147, clean in 5 consecutive full runs.
-- **`wasm all`:** all 18 suites pass, and so do `smoke` (FitNotes) and `fwtest` (31 of 31).
+- **Unit tests:** 1,147 pass. The browser tests' "End Of Central Directory" flake recurred once.
+- **`smoke`** (FitNotes): clean.
+- **`wasm all`:** all 17 suites pass. **`fwtest`:** 31 of 31.
 - **Not run since M7:** `--live`, `--full --jobs 1`, `corpus` and `textcmp`. Before M7 the serial `--live` matrix
   reached 13 of 14 flows; TikTok misses its launch budget (history, "Live matrix parity").
 
 ## Open work, in priority order
 
-### 1. The full matrix after M7
+### 1. Cold taps: fewer, cheaper modules
+A tap without a saved build compiles the methods it first calls. Compiling ahead covers 16–45% of those links.
+The rest is compiling, one module per method (history, "A cold tap is mostly compiling"). The levers:
+- **The compiler.** It takes 52% of `linkSlot`.
+- **Module count.** A Chrome Worker charges about 18.5 µs per module against Node's 4.2 µs, and no V8 flag changes
+  that. The main process makes about 6,400 modules:
+  - 3,953 from `linkSlot`;
+  - 911 from `buildClasses`;
+  - 603 from `linkEnsure`;
+  - 318 stub pools.
+
+  `linkEnsure` and the stub pools are the candidates to fold into fewer modules.
+- **Better prediction.** Adding single-target callees to a link's batch hits 64% of the time, below the 70% where
+  it breaks even. A prediction that hits more often than that pays inside the tap itself, not only when the app is
+  idle.
+
+The harness's state probe also costs about 31 ms per Komikku tap. Probing less often would lower what `lat`
+reports, but not what a user sees.
+
+### 2. The full matrix after M7
 Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`, serially, with a platform build that matches the
 sources. Compare any failure with `33373567` (the last commit before M7) under the same settings. That commit
 cannot key a platform build either. Check it out in its own worktree with its own `vendor/wasm-aot` (not the
@@ -121,7 +157,7 @@ symlink), cherry-pick `06f9ceb4`, and run `bun run aot` there. Lichess's launch 
 the reference shows a notification-permission request and live content that neither tier shows. Do not raise the
 limit.
 
-### 2. TikTok's launch
+### 3. TikTok's launch
 It times out on the Wasm tier.
 - It no longer crashes the renderer; the crash was a second process's refine (history, 2026-10-12).
 - The 4 GB shared cage still runs at 3.7–4.2 GB after 100 s.
@@ -130,7 +166,7 @@ It times out on the Wasm tier.
   looked up. The proposed design passes the slot at the call site, so one stub per signature serves every
   unlinked method.
 
-### 3. First-launch compile cost (Komikku, Feeder, TikTok)
+### 4. First-launch compile cost (Komikku, Feeder, TikTok)
 The remaining levers:
 - **Compiler front-end allocation.** About 200 MB/s while compiling; `Flow` construction is the largest share, at 12%.
 - **Instantiation.** C modules carry about 172 global imports each. Move cross-module class access to id-indexed
@@ -142,7 +178,7 @@ Measure each lever on Komikku's first launch, 3 matched runs or more. The histor
 Without a platform build FitNotes' quick flow takes 144 s against 46 s and times out on four steps, so the on-demand
 path is itself a cost worth profiling.
 
-### 4. Post-M7 cleanup candidates
+### 5. Post-M7 cleanup candidates
 Confirm each with a search for references before deleting:
 - `src/jvm/runtime.ts` is still shaped around the JS tier in places (`rt.make` gives a carrier of fields that cannot
   take a virtual call). Narrow it to what natives and the Wasm host use.
@@ -151,7 +187,7 @@ Confirm each with a search for references before deleting:
 - Browser tests once failed 9 at a time with "End Of Central Directory signature not found" while reading a jar. This
   happened once in 13 full runs at the end of M7. The history records earlier occurrences, still unexplained.
 
-### 5. Lower value; do these only with a new measurement that justifies them
+### 6. Lower value; do these only with a new measurement that justifies them
 - **M2b:** `system_server` and the broker stores in a system Worker.
   - The e2e probe showed why it matters: the broker answers app IPC on the page thread, and slow page work (the probe's
     readbacks) starved Komikku's chapter-list queries.
@@ -178,7 +214,9 @@ Confirm each with a search for references before deleting:
 - **The platform build is keyed by every file under `src/`** and the AOT scripts. After a source edit the server
   answers 404 for it unless `WEBDROID_AOT_STALE=1`. That flag is right for edits outside the compiler and linker;
   after one inside them, run `bun run aot`. Check `browserErrors` in `run.json` for a failed `/aot/current.json`,
-  and `wasmAotLoaded` above 0 in the step counters.
+  and `wasmAotLoaded` above 0 in the step counters. A temporary counter added under `src/` has the same effect: it
+  turns a `--warm` run into an on-demand one, which fails with "app code is not saved". Rebuild the platform build
+  before you measure.
 - **`vendor/wasm-aot` is shared.** It is ignored by Git, and a worktree usually symlinks it to this checkout's.
   `bun run aot` prunes the builds it replaces, including the bundled app builds. Regenerate those with
   `bun run wasm aot-profile` against a running server.
@@ -205,7 +243,9 @@ bun run test
 
 - e2e writes `tests/e2e/actual-fast/<flow>/run.json`. Check each step's `newMissing`, `newErrors`,
   `nativeRequired`, settle reason and timings.
-- `lat` scenarios live in `scripts/lat/scenarios/` (calculatorm, fitnotes, mihon). For another app, add a temporary
+- `lat` scenarios live in `scripts/lat/scenarios/` (calculatorm, fitnotes, komikku, mihon). Mihon's live update
+  dialog covers its onboarding, so use Komikku for a Compose app. Without `--warm`, `lat` measures a launch with no
+  saved build. `WEBDROID_JS_FLAGS` passes V8 flags to the browser. For another app, add a temporary
   scenario there and delete it afterwards. `--timeline` shows the app Worker's startup marks, and `--trace` writes a
   browser-wide trace.
 - The `wasm` suites relevant to recent work are `loaders`, `persist`, `lazytest`, `linkdiff` and `hostclass`.

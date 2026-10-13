@@ -7265,3 +7265,144 @@ Verification at the series tip: every commit typechecks. All of these pass:
 - a fresh eight-jar platform build (290,828 methods, 7 gaps);
 - the `--jobs 1` quick e2e gate: all 7 flows, with no new missing APIs, errors, required natives, draw errors,
   settle timeouts or wedges.
+
+### Where a tap's time goes: the cold tier removed, and compiling ahead in idle time (2026-10-13)
+
+Measured with `lat komikku calculatorm fitnotes --gpu --warm`, three matched serial runs per arm, medians. The new
+Komikku scenario (`scripts/lat/scenarios/komikku.json`) takes the private storage, onboards, and opens More,
+Settings and Appearance, then scrolls Appearance. It replaces Mihon in-app, whose live update dialog covers
+onboarding.
+
+**The cold interpreter is gone.** `?cold=1` measured slower than compiling on demand, and its deoptimization
+guards needed a second platform build. Removing it (`7f6fc18f`) deletes 2,654 lines, and `bun run aot` takes 21 s
+instead of 49 s. One full unit-test run after it showed 6 failures without output; three clean runs followed.
+
+**Second-tier planning on the app thread** (`39bbe2f1`). Each job used to report the init state of every pending
+class, so that a unit could drop an inline ensure check. That report is gone. Call counts are read through one
+cached view. Virtual calls with more than 32 implementations get no guards, so planning no longer rescans
+declarations like `Function1.invoke`. In Mihon's in-app steps `upgradeJob` falls from 217 to 61 ms.
+
+**Warm launches hung at "Starting app…"** whenever a launch prefetched more than 16 platform modules on the page
+thread. `FetchStore.load` returned early on an empty list, and each completion called `load([])` to start the next
+file, so the queue never drained past its first 16. The defect dates from `e951d359`.
+
+**`java.lang.Math`'s transcendental functions are imported host functions.** They were natives behind the
+generated wrapper, which counts, catches and checks each call for a Promise. The intrinsic now calls the host's
+`Math` function directly. Komikku's Appearance tap falls from 112k to 15k crossings, and its frame time from 97
+to 92 ms. Latency is unchanged. `StrictMath` keeps fdlibm, bit for bit.
+
+**What a Komikku tap is.** The warm taps take 160–230 ms against the 150 ms gate. A profile of the "More" tap
+(250 ms window, app Worker):
+- The input lands about 16 ms before the first frame, which takes 15 ms.
+- Frames then follow at the display's rate, 2–10 ms each, until the screen transition ends. Compose leaves a
+  screen's semantics out until it is visible, so the probe matches only once the transition has finished.
+- Choreographer frames take 90 ms of the window, and state probes take about 31 ms. A probe walks the
+  accessibility tree on the main looper (`walkView`, `createAccessibilityNodeInfo`) at 5–10 ms per probe, after
+  every frame.
+- Second-tier planning and adoption take 4–12 ms per tap.
+So these taps are bound by the app's transition and by the harness's probes, not by guest compute.
+
+An earlier figure of 25 ms per tap for render replay was a mislabel. Replay costs about 3 ms per tap.
+
+**Measurement trap.** The dev server answers 404 for `/aot/current.json` whenever any source under `src/`
+differs from the built key, unless `WEBDROID_AOT_STALE=1`. A temporary counter added to `src/` therefore turns a
+warm run into an on-demand run that fails with "app code is not saved". Rebuild with `bun run aot` after every
+source edit before measuring.
+
+**V8's tiering is not a lever for taps.** Warm `--gpu`, three runs per arm, against the Math build:
+- `--wasm-tiering-budget=1300000` (a tenth of the default) leaves Komikku's taps unchanged. It moves Calculator's
+  taps within noise: `7-warm` 29 → 20 ms, `7` 34 → 28 ms, `equals` 59 → 68 ms.
+- `--no-liftoff` makes Calculator's first tap 710 ms, and Komikku's launch missed its rendered state in both runs.
+So code quality after tier-up decides little of a warm tap.
+
+**A cold tap is mostly compiling.** Without a saved build (`lat` without `--warm`, two runs):
+- Calculator's first tap takes 160–185 ms against 27 ms warm. It links 229–342 methods in as many modules:
+  57–78 ms compiling and 18–21 ms creating modules.
+- Komikku's taps take 200–405 ms against 160–200 ms warm.
+- Launches take 2.7 s (Calculator) and 6.8–7.0 s (Komikku), against 1.6 and 2.75 s warm.
+
+In a profile of Calculator's cold launch and taps, `linkSlot` takes 1,851 ms:
+- the compiler (`compileMethod`), 954 ms;
+- `WebAssembly.Module`, 262 ms, and `Instance`, 182 ms;
+- encoding (`finishModule`), 96 ms, and import objects, 99 ms;
+- class modules and stub pools, the rest.
+
+The main process makes about 6,370 modules:
+
+| Made by | Modules |
+|---|---|
+| `linkSlot` | 3,953 |
+| `buildClasses` | 911 |
+| `linkEnsure` | 603 |
+| platform data modules | 335 |
+| stub pools | 318 |
+| helper units | 196 |
+
+A unit holds about one method, 1.8 KB and 10 imports. `World.batch` (a method's callees before its first branch)
+adds almost nothing: 3,957 links compiled 3,711 methods.
+
+**Chrome charges a module far more than Node.** The same 328 unit modules compile in 4.2 µs each under Node 24's
+V8 and in 18.5 µs each in a Worker of Chrome for Testing 151. A synthetic module costs:
+
+| Synthetic module | Node | Chrome |
+|---|---|---|
+| 1 function | 0.9 µs | 4.4 µs |
+| 10 functions | 1.6 µs | 14.6 µs |
+
+V8 flags don't change Chrome's number: lazy compilation, lazy validation, dynamic tiering and Liftoff on or off all
+measure alike. Loading the 2,159 platform modules first doesn't change Node's number either. The cost is the
+embedder's, so the lever is fewer modules. Instantiation costs about the same in both, and grows with exports.
+
+**Callees as a prediction.** At the end of Calculator's cold launch, 3,086 single-target callees of linked methods
+were not yet linked. 1,983 of them were linked later in the launch, a 64% hit rate. By call kind:
+
+| Call kind | Hit rate |
+|---|---|
+| same-class virtual | 82% |
+| `<init>` of another class | 68% |
+| virtual into another class | 60% |
+| static | 57–58% |
+
+Folding them into a link's batch would save a module per hit (about 85 µs) and waste a compile per miss (about
+200 µs). That breaks even near 70%, so it was not done.
+
+**Compiling ahead in idle time.** Earlier, compiling ahead in a Worker during launch was rejected: the app thread
+had no idle time then, and the Worker's units went stale against the page's numbering. Between interactions the
+app thread does have idle time. There, `World.ahead` compiles on the app thread, so numbering is not a problem.
+
+How it works:
+- **When it runs.** The main looper has waited 100 ms (`mainloop.ts`), no other thread of the process is runnable
+  (`yieldStats.pending()`), and the latest input is more than 1 s old. It runs in slices of at most 4 ms.
+- **What it compiles.** The single-target callees of the methods that ran, then what those call in turn, 16
+  methods to a unit, up to 8,192 methods per World. It skips classes not yet linked and methods a build module
+  holds.
+- **What it keeps.** A method compiled ahead joins the World's demand, and so the saved build, only once it has
+  run. Its first-tier counter shows that.
+
+A first trial looked only one call level deep. It removed 10–25% of a cold tap's on-demand links, too few. The
+estimate behind it had counted chains that linked within the same tap as predictable. Following callees
+transitively removes 16–45%.
+
+Two problems came up in the A/B and were fixed:
+- **Background threads.** Gated on the main looper alone, slices ran while the main thread waited for its
+  background threads, which share the JS thread. Komikku's launch lost about 70 ms, and its `start` tap 273 → 320
+  ms, with 82–85 methods compiled inside the tap's window. Requiring no runnable thread fixed the launch. Waiting 1 s
+  after input, rather than the 250 ms `answeringInput` window, fixed the tap.
+- **Warm launches.** With a saved build, compiling ahead made Calculator's first warm tap 27 → 41 ms and doubled
+  FitNotes' scroll intervals over 25 ms. A saved build already holds what earlier launches ran, so compiling ahead
+  now runs only in a launch without one. Warm runs are then neutral against the switch turned off.
+
+Cold `lat calculatorm komikku --gpu`, three runs per arm, medians off → on:
+
+| Tap | Off | On |
+|---|---|---|
+| Calculator `7` | 179 | 127 |
+| Calculator `plus` | 117 | 101 |
+| Calculator `equals` | 83 | 65 |
+| Komikku `next` | 197 | 192 |
+| Komikku `more` | 217 | 203 |
+| Komikku `settings` | 233 | 218 |
+| Komikku `appearance` | 337 | 264 |
+| Komikku `start` | 267 | 291 (ranges 238–339 and 247–307 overlap) |
+
+Komikku's launch is 6.80–6.90 s off and 6.68–6.76 s on. Calculator's launch and both scrolls are unchanged.
