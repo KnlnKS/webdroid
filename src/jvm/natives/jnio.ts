@@ -4,7 +4,7 @@
 // read-only mapping or an early non-movable array, jmemory.ts), else a heap buffer's array.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, scall, newObj, iof, classNameOf, initClass } from "./jentry";
+import { after, scall, newObj, iof, classNameOf } from "./jentry";
 import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
@@ -127,10 +127,12 @@ export function nativeOrder(b: JBuffer): JBuffer {
 /** a direct buffer holding a copy of `bytes` */
 export const directCopy = (bytes: Uint8Array): JBuffer | Promise<JBuffer> =>
   after(allocateDirect(bytes.length), (b) => { bufferBytes(b).set(bytes); return b; });
-/** initializes what allocateDirectNow needs */
+let directPrepared = false;
+/** prepares allocateDirectNow: a first allocation initializes the classes it reaches and compiles its code, either of which may wait */
 export function directReady(): Promise<void> | null {
-  const a = initClass("java/nio/ByteBuffer"), b = initClass("java/nio/DirectByteBuffer");
-  return a || b ? Promise.all([a, b]).then(() => {}) : null;
+  if (directPrepared) return null;
+  const made = after(allocateDirect(0), () => { directPrepared = true; });
+  return made instanceof Promise ? made : null;
 }
 /** allocateDirect for a caller that cannot wait, once `directReady` has settled */
 export function allocateDirectNow(n: number): JBuffer {
