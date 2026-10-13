@@ -42,7 +42,12 @@ export function declareBase(mb: ModuleBuilder): Base {
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
 export const kindVT = (_tObj: number, k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
 
+const D_D = { params: [T.f64], results: [T.f64] }, DD_D = { params: [T.f64, T.f64], results: [T.f64] };
+/** java.lang.Math's transcendental natives: the host's Math, imported as they are rather than wrapped as natives */
+export const MATH_IMPORTS = { acos: D_D, asin: D_D, atan: D_D, cbrt: D_D, cos: D_D, cosh: D_D, exp: D_D, expm1: D_D, log: D_D, log10: D_D,
+  log1p: D_D, sin: D_D, sinh: D_D, tan: D_D, tanh: D_D, atan2: DD_D, hypot: DD_D, pow: DD_D } satisfies Record<string, FunctionType>;
 const HOST_IMPORTS = {
+  ...MATH_IMPORTS,
   initSignatures: { params: [T.i32], results: [] },
   initSignaturesWait: { params: [T.i32], results: [] },
   catchBlock: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.i32] },

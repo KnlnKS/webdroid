@@ -1,6 +1,6 @@
 import { OP, type Code } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
+import { MATH_IMPORTS, type Compiler, type Intrinsic } from "../compiler/j2w";
 import { emitRefCopy, classIntrinsics } from "./classes";
 import { unsafeIntrinsics } from "./unsafe";
 import { reflectIntrinsics } from "./reflect";
@@ -65,6 +65,10 @@ for (const [name, desc] of [["in", "Ljava/io/InputStream;"], ["out", "Ljava/io/P
 def("java/lang/StrictMath.sqrt(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9f, OP.i64_reinterpret_f64); });
 def("java/lang/StrictMath.floor(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9c, OP.i64_reinterpret_f64); });
 def("java/lang/StrictMath.ceil(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9b, OP.i64_reinterpret_f64); });
+for (const [f, { params }] of Object.entries(MATH_IMPORTS)) def(`java/lang/Math.${f}(${"D".repeat(params.length)})D`, (cx, m, c) => {
+  params.forEach((_, i) => c.lget(i).raw(OP.f64_reinterpret_i64));
+  c.call(cx.imp[f as keyof typeof MATH_IMPORTS]).raw(OP.i64_reinterpret_f64);
+});
 def("java/lang/Math.sqrt(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9f, OP.i64_reinterpret_f64); });
 
 // System.arraycopy(Object src, int sp, Object dst, int dp, int n): an element kind's arrays copy as one array.copy; a pair of arrays of

@@ -862,16 +862,12 @@ function scalbn(x: number, n: number): number {
 }
 const copysign = (x: number, y: number): number => withHI(x, (HI(x) & 0x7fffffff) | (HI(y) & 0x80000000));
 
-// sqrt, floor, ceil and rint are Wasm instructions (src/wasm/link/intrinsics.ts)
-const MATH_1 = ["acos", "asin", "atan", "cbrt", "cos", "cosh", "exp", "expm1", "log", "log10", "log1p", "sin", "sinh", "tan", "tanh"] as const;
 const STRICT_1 = { acos, asin, atan, cbrt, cos, cosh, exp, expm1, log, log10, log1p, sin, sinh, tan, tanh };
 
-// Math's natives may be the platform's (bionic's on a device); StrictMath's are fdlibm's, bit for bit
+// Math's other natives may be the platform's (bionic's on a device): they are the host's Math, imported directly
+// (src/wasm/link/intrinsics.ts). StrictMath's are fdlibm's, bit for bit.
 {
-  const math: Record<string, unknown> = { "IEEEremainder(DD)D": remainder };
-  for (const f of MATH_1) math[f + "(D)D"] = Math[f];
-  for (const f of ["atan2", "hypot", "pow"] as const) math[f + "(DD)D"] = Math[f];
-  rt.registerJnis("java/lang/Math", math);
+  rt.registerJnis("java/lang/Math", { "IEEEremainder(DD)D": remainder });
   const strict: Record<string, unknown> = { "IEEEremainder(DD)D": remainder };
   for (const [f, fn] of Object.entries(STRICT_1)) strict[f + "(D)D"] = fn;
   strict["atan2(DD)D"] = atan2;
