@@ -87,16 +87,16 @@ describe("looper", () => {
     const runnable = (name: string) => fnRunnable(() => { events.push(name); });
     const t0 = performance.now();
     await onMain(async () => {
-      await postRunnable(runnable("late"), 30);
+      await postRunnable(runnable("late"), 250);
       await postRunnable(runnable("a"));
       await postRunnable(runnable("b"));
     });
     await onMain(() => events.push("job"));
     expect(events).toEqual(["a", "b", "job"]);
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, 260));
     await onMain(() => {});
     expect(events).toEqual(["a", "b", "job", "late"]);
-    expect(performance.now() - t0).toBeGreaterThanOrEqual(30);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(250);
   });
 
   test("a HandlerThread loops on its own thread, with a tid of its own, until it quits", async () => {
