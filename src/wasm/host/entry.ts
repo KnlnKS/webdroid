@@ -32,7 +32,14 @@ export const onNestedStrand = <T>(w: World, f: (s: Strand) => T): T => nested.ge
 /** the Java thread whatever is running enters Java as */
 export const runningThread = (w: World): ThreadRec => nested.get(w)!.thread();
 
+const entries = new WeakMap<World, Entry>();
+/** the entry seam over `w`: one per World, since it keeps the World's host threads and its scheduler's thread hook */
 export function wasmEntry(w: World): Entry {
+  let entry = entries.get(w);
+  if (!entry) entries.set(w, entry = makeEntry(w));
+  return entry;
+}
+function makeEntry(w: World): Entry {
   const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
   const jthreads = new WeakMap<ThreadRec, JThread>(), recs = new WeakMap<JThread, ThreadRec>();

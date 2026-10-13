@@ -36,9 +36,13 @@ export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
  *  and its other entries served as boot resources (libcore reads calendars.properties and its
  *  Hijrah data from core-oj.jar) */
 export function loadPlatformJar(bytes: Uint8Array, i: number): void {
+  mountPlatformJar(bytes, i);
+  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(rt, d, true);
+}
+/** the jar's file and the resources the boot class loader reads from it, without its classes */
+export function mountPlatformJar(bytes: Uint8Array, i: number): void {
   const jar = BOOT_JAR_PATHS[i];
   vfs.mount(jar, new BytesFile(bytes));
-  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(rt, d, true);
   for (const [name, entry] of centralDir(bytes)) {
     if (!name.endsWith("/") && !isDexEntry(name) && !rt.bootResources.has(name)) rt.bootResources.set(name, { jar, read: () => entryBytes(bytes, entry) });
   }

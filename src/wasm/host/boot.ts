@@ -97,20 +97,15 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
     if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { aotKey: store?.key, called: () => made.calledMethods() });
-    rt.mkThrowable = hostThrowable;
-    rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
-    rt.classFor = (cls) => made.bridge.toHost(classRef(made, cls));
-    wasmBox.make = (desc, v) => made.bridge.toHost(boxRef(made, desc, v));
     return made;
   };
   if (typeof location === "undefined") {
-    const start = (made: World) => { useEntry(wasmEntry(install(made))); useJniVm(wasmJni(made)); fieldNames.find = fieldNamesOf(made); };
     return { threads, loadDex(dex, isPlatform) {
       if (world) world.addDexes([dex], isPlatform ? world.prog.boot : world.prog.root);
       else {
         const p = new Program([]);
         p.add([dex], isPlatform ? p.boot : p.root); p.addExterns(externs);
-        start(createWorld(p, { dexes }));
+        useWorld(install(createWorld(p, { dexes })));
       }
     } };
   }
@@ -128,7 +123,6 @@ export async function bootWasmTier(): Promise<TierBackend> {
   let entry: Entry | undefined;
   const lazyEntry = (name: keyof Entry) => (...args: unknown[]) => ((entry ??= wasmEntry(current()))[name] as (...a: unknown[]) => unknown)(...args);
   useEntry(Object.fromEntries(ENTRY_NAMES.map((n) => [n, lazyEntry(n)])) as unknown as Entry);
-  const lazy = <T extends object>(make: () => T): T => { let v: T | undefined; return new Proxy({} as T, { get: (_, k) => ((v ??= make()) as Record<PropertyKey, unknown>)[k] }); };
   useJniVm(lazy(() => wasmJni(current())));
   let names: ReturnType<typeof fieldNamesOf> | undefined;
   fieldNames.find = (cls, name) => (names ??= fieldNamesOf(current()))(cls, name);
@@ -184,6 +178,19 @@ export async function bootWasmTier(): Promise<TierBackend> {
       await store.ready;
     },
   };
+}
+const lazy = <T extends object>(make: () => T): T => { let v: T | undefined; return new Proxy({} as T, { get: (_, k) => ((v ??= make()) as Record<PropertyKey, unknown>)[k] }); };
+let using: World | undefined;
+/** makes `w` the realm's Java: what jentry, JNI and the runtime's natives reach (JNI once it is first used: a World without the platform has none) */
+export function useWorld(w: World): World {
+  if (using === w) return w;
+  using = w;
+  useEntry(wasmEntry(w)); useJniVm(lazy(() => wasmJni(w))); fieldNames.find = fieldNamesOf(w);
+  rt.mkThrowable = hostThrowable;
+  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(w, cls); };
+  rt.classFor = (cls) => w.bridge.toHost(classRef(w, cls));
+  wasmBox.make = (desc, v) => w.bridge.toHost(boxRef(w, desc, v));
+  return w;
 }
 const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "linkClass", "initClass", "iof", "classNameOf", "callOn", "after"] as const satisfies readonly (keyof Entry)[];
 
