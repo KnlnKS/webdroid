@@ -10,7 +10,7 @@
 // the compiled code the first launch persisted.
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
-//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo;
+//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true}] }   (pick offers a synthetic photo;
 //     fps scrolls back and forth for ms and reports presentation intervals and page long tasks)
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
@@ -228,6 +228,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const out = result.taps;
   for (const s of steps) {
     if (s.wait) { await sleep(s.wait); await idle(); continue; }
+    // as the e2e driver's privateStorage: without the host's pickers, a document or folder request takes the private storage
+    if (s.privateStorage) { for (const name of ["showDirectoryPicker", "showOpenFilePicker", "showSaveFilePicker"]) Object.defineProperty(window, name, { value: undefined, configurable: true }); continue; }
     if (s.pick) {
       // a synthetic photo, so the picker has an image to hand the app
       const img = new OffscreenCanvas(1600, 1200), g = img.getContext("2d")!, grad = g.createLinearGradient(0, 0, 1600, 1200);
@@ -329,7 +331,8 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   const proc = Bun.spawn([chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
-    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]), "about:blank"], { stdout: "ignore", stderr: "ignore" });
+    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
+    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), "about:blank"], { stdout: "ignore", stderr: "ignore" });
   let port = "";
   for (let i = 0; i < 100 && !port; i++) {
     await Bun.sleep(100);
