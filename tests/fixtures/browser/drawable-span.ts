@@ -7,7 +7,7 @@ import { bootWithFonts } from "./boot";
 
 async function probe() {
   await bootWithFonts();
-  const paint = newPaint();
+  const paint = await newPaint();
   await vcall(paint, "setTextSize", "(F)V", 12);
   /** a FontMetricsInt's top, bottom, ascent and descent */
   const metric = (fm: object, k: string) => (fm as Record<string, number>)[declaredField("android/graphics/Paint$FontMetricsInt", k)];

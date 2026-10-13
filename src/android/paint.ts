@@ -150,13 +150,8 @@ export function paintOf(p: object): NativePaint {
   return deref<NativePaint>(typeof h === "bigint" ? h : (p as Record<string, bigint>)[nativePaintField ||= declaredField(PAINT, "mNativePaint")]);
 }
 const TEXT_PAINT = "android/text/TextPaint";
-/** `new Paint(ANTI_ALIAS_FLAG)` or `new TextPaint(ANTI_ALIAS_FLAG)` from TS, synchronously: the
- *  zygote has initialized both (preloadPaint) */
-export function newPaint(cls: typeof PAINT | typeof TEXT_PAINT = PAINT): JObj {
-  const p = newObj(cls, "(I)V", AA);
-  if (p instanceof Promise) throw new Error(`${cls} constructed before preloadPaint`);
-  return p;
-}
+/** `new Paint(ANTI_ALIAS_FLAG)` or `new TextPaint(ANTI_ALIAS_FLAG)` from host code, which waits when a call it makes links code */
+export const newPaint = async (cls: typeof PAINT | typeof TEXT_PAINT = PAINT): Promise<JObj> => await newObj(cls, "(I)V", AA) as JObj;
 /** ZygoteInit.preloadClasses' share: Paint, TextPaint and what their constructors reach */
 export const preloadPaint = (): unknown => newObj(TEXT_PAINT, "(I)V", AA);
 const TF = "Landroid/graphics/Typeface;";

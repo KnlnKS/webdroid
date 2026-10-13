@@ -11,7 +11,7 @@ async function row(effect: unknown): Promise<number[]> {
   await vcall(node, "setPosition", "(IIII)Z", 0, 0, 60, 20);
   const rec = await vcall(node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 60, 20);
   await vcall(rec, "drawColor", "(I)V", -1);
-  const black = newPaint();
+  const black = await newPaint();
   await vcall(black, "setColor", "(I)V", 0xff000000 | 0);
   await vcall(rec, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 0, 0, 30, 20, black);
   await vcall(node, "endRecording", "()V");

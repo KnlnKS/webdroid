@@ -16,7 +16,7 @@ async function probe() {
   await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "boundary", 8);
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0x80ff0000);
   await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "green", 1);
-  const paint = newPaint();
+  const paint = await newPaint();
   await vcall(paint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
   const node = await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", "shader");
   await vcall(node, "setPosition", "(IIII)Z", 0, 0, 16, 16);
@@ -48,7 +48,7 @@ async function probe() {
   for (const [name, desc, ...args] of [["setOrigin", "(FF)V", 50, 50], ["setTouch", "(FF)V", 50, 50], ["setRadius", "(F)V", 40],
     ["setProgress", "(F)V", 0.3], ["setNoisePhase", "(F)V", 10], ["setColor", "(II)V", 0x80ff0000 | 0, -1], ["setResolution", "(FF)V", 100, 100]] as const)
     await vcall(ripple, name, desc, ...args);
-  const ripplePaint = newPaint();
+  const ripplePaint = await newPaint();
   await vcall(ripplePaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", ripple);
   const rippleCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
   await vcall(await canvasOver(rippleCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 50, 50, 40, ripplePaint);

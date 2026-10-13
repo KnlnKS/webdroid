@@ -101,7 +101,7 @@ describe("style-wrap", () => {
     expect(iof(second, "android/text/style/MetricAffectingSpan")).toBe(true);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/CharacterStyle;")).toBe(style);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/MetricAffectingSpan;")).toBe(style);
-    const paint = newPaint("android/text/TextPaint");
+    const paint = await newPaint("android/text/TextPaint");
     await vcall(second, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(paintOf(paint).textSize).toBe(23);
     const color = await newObj("android/text/style/ForegroundColorSpan", "(I)V", -65536);
@@ -133,7 +133,7 @@ describe("text-appearance-span", () => {
     const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
-    const paint = newPaint("android/text/TextPaint");
+    const paint = await newPaint("android/text/TextPaint");
     await setPaintTypeface(paint, await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2));
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(await vcall(paintTypeface(paint), "getStyle", "()I")).toBe(3);
@@ -149,7 +149,7 @@ describe("text-appearance-span", () => {
 
   test("SuperscriptSpan shifts the existing baseline by half the ascent without resizing text", async () => {
     const span = await newObj("android/text/style/SuperscriptSpan", "()V");
-    const paint = newPaint("android/text/TextPaint");
+    const paint = await newPaint("android/text/TextPaint");
     (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
     paintOf(paint).textSize = 24;
     const half = Math.trunc(await vcall(paint, "ascent", "()F") / 2);
@@ -171,7 +171,7 @@ describe("text-platform", () => {
     expect(await vcall(span, "getTypeface", "()Landroid/graphics/Typeface;")).toBe(typeface);
     expect(await vcall(span, "getFamily", "()Ljava/lang/String;")).toBeNull();
 
-    const paint = newPaint("android/text/TextPaint");
+    const paint = await newPaint("android/text/TextPaint");
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(paintTypeface(paint)).toBe(typeface);
   });
@@ -261,7 +261,7 @@ describe("minikin", () => {
     const { styleOf, advances } = await import("../src/android/minikin");
     const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));
-    const paint = newPaint("android/text/TextPaint"), mismatches: string[] = [];
+    const paint = await newPaint("android/text/TextPaint"), mismatches: string[] = [];
     for (const [, i, spacing, ...device] of rows.filter((r) => r.startsWith("advances ")).map((r) => r.split(" "))) {
       const { text, size } = cases[+i];
       await vcall(paint, "setTextSize", "(F)V", size);

@@ -119,7 +119,7 @@ describe("font-metrics", () => {
     await vcall(buffer, "put", `([B)${BB}`, new Int8Array(bytes.buffer));
     const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
     const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", "(Landroid/graphics/fonts/Font;)V", font), "build", "()Landroid/graphics/fonts/FontFamily;");
-    const paint = newPaint("android/text/TextPaint");
+    const paint = await newPaint("android/text/TextPaint");
     await setPaintTypeface(paint, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
     paintOf(paint).textSize = 68;
     expect(await vcall(paint, "ascent", "()F")).toBeCloseTo(-63.08594, 4);
@@ -142,7 +142,7 @@ describe("font-metrics", () => {
   });
 
   test("system Paint metrics retain Android fractions before integer rounding", async () => {
-    const paint = newPaint();
+    const paint = await newPaint();
     await vcall(paint, "setTextSize", "(F)V", 48);
     const fm = await newObj("android/graphics/Paint$FontMetrics", "()V"), fi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
     expect(await vcall(paint, "getFontMetrics", "(Landroid/graphics/Paint$FontMetrics;)F", fm)).toBe(56.25);
@@ -157,7 +157,7 @@ describe("lighting-color-filter", () => {
 
   test("lighting filters retain alpha and update an attached paint's RGB transform", async () => {
     const filter = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0xff104020);
-    const paint = newPaint();
+    const paint = await newPaint();
     await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
     expect(await vcall(filter, "getColorMultiply", "()I")).toBe(0x0080ff00);
     expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020 | 0);

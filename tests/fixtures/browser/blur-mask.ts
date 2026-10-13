@@ -13,7 +13,7 @@ async function probe() {
   for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
     const value = await blur(style);
     const filter = await newObj("android/graphics/BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 5, value);
-    const paint = newPaint();
+    const paint = await newPaint();
     await vcall(paint, "setColor", "(I)V", 0x80ff0000 | 0);
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const ctx = new OffscreenCanvas(80, 80).getContext("2d")!;
@@ -39,7 +39,7 @@ async function probe() {
   const source = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 20, 20, argb);
   await vcall(source, "setDensity", "(I)V", 480);
   bitmapOf(source).ctx.fillStyle = "#ff000080"; bitmapOf(source).ctx.fillRect(5, 5, 10, 10);
-  const paint = newPaint();
+  const paint = await newPaint();
   await vcall(paint, "setColor", "(I)V", 0x4000ff00);
   const extracted = [];
   for (const radius of [0, 1, 2, 3, 5, 10]) for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
@@ -88,24 +88,24 @@ async function effects() {
   const surface = async () => { const ctx = new OffscreenCanvas(60, 60).getContext("2d")!; return { ctx, canvas: await canvasOver(ctx, 60, 60), alpha: (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3] }; };
   const set = (paint: unknown, name: string, desc: string, value: unknown) => vcall(paint, name, desc, value);
   const rect = (canvas: unknown, paint: unknown) => vcall(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 50, 50, paint);
-  const corner = newPaint(), c = await surface();
+  const corner = await newPaint(), c = await surface();
   await set(corner, "setPathEffect", "(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;", await newObj("android/graphics/CornerPathEffect", "(F)V", 12));
   await rect(c.canvas, corner);
-  const shadow = newPaint(), s = await surface();
+  const shadow = await newPaint(), s = await surface();
   await vcall(shadow, "setShadowLayer", "(FFFI)V", 2, 6, 6, 0xff0000ff | 0);
   await vcall(s.canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 30, 30, shadow);
-  const emboss = newPaint(), e = await surface();
+  const emboss = await newPaint(), e = await surface();
   await set(emboss, "setColor", "(I)V", 0xff808080 | 0);
   await set(emboss, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await newObj("android/graphics/EmbossMaskFilter", "([FFFF)V", Float32Array.of(-1, -1, 1), 0.4, 8, 4));
   await rect(e.canvas, emboss);
   const shade = (x: number, y: number) => e.ctx.getImageData(x, y, 1, 1).data[0];
-  const table = newPaint(), t = await surface();
+  const table = await newPaint(), t = await surface();
   await set(table, "setAlpha", "(I)V", 255);
   await set(table, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 0, 0));
   await vcall(t.canvas, "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 30, 20.5, table);
   let partial = 0;
   for (const v of t.ctx.getImageData(0, 0, 60, 60).data.filter((_, i) => i % 4 === 3)) if (v && v < 255) partial++;
-  const text = newPaint(), ink = async (scale: number) => {
+  const text = await newPaint(), ink = async (scale: number) => {
     const w = await surface();
     await set(text, "setTextSize", "(F)V", 20);
     await set(text, "setTextScaleX", "(F)V", scale);
