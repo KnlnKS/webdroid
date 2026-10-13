@@ -7117,3 +7117,20 @@ At its location-permission step the app thread was busy for 11–30 s, and the m
 On a later Komikku launch, an app build's class-hierarchy update when the app's dexes load fell from
 137–139 ms to 41 ms. Implementor lists now rescan when classes have been added since they were made. Launch is
 unchanged (2,514–2,639 against 2,508–2,647 ms over five pairs), because those dexes load after the first frame.
+
+### A reproducible quick gate: guest time during frames, and no network (2026-10-12)
+
+The quick gate reached 5 of 7 flows. Both causes were in the harness.
+- **Calculator.** The probe's quiescent settle advances a controlled guest clock once, through the horizon and
+  the pixel window. A ripple that the app started after that advance never saw time pass, so it stayed at its
+  first frame and asked for a frame at every vsync. Unpatched, 3 of 5 runs timed out on `7b` or `eq` (73–141 s),
+  and a fourth spent 118 s there. The probe now advances the clock while the app has a vsync scheduled, 64 ms per
+  sample, up to 2 s past the settle's advance. Six runs at 16 ms per sample all passed in 16–28 s, since each
+  sample costs about 70 ms of harness time; at 64 ms per sample the flow takes 8.7–13 s.
+- **Mihon.** v0.20.4 finds v0.21.0 on GitHub and covers each screen with an update dialog. The driver now runs
+  every non-live flow offline: `/dns` answers NXDOMAIN, `/proxy` answers the proxy's unresolved-host error and the
+  `/tcp` and `/udp` relays close, so Java sees `UnknownHostException` as on a device in airplane mode. Playwright's
+  context routes reach the process Workers' requests. A WebView's failed loads of network resources are no longer
+  browser failures while offline (Flappy Bird's AdMob script).
+- **Result.** Two consecutive quick gates reached 7 of 7, in 159 and 166 s. The emulator recorder still runs
+  online, so re-recording Mihon's references would capture the dialog.

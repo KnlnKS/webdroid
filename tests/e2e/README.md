@@ -27,7 +27,8 @@ Recording new goldens is a separate, manual step (below).
 `bun run e2e` is the quick gate. By default it runs the flows reproducible from the repository
 and local APKs alone (`clock: "controlled"` or `"pinned"`); `--live`, or naming a flow, adds the
 flows that depend on live network content. Controlled flows advance Android time logically and
-the harness pins `Date` and seeds `Math.random`, so their UI trees and checkpoint images repeat
+the harness pins `Date`, seeds `Math.random` and cuts the network (names fail to resolve, as in
+airplane mode), so their UI trees and checkpoint images repeat
 run to run; native GL games stay on real monotonic time. Live flows use per-step readiness
 checks and short observation samples instead of the full recorder's long dwell windows.
 
