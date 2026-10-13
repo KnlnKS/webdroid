@@ -23,8 +23,8 @@ import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
 import { wasmJni } from "./jni";
 import { useJniVm } from "../../native/jnivm";
-import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
-import { natives, nativeSource } from "./nativesource";
+import { classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
+import { hostSpec, natives, nativeSource } from "./nativesource";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode, type Built } from "./appcode";
@@ -71,6 +71,7 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
   // the frames of Java code, as the JS tier names them: a method the host implements is not one
   rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
+  rt.registered = (spec) => { const host = hostSpec(spec); if (host) w.addHostClass(host); };
   return w;
 }
 
@@ -97,6 +98,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { aotKey: store?.key, called: () => made.calledMethods() });
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
+    rt.classFor = (cls) => made.bridge.toHost(classRef(made, cls));
     return made;
   };
   if (typeof location === "undefined") {
@@ -130,6 +132,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   fieldNames.find = (cls, name) => (names ??= fieldNamesOf(current()))(cls, name);
   rt.mkThrowable = hostThrowable;
   rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(current(), cls); };
+  rt.classFor = (cls) => current().bridge.toHost(classRef(current(), cls));
   const [aot, jars] = await opening;
   store = aot;
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));

@@ -2,12 +2,12 @@
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime";
 import { refOf, type Bridge } from "./bridge";
-import { constClass, idOfClass, typeName } from "../link/classes";
+import { idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
 import { failed, symbolicImplFor } from "../compiler/linkage";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
-import { onNestedStrand, runningThread } from "./entry";
+import { classRef, onNestedStrand, runningThread } from "./entry";
 import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm";
 
 interface WasmField extends JniField { info: FieldInfo }
@@ -40,7 +40,7 @@ export function wasmJni(w: World): JniVm {
     const x = a.slice(1), y = b.slice(1);
     return x[0] === "L" && y[0] === "L" ? isSub(x.slice(1, -1), y.slice(1, -1)) : x[0] === "[" && y[0] === "[" ? isSub(x, y) : x === y;
   };
-  const mirror = (c: JniClass): unknown => w.hostFn("j:class:" + c.name, [], "L", (cx, code) => { constClass(cx, code, c.name); })();
+  const mirror = (c: JniClass): unknown => classRef(w, c.name);
   const classId = w.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
   /** a Class as JNI holds it, or as a native's argument holds it (the host form of the object) */
   const classOf = (mirror: unknown): JniClass | null => {

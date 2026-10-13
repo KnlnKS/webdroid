@@ -341,7 +341,10 @@ export class Runtime {
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
     this.ifaceNames = null;
+    this.registered?.(spec);
   }
+  /** a spec registered after the Wasm tier's World was made (a module a split bundle loads later) */
+  registered?: (spec: NativeSpec) => void;
   /** §4.7 intrinsics: per bytecode class and mangled method, what makes a TS body over the class's
    *  own fields from the AOSP body it stands for (which it calls for cases it does not cover) */
   intrinsics = new Map<string, Map<string, Intrinsic>>();

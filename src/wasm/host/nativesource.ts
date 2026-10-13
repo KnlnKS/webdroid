@@ -1,5 +1,5 @@
 // The registered natives of the production runtime as the Wasm tier's NativeSource.
-import { rt, JObj } from "../../jvm/runtime";
+import { rt, JObj, type NativeSpec } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { mangleMethod, splitSig } from "../../jvm/abi";
 import { TS_SPECS, tsSpecAllowance } from "../../jvm/provenance";
@@ -20,10 +20,11 @@ export const lookup = (cls: string, key: string, isStatic: boolean) => {
 /** the values of natives that read the ICU data asynchronously, resolved once before they run (a native cannot suspend yet) */
 export const settled = new Map<string, unknown>();
 /** the registered classes the host implements: all but those the VM itself is (the Wasm tier runs those as Wasm) and those that stand in for bytecode for speed */
-const hostSpecs = (): HostSpec[] => [...rt.natives].filter(([name]) => !/^(vm|intrinsic)/.test(TS_SPECS[tsSpecAllowance(name) ?? ""] ?? "")).map(([name, spec]) => ({
-  name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
+export const hostSpec = (spec: NativeSpec): HostSpec | null => /^(vm|intrinsic)/.test(TS_SPECS[tsSpecAllowance(spec.name) ?? ""] ?? "") ? null : {
+  name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
-}));
+};
+const hostSpecs = (): HostSpec[] => [...rt.natives.values()].flatMap((spec) => hostSpec(spec) ?? []);
 export const nativeSource: NativeSource = {
   hostSpecs,
   find: (cls, key, isStatic, hasBody) => {

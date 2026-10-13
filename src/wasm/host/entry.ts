@@ -20,6 +20,7 @@ import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits } from "./bridge";
 import { failed } from "../compiler/linkage";
 import { UInfo } from "../link/unsafe";
+import { constClass } from "../link/classes";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
@@ -241,6 +242,8 @@ export function hostThrowable(cls: string, msg: string | null): JThrowable {
   e.msg = msg;
   return e;
 }
+/** the Class object of `cls`, a Java reference */
+export const classRef = (w: World, cls: string): object => w.hostFn("j:class:" + cls, [], "L", (cx, c) => { constClass(cx, c, cls); })() as object;
 /** an instance of the Java class `cls` made by the host, as `rt.make` makes one for a native that fills in a result (a Struct*) or an exception (UnixException)
  *  by field name; the Bridge copies it into Java */
 export const hostObject = (w: World, cls: string): JObj => new (hostClass(cls, w.prog.isSubclass(cls, "java/lang/Throwable") ? JThrowable : JObj))();
