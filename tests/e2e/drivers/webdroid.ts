@@ -71,6 +71,8 @@ type LaunchOpts = {
   privateStorage?: { files: { path: string; fixture: string }[] };
   shots?: boolean;
   controlled?: boolean;
+  /** no network, as a device in airplane mode: every name fails to resolve */
+  offline?: boolean;
 };
 
 type StepOptions = {
@@ -94,11 +96,22 @@ export class WebdroidDriver {
       await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
       if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
         Object.defineProperty(window, name, { value: undefined, configurable: true });` });
+      if (opts.offline) {
+        await ctx.route(/^https?:\/\/[^/]+\/(dns|proxy)\?/, (route) => route.fulfill(
+          new URL(route.request().url()).pathname === "/dns" ? { status: 404 } : { status: 502, headers: { "x-wd-error": "host" } }));
+        await ctx.routeWebSocket(/^wss?:\/\/[^/]+\/(tcp|udp)(\?|$)/, (ws) => ws.close());
+      }
       const page = await ctx.newPage();
       if (process.env.WEBDROID_CPU_THROTTLE) await (await ctx.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.WEBDROID_CPU_THROTTLE) });
       const drv = new WebdroidDriver(browser, page, screen, server);
       page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
-      page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
+      page.on("console", (message) => {
+        if (message.type() !== "error") return;
+        const { url } = message.location();
+        // offline, what the network serves fails to load, as on a device without one
+        if (opts.offline && message.text().startsWith("Failed to load resource") && !url.startsWith(BASE_URL)) return;
+        drv.errors.push(`${url}: ${message.text()}`);
+      });
       await drv.open(!!opts.controlled);
       if (opts.privateStorage) {
         const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({

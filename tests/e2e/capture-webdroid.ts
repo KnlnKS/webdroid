@@ -99,6 +99,8 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
     privateStorage: flow.privateStorage,
     shots,
     controlled,
+    // the reproducible gate does not depend on what the network serves (Mihon's update check)
+    offline: flow.clock !== "live",
   });
 }
 

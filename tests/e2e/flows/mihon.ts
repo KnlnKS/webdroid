@@ -10,9 +10,8 @@
 //                      Light/Default theme — no picker, no wallpaper-derived Material You
 //                      colours, fully deterministic.
 //
-// Every screen here is offline-reachable: src/jvm/natives/jnet.ts makes sockets throw a
-// catchable ConnectException by design, so Browse/Extensions would be an unreachable target
-// rather than a fair one.
+// Every screen here is offline-reachable: the reproducible gate runs without a network, so
+// Browse/Extensions would be an unreachable target rather than a fair one.
 import { wait, type Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
