@@ -7,14 +7,12 @@ const MAX_STATES = 256;
 const MAX_ACTIONS_PER_STATE = 256;
 const MAX_SCROLLS_PER_FAMILY = 4;
 const MAX_PATH = 24;
-const MAX_COVERAGE = 20_000;
 const MAX_SIGNALS = 2_000;
 
 export type UiPrefix = { actions: UiAction[]; states: string[]; target: string | null };
 type Candidate = { key: string; scroll: boolean };
 type State = Omit<UiPrefix, "target"> & { family: string; candidates: Candidate[]; tried: string[]; discoveries: number; replayFailures: number };
-type Journal = { schemaVersion: 2; apkHash: string; states: Record<string, State>; scrollAttempts: Record<string, number>;
-  coverage: string[]; signals: string[] };
+type Journal = { schemaVersion: 2; apkHash: string; states: Record<string, State>; scrollAttempts: Record<string, number>; signals: string[] };
 
 function scrollKey(family: string, action: string): string { return JSON.stringify([family, action]); }
 
@@ -32,7 +30,6 @@ function parseJournal(value: unknown, apkHash: string): Journal {
   if (!isObject(value) || value.schemaVersion !== 2 || value.apkHash !== apkHash || !isObject(value.states) ||
       !isObject(value.scrollAttempts) || Object.values(value.scrollAttempts).some((count) =>
         typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) ||
-      !Array.isArray(value.coverage) || !value.coverage.every((item) => typeof item === "string") ||
       !Array.isArray(value.signals) || !value.signals.every((item) => typeof item === "string"))
     throw new Error("invalid or stale UI exploration journal");
   const states: Record<string, State> = {};
@@ -52,12 +49,11 @@ function parseJournal(value: unknown, apkHash: string): Journal {
       discoveries: raw.discoveries, replayFailures: raw.replayFailures };
   }
   return { schemaVersion: 2, apkHash, states, scrollAttempts: value.scrollAttempts as Record<string, number>,
-    coverage: value.coverage, signals: value.signals };
+    signals: value.signals };
 }
 
 export class UiExplorer {
   private readonly states: Record<string, State>;
-  private readonly coverage: Set<string>;
   private readonly signals: Set<string>;
   private readonly scrollAttempts: Record<string, number>;
   private liveCandidates: UiAction[] = [];
@@ -66,7 +62,6 @@ export class UiExplorer {
   private constructor(private readonly file: string, private readonly apkHash: string, journal: Journal) {
     this.states = journal.states;
     this.scrollAttempts = journal.scrollAttempts;
-    this.coverage = new Set(journal.coverage);
     this.signals = new Set(journal.signals);
   }
 
@@ -76,7 +71,7 @@ export class UiExplorer {
     const apkHash = digest.digest("hex");
     const file = `${directory}/${pkg}-${apkHash.slice(0, 12)}-v2.exploration.json`;
     const stored: unknown = await Bun.file(file).exists() ? JSON.parse(await Bun.file(file).text()) :
-      { schemaVersion: 2, apkHash, states: {}, scrollAttempts: {}, coverage: [], signals: [] };
+      { schemaVersion: 2, apkHash, states: {}, scrollAttempts: {}, signals: [] };
     return new UiExplorer(file, apkHash, parseJournal(stored, apkHash));
   }
 
@@ -114,7 +109,7 @@ export class UiExplorer {
     return semantic.length ? random.pick(semantic) : actions.length ? random.pick(actions) : null;
   }
 
-  observeAction(key: string, action: UiAction, coverage: readonly string[], signals: readonly string[], recordAttempt = true): number {
+  observeAction(key: string, action: UiAction, signals: readonly string[], recordAttempt = true): number {
     const state = this.states[key];
     if (!state) throw new Error(`UI exploration state ${key} is absent`);
     const actionKey = uiActionKey(action);
@@ -126,7 +121,6 @@ export class UiExplorer {
       }
     }
     let discoveries = 0;
-    for (const method of coverage) if (this.coverage.size < MAX_COVERAGE && !this.coverage.has(method)) { this.coverage.add(method); discoveries++; }
     for (const signal of signals) if (this.signals.size < MAX_SIGNALS && !this.signals.has(signal)) { this.signals.add(signal); discoveries++; }
     state.discoveries += discoveries;
     return discoveries;
@@ -149,14 +143,14 @@ export class UiExplorer {
 
   async save(): Promise<void> {
     const journal: Journal = { schemaVersion: 2, apkHash: this.apkHash, states: this.states, scrollAttempts: this.scrollAttempts,
-      coverage: [...this.coverage], signals: [...this.signals] };
+      signals: [...this.signals] };
     const temporary = `${this.file}.${process.pid}.tmp`;
     await Bun.write(temporary, JSON.stringify(journal));
     renameSync(temporary, this.file);
   }
 
-  summary(): { states: number; actions: number; coverage: number; signals: number } {
+  summary(): { states: number; actions: number; signals: number } {
     return { states: Object.keys(this.states).length, actions: Object.values(this.states).reduce((total, state) => total + state.tried.length, 0),
-      coverage: this.coverage.size, signals: this.signals.size };
+      signals: this.signals.size };
   }
 }

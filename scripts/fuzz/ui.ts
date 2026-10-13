@@ -23,9 +23,8 @@ type UiStep = {
   webdroidFrameHash: string;
   structuralDivergence?: string;
   pixel?: { strictPct: number; tolerantPct: number; contentDiffPct: number } | { sizeMismatch: string };
-  diagnostics: { status: "ok"; alive: boolean; errors: string[]; processes: ReturnType<typeof compactDiagnostics> }
+  diagnostics: { status: "ok"; alive: boolean; errors: string[]; processes: Awaited<ReturnType<typeof readProcesses>> }
     | { status: "action-failure"; message: string };
-  coverageDelta: string[];
   signals: string[];
   state?: string;
   nextState?: string;
@@ -104,35 +103,12 @@ function processSignals(processes: Awaited<ReturnType<typeof readProcesses>>): s
   return signals;
 }
 
-function coverage(processes: Awaited<ReturnType<typeof readProcesses>>): Set<string> {
-  const out = new Set<string>();
-  for (const process of processes) {
-    const diagnostics = process.diagnostics;
-    if (diagnostics.status !== "ok") continue;
-    const snapshot = diagnostics.coverage;
-    if (!snapshot) continue;
-    const pkg = diagnostics.pkg ?? process.url;
-    for (const method of snapshot.methods) out.add(`${pkg}:${String(method)}`);
-  }
-  return out;
-}
-
-function compactDiagnostics(processes: Awaited<ReturnType<typeof readProcesses>>) {
-  return processes.map((process) => {
-    const diagnostics = process.diagnostics;
-    if (diagnostics.status !== "ok") return process;
-    const snapshot = diagnostics.coverage;
-    return { ...process, diagnostics: { ...diagnostics,
-      coverage: snapshot ? { enabled: snapshot.enabled, methodCount: snapshot.methods.length } : null } };
-  });
-}
-
 async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: UiRunPlan): Promise<UiRun> {
   const random = new Random((options.seed ^ Math.imul(apkIndex + 1, 0x9e3779b1)) >>> 0);
   const targets = await openUiTargets(app, options.oracle);
   const web = targets.webdroid, android = targets.android;
   const environment: Record<string, unknown> = {};
-  const seenSignals = new Set<string>(), seenCoverage = new Set<string>(), seenTrees = new Set<string>(), seenFrames = new Set<string>();
+  const seenSignals = new Set<string>(), seenTrees = new Set<string>(), seenFrames = new Set<string>();
   const steps: UiStep[] = [];
   let nextAndroidNodes: UiNode[] | undefined;
   try {
@@ -142,7 +118,6 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
     const bootSignals = [...processSignals(bootProcesses), ...web.errors.map((error) => `page-error:${error}`)];
     environment.bootSignals = bootSignals;
     for (const signal of bootSignals) seenSignals.add(signal);
-    for (const method of coverage(bootProcesses)) seenCoverage.add(method);
     const stepCount = plan.kind === "replay" ? plan.actions.length : options.steps;
     for (let index = 0; index < stepCount; index++) {
       const webNodes = await web.tree();
@@ -172,11 +147,11 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (state && plan.kind === "explore") {
-          plan.explorer.observeAction(state, action, [], [`timeout-or-error:${message}`], index >= plan.prefix.actions.length);
+          plan.explorer.observeAction(state, action, [`timeout-or-error:${message}`], index >= plan.prefix.actions.length);
           await plan.explorer.save();
         }
         steps.push({ index, action, webdroidTreeHash: hash(webNodes), webdroidFrameHash: "", structuralDivergence: message,
-          diagnostics: { status: "action-failure", message }, coverageDelta: [], signals: [`timeout-or-error:${message}`] });
+          diagnostics: { status: "action-failure", message }, signals: [`timeout-or-error:${message}`] });
         break;
       }
       await Bun.sleep(250);
@@ -190,12 +165,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       const signals = processSignals(relevant);
       for (const error of web.errors) signals.push(`page-error:${error}`);
       if (!alive) signals.push("wedge:foreground");
-      const currentCoverage = coverage(relevant);
-      const coverageDelta = [...currentCoverage].filter((method) => !seenCoverage.has(method));
       const webTreeHash = hash(nextWebTree), webFrameHash = hash(webPng);
       const androidTreeHash = postAndroidNodes ? hash(postAndroidNodes) : undefined, androidFrameHash = androidPng ? hash(androidPng) : undefined;
       const newSignals = signals.filter((signal) => !seenSignals.has(signal));
-      const novel = coverageDelta.length || newSignals.length || !seenTrees.has(webTreeHash) || !seenFrames.has(webFrameHash) || structuralDivergence;
+      const novel = newSignals.length || !seenTrees.has(webTreeHash) || !seenFrames.has(webFrameHash) || structuralDivergence;
       let pixel: UiStep["pixel"];
       let diff: Img | undefined;
       if (androidPng) {
@@ -208,11 +181,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       }
       const step: UiStep = { index, action, androidTreeHash, webdroidTreeHash: webTreeHash, androidFrameHash,
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
-        diagnostics: { status: "ok", alive, errors: web.errors, processes: compactDiagnostics(relevant) },
-        coverageDelta, signals: newSignals };
+        diagnostics: { status: "ok", alive, errors: web.errors, processes: relevant }, signals: newSignals };
       if (state && plan.kind === "explore") {
         step.state = state;
-        step.discoveries = plan.explorer.observeAction(state, action, coverageDelta, newSignals, index >= plan.prefix.actions.length);
+        step.discoveries = plan.explorer.observeAction(state, action, newSignals, index >= plan.prefix.actions.length);
         if (!structuralDivergence && alive) {
           const nextSource = postAndroidNodes ?? nextWebTree;
           const nextSize = screenSize(nextSource);
@@ -231,7 +203,6 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       }
       steps.push(step);
       for (const signal of signals) seenSignals.add(signal);
-      for (const method of currentCoverage) seenCoverage.add(method);
       seenTrees.add(webTreeHash); seenFrames.add(webFrameHash);
       if (uiFailure([step])) break;
     }

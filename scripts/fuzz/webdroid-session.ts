@@ -56,7 +56,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const query = new URLSearchParams({ apk, screen: formatScreen(device), fuzzCoverage: "1" });
+    const query = new URLSearchParams({ apk, screen: formatScreen(device) });
     await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
     return {

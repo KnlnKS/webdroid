@@ -345,8 +345,8 @@ bun run fuzz ui apks/FitNotes.apk apks/calculatorm.apk \
   --out fuzz-results/ui-1592594996
 ```
 
-Without `--oracle`, the fuzzer explores webdroid alone and retains coverage, tree, frame, diagnostic,
-and error novelty:
+Without `--oracle`, the fuzzer explores webdroid alone and retains tree, frame, diagnostic, and error
+novelty:
 
 ```bash
 bun run fuzz ui FitNotes.apk --seed 1592594996 --steps 100 \
@@ -360,7 +360,7 @@ The same `--out` directory resumes a journal named for its package and APK conte
 bounds new actions in this invocation; replaying a stored path to an unexplored screen costs extra
 actions, with a total cap of three times `--steps` and at most 64 episodes. The campaign summary
 reports both explored and replayed action counts. To start a fresh search, use a new output directory. The journal records screen states,
-actions tried from each state, shortest replay paths, coverage, and signals. Its state and path
+actions tried from each state, shortest replay paths, and signals. Its state and path
 limits keep long or live-content campaigns bounded. Screen identity includes visible text and
 coarse control positions, so Compose screens with identical controls retain distinct paths. Scroll attempts are capped at four
 per scrollable layout family and control, even as list content changes. Version 2 journals use a
@@ -391,15 +391,10 @@ class plus ordinal. Normalized coordinates are retained with the identity. If An
 target that webdroid does not expose, or tree overlap falls below the structural threshold, the run
 stops at that first divergence because later actions are no longer comparable.
 
-UI runs enable `?fuzzCoverage=1`. Coverage probes are emitted into generated JVM methods only in
-that mode and are forwarded to child process frames. With coverage disabled, generated production
-methods contain no probe and no per-call conditional branch.
-
 Every successful step records:
 
 - Android/webdroid tree and frame hashes when an oracle is present;
 - tolerant pixel scores and optional screenshots/diff images;
-- new JVM method coverage;
 - missing APIs, native requirements, unread attributes, and runtime/page errors;
 - queue and compositor state;
 - layout, draw, GL, frame, compilation, and native counters; and
@@ -466,7 +461,7 @@ jq '[.minimized.failure.fingerprint,.reproductions[].failure.fingerprint]' \
 
 # UI actions, first divergence, signals, and process diagnostic states.
 jq '{actions:.minimized.actions,steps:[.minimized.run.steps[] | {
-  index,structuralDivergence,signals,coverageDelta,
+  index,structuralDivergence,signals,
   processes:[.diagnostics.processes[]? | {url,status:.diagnostics.status}]
 }]}' fuzz-results/ui-1592594996/FitNotes.failure.json
 ```

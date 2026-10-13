@@ -11,7 +11,6 @@ import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generat
 import { injectedProbeFailure } from "../scripts/fuzz/injected";
 import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
 import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase, type ProbeResult } from "../scripts/fuzz/model";
-import { configureJvmCoverage, coverageProbeSource, jvmCoverage } from "../src/jvm/coverage";
 import { UiExplorer } from "../scripts/fuzz/ui-explorer";
 import { generateUiAction, matchIdentity, uiStateKey, validateUiAction } from "../scripts/fuzz/ui-model";
 import { Random } from "../scripts/fuzz/random";
@@ -149,22 +148,6 @@ describe("fuzz-core", () => {
   });
 });
 
-describe("fuzz-coverage", () => {
-  test("fuzz coverage emits probes only while explicitly enabled", () => {
-    configureJvmCoverage(false);
-    expect(coverageProbeSource("android/view/View.draw()V")).toBe("");
-    expect(jvmCoverage.snapshot()).toEqual({ enabled: false, methods: [] });
-
-    configureJvmCoverage(true);
-    expect(coverageProbeSource("android/view/View.draw()V")).toContain("R.cv(");
-    jvmCoverage.hit("android/view/View.draw()V");
-    expect(jvmCoverage.snapshot().methods).toEqual(["android/view/View.draw()V"]);
-    jvmCoverage.reset();
-    expect(jvmCoverage.snapshot().methods).toEqual([]);
-    configureJvmCoverage(false);
-  });
-});
-
 describe("fuzz-semantic", () => {
   const node = (overrides: Partial<UiNode> = {}): UiNode => ({
     text: "", desc: "", cls: "android.widget.Button", resId: "", bounds: [0, 0, 100, 100],
@@ -214,14 +197,14 @@ describe("fuzz-semantic", () => {
         const initial = explorer.observeState(nodes, 100, 100, { actions: [], states: [], target: null });
         const first = explorer.choose(initial, new Random(12));
         if (!first) throw new Error("expected a UI action");
-        explorer.observeAction(initial, first, ["sample:method"], []);
+        explorer.observeAction(initial, first, []);
         const next = explorer.observeState([node({ text: "Next", clickable: true })], 100, 100,
           { actions: [first], states: [initial], target: null });
         await explorer.save();
 
         const resumed = await UiExplorer.open(directory, "sample", apk);
         expect(resumed.choose(initial, new Random(12))).not.toEqual(first);
-        expect(resumed.summary()).toEqual({ states: 2, actions: 1, coverage: 1, signals: 0 });
+        expect(resumed.summary()).toEqual({ states: 2, actions: 1, signals: 0 });
         expect(resumed.nextPrefix(new Set())).toEqual({ actions: [], states: [], target: initial });
         expect(next).not.toBe(initial);
       } finally {
@@ -241,7 +224,7 @@ describe("fuzz-semantic", () => {
           const action = explorer.choose(initial, new Random(1));
           if (!action) throw new Error("expected scroll action");
           expect(action.type).toBe("scroll");
-          explorer.observeAction(initial, action, [], []);
+          explorer.observeAction(initial, action, []);
         }
         await explorer.save();
 
@@ -253,7 +236,7 @@ describe("fuzz-semantic", () => {
           const action = resumed.choose(state, new Random(1));
           if (!action) throw new Error("expected scroll action");
           expect(action.type).toBe("scroll");
-          resumed.observeAction(state, action, [], []);
+          resumed.observeAction(state, action, []);
         }
         expect(resumed.choose(state, new Random(1))?.type).not.toBe("scroll");
         resumed.observeState(firstPage, 100, 100, { actions: [], states: [], target: null });
