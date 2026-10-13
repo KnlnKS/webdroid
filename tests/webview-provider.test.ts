@@ -16,10 +16,11 @@ describe("webfragment", () => {
     provider: WebViewChromium | null = null;
   }
   /** a WebView's provider, its view a stand-in: these exercise the provider's navigation alone */
-  const webView = (client: FragmentClient | null = null) => {
+  const webView = async (client: FragmentClient | null = null) => {
     const p = rt.make("webdroid/WebViewProvider") as WebViewChromium;
     p.view = new JObj(); p.settings = rt.make("webdroid/WebSettings");
-    if (client) { p.client = client; client.provider = p; }
+    p.client = client ?? await newObj("android/webkit/WebViewClient");
+    if (client) client.provider = p;
     return p;
   };
   rt.register({
@@ -36,7 +37,7 @@ describe("webfragment", () => {
   rt.linkNatives();
 
   test("fragment navigation updates the URL and finishes without starting or committing a document", async () => {
-    const client = new FragmentClient(), view = webView(client);
+    const client = new FragmentClient(), view = await webView(client);
     view.loaded = true; view.progress = 100;
     const url = "https://example.org/page#section";
     view.fragmentNavigated(url);
@@ -46,7 +47,7 @@ describe("webfragment", () => {
   });
 
   test("a suspended visited-history callback can cancel the old fragment completion", async () => {
-    const client = new FragmentClient(), view = webView(client);
+    const client = new FragmentClient(), view = await webView(client);
     client.visited = async () => { await Promise.resolve(); view.gen++; };
     const url = "https://example.org/page#section";
     view.fragmentNavigated(url);
@@ -55,7 +56,7 @@ describe("webfragment", () => {
   });
 
   test("a queued page-start callback retains its URL when a fragment commits", async () => {
-    const client = new FragmentClient(), view = webView(client);
+    const client = new FragmentClient(), view = await webView(client);
     const url = "https://example.org/page";
     await onMain(() => { view.loadUrl(url); view.fragmentNavigated(url + "#section"); });
     await onMain(() => {});
@@ -63,7 +64,7 @@ describe("webfragment", () => {
   });
 
   test("a WebView history copy is an independent snapshot", async () => {
-    const view = webView();
+    const view = await webView();
     view.loadUrl("https://example.org/one");
     view.loadUrl("https://example.org/two");
     const history = await vcall(view, "copyBackForwardList", "()Landroid/webkit/WebBackForwardList;");
@@ -87,7 +88,7 @@ describe("webview-keys", () => {
 
   test("WebView keys the client claims, and keys the page cannot take, go through View's dispatch", async () => {
     const view = rt.make("webdroid/WebViewProvider") as WebViewChromium, client = new KeyClient(), access = new Access();
-    view.view = new JObj(); view.access = access;
+    view.view = new JObj(); view.access = access; view.client = await newObj("android/webkit/WebViewClient");
     const back = await newObj("android/view/KeyEvent", "(II)V", 0, 4);
     const escape = await newObj("android/view/KeyEvent", "(II)V", 1, 111);
     expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", back)).toBe(1);

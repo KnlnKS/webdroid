@@ -3,7 +3,7 @@ import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { jarray } from "../src/jvm/abi";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
@@ -124,7 +124,7 @@ describe("package-checksums", () => {
     registerPackage(archive, path);
     const listener = new ChecksumListener();
     const pms = await hostedService("package");
-    await vcall(pms, "requestPackageChecksums", "(Ljava/lang/String;ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V", archive.pkg, 0, 0, 8, newArrayList(), listener, 0);
+    await vcall(pms, "requestPackageChecksums", "(Ljava/lang/String;ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V", archive.pkg, 0, 0, 8, await newArrayList(), listener, 0);
     const checksums = await toJsArray(listener.checksums);
     expect(checksums).toHaveLength(1);
     expect(await vcall(checksums[0], "getSplitName", "()Ljava/lang/String;")).toBeNull();
@@ -424,7 +424,7 @@ describe("pending-intents", () => {
         const rejected = await Promise.resolve().then(() => vcall(activityManager, "getIntentSenderWithFeature",
           "(ILjava/lang/String;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;I[Landroid/content/Intent;[Ljava/lang/String;ILandroid/os/Bundle;I)Landroid/content/IIntentSender;",
           1, PKG, null, null, null, 2, jarray([supplied], "Landroid/content/Intent;"), null, 0x4000000, null, 0)).then(() => null, (error: unknown) => error);
-        expect(rt.iof(rejected, "java/lang/IllegalArgumentException")).toBe(1);
+        expect(iof(rejected, "java/lang/IllegalArgumentException")).toBe(true);
         expect(await vcall(pfd, "getFd", "()I")).toBeGreaterThanOrEqual(0);
       } finally { await vcall(pfd, "close", "()V"); }
       const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
@@ -448,7 +448,7 @@ describe("pending-intents", () => {
       await canceled;
       expect(done).toBe(true);
       const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
-      expect(rt.iof(error, "android/app/PendingIntent$CanceledException")).toBe(1);
+      expect(iof(error, "android/app/PendingIntent$CanceledException")).toBe(true);
     } finally {
       release(); client.close(); stop(); Object.assign(pendingTransport, owner); Object.assign(alarmTransport, alarms);
     }
@@ -459,7 +459,7 @@ describe("resolver-file", () => {
   rt.linkNatives();
   test("resolver file opens decode paths and reject missing files without creating them", async () => {
     await loadLibcore();
-    const resolver = rt.make("android/content/ContentResolver");
+    const resolver = await vcall(await app(), "getContentResolver", "()Landroid/content/ContentResolver;");
     const path = "/resolver file?x=1", uri = await mkUri("file:///resolver%20file%3Fx%3D1?ignored=2#fragment");
     vfs.write(path, Uint8Array.of(7, 8));
     try {
@@ -474,7 +474,7 @@ describe("resolver-file", () => {
       vfs.delete(path);
       for (const missing of [uri, await mkUri("unsupported://file")]) {
         const error = await vcallAsync(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", missing, "r").catch(error => error);
-        expect(rt.iof(error, "java/io/FileNotFoundException")).toBe(1);
+        expect(iof(error, "java/io/FileNotFoundException")).toBe(true);
       }
       expect(vfs.exists(path)).toBe(false);
     } finally { vfs.delete(path); }
@@ -660,7 +660,7 @@ describe("window-context", () => {
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
     expect(await vcall(displayContext, "isUiContext", "()Z")).toBe(0);
     const window = await vcall(displayContext, "createWindowContext", "(ILandroid/os/Bundle;)Landroid/content/Context;", 2038, null);
-    expect(rt.iof(window, "android/content/ContextWrapper")).toBeTruthy();
+    expect(iof(window, "android/content/ContextWrapper")).toBeTruthy();
     // its display is the window manager's for the same display id, not the caller's object
     expect(await vcall(await vcall(window, "getDisplay", "()Landroid/view/Display;"), "getDisplayId", "()I")).toBe(await vcall(screen, "getDisplayId", "()I"));
     expect(await vcall(window, "isUiContext", "()Z")).toBe(1);
@@ -669,7 +669,7 @@ describe("window-context", () => {
     const second = await vcall(source, "createWindowContext", "(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;", screen, 2038, null);
     expect(await vcall(second, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "window")).not.toBe(manager);
     const error = await vcallAsync(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", null).then(() => null, e => e);
-    expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
+    expect(iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
   });
 
 });

@@ -2,7 +2,8 @@ import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import "../src/natives";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
-import { rt } from "../src/jvm/runtime";
+import { rt, getDeclared } from "../src/jvm/runtime";
+import { loadDex } from "../src/jvm/tier";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
 import { nativeParcel } from "../src/android/parcel";
@@ -24,13 +25,13 @@ async function encode(value: unknown) {
 }
 
 describe("object-stream-external", () => {
-  rt.loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/SerializationProbe.dex"))));
+  // on the boot class path, where ObjectInputStream resolves a class when no app code is on the stack
+  loadDex(rt, new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/SerializationProbe.dex"))), true);
   const oracle = "aced00057372001a53657269616c697a6174696f6e50726f6265245061796c6f616400000000000000070c000078707716ffffffffffffffef075bcd150008c080eda0bdedba8071007e00017704000003e77871007e0001";
-  const field = (value: object, cls: string, name: string) => Reflect.get(value, rt.link(cls).fieldTable.get(name)!);
   const makeValue = () => newObj("SerializationProbe$Value", "(JI)V", -17n, 123456789);
   function checkValue(value: object) {
-    expect(field(value, "SerializationProbe$Value", "seconds")).toBe(-17n);
-    expect(field(value, "SerializationProbe$Value", "nanos")).toBe(123456789);
+    expect(getDeclared<bigint>(value, "SerializationProbe$Value", "seconds")).toBe(-17n);
+    expect(getDeclared<number>(value, "SerializationProbe$Value", "nanos")).toBe(123456789);
   }
   test("externalized objects read Java bytes, skip unread data, and resolve repeated references", async () => {
     for (const bytes of [i8(hexBytes(oracle)), await encode(await makeValue())]) {
@@ -70,15 +71,16 @@ describe("object-stream-external", () => {
     const oracle = (await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.hex").text()).trim();
     for (const bytes of [i8(hexBytes(oracle)), await encode(await newObj("SerializationProbe$Graph"))]) {
       const graph = await vcall(await input(bytes), "readObject", "()Ljava/lang/Object;");
-      const get = (name: string) => field(graph, "SerializationProbe$Graph", name);
+      const get = (name: string) => getDeclared(graph, "SerializationProbe$Graph", name);
       expect([get("flag"), get("small"), get("letter"), get("medium"), get("integer"), get("large"), get("single"), get("wide")])
         .toEqual([1, -123, 65535, -32000, 1234567, -987654321012345n, 1.25, -9.75]);
       expect(get("cycle")).toBe(graph);
       expect(await vcall(get("set"), "size", "()I")).toBe(2);
       expect(await vcall(get("set"), "contains", "(Ljava/lang/Object;)Z", "two")).toBe(1);
-      expect(await vcall(get("list"), "get", "(I)Ljava/lang/Object;", 1)).toBe(get("numbers"));
+      // arrays are equal only to themselves
+      expect(await vcall(get("numbers"), "equals", "(Ljava/lang/Object;)Z", await vcall(get("list"), "get", "(I)Ljava/lang/Object;", 1))).toBe(1);
       expect(await vcall(get("list"), "get", "(I)Ljava/lang/Object;", 2)).toBe(graph);
-      expect(field(graph, "SerializationProbe$Base", "initialized")).toBe(31);
+      expect(getDeclared<number>(graph, "SerializationProbe$Base", "initialized")).toBe(31);
     }
   });
 

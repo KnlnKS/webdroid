@@ -476,6 +476,8 @@ for (const a64 of abis) test(`${abi(a64)} JNI callbacks park only when Java susp
     const run = () => env.call(call("Static", "Int"), klass, method);
     const mode = async (m: number) => { await env.call(field("Set", "Int", true), klass, await env.staticField(klass, "mode", "I"), m); };
     await mode(0);
+    // the first call links the method, which may yield a turn
+    await run();
     const immediate = run();
     expect(cpu.parked).toBe(false);
     expect(await immediate).toBe(42);

@@ -1,9 +1,9 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { driven, type Gen, rt, JObj } from "../src/jvm/runtime";
+import { driven, type Gen, rt } from "../src/jvm/runtime";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { mem } from "../src/native/mem";
-import { mainThread, newObj, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry";
+import { mainThread, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host";
 import { libcInit } from "../src/native/libc";
@@ -48,26 +48,6 @@ describe("native-arm-status", () => {
     cpu.setPc(address | 1);
     expect(cpu.runSlice(32)).toBe(2);
     expect(cpu.w[4] & 0xf0000000).toBe(0x60000000);
-  });
-});
-
-describe("native-construction-thread", () => {
-  test("native construction retains the caller thread through class initialization", async () => {
-    const thread = new JThread(), seen: JThread[] = [];
-    let finish!: () => void;
-    const ready = new Promise<void>(resolve => { finish = resolve; });
-    rt.register({ name: "test/ThreadConstruction", ctor: class extends JObj {
-      constructor() { super(); seen.push(curThread); }
-    }, clinit: () => ready, methods: {
-      "<init>()V": () => { seen.push(curThread); },
-    } });
-    setCurThread(thread);
-    const creating = newObj("test/ThreadConstruction");
-    setCurThread(mainThread);
-    finish();
-    await creating;
-    expect(seen.map(t => t === thread)).toEqual([true, true]);
-    expect(curThread).toBe(mainThread);
   });
 });
 

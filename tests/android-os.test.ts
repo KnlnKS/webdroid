@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { TV } from "../src/android/axml";
-import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jentry";
+import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { NativeLooper, onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
@@ -46,7 +46,7 @@ describe("bitmap-parcel", () => {
     await vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", b, 0);
     await vcall(p, "setDataPosition", "(I)V", 0);
     const back = await vcall(p, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
-    expect(rt.iof(back, "android/graphics/Bitmap")).toBe(1);
+    expect(iof(back, "android/graphics/Bitmap")).toBe(true);
     expect(back).not.toBe(b);
     const get = (name: string) => vcall(back, name, name.startsWith("has") ? "()Z" : "()I");
     expect([await get("getWidth"), await get("getHeight"), await get("getDensity"), await get("hasAlpha")]).toEqual([3, 2, 320, 0]);
@@ -110,7 +110,7 @@ describe("looper", () => {
     expect(tid).not.toBe(await scall("android/os/Process", "myTid", "()I"));
     expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
     const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await vcall(thread, "getLooper", "()Landroid/os/Looper;"));
-    const ran = new Promise<unknown>((resolve) => postTo(handler, () => resolve(curThread)));
+    const ran = new Promise<unknown>((resolve) => postTo(handler, async () => resolve(await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"))));
     expect(await ran).toBe(thread);
     expect(await vcall(thread, "quit", "()Z")).toBe(1);
     await vcall(thread, "join", "()V");
@@ -126,7 +126,7 @@ describe("job-scheduler", () => {
   rt.linkNatives();
   test("enqueued work reaches a bound service's JobServiceEngine and finishing unbinds it", async () => {
     const events: string[] = [];
-    rt.register({ name: "test/jobs/Engine", ctor: class extends (rt.link("android/app/job/JobServiceEngine").ctor as new () => JObj) {},
+    rt.register({ name: "test/jobs/Engine", ctor: class extends JObj {},
       sup: "android/app/job/JobServiceEngine", methods: {
         "onStartJob(Landroid/app/job/JobParameters;)Z": async (params: JObj) => {
           for (let item; (item = await vcall(params, "dequeueWork", "()Landroid/app/job/JobWorkItem;"));) {
@@ -136,7 +136,7 @@ describe("job-scheduler", () => {
           return 1;
         },
       } });
-    rt.register({ name: PKG.replace(/\./g, "/") + "/Worker", ctor: class extends (rt.link("android/app/Service").ctor as new () => JObj) {}, sup: "android/app/Service", methods: {
+    rt.register({ name: PKG.replace(/\./g, "/") + "/Worker", ctor: class extends JObj {}, sup: "android/app/Service", methods: {
       "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": async function (this: JObj) {
         return vcall(await newObj("test/jobs/Engine", "(Landroid/app/Service;)V", this), "getBinder", "()Landroid/os/IBinder;");
       },

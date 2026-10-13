@@ -3,7 +3,7 @@ import { vfs } from "./vfs";
 import { PrivateFiles } from "./privatefiles";
 
 test("appends keep the writer's spare capacity while every realm reads the new bytes", async () => {
-  const realm = "other", other: typeof vfs = (await import(`./vfs.ts?${realm}`)).vfs;
+  const other: typeof vfs = (await import("./vfs.ts?other" as string)).vfs;
   expect(other).not.toBe(vfs);
   const files = new PrivateFiles();
   files.attach(1, vfs); files.attach(2, other);

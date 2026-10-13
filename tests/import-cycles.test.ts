@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Glob } from "bun";
+import { globSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 
@@ -7,7 +7,7 @@ import ts from "typescript";
 // class/const/let binding from its own cycle while loading (TDZ in production only).
 test("modules do not read cyclic imports during evaluation", async () => {
   const root = resolve(import.meta.dir, "..");
-  const files = new Set([...new Glob("src/**/*.ts").scanSync(root)].filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".d.ts")).map((f) => resolve(root, f)));
+  const files = new Set([...globSync("src/**/*.ts", { cwd: root })].filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".d.ts")).map((f) => resolve(root, f)));
   type Binding = { from: string; name: string };
   type Module = { source: ts.SourceFile; imports: Map<string, Binding>; reexports: Map<string, Binding>; deps: Set<string>; tdz: Set<string> };
   const modules = new Map<string, Module>();

@@ -1,8 +1,9 @@
 import { expect, test, describe, beforeAll } from "bun:test";
-import { loadFrameworkJar, bootApp, packageRecord } from "./java";
+import { loadFrameworkJar, bootApp, packageRecord, thrown } from "./java";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
-import { implement, newObj, scall, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
+import { newObj, scall, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
+import { lambda } from "../src/jvm/natives/jlambda";
 import { vfs } from "../src/shell/vfs";
 import { onMain } from "../src/android/mainloop";
 import { mkAssetFd } from "../src/android/resnative";
@@ -30,7 +31,7 @@ describe("audio-attributes", () => {
 
   test("the audio service's focus stack tells holders of their loss and return", async () => {
     const changes: [string, number][] = [];
-    const dispatcher = () => implement(new JObj(), "dispatchAudioFocusChange", "(ILjava/lang/String;)V", (change: number, id: string) => { changes.push([id, change]); });
+    const dispatcher = () => lambda("android/media/IAudioFocusDispatcher", "dispatchAudioFocusChange(ILjava/lang/String;)V", (change: number, id: string) => { changes.push([id, change]); });
     const audio = await hostedService("audio");
     const request = (gain: number, id: string) => vcall(audio, "requestAudioFocus",
       "(Landroid/media/AudioAttributes;ILandroid/os/IBinder;Landroid/media/IAudioFocusDispatcher;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILandroid/media/audiopolicy/IAudioPolicyCallback;I)I",
@@ -90,7 +91,7 @@ describe("media-retriever", () => {
     await vcall(retriever, "release", "()V");
     vfs.write("/sdcard/media-probe.txt", new Uint8Array(0));
     const failed = await vcallAsync(await newObj("android/media/MediaMetadataRetriever", "()V"), "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.txt").then(() => null, (e: unknown) => e);
-    expect(rt.iof(failed, "java/lang/RuntimeException")).toBe(1);
+    expect(iof(failed, "java/lang/RuntimeException")).toBe(true);
   });
 
   test("MediaMetadataRetriever reads MP3 metadata", async () => {
@@ -108,10 +109,7 @@ describe("mediadrm", () => {
 
   test("MediaDrm reports the browser device's unsupported schemes", async () => {
     const uuid = await newObj("java/util/UUID", "(JJ)V", 0n, 0n);
-    await expect((async () => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))()).rejects.toMatchObject({
-      constructor: rt.link("android/media/UnsupportedSchemeException").ctor,
-    });
-    expect(rt.iof(rt.make("android/media/UnsupportedSchemeException"), "android/media/MediaDrmException")).toBe(1);
+    expect(await thrown(() => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))).toStartWith("android/media/UnsupportedSchemeException:");
     expect(await scall("android/media/MediaDrm", "isCryptoSchemeSupported", "(Ljava/util/UUID;)Z", uuid)).toBe(0);
   });
 });
@@ -131,9 +129,12 @@ describe("mediasession", () => {
     const callback = rt.make("test/SessionCallback");
     const setCallback = () => vcall(session, "setCallback", "(Landroid/media/session/MediaSession$Callback;)V", callback);
     const command = (name: string) => vcall(controller, "sendCommand", "(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V", name, null, null);
+    // the session's ISessionCallback is oneway, as from system_server: the command reaches the callback's handler on a turn of its own
+    const queued = async () => vcall(getDeclared(session, "android/media/session/MediaSession", "mCallback"), "hasMessagesOrCallbacks", "()Z");
     await onMain(async () => {
       await setCallback();
       await command("discarded");
+      while (!await queued()) await new Promise((r) => setTimeout(r, 0));
       await setCallback();
       await command("delivered");
       expect(commands).toEqual([]);
@@ -155,7 +156,7 @@ describe("sound-pool", () => {
 
   const loadListener = () => {
     const loaded: number[][] = [];
-    return Object.assign(implement(new JObj(), "onLoadComplete", "(Landroid/media/SoundPool;II)V", (_pool: unknown, id: number, status: number) => { loaded.push([id, status]); }), { loaded });
+    return Object.assign(lambda("android/media/SoundPool$OnLoadCompleteListener", "onLoadComplete(Landroid/media/SoundPool;II)V", (_pool: unknown, id: number, status: number) => { loaded.push([id, status]); }), { loaded });
   };
 
   test("SoundPool.load(AssetFileDescriptor) decodes the descriptor's bytes and reports the load", async () => {

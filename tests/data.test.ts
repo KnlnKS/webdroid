@@ -3,7 +3,7 @@ import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
+import { newObj, vcall, scall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
 import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint";
@@ -305,7 +305,7 @@ describe("cursorwindow", () => {
     const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(window, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
-    const restored = await vcall(rt.link("android/database/CursorWindow").ctor, "newFromParcel", "(Landroid/os/Parcel;)Landroid/database/CursorWindow;", parcel);
+    const restored = await scall("android/database/CursorWindow", "newFromParcel", "(Landroid/os/Parcel;)Landroid/database/CursorWindow;", parcel);
     expect(await vcall(restored, "getStartPosition", "()I")).toBe(8);
     expect(await vcall(restored, "getLong", "(II)J", 8, 0)).toBe(9007199254740993n);
     expect(await vcall(restored, "getString", "(II)Ljava/lang/String;", 8, 1)).toBe("hello");
@@ -329,9 +329,7 @@ describe("sax", () => {
       "characters([CII)V": (text: Uint16Array, start: number, length: number) => { events.push(String.fromCharCode(...text.subarray(start, start + length))); },
     } });
     const parse = async (xml: string) => {
-      const factory = rt.link("javax/xml/parsers/SAXParserFactory");
-      await rt.initClass(factory);
-      const f = await vcall(factory.ctor, "newInstance", "()Ljavax/xml/parsers/SAXParserFactory;");
+      const f = await scall("javax/xml/parsers/SAXParserFactory", "newInstance", "()Ljavax/xml/parsers/SAXParserFactory;");
       await vcall(f, "setNamespaceAware", "(Z)V", 1);
       const reader = await vcall(await vcall(f, "newSAXParser", "()Ljavax/xml/parsers/SAXParser;"), "getXMLReader", "()Lorg/xml/sax/XMLReader;");
       await vcall(reader, "setContentHandler", "(Lorg/xml/sax/ContentHandler;)V", rt.make("test/SaxEvents"));
@@ -341,7 +339,7 @@ describe("sax", () => {
     await parse('<!DOCTYPE r [<!ENTITY who "world">]><r xmlns="urn:a" xmlns:b="urn:b" b:k="v&amp;w"><b:c>hi &who;</b:c><![CDATA[<x>]]></r>');
     expect(events).toEqual(["ns =urn:a", "ns b=urn:b", "<urn:a|r v&w", "<urn:b|c null", "hi world", "/c", "<x>", "/r"]);
     const error = await parse("<a><b></a>").catch((e) => e);
-    expect(rt.iof(error, "org/xml/sax/SAXParseException")).toBe(1);
+    expect(iof(error, "org/xml/sax/SAXParseException")).toBe(true);
   });
 });
 

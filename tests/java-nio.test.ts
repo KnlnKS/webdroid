@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry";
 import { rt } from "../src/jvm/runtime";
 import { vfs } from "../src/shell/vfs";
 import { scall, loadLibcore } from "./java";
@@ -8,7 +8,6 @@ import { decodeString, encodeString } from "../src/jvm/charset";
 
 rt.linkNatives();
 await loadLibcore();
-const statics = async (cls: string): Promise<any> => { const info = rt.link(cls); await rt.initClass(info); return info.ctor; };
 
 describe("charset", () => {
   test("UTF-16 and UTF-32 match the reference device's byte orders, marks and replacements", async () => {
@@ -32,7 +31,7 @@ describe("mapped-files", () => {
     vfs.write("/tmp/nio-map.bin", new Uint8Array([1, 2, 3, 4]));
     const raf = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "rw");
     const channel = await vcall(raf, "getChannel", "()Ljava/nio/channels/FileChannel;");
-    const mode = (await statics("java/nio/channels/FileChannel$MapMode")).s$READ_WRITE;
+    const mode = await staticField("java/nio/channels/FileChannel$MapMode", "READ_WRITE");
     const map = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 2n, 6n);
     expect(await vcall(map, "capacity", "()I")).toBe(6);
     expect(vfs.read("/tmp/nio-map.bin")!.length).toBe(8);           // the mapping extended the file
@@ -77,7 +76,7 @@ describe("mapped-files", () => {
     vfs.mount("/tmp/nio-paged.bin", { size, read: async (at, n) => { reads.push(at); return bytes.slice(at, at + n); } });
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-paged.bin");
     const channel = await vcall(input, "getChannel", "()Ljava/nio/channels/FileChannel;");
-    const mode = (await statics("java/nio/channels/FileChannel$MapMode")).s$READ_ONLY;
+    const mode = await staticField("java/nio/channels/FileChannel$MapMode", "READ_ONLY");
     const map = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 3n, BigInt(size - 3));
     await vcall(input, "close", "()V");
     const at = (i: number) => bytes[i + 3], int = (i: number) => (at(i) << 24 | at(i + 1) << 16 | at(i + 2) << 8 | at(i + 3));

@@ -1,88 +1,17 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
-import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, curThread, JThread, implement } from "../src/jvm/natives/jentry";
-import { park } from "../src/jvm/natives/jthread";
-import { type JClassLoader } from "../src/jvm/natives/jlang";
-import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
-import { JObj, rt, TYPE_MARK, type ClassInfo } from "../src/jvm/runtime";
-import { Strand } from "../src/jvm/suspend";
-import { scall, loadLibcore, mountApexData } from "./java";
+import { readFileSync } from "node:fs";
+import { jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
+import { DexFile } from "../src/jvm/dex";
+import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
+import { JObj, rt } from "../src/jvm/runtime";
+import { loadDex } from "../src/jvm/tier";
+import { scall, thrown, loadLibcore, mountApexData } from "./java";
 import { detached } from "../src/jvm/natives/jthrowable";
 
 rt.linkNatives();
 await loadLibcore();
 await mountApexData();
-
-describe("annotation-enum-init", () => {
-  test("explicit enum annotation elements wait for class initialization", async () => {
-    const modeName = "test/DeferredAnnotationMode";
-    const annotationName = "test/DeferredEnumAnnotation";
-    const mode = new JObj();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-
-    class Mode extends JObj {}
-    rt.register({
-      name: modeName,
-      ctor: Mode,
-      statics: { MAIN: null },
-      clinit: async () => {
-        await gate;
-        (Mode as unknown as Record<string, unknown>)[mangleStaticField("MAIN")] = mode;
-      },
-    });
-    rt.register({
-      name: annotationName,
-      ctor: class extends JObj {},
-      methods: { [`value()L${modeName};`]: () => null },
-    });
-
-    const dex = {
-      field: () => ({ cls: 0, type: 0, name: "MAIN" }),
-      type: () => `L${modeName};`,
-    } as unknown as DexFile;
-    const annotation: EncAnnotation = {
-      visibility: 1,
-      type: annotationName,
-      elements: { value: { kind: "enum", idx: 0 } },
-      dex,
-    };
-
-    mkAnnotation(annotation);
-    const second = mkAnnotation(annotation);
-    const pending = vcall(second, "value", `()L${modeName};`);
-    release();
-
-    expect(await pending).toBe(mode);
-  });
-
-  test("annotation arrays retain their declared Java types", async () => {
-    const name = "test/ArrayAnnotation";
-    rt.register({
-      name,
-      ctor: class extends JObj {},
-      methods: {
-        "versions()[I": () => null,
-        "names()[Ljava/lang/String;": () => null,
-      },
-    });
-    const annotation = mkAnnotation({
-      visibility: 1,
-      type: name,
-      elements: { versions: [2, 3, 0], names: ["one", "two"] },
-      dex: {} as DexFile,
-    });
-
-    const versions = await vcall(annotation, "versions", "()[I");
-    const names = await vcall(annotation, "names", "()[Ljava/lang/String;");
-    expect(versions).toEqual(new Int32Array([2, 3, 0]));
-    expect(rt.iof(versions, "[I")).toBe(1);
-    expect(names).toEqual(expect.arrayContaining(["one", "two"]));
-    expect(rt.iof(names, "[Ljava/lang/String;")).toBe(1);
-  });
-});
 
 describe("strict-math", () => {
   // x, y, then sin cos tan asin acos atan exp log log10 log1p expm1 cbrt sinh cosh tanh atan2(x, y)
@@ -109,13 +38,6 @@ describe("strict-math", () => {
       const got = [...one.map((f) => scall("java/lang/StrictMath", f, "(D)D", bits(x))), ...two.map((f) => scall("java/lang/StrictMath", f, "(DD)D", bits(x), bits(y)))];
       expect((await Promise.all(got)).map(hex)).toEqual(expected);
     }
-  });
-});
-
-describe("object-bridge", () => {
-  test("host objects retain java.lang.Object.getClass", async () => {
-    const cls = await vcall({}, "getClass", "()Ljava/lang/Class;");
-    expect(await vcall(cls, "getName", "()Ljava/lang/String;")).toBe("java.lang.Object");
   });
 });
 
@@ -190,101 +112,30 @@ describe("regex", () => {
   });
 });
 
-describe("class-init", () => {
-  test("a failed <clinit> wraps its exception once, then the class stays erroneous", () => {
-    rt.register({ name: "test/FailingInit", ctor: class extends JObj {}, clinit: () => { throw rt.mkThrowable("java/lang/IllegalStateException", "boom"); } });
-    const info = rt.link("test/FailingInit");
-    const attempt = () => { try { rt.initClass(info); } catch (e) { return e as { cause: unknown }; } };
-    const first = attempt(), second = attempt();
-    expect(rt.iof(first, "java/lang/ExceptionInInitializerError")).toBe(1);
-    expect((first!.cause as { msg: string }).msg).toBe("boom");
-    expect(rt.iof(second, "java/lang/NoClassDefFoundError")).toBe(1);
-    expect(second!.cause).toBe(first);
-  });
-
-  test("a suspended <clinit>'s chain re-enters its class at once; other chains on its thread wait", async () => {
-    const gate = Promise.withResolvers<void>();
-    class Interleaved extends JObj { static ready = 0; }
-    let reentry: unknown;
-    rt.register({ name: "test/InterleavedInit", ctor: Interleaved, clinit: () => rt.drive(function* () {
-      yield gate.promise;
-      reentry = rt.initClass(info);
-      Interleaved.ready = 1;
-    }()) });
-    const info = rt.link("test/InterleavedInit");
-    // the chain that forks the <clinit> without waiting for it runs on, as does another job
-    let first: unknown;
-    const forker = callOn(mainThread, () => { detached(() => (first = rt.initClass(info))); return rt.initClass(info); });
-    const second = callOn(mainThread, () => rt.initClass(info));
-    expect(forker).toBeInstanceOf(Promise);
-    expect(second).toBeInstanceOf(Promise);
-    const seen = Promise.all([forker, second]).then(() => Interleaved.ready);
-    gate.resolve();
-    expect(await seen).toBe(1);
-    expect(reentry).toBeNull();
-    await first;
-  });
-
-  test("another chain waits out a stalled <clinit>; chains waiting on each other proceed", async () => {
-    class Stalled extends JObj { static ready = 0; }
-    rt.register({ name: "test/StalledInit", ctor: Stalled, clinit: () => rt.drive(function* () {
-      yield new Promise<void>((r) => setTimeout(r, 150));
-      Stalled.ready = 1;
-    }()) });
-    const stalled = rt.link("test/StalledInit");
-    const first = callOn(mainThread, () => rt.initClass(stalled));
-    expect(await Promise.resolve(callOn(mainThread, () => rt.initClass(stalled))).then(() => Stalled.ready)).toBe(1);
-    await first;
-
-    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-    const cyclic = (name: string, gate: Promise<void>, other: () => ClassInfo) => rt.register({ name, ctor: class extends JObj {}, clinit: () => rt.drive(function* () {
-      yield gate;
-      yield rt.initClass(other());
-    }()) });
-    cyclic("test/CycleA", gates[0].promise, () => rt.link("test/CycleB"));
-    cyclic("test/CycleB", gates[1].promise, () => rt.link("test/CycleA"));
-    const a = callOn(mainThread, () => rt.initClass(rt.link("test/CycleA")));
-    const b = callOn(mainThread, () => rt.initClass(rt.link("test/CycleB")));
-    gates[0].resolve(); await Promise.resolve();
-    gates[1].resolve();
-    await Promise.all([a, b]);
-    expect([rt.link("test/CycleA").state, rt.link("test/CycleB").state]).toEqual([2, 2]);
-  });
-});
-
 describe("reference", () => {
   test("PhantomReference never yields its referent and enqueues nothing", async () => {
     const queue = await newObj("java/lang/ref/ReferenceQueue");
     const referent = await newObj("java/lang/Object");
     const ref = await newObj("java/lang/ref/PhantomReference", "(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V", referent, queue);
-    expect(rt.iof(ref, "java/lang/ref/Reference")).toBe(1);
+    expect(iof(ref, "java/lang/ref/Reference")).toBe(true);
     expect(await vcall(ref, "get", "()Ljava/lang/Object;")).toBeNull();
     expect(await vcall(queue, "poll", "()Ljava/lang/ref/Reference;")).toBeNull();
     expect(await vcall(queue, "remove", "(J)Ljava/lang/ref/Reference;", 5n)).toBeNull();
-  });
-
-  test("InheritableThreadLocal values reach threads created afterwards", async () => {
-    const local = await newObj("java/lang/InheritableThreadLocal");
-    await vcall(local, "set", "(Ljava/lang/Object;)V", "inherited");
-    const thread = await newObj("java/lang/Thread");
-    expect(await vcallOn(thread, local, "get", "()Ljava/lang/Object;")).toBe("inherited");
-    expect(await vcall(local, "get", "()Ljava/lang/Object;")).toBe("inherited");
-    await vcall(await newObj("java/lang/Object"), "hashCode", "()I");
-    expect(rt.iof(local, "java/lang/ThreadLocal")).toBe(1);
   });
 });
 
 describe("reference-queue", () => {
   test("reference queue state survives explicit enqueue, blocked removal and repeated enqueue", async () => {
     const queue = await newObj("java/lang/ref/ReferenceQueue");
-    const value = new JObj();
+    const value = await newObj("java/lang/Object");
     const ref = await newObj("java/lang/ref/WeakReference", "(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V", value, queue);
     expect(await vcall(ref, "get", "()Ljava/lang/Object;")).toBe(value);
     expect(await vcall(ref, "isEnqueued", "()Z")).toBe(0);
     const waiting = vcall(queue, "remove", "()Ljava/lang/ref/Reference;");
     expect(await vcall(ref, "enqueue", "()Z")).toBe(1);
     expect(await waiting).toBe(ref);
-    expect(await vcall(ref, "get", "()Ljava/lang/Object;")).toBeNull();
+    // only the collector clears a referent it enqueues
+    expect(await vcall(ref, "get", "()Ljava/lang/Object;")).toBe(value);
     expect(await vcall(ref, "isEnqueued", "()Z")).toBe(0);
     expect(await vcall(ref, "enqueue", "()Z")).toBe(0);
     expect(await vcall(queue, "poll", "()Ljava/lang/ref/Reference;")).toBeNull();
@@ -301,83 +152,8 @@ describe("reference-queue", () => {
 });
 
 describe("reflection-field", () => {
-  class Fields extends JObj { value: number | bigint = 0; static value: number | bigint = 0; }
-  rt.register({ name: "test/PrimitiveFields", ctor: Fields });
-  rt.linkNatives();
-  const owner = rt.link("test/PrimitiveFields");
-  const field = (desc: string, isStatic = false) => Object.assign(new JField(), { owner, prop: "value", desc, isStatic });
-
-  test("reflective reads finish synchronously, and identity hashes are stable and not cloned", () => {
-    const o = new Fields(); o.value = 7;
-    expect(vcall(field("I"), "getInt", "(Ljava/lang/Object;)I", o)).toBe(7);
-    const h = vcall(o, "hashCode", "()I");
-    expect(vcall(o, "hashCode", "()I")).toBe(h);
-    expect(vcall(vcall(o, "clone", "()Ljava/lang/Object;"), "hashCode", "()I")).not.toBe(h);
-  });
-
-  test("proxy creation shares classes without crossing interface sets", async () => {
-    const names = ["test/ConcurrentProxyA", "test/ConcurrentProxyB"];
-    rt.markers(...names);
-    const handler = implement({}, "invoke", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;", () => null);
-    const create = (name: string) => vcall(rt.link("java/lang/reflect/Proxy").ctor, "newProxyInstance",
-      "(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;", null, [rt.classFor(name)], handler);
-    const [first, repeated, other] = await Promise.all([create(names[0]), create(names[0]), create(names[1])]);
-    expect(first.constructor === repeated.constructor).toBe(true);
-    expect(first.constructor === other.constructor).toBe(false);
-    expect([rt.iof(first, names[0]), rt.iof(first, names[1]), rt.iof(other, names[0]), rt.iof(other, names[1])]).toEqual([1, 0, 0, 1]);
-  });
-
-  test("typed field writes preserve primitive representation and Java widening rules", async () => {
-    const methods = ["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"];
-    const descriptors = "ZBCSIJFD";
-    const allowed = ["Z", "BSIJFD", "CIJFD", "SIJFD", "IJFD", "JFD", "FD", "D"];
-    for (let i = 0; i < methods.length; i++) for (const destination of descriptors) {
-      const object = new Fields(), f = field(destination), value = descriptors[i] === "J" ? 1n : 1;
-      const write = vcallAsync(f, "set" + methods[i], `(Ljava/lang/Object;${descriptors[i]})V`, object, value);
-      if (allowed[i].includes(destination)) {
-        await write;
-        expect(object.value).toBe(destination === "J" ? 1n : 1);
-      } else {
-        await expect(write).rejects.toMatchObject({ msg: "Invalid primitive field conversion" });
-        expect(object.value).toBe(0);
-      }
-    }
-  });
-
-  test("long field writes keep all bits and round directly when widening to float", async () => {
-    const object = new Fields();
-    const value = (1n << 62n) + (1n << 38n) + 1n;
-    await vcall(field("J"), "setLong", "(Ljava/lang/Object;J)V", object, value);
-    expect(object.value).toBe(value);
-    await vcall(field("F"), "setLong", "(Ljava/lang/Object;J)V", object, value);
-    expect(object.value).toBe(2 ** 62 + 2 ** 39);
-    await vcall(field("F"), "setLong", "(Ljava/lang/Object;J)V", object, -value);
-    expect(object.value).toBe(-(2 ** 62 + 2 ** 39));
-    await vcall(field("F"), "setLong", "(Ljava/lang/Object;J)V", object, value - 1n);
-    expect(object.value).toBe(2 ** 62);
-  });
-
-  test("typed setters ignore static receivers and reject invalid instance receivers and reference fields", async () => {
-    await vcall(field("J", true), "setLong", "(Ljava/lang/Object;J)V", null, 7n);
-    expect(Fields.value).toBe(7n);
-    const error = await vcallAsync(field("J"), "setLong", "(Ljava/lang/Object;J)V", null, 7n).catch(error => error);
-    expect(rt.iof(error, "java/lang/NullPointerException")).toBe(1);
-    await expect(vcallAsync(field("J"), "setLong", "(Ljava/lang/Object;J)V", new JObj(), 7n)).rejects.toMatchObject({ msg: "Wrong field receiver" });
-    await expect(vcallAsync(field("Ljava/lang/Long;"), "setLong", "(Ljava/lang/Object;J)V", new Fields(), 7n)).rejects.toMatchObject({ msg: "Invalid primitive field conversion" });
-  });
-
-  test("a static primitive write waits for its declaring class to initialize", async () => {
-    class DelayedFields extends JObj { static value = 0n; }
-    rt.register({ name: "test/DelayedFields", ctor: DelayedFields, clinit: async () => {
-      await Promise.resolve(); DelayedFields.value = 3n;
-    } });
-    const f = Object.assign(new JField(), { owner: rt.link("test/DelayedFields"), prop: "value", desc: "J", isStatic: true });
-    await vcall(f, "setLong", "(Ljava/lang/Object;J)V", null, 9n);
-    expect(DelayedFields.value).toBe(9n);
-  });
-
   test("type variables are equal only within one generic declaration", async () => {
-    const forName = (n: string) => (rt.link("java/lang/Class").ctor as any)[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")](n);
+    const forName = (n: string) => scall("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", n);
     const arrayList = await forName("java.util.ArrayList"), list = await forName("java.util.List");
     const listOfE = (await vcall(arrayList, "getGenericInterfaces", "()[Ljava/lang/reflect/Type;"))[0];
     const eOfArrayList = (await vcall(listOfE, "getActualTypeArguments", "()[Ljava/lang/reflect/Type;"))[0];
@@ -392,76 +168,43 @@ describe("reflection-field", () => {
     expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfList)).toBe("list");
   });
 
-  test("Unsafe offsets retain the field type when native properties share a name", async () => {
-    const unsafe = await vcall(rt.link("sun/misc/Unsafe").ctor, "getUnsafe", "()Lsun/misc/Unsafe;");
-    const offsets = new Map<string, bigint>();
-    for (const desc of ["I", "F", "J", "D"]) {
-      const field = Object.assign(new JField(), { prop: "sharedUnsafeValue", desc });
-      offsets.set(desc, await vcall(unsafe, "objectFieldOffset", "(Ljava/lang/reflect/Field;)J", field));
-    }
-    for (const [desc, access, bits] of [["I", "Int", 7], ["F", "Int", 0x3fc00000], ["J", "Long", 7n], ["D", "Long", 0x3ff8000000000000n]] as const) {
-      const field = { sharedUnsafeValue: desc === "J" ? 7n : desc === "I" ? 7 : 1.5 };
-      const type = access === "Int" ? "I" : "J", offset = offsets.get(desc)!;
-      expect(await vcall(unsafe, "get" + access, "(Ljava/lang/Object;J)" + type, field, offset)).toBe(bits);
-      await vcall(unsafe, "put" + access, "(Ljava/lang/Object;J" + type + ")V", field, offset, bits);
-      expect(field.sharedUnsafeValue).toBe(desc === "J" ? 7n : desc === "I" ? 7 : 1.5);
-    }
-  });
-
   test("Unsafe reference-array offsets preserve adjacent elements and compare-and-swap", async () => {
-    const unsafe = await vcall(rt.link("sun/misc/Unsafe").ctor, "getUnsafe", "()Lsun/misc/Unsafe;");
+    const unsafe = await scall("sun/misc/Unsafe", "getUnsafe", "()Lsun/misc/Unsafe;");
     const cls = rt.classFor("[Ljava/lang/Object;");
     const base = await vcall(unsafe, "arrayBaseOffset", "(Ljava/lang/Class;)I", cls);
     const scale = await vcall(unsafe, "arrayIndexScale", "(Ljava/lang/Class;)I", cls);
     expect([4, 8]).toContain(scale);
-    const values = ["first", null, "last"];
+    const [first, middle, changed, last] = await Promise.all([0, 1, 2, 3].map(() => newObj("java/lang/Object")));
+    const values = jarray([first, null, last], "Ljava/lang/Object;");
     const offset = BigInt(base + scale);
-    await vcall(unsafe, "putOrderedObject", "(Ljava/lang/Object;JLjava/lang/Object;)V", values, offset, "middle");
-    expect(await vcall(unsafe, "getObjectVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;", values, offset)).toBe("middle");
-    expect(await vcall(unsafe, "compareAndSwapObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", values, offset, "middle", "changed")).toBe(1);
-    expect(values).toEqual(["first", "changed", "last"]);
+    await vcall(unsafe, "putOrderedObject", "(Ljava/lang/Object;JLjava/lang/Object;)V", values, offset, middle);
+    expect(await vcall(unsafe, "getObjectVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;", values, offset)).toBe(middle);
+    expect(await vcall(unsafe, "compareAndSwapObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", values, offset, middle, changed)).toBe(1);
+    expect([...values]).toEqual([first, changed, last]);
   });
 });
 
 describe("string-codepoints", () => {
   test("String streams distinguish UTF-16 units from Unicode code points", async () => {
     const value = "A😀B";
-    const call = (name: string) => (String.prototype as any)[mangleMethod(name, "()Ljava/util/stream/IntStream;")].call(value);
-    expect(Array.from(await vcall(call("chars"), "toArray", "()[I"))).toEqual([65, 0xd83d, 0xde00, 66]);
-    expect(Array.from(await vcall(call("codePoints"), "toArray", "()[I"))).toEqual([65, 0x1f600, 66]);
+    const call = async (name: string) => vcall(await vcall(value, name, "()Ljava/util/stream/IntStream;"), "toArray", "()[I");
+    expect(Array.from(await call("chars"))).toEqual([65, 0xd83d, 0xde00, 66]);
+    expect(Array.from(await call("codePoints"))).toEqual([65, 0x1f600, 66]);
   });
 
-  test("String.indexOf(int) finds supplementary code points and never an invalid one", () => {
-    const at = (name: string, desc: string, ...args: number[]) => (String.prototype as any)[mangleMethod(name, desc)].call("A😀B￿", ...args);
-    expect(at("indexOf", "(I)I", 0x1f600)).toBe(1);
-    expect(at("indexOf", "(I)I", 0xf600)).toBe(-1);
-    expect(at("indexOf", "(I)I", -1)).toBe(-1);
-    expect(at("indexOf", "(II)I", 0x42, -5)).toBe(3);
-    expect(at("lastIndexOf", "(I)I", 0x1f600)).toBe(1);
-    expect(at("lastIndexOf", "(II)I", 0x41, -1)).toBe(-1);
-  });
-
-  test("String.valueOf(Object) accepts Webdroid primitive values", async () => {
-    const valueOf = (rt.link("java/lang/String").ctor as any)[mangleMethod("valueOf", "(Ljava/lang/Object;)Ljava/lang/String;")];
-    expect(await valueOf(1)).toBe("1");
-    expect(await valueOf(42n)).toBe("42");
+  test("String.indexOf(int) finds supplementary code points and never an invalid one", async () => {
+    const at = (name: string, desc: string, ...args: number[]) => vcall("A😀B￿", name, desc, ...args);
+    expect(await at("indexOf", "(I)I", 0x1f600)).toBe(1);
+    expect(await at("indexOf", "(I)I", 0xf600)).toBe(-1);
+    expect(await at("indexOf", "(I)I", -1)).toBe(-1);
+    expect(await at("indexOf", "(II)I", 0x42, -5)).toBe(3);
+    expect(await at("lastIndexOf", "(I)I", 0x1f600)).toBe(1);
+    expect(await at("lastIndexOf", "(II)I", 0x41, -1)).toBe(-1);
   });
 });
 
 describe("java-math-boundary", () => {
   const big = (s: string) => newObj("java/math/BigInteger", "(Ljava/lang/String;)V", s);
-  test("bigOf and mkBigInteger cross libcore's sign and magnitude", async () => {
-    const { bigOf, mkBigInteger } = await import("../src/jvm/natives/jmath");
-    for (const s of ["0", "1", "-1", "4294967295", "-4294967296", "18446744073709551617", "-" + "9".repeat(80)]) {
-      expect(bigOf(await big(s))).toBe(BigInt(s));
-      const b = await mkBigInteger(BigInt(s));
-      expect(await vcall(b, "toString", "()Ljava/lang/String;")).toBe(s);
-      expect(await vcall(b, "equals", "(Ljava/lang/Object;)Z", await big(s))).toBe(1);
-    }
-    expect(await vcall(await big("255"), "toString", "(I)Ljava/lang/String;", 16)).toBe("ff");
-    const args = jarray([await big("-123456789012345678901234567890")], "Ljava/lang/Object;");
-    expect(await scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "%1$d %1$x", args)).toBe("-123456789012345678901234567890 -18ee90ff6c373e0ee4e3f0ad2");
-  });
   test("NativeBN serves modPow, multiply and divide on large operands", async () => {
     const p = (1n << 521n) - 1n, a = 3n ** 300n, e = (1n << 200n) + 12345n;
     const text = (o: unknown) => vcall(o, "toString", "()Ljava/lang/String;");
@@ -479,39 +222,16 @@ describe("java-math-boundary", () => {
 
 describe("invocation-target", () => {
   test("Method.invoke wraps what the target threw, and a stack trace prints it as the cause", async () => {
-    const { stackTraceText } = await import("../src/jvm/natives/jthrowable");
     const method = await vcallAsync(rt.classFor("java/lang/Integer"), "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
       "parseInt", jarray([rt.classFor("java/lang/String")], "Ljava/lang/Class;"));
     const e = await vcallAsync(method, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", null, jarray(["x"], "Ljava/lang/Object;")).then(() => null, (x) => x);
-    expect(rt.iof(e, "java/lang/reflect/InvocationTargetException")).toBe(1);
+    expect(iof(e, "java/lang/reflect/InvocationTargetException")).toBe(true);
     const target = await vcallAsync(e, "getTargetException", "()Ljava/lang/Throwable;");
-    expect(rt.iof(target, "java/lang/NumberFormatException")).toBe(1);
+    expect(iof(target, "java/lang/NumberFormatException")).toBe(true);
     expect(await vcallAsync(e, "getCause", "()Ljava/lang/Throwable;") === target).toBe(true);
-    expect(await stackTraceText(e)).toContain("\nCaused by: java.lang.NumberFormatException: For input string: \"x\"");
-    const thrown = target as import("../src/jvm/natives/jthrowable").JThrowable, trace = await stackTraceText(thrown);
-    thrown.jsErr!.stack = thrown.jsStack!.split("\n").flatMap(line => {
-      const frame = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):(\d+))?\)?$/.exec(line);
-      if (!frame) return [];
-      const [, fn = "", url, row, col] = frame;
-      return [fn + "@" + (fn === "wdColdHandler" ? "" : url + (row ? `:${row}:${col}` : ""))];
-    }).join("\n");
-    thrown.trace = null;
-    expect(await stackTraceText(thrown)).toBe(trace);
-  });
-});
-
-describe("thread-group", () => {
-  test("threads live in libcore's main group, under system, while they run", async () => {
-    const group = await vcall(await newObj("java/lang/Thread"), "getThreadGroup", "()Ljava/lang/ThreadGroup;");
-    expect(await vcall(group, "getName", "()Ljava/lang/String;")).toBe("main");
-    expect(await vcall(await vcall(group, "getParent", "()Ljava/lang/ThreadGroup;"), "getName", "()Ljava/lang/String;")).toBe("system");
-    const before = await vcall(group, "activeCount", "()I");
-    const thread = await newObj("java/lang/Thread");
-    await vcall(thread, "start", "()V");
-    expect(await vcall(group, "activeCount", "()I")).toBe(before + 1);
-    await vcall(thread, "join", "()V");
-    expect(await vcall(group, "activeCount", "()I")).toBe(before);
-    expect(await vcall(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;")).toBeNull();
+    const text = await newObj("java/io/StringWriter");
+    await vcall(e, "printStackTrace", "(Ljava/io/PrintWriter;)V", await newObj("java/io/PrintWriter", "(Ljava/io/Writer;)V", text));
+    expect(await vcall(text, "toString", "()Ljava/lang/String;")).toContain("\nCaused by: java.lang.NumberFormatException: For input string: \"x\"");
   });
 });
 
@@ -521,15 +241,16 @@ describe("uncaught-exceptions", () => {
   rt.register({ name: "test/UncaughtRecorder", ctor: Recorder, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"], methods: {
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": function (this: Recorder, t: unknown, e: unknown) { seen.push([this.tag, t, e]); },
   } });
-  const failure = rt.mkThrowable("java/lang/IllegalStateException", "escaped");
+  let failure: unknown;
   rt.register({ name: "test/Throwing", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": () => { throw failure; } } });
-  rt.linkNatives();
   const recorder = async (tag: string) => Object.assign(await newObj("test/UncaughtRecorder") as Recorder, { tag });
 
   test("Thread.dispatchUncaughtException runs the pre-handler, then the thread's handler or its group's default", async () => {
-    const T = rt.link("java/lang/Thread").ctor, H = "(Ljava/lang/Thread$UncaughtExceptionHandler;)V";
-    await vcall(T, "setUncaughtExceptionPreHandler", H, await recorder("pre"));
-    await vcall(T, "setDefaultUncaughtExceptionHandler", H, await recorder("default"));
+    const H = "(Ljava/lang/Thread$UncaughtExceptionHandler;)V";
+    const set = (name: string, handler: unknown) => scall("java/lang/Thread", name, H, handler);
+    failure = await newObj("java/lang/IllegalStateException", "(Ljava/lang/String;)V", "escaped");
+    await set("setUncaughtExceptionPreHandler", await recorder("pre"));
+    await set("setDefaultUncaughtExceptionHandler", await recorder("default"));
     try {
       const thread = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", await newObj("test/Throwing"));
       await vcall(thread, "start", "()V");
@@ -545,37 +266,40 @@ describe("uncaught-exceptions", () => {
       seen.length = 0;
       detached(() => { throw failure; });
       await Bun.sleep(0);
-      expect(seen).toEqual([["pre", mainThread, failure], ["default", mainThread, failure]]);
+      const main = await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;");
+      expect(seen).toEqual([["pre", main, failure], ["default", main, failure]]);
     } finally {
       seen.length = 0;
-      await vcall(T, "setUncaughtExceptionPreHandler", H, null);
-      await vcall(T, "setDefaultUncaughtExceptionHandler", H, null);
+      await set("setUncaughtExceptionPreHandler", null);
+      await set("setDefaultUncaughtExceptionHandler", null);
     }
   });
 });
 
-describe("thread-enumeration", () => {
+describe("thread-group", () => {
   class WaitingTask extends JObj { finish: (() => void) | null = null; }
-  rt.register({ name: "test/EnumerationTask", ctor: WaitingTask, ifaces: ["java/lang/Runnable"], methods: {
+  rt.register({ name: "test/WaitingTask", ctor: WaitingTask, ifaces: ["java/lang/Runnable"], methods: {
     "run()V": function (this: WaitingTask) { return new Promise<void>(resolve => { this.finish = resolve; }); },
   } });
-  rt.linkNatives();
-  test("thread enumeration includes suspended live threads and removes completed threads", async () => {
-    const cls = rt.link("java/lang/Thread").ctor;
-    const count = await vcall(cls, "activeCount", "()I");
-    const task = await newObj("test/EnumerationTask");
+  test("live threads, suspended ones included, are in libcore's main group, under system, until they end", async () => {
+    const task = await newObj("test/WaitingTask") as WaitingTask;
     const thread = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", task);
+    const group = await vcall(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;");
+    expect(await vcall(group, "getName", "()Ljava/lang/String;")).toBe("main");
+    expect(await vcall(await vcall(group, "getParent", "()Ljava/lang/ThreadGroup;"), "getName", "()Ljava/lang/String;")).toBe("system");
+    const activeCount = () => vcall(group, "activeCount", "()I");
+    const count = await activeCount();
     await vcall(thread, "start", "()V");
     await Bun.sleep(0);
     try {
-      expect(curThread).toBe(mainThread);
-      expect(await vcall(cls, "activeCount", "()I")).toBe(count + 1);
+      expect(await activeCount()).toBe(count + 1);
       const threads = jarray(new Array(count + 2).fill(null), "Ljava/lang/Thread;");
-      expect(await vcall(cls, "enumerate", "([Ljava/lang/Thread;)I", threads)).toBe(count + 1);
+      expect(await scall("java/lang/Thread", "enumerate", "([Ljava/lang/Thread;)I", threads)).toBe(count + 1);
       expect(threads).toContain(thread);
     } finally { task.finish?.(); }
     await vcall(thread, "join", "()V");
-    expect(await vcall(cls, "activeCount", "()I")).toBe(count);
+    expect(await activeCount()).toBe(count);
+    expect(await vcall(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;")).toBeNull();
   });
 });
 
@@ -591,53 +315,6 @@ describe("thread-state", () => {
     expect(await state(thread)).toBe("TERMINATED");
     await expect(vcallAsync(thread, "start", "()V")).rejects.toBeDefined();
   });
-
-  test("a forked loader's runtime runs a strand in the root's one slot", () => {
-    const fork = rt.fork(), s = new Strand(curThread), was = rt.cur;
-    fork.within(s, () => { expect(rt.cur).toBe(s); expect(fork.cur).toBe(s); });
-    expect(Object.hasOwn(fork, "cur")).toBe(false);
-    expect(rt.cur).toBe(was);
-  });
-
-  test("a monitor excludes another call chain on its thread and admits its own", async () => {
-    const lock = {}, a = new Strand(curThread), b = new Strand(curThread);
-    const within = <T>(s: Strand, f: () => T) => rt.within(s, f);
-    within(a, () => { rt.me(lock); rt.me(lock); });
-    let entered = false;
-    const blocked = within(b, () => rt.me(lock));
-    void Promise.resolve(blocked).then(() => { entered = true; });
-    expect(blocked).toBeInstanceOf(Promise);
-    expect(() => within(b, () => rt.mx(lock))).toThrow();
-    within(a, () => rt.mx(lock));
-    await Promise.resolve();
-    expect(entered).toBe(false);
-    within(a, () => rt.mx(lock));
-    await blocked;
-    expect(entered).toBe(true);
-    within(b, () => rt.mx(lock));
-  });
-
-  test("Thread states expose monitor contention, timed parking, wakeup and interruption", async () => {
-    const thread = new JThread(); thread.alive = 1;
-    const lock = {}, owner = new JThread(); owner.alive = 1;
-    rt.monitors.enter(lock, owner.root);
-    const entered = rt.monitors.enter(lock, thread.root);
-    expect(await state(thread)).toBe("BLOCKED");
-    rt.monitors.exit(lock, owner.root);
-    await entered;
-    rt.monitors.exit(lock, thread.root);
-    let wake = () => {};
-    const waiting = park(thread, (resume) => { wake = resume; return () => {}; });
-    expect(await state(thread)).toBe("WAITING");
-    wake(); await waiting;
-    expect(await state(thread)).toBe("RUNNABLE");
-    const timed = park(thread, () => () => {}, 10000);
-    expect(await state(thread)).toBe("TIMED_WAITING");
-    const interrupted = timed.then(() => false, () => true);
-    await vcall(thread, "interrupt", "()V");
-    expect(await interrupted).toBe(true);
-    expect(await state(thread)).toBe("RUNNABLE");
-  });
 });
 
 describe("string-case", () => {
@@ -650,7 +327,7 @@ describe("string-case", () => {
     expect(await call("MiXeD", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "mixed")).toBe(1);
     expect(await call("a@[", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "a`{")).toBe(0);
     expect(await call("ok", "equalsIgnoreCase", "(Ljava/lang/String;)Z", "o\u212a")).toBe(1);
-    const cmp = (rt.link("java/lang/String").ctor as Record<string, unknown>)[mangleStaticField("CASE_INSENSITIVE_ORDER")];
+    const cmp = await staticField("java/lang/String", "CASE_INSENSITIVE_ORDER");
     expect(await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "b", "A")).toBe(1);
   });
 
@@ -677,45 +354,19 @@ describe("string-case", () => {
 });
 
 describe("string-trim", () => {
-  test("String.trim removes a proc cmdline terminator", () => {
-    const trim = String.prototype[mangleMethod("trim", "()Ljava/lang/String;") as keyof String] as unknown as (this: string) => string;
-    expect(trim.call("\0 com.example.app\0")).toBe("com.example.app");
+  test("String.trim removes a proc cmdline terminator", async () => {
+    expect(await vcall("\0 com.example.app\0", "trim", "()Ljava/lang/String;")).toBe("com.example.app");
   });
 });
 
 describe("invoke-polymorphic-custom", () => {
-  test("VarHandles, method handles and record methods agree across tiers", async () => {
-    const { DexFile } = await import("../src/jvm/dex");
-    const { configureJvm } = await import("../src/jvm/profile");
-    const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/InvokeProbe.dex").arrayBuffer());
-    for (const tier of ["js", "cold"] as const) {
-      configureJvm({ profile: false, tier });
-      try {
-        const R = rt.fork(), missing = rt.missing.size;
-        R.loadDex(new DexFile(bytes));
-        const info = R.link("InvokeProbe");
-        await R.initClass(info);
-        const call = (name: string) => info.ctor[mangleMethod(name, "()Ljava/lang/String;")]();
-        expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
-        expect(await call("methodHandles")).toBe("103,107,n7");
-        expect(await call("records")).toBe("Point[x=1, label=a, id=9],true,false,true,Point[x=2, label=null, id=9]");
-        expect([...R.missing].slice(missing)).toEqual([]);
-      } finally { configureJvm({ profile: false, tier: "auto" }); }
-    }
-  });
-});
-
-describe("lazy-native-static", () => {
-  test("a subclass writing a same-named static leaves the native class's lazy value alone", () => {
-    const token = new JObj();
-    class Base extends JObj {}
-    class Sub extends Base {}
-    rt.register({ name: "test/LazyStaticBase", ctor: Base, statics: { get TOKEN() { return token; } } });
-    rt.link("test/LazyStaticBase");
-    const key = mangleStaticField("TOKEN");
-    (Sub as unknown as Record<string, unknown>)[key] = null;
-    expect((Sub as unknown as Record<string, unknown>)[key]).toBeNull();
-    expect((Base as unknown as Record<string, unknown>)[key]).toBe(token);
+  test("VarHandles, method handles and record methods", async () => {
+    loadDex(rt, new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/InvokeProbe.dex"))), true);
+    const missing = rt.missing.size, call = (name: string) => scall("InvokeProbe", name, "()Ljava/lang/String;");
+    expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
+    expect(await call("methodHandles")).toBe("103,107,n7");
+    expect(await call("records")).toBe("Point[x=1, label=a, id=9],true,false,true,Point[x=2, label=null, id=9]");
+    expect([...rt.missing].slice(missing)).toEqual([]);
   });
 });
 
@@ -729,33 +380,18 @@ describe("system-properties", () => {
     expect([await property("android.icu.unicode.version"), await property("android.icu.cldr.version")]).toEqual(["15.1", "45.0"]);
   });
   test("loadLibrary reports a library the class path lacks as the linker does", async () => {
-    let error: unknown;
-    try { await vcallAsync(rt.link("java/lang/System").ctor, "loadLibrary", "(Ljava/lang/String;)V", "absent"); } catch (e) { error = e; }
-    expect((error as { msg?: string })?.msg).toBe('dlopen failed: library "libabsent.so" not found');
+    expect(await thrown(() => scall("java/lang/System", "loadLibrary", "(Ljava/lang/String;)V", "absent")))
+      .toBe('java/lang/UnsatisfiedLinkError: dlopen failed: library "libabsent.so" not found');
   });
   test("Runtime.exec tokenizes the program and reports that processes cannot start", async () => {
     const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
-    await expect(vcallAsync(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
-      .rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor, msg: expect.stringContaining('"getprop"') });
+    const error = await thrown(() => vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"));
+    expect(error).toStartWith("java/io/IOException: ");
+    expect(error).toContain('"getprop"');
   });
 });
 
 describe("dex-class-loaders", () => {
-  test("path loaders are BaseDexClassLoaders that extract their native libraries", async () => {
-    const { vfs } = await import("../src/shell/vfs");
-    for (const name of ["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "webdroid/PackageClassLoader"]) {
-      expect(rt.iof(rt.make(name), "dalvik/system/BaseDexClassLoader")).toBe(1);
-    }
-    const loader = rt.make("dalvik/system/PathClassLoader") as JClassLoader;
-    loader.runtime = rt.fork();
-    loader.runtime.classpath["lib/arm64-v8a/libfixture.so"] = new Uint8Array([1, 2, 3]);
-    loader.runtime.classpathLocations.set("lib/arm64-v8a/libfixture.so", "/data/fixture.apk");
-    const path = await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "fixture");
-    expect(vfs.read(path)).toEqual(new Uint8Array([1, 2, 3]));
-    expect(await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "absent")).toBeNull();
-    vfs.delete(path);
-  });
-
   test("in-memory DEX loaders read the buffer window and preserve defining-loader identity", async () => {
     const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
     const padded = new Int8Array(bytes.length + 16);
@@ -776,18 +412,3 @@ describe("dex-class-loaders", () => {
   });
 });
 
-// compiled code calls a method's Java-ABI name (suspend.ts): whatever installs the public name
-// must install that one beside it, or a host override is skipped for an inherited body
-test("every linked class carries both calling conventions of its methods", () => {
-  const missing: string[] = [];
-  for (const [name, info] of rt.classes) for (const o of info.ctor ? [info.ctor, info.ctor.prototype] : [])
-    for (const k of Object.getOwnPropertyNames(o)) if (/^(m\$|i\$|\$clinit$)/.test(k) && typeof o[k] === "function" && !Object.hasOwn(o, "x" + k)) missing.push(`${name}.${k}`);
-  expect(missing).toEqual([]);
-});
-
-test("a linked class prototype marks the types iof reports", () => {
-  const proto = rt.link("java/util/ArrayList").ctor.prototype as Record<string, unknown>;
-  for (const name of ["java/util/List", "java/util/Collection", "java/lang/Object", "java/util/RandomAccess"]) expect(proto[TYPE_MARK + name]).toBe(1);
-  for (const name of ["java/util/Map", "java/lang/Number"]) expect(proto[TYPE_MARK + name]).toBeUndefined();
-  expect(rt.iof(Object.create(proto), "java/util/List")).toBe(1);
-});

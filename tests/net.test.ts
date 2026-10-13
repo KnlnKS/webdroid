@@ -1,10 +1,9 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
-import { systemClassLoader } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { dialName, syntheticAddress } from "../src/shell/relay";
-import { scall, mountApexData, loadFrameworkJar } from "./java";
+import { scall, mountApexData, loadFrameworkJar, thrown } from "./java";
 import { vfs } from "../src/shell/vfs";
 
 // framework.jar and a running main looper, as a booted page has them
@@ -35,7 +34,7 @@ describe("datagram-socket", () => {
     const receiver = await newObj("java/net/DatagramSocket", "()V");
     const sender = await newObj("java/net/DatagramSocket", "()V");
     const port = await vcall(receiver, "getLocalPort", "()I") as number;
-    const loopback = await vcall(rt.link("java/net/InetAddress").ctor, "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "localhost");
+    const loopback = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "localhost");
     const outgoing = await newObj("java/net/DatagramPacket", "([BILjava/net/InetAddress;I)V", new Int8Array([4, 5, 6]), 3, loopback, port);
     await vcall(sender, "send", "(Ljava/net/DatagramPacket;)V", outgoing);
     const incoming = await newObj("java/net/DatagramPacket", "([BI)V", new Int8Array(8), 8);
@@ -200,7 +199,7 @@ describe("inet", () => {
     expect(text).toMatch(/^198\.1[89]\.\d+\.\d+$/);
     expect(text).toBe(syntheticAddress("v16m.example.com").join("."));
     expect(await vcall(a, "toString", "()Ljava/lang/String;")).toBe("v16m.example.com/" + text);
-    expect(rt.iof(a, "java/net/Inet4Address")).toBeTruthy();
+    expect(iof(a, "java/net/Inet4Address")).toBeTruthy();
     const bytes = await vcall(a, "getAddress", "()[B");
     const back = await scall("java/net/InetAddress", "getByAddress", "([B)Ljava/net/InetAddress;", bytes);
     expect(await vcall(back, "getHostName", "()Ljava/lang/String;")).toBe("v16m.example.com");
@@ -229,7 +228,7 @@ describe("inet", () => {
 describe("localsocket", () => {
   test("LocalServerSocket accepts an in-process LocalSocket and streams bytes both ways", async () => {
     const server = await newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock");
-    await expect((async () => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))()).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+    expect(await thrown(() => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))).toStartWith("java/io/IOException:");
     const accepted = vcall(server, "accept", "()Landroid/net/LocalSocket;");
     const client = await newObj("android/net/LocalSocket");
     await vcall(client, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"));
@@ -248,7 +247,8 @@ describe("localsocket", () => {
     expect(await vcall(input, "read", "([BII)I", buf, 0, 8)).toBe(-1);
     await vcall(server, "close", "()V");
     const late = await newObj("android/net/LocalSocket");
-    await expect(vcallAsync(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+    const address = await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock");
+    expect(await thrown(() => vcall(late, "connect", "(Landroid/net/LocalSocketAddress;)V", address))).toStartWith("java/io/IOException:");
   });
   test("LocalSocket passes descriptors and credentials through the kernel, and its timeout reads EAGAIN", async () => {
     const pair: JObj[] = [await newObj("java/io/FileDescriptor"), await newObj("java/io/FileDescriptor")];
@@ -268,7 +268,8 @@ describe("localsocket", () => {
     const credentials = await vcall(b, "getPeerCredentials", "()Landroid/net/Credentials;");
     expect(await vcall(credentials, "getUid", "()I")).toBe(await scall("android/os/Process", "myUid", "()I"));
     await vcall(b, "setSoTimeout", "(I)V", 20);
-    await expect(vcallAsync(await vcall(b, "getInputStream", "()Ljava/io/InputStream;"), "read", "()I")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+    const input = await vcall(b, "getInputStream", "()Ljava/io/InputStream;");
+    expect(await thrown(() => vcall(input, "read", "()I"))).toStartWith("java/io/IOException:");
     for (const s of [a, b]) await vcall(s, "close", "()V");
   });
   test("closing a LocalServerSocket ends the streams of connections it never accepted", async () => {
@@ -285,10 +286,11 @@ describe("localsocket", () => {
 describe("url-handlers", () => {
   test("URL resolves http, https and class path jar handlers as a device does", async () => {
     const connection = async (spec: string) => vcall(await newObj("java/net/URL", "(Ljava/lang/String;)V", spec), "openConnection", "()Ljava/net/URLConnection;");
-    expect(rt.iof(await connection("https://example.test/a"), "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
+    expect(iof(await connection("https://example.test/a"), "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
     const http = await connection("http://example.test/a");
-    expect(rt.iof(http, "java/net/HttpURLConnection") && !rt.iof(http, "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
-    const url = await vcall(systemClassLoader(), "getResource", "(Ljava/lang/String;)Ljava/net/URL;", "calendars.properties");
+    expect(iof(http, "java/net/HttpURLConnection") && !iof(http, "javax/net/ssl/HttpsURLConnection")).toBeTruthy();
+    const loader = await scall("java/lang/ClassLoader", "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
+    const url = await vcall(loader, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", "calendars.properties");
     expect(await vcall(url, "toString", "()Ljava/lang/String;")).toBe("jar:file:/apex/com.android.art/javalib/core-oj.jar!/calendars.properties");
     const stream = await vcall(url, "openStream", "()Ljava/io/InputStream;");
     expect(await vcall(stream, "read", "()I")).toBe("#".charCodeAt(0));
@@ -311,10 +313,9 @@ describe("ssl-parameters", () => {
   });
 
   test("SSLContext retains the selected protocol and provider", async () => {
-    const cls = rt.link("javax/net/ssl/SSLContext").ctor;
-    const initial = await vcall(cls, "getDefault", "()Ljavax/net/ssl/SSLContext;");
+    const initial = await scall("javax/net/ssl/SSLContext", "getDefault", "()Ljavax/net/ssl/SSLContext;");
     const provider = await vcall(initial, "getProvider", "()Ljava/security/Provider;");
-    const context = await vcall(cls, "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljavax/net/ssl/SSLContext;", "TLS", provider);
+    const context = await scall("javax/net/ssl/SSLContext", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljavax/net/ssl/SSLContext;", "TLS", provider);
     expect(await vcall(context, "getProvider", "()Ljava/security/Provider;")).toBe(provider);
     expect(await vcall(context, "getProtocol", "()Ljava/lang/String;")).toBe("TLS");
     const engine = await vcall(context, "createSSLEngine", "()Ljavax/net/ssl/SSLEngine;");

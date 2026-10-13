@@ -17,6 +17,8 @@ class CompilePort implements WorkerPort {
 }
 
 const world = {demand: {methods: new Set(), classes: [], infos: []}, prog: {root: {}}} as unknown as World;
+// without the Web Locks API a build's worker is spawned at once
+Object.defineProperty(navigator, 'locks', {value: undefined, configurable: true});
 
 test('app code death closes its builder, rejects its build and prevents late restart', async () => {
   const fetchMock = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));

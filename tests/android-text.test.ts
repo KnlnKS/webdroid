@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { implement, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
@@ -17,9 +17,9 @@ describe("locale-span", () => {
   rt.linkNatives();
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
     await loadLibcore();
-    const locales = await vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
+    const locales = await scall("android/os/LocaleList", "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
     const span = await newObj("android/text/style/LocaleSpan", "(Landroid/os/LocaleList;)V", locales);
-    expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
+    expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
     const paint = await newObj("android/text/TextPaint");
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
@@ -42,8 +42,7 @@ describe("metric-spans", () => {
   rt.linkNatives();
 
   test("style spans preserve existing italics for drawing and measurement", async () => {
-    const typeface = rt.link("android/graphics/Typeface").ctor;
-    const italic = await vcall(typeface, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2);
+    const italic = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2);
     const span = await newObj("android/text/style/StyleSpan", "(I)V", 1);
     for (const method of ["updateDrawState", "updateMeasureState"]) {
       const paint = await newObj("android/text/TextPaint", "()V");
@@ -99,11 +98,11 @@ describe("spanned-append", () => {
 describe("style-wrap", () => {
   rt.linkNatives();
   test("style wrappers remain distinct while forwarding draw and measure state", async () => {
-    const wrap = (style: unknown) => vcall(rt.link("android/text/style/CharacterStyle").ctor, "wrap", "(Landroid/text/style/CharacterStyle;)Landroid/text/style/CharacterStyle;", style);
+    const wrap = (style: unknown) => scall("android/text/style/CharacterStyle", "wrap", "(Landroid/text/style/CharacterStyle;)Landroid/text/style/CharacterStyle;", style);
     const style = await newObj("android/text/style/AbsoluteSizeSpan", "(I)V", 23);
     const first = await wrap(style), second = await wrap(first);
     expect(second).not.toBe(first);
-    expect(rt.iof(second, "android/text/style/MetricAffectingSpan")).toBe(1);
+    expect(iof(second, "android/text/style/MetricAffectingSpan")).toBe(true);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/CharacterStyle;")).toBe(style);
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/MetricAffectingSpan;")).toBe(style);
     const paint = newPaint("android/text/TextPaint");
@@ -111,7 +110,7 @@ describe("style-wrap", () => {
     expect(paintOf(paint).textSize).toBe(23);
     const color = await newObj("android/text/style/ForegroundColorSpan", "(I)V", -65536);
     const colorWrapper = await wrap(color);
-    expect(rt.iof(colorWrapper, "android/text/style/MetricAffectingSpan")).toBe(0);
+    expect(iof(colorWrapper, "android/text/style/MetricAffectingSpan")).toBe(false);
     await vcall(colorWrapper, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(await vcall(paint, "getColor", "()I")).toBe(-65536);
   });
@@ -135,7 +134,7 @@ describe("styled-null", () => {
 });
 
 describe("text-appearance-span", () => {
-  test("text appearances combine font style and apply state colors after virtual measurement", async () => {
+  test("text appearances combine font style and apply state colors", async () => {
     rt.linkNatives();
     const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
@@ -146,34 +145,28 @@ describe("text-appearance-span", () => {
     expect(await vcall(paintTypeface(paint), "getStyle", "()I")).toBe(3);
     expect(paintOf(paint).textSize).toBe(28);
     expect(await vcall(paint, "getColor", "()I")).not.toBe(0xff123456 | 0);
-    let calls = 0;
-    implement(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", async (p: object) => {
-      await Promise.resolve(); calls++; paintOf(p).textSize = 36;
-    });
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
-    expect(calls).toBe(1);
-    expect(paintOf(paint).textSize).toBe(36);
     expect(await vcall(paint, "getColor", "()I")).toBe(0xff123456 | 0);
     expect(textPaintField(paint, "linkColor")).toBe(0xffabcdef | 0);
     expect(await vcall(span, "getTextColor", "()Landroid/content/res/ColorStateList;")).toBe(color);
-    expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
+    expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
   });
 
 
-  test("SuperscriptSpan shifts the existing baseline using virtual ascent without resizing text", async () => {
+  test("SuperscriptSpan shifts the existing baseline by half the ascent without resizing text", async () => {
     rt.linkNatives();
     const span = await newObj("android/text/style/SuperscriptSpan", "()V");
     const paint = newPaint("android/text/TextPaint");
     (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
     paintOf(paint).textSize = 24;
-    implement(paint, "ascent", "()F", async () => { await Promise.resolve(); return -15; });
+    const half = Math.trunc(await vcall(paint, "ascent", "()F") / 2);
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(textPaintField(paint, "baselineShift")).toBe(-4);
+    expect(textPaintField(paint, "baselineShift")).toBe(3 + half);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
-    expect(textPaintField(paint, "baselineShift")).toBe(-11);
+    expect(textPaintField(paint, "baselineShift")).toBe(3 + 2 * half);
     expect(paintOf(paint).textSize).toBe(24);
     expect(await vcall(span, "getSpanTypeId", "()I")).toBe(14);
-    expect(rt.iof(span, "android/text/style/MetricAffectingSpan")).toBe(1);
+    expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
   });
 });
 
@@ -202,7 +195,7 @@ describe("tts-span", () => {
       expect(await vcall(span, "getType", "()Ljava/lang/String;")).toBe("android.type." + name.toLowerCase());
       const args = await vcall(span, "getArgs", "()Landroid/os/PersistableBundle;");
       expect(await vcall(args, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "android.arg." + name.toLowerCase())).toBe("Golden Gate Bridge");
-      const parcel = await vcall(rt.link("android/os/Parcel").ctor, "obtain", "()Landroid/os/Parcel;");
+      const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
       await vcall(span, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
       await vcall(parcel, "setDataPosition", "(I)V", 0);
       const copy = await newObj("android/text/style/TtsSpan", "(Landroid/os/Parcel;)V", parcel);

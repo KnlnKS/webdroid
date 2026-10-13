@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry";
+import { classNameOf, newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord, thrown } from "./java";
@@ -13,7 +13,7 @@ let app: JObj, phone: JObj, subscriptions: JObj, wifi: JObj;
 const outcomes: ((value: string) => void)[] = [];
 rt.register({ name: "webdroid/test/Outcome", ctor: class extends JObj {}, ifaces: ["android/os/OutcomeReceiver"], methods: {
   "onResult(Ljava/lang/Object;)V": (value: unknown) => outcomes.shift()?.(`result ${value}`),
-  "onError(Ljava/lang/Throwable;)V": (error: { constructor: { $i?: { name: string } }; msg?: string }) => outcomes.shift()?.(`${error.constructor.$i?.name}: ${error.msg}`),
+  "onError(Ljava/lang/Throwable;)V": (error: { msg?: string }) => outcomes.shift()?.(`${classNameOf(error)}: ${error.msg}`),
 } });
 rt.register({ name: "webdroid/test/CallState", ctor: class extends JObj {}, sup: "android/telephony/TelephonyCallback",
   ifaces: ["android/telephony/TelephonyCallback$CallStateListener"], methods: { "onCallStateChanged(I)V": () => {} } });

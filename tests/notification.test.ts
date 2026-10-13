@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, afterAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { classNameOf, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { stringHash } from "../src/jvm/abi";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
@@ -72,7 +72,7 @@ describe("notification-manager", () => {
     expect(await vcall(stored, "getImportance", "()I")).toBe(2);
     const rejected = await vcallAsync(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("miscellaneous", "M", 3))
       .then(() => null, error => error);
-    expect(rejected).toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+    expect(classNameOf(rejected)).toBe("java/lang/IllegalArgumentException");
     await vcall(manager, "deleteNotificationChannel", "(Ljava/lang/String;)V", "a");
     expect(await vcall(manager, "getNotificationChannel", "(Ljava/lang/String;)Landroid/app/NotificationChannel;", "a")).toBeNull();
   });

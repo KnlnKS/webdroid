@@ -5,7 +5,7 @@ import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, import
 import { StoredParcel } from "../src/shell/stored-parcel";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel";
 import { handle, release as releaseHandle, take } from "../src/android/handles";
-import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
+import { newObj, vcall, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
@@ -30,7 +30,6 @@ rt.linkNatives();
 
 describe("android-pfd", () => {
   test("document descriptors share seekable writes and commit on last close", async () => {
-    rt.link("android/os/ParcelFileDescriptor");
     const written: Uint8Array[] = [];
     const sink = (bytes: Uint8Array) => { written.push(bytes.slice()); };
     const key = `test-pfd-${Math.random()}`;
@@ -496,7 +495,7 @@ describe("file-descriptor", () => {
 describe("file-input-descriptor", () => {
   async function rejectsJava(value: Promise<unknown>, name: string) {
     const error = await value.then(() => null, error => error);
-    expect(rt.iof(error, name)).toBe(1);
+    expect(iof(error, name)).toBe(true);
   }
 
   test("descriptor streams share native offsets and borrow ownership across rename and unlink", async () => {
@@ -516,8 +515,7 @@ describe("file-input-descriptor", () => {
       const channel = await vcall(owner, "getChannel", "()Ljava/nio/channels/FileChannel;");
       expect(await vcall(channel, "position", "()J")).toBe(2n);
       expect(await vcall(channel, "size", "()J")).toBe(4n);
-      const modes = rt.link("java/nio/channels/FileChannel$MapMode"); await rt.initClass(modes);
-      const mode = modes.ctor.s$READ_ONLY;
+      const mode = await staticField("java/nio/channels/FileChannel$MapMode", "READ_ONLY");
       const mapped = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 1n, 2n);
       expect(await vcall(mapped, "get", "(I)B", 1)).toBe(3);
       expect(await vcall(channel, "position", "()J")).toBe(2n);
@@ -661,7 +659,7 @@ describe("parcel-file", () => {
     const path = "/data/local/tmp/pfd-lazy-test";
     vfs.mount(path, { size: 3, read: async (offset, length) => Uint8Array.of(7, 8, 9).slice(offset, offset + length) });
     try {
-      const pfd = await vcall(rt.link("android/os/ParcelFileDescriptor").ctor, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path), 0x10000000);
+      const pfd = await scall("android/os/ParcelFileDescriptor", "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path), 0x10000000);
       const input = await newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", pfd);
       expect(await vcall(input, "read", "()I")).toBe(7);
       expect(await vcall(pfd, "getStatSize", "()J")).toBe(3n);

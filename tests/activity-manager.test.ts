@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 
+/** a fixture runs Java on the Wasm tier, so under node as the unit tests do */
+const UNDER_NODE = new URL("../scripts/wasm/undernode.ts", import.meta.url).pathname;
+
 // Each fixture drives the activity manager in a process of its own, whose app identity and
 // registered binders it sets up from scratch.
 async function fixture(name: string): Promise<unknown> {
-  const run = Bun.spawn(["bun", new URL(`fixtures/${name}.ts`, import.meta.url).pathname], { stdout: "pipe", stderr: "ignore" });
+  const run = Bun.spawn(["bun", UNDER_NODE, new URL(`fixtures/${name}.ts`, import.meta.url).pathname], { stdout: "pipe", stderr: "ignore" });
   return JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
 }
 

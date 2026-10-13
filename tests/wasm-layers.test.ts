@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { Glob } from "bun";
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
 // compiler <- link <- host: the compiler and the linker run in a page, a worker and node, so only host/ may reach the runtime, the natives and
@@ -10,7 +9,7 @@ const SHARED_FRONT_END = new Set(["abi", "dex", "opcodes", "prepared", "structur
 test("src/wasm keeps its layers", () => {
   const root = resolve(import.meta.dir, "..", "src");
   const violations: string[] = [];
-  for (const file of new Glob("**/*.ts").scanSync(root)) {
+  for (const file of globSync("**/*.ts", { cwd: root })) {
     if (file.endsWith(".test.ts") || file.endsWith(".d.ts")) continue;
     const from = resolve(root, file), layer = file.startsWith("wasm/") ? file.split("/")[1] : "js";
     const text = readFileSync(from, "utf8");
@@ -33,6 +32,6 @@ test("src/wasm keeps its layers", () => {
 
 test("host code holds Java objects only as the facades toHost makes", () => {
   const root = resolve(import.meta.dir, "..", "src/wasm/host");
-  const raw = [...new Glob("*.ts").scanSync(root)].filter((file) => /\b(?:w|world)\.entry\(/.test(readFileSync(resolve(root, file), "utf8")));
+  const raw = [...globSync("*.ts", { cwd: root })].filter((file) => /\b(?:w|world)\.entry\(/.test(readFileSync(resolve(root, file), "utf8")));
   expect(raw).toEqual([]);
 });
