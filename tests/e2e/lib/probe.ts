@@ -350,6 +350,8 @@ function installProbe(cfg: ProbeConfig): void {
     // contract, and a controlled clock runs through the window as a real one would.
     const windowMs = (q.stableFrames + 1) * q.intervalMs;
     if (controlled) await g.wd.guestClock.advanceBy(horizonMs + windowMs);
+    // a ripple or transition runs well inside two seconds; a spinner stops at the bound
+    const animationEnd = controlled ? g.wd.guestClock.now() + 2000 : 0;
     const horizonAt = t0 + (controlled ? 0 : horizonMs);
     const dueBefore = horizonAt + windowMs;
     // the pixel rule samples only past the horizon, as the recorder does past its dwell
@@ -375,6 +377,13 @@ function installProbe(cfg: ProbeConfig): void {
       const b = await busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
+      // an animation the app started after the clock ran through the window (a slow tap's ripple)
+      // would stay at its first frame and ask for frames forever: time passes while frames are asked
+      // for, four display frames a sample, since only where the animation ends is captured
+      if (controlled && b.includes("vsync") && g.wd.guestClock.now() < animationEnd) {
+        await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
+        await g.wd.testFrame();
+      }
       // a still screen settles past timers and network, not past work under way: a main-thread job
       // or its queue (its result is not drawn yet) or an activity start or finish, nor on a real
       // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
