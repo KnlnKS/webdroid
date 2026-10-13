@@ -4,14 +4,14 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { world } from "./lib";
-import { jsTier, natives, processStateAsync } from "./oracle";
-import { AOSP } from "./paths";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, ROOT } from "./paths";
 
 const dir = process.env.WEBDROID_AOT;
 if (!dir) throw new Error("set WEBDROID_AOT to a build");
-await jsTier([]);
+await mountPlatform(ROOT);
 const w = world(PLATFORM_JARS.map((j) => join(AOSP, j)), { natives });
-await processStateAsync(w);
+await startProcess(w);
 writeFileSync(join(dir, "startup.json"), JSON.stringify(w.aot!.loaded));
 console.log(`${w.aot!.loaded.length} files`);
 process.exit();

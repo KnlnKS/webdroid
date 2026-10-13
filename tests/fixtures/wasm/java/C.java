@@ -1,6 +1,6 @@
 /** Class model tests: every method is a static int(int) that exercises one feature once. Run by classdiff.ts. */
 public class C {
-  public static int jsWrong_definitionlessAnnotations(int n) {
+  public static int definitionlessAnnotations(int n) {
     for (Class<?> type : new Class<?>[] {int.class, void.class, int[].class, Object[][].class}) {
       if (type.getDeclaredAnnotation(Deprecated.class) != null || type.getDeclaredAnnotations().length != 0 || type.getAnnotations().length != 0 || type.getTypeParameters().length != 0) return 1;
     }
@@ -55,7 +55,7 @@ public class C {
     r += Object.class.getSuperclass() == null ? 16384 : 0;
     return r;
   }
-  public static int jsWrong_classApi(int n) {
+  public static int arrayClassApi(int n) {
     int r = 0;
     r += A[].class.isAssignableFrom(B[].class) ? 8 : 0;
     r += Object[].class.isAssignableFrom(A[].class) ? 16 : 0;
@@ -96,7 +96,7 @@ public class C {
     a[1] = null; r += 16;
     return r;
   }
-  public static int jsWrong_arrayStore(int n) {
+  public static int arrayStore(int n) {
     int r = 0;
     Object[] a = new A[2];
     try { a[0] = new Object(); } catch (ArrayStoreException e) { r += 1; }
@@ -108,7 +108,7 @@ public class C {
     try { ((Object[]) ia)[0] = new D(); r += 2; } catch (ArrayStoreException e) { r += 4; }
     return r;
   }
-  public static int jsWrong_arrayStoreIface(int n) {
+  public static int arrayStoreIface(int n) {
     int r = 0;
     Object[] ia = new I[2], ba = new B[1], ca = new Comparable[1], sa = new CharSequence[1];
     ia[0] = new A(); ia[1] = new B(); r += 1;
@@ -160,7 +160,7 @@ public class C {
   interface WithDefault { int V = Order.next(1); default int d() { return 1; } }
   static class Order { static int last; static int next(int v) { last = last * 10 + v; return v; } }
   static class Impl implements WithDefault { }
-  public static int jsWrong_initDefaultIface(int n) { new Impl(); return Order.last; }
+  public static int initDefaultIface(int n) { new Impl(); return Order.last; }
 
   // ---- VarHandle: handles made by Lookup.findVarHandle and MethodHandles.arrayElementVarHandle
   static class S { int i = 5; long l = 1L << 40; Object o; int j = 7; }
@@ -227,8 +227,8 @@ public class C {
     }
     return r + S.class.getDeclaredFields().length * 100000000;
   }
-  public static int jsWrong_publicFields(int n) { return T2.class.getFields().length; }
-  public static int jsWrong_arraycopyStore(int n) {
+  public static int publicFields(int n) { return T2.class.getFields().length; }
+  public static int arraycopyStore(int n) {
     Object[] src = {new A(), new Object(), new A()}; A[] dst = new A[3]; int r = 0;
     try { System.arraycopy(src, 0, dst, 0, 3); } catch (ArrayStoreException e) { r += 1; }
     r += dst[0] != null ? 2 : 0;

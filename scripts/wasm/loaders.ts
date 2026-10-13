@@ -35,15 +35,10 @@ import type { Code } from "../../src/wasm/compiler/code";
 import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
-import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
-import { useEntry } from "../../src/jvm/natives/jentry";
-import { rt } from "../../src/jvm/runtime";
-import { mangleMethod } from "../../src/jvm/abi";
-import { callOn } from "../../src/jvm/natives/jentry";
-import { jvmProfiler } from "../../src/jvm/profile";
-import { perf } from "../../src/perf";
-import { jsTier, natives } from "./oracle";
-import { AOSP, JAVA } from "./paths";
+import { wasmEntry } from "../../src/wasm/host/entry";
+import { useWorld } from "../../src/wasm/host/boot";
+import { mountPlatform, natives } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 
 import { androidPlatform, androidTool } from "../android-sdk";
@@ -113,7 +108,7 @@ try {
 // the files the loaders open: libcore finds them through the file system, the World reads their dex
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
-const js = await jsTier(loadDexes(app));
+await mountPlatform(ROOT);
 const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { ...(process.argv.includes("--cold") && { cold: true }), natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
@@ -123,7 +118,7 @@ let failed = 0;
 const gaps = new Set<string>();
 w.onGap = (id) => gaps.add(w.gapList[id]);
 let got: number;
-try { got = w.entry("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number; } catch (e) {
+try { got = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number; } catch (e) {
   const t = w.throwable(e);
   if (!t) throw e;
   const detail = w.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t);
@@ -140,15 +135,13 @@ w.opts.dexes = async (path) => {
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tmp/a.dex", "/data/local/tmp/b.dex"];
-const memberExpected = await js("Ldr", "memberResolution", desc, paths);
 const memberResult = await w.entryAsync("Ldr", "memberResolution", desc)(...paths);
-if (memberExpected !== 31 || memberResult !== memberExpected) throw new Error(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}, expected=31`);
-console.log(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
+if (memberResult !== 31) throw new Error(`binary member descriptors: wasm=${memberResult}, expected=31`);
+console.log(`binary member descriptors: wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
 if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
   for (const method of ["memberConstraints", "memberInterfaceConstraints", "memberIndirectConstraints", "memberReentrantConstraints"]) {
-    const baseline = await js("Ldr", method, desc, paths);
     const result = await w.entryAsync("Ldr", method, desc)(...paths);
-    console.log(`${method}: js=${baseline}, wasm=${result}, expected=255`);
+    console.log(`${method}: wasm=${result}, expected=255`);
     if (result !== 255) throw new Error(`${method}: ${result}`);
   }
 }
@@ -187,8 +180,7 @@ if (!process.argv.includes("--member-only") || process.argv.includes("--package"
   for (const ownType of [true, false]) {
     const signature = "(Ljava/lang/String;Ljava/lang/String;Z)I", args = [...paths, ownType];
     const result = await w.entryAsync("Ldr", "packageMembers", signature)(...args);
-    const baseline = await js("Ldr", "packageMembers", signature, args);
-    console.log(`package-private dispatch ownType=${ownType}: js=${baseline}, wasm=${result}, expected=1122`);
+    console.log(`package-private dispatch ownType=${ownType}: wasm=${result}, expected=1122`);
     if (result !== 1122) throw new Error(`package-private dispatch: ${result}`);
   }
   const same = await w.entryAsync("Ldr", "packageSameLoader", desc)(...paths);
@@ -221,10 +213,9 @@ if (!process.argv.includes("--member-only") || process.argv.includes("--package"
 }
 if (process.argv.includes("--member-only")) process.exit(0);
 if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {
-  const expected = await js("Ldr", "hierarchyDelegateLast", desc, paths);
   const result = await w.entryAsync("Ldr", "hierarchyDelegateLast", desc)(...paths);
-  if (expected !== 7 || result !== expected) throw new Error(`defining hierarchy mirrors: js=${expected}, wasm=${result}, expected=7`);
-  console.log(`defining hierarchy mirrors: js=${expected}, wasm=${result}`);
+  if (result !== 7) throw new Error(`defining hierarchy mirrors: wasm=${result}, expected=7`);
+  console.log(`defining hierarchy mirrors: wasm=${result}`);
   if (process.argv.includes("--hierarchy")) process.exit(0);
 }
 if (!process.argv.includes("--hierarchy")) {
@@ -244,10 +235,9 @@ if (!process.argv.includes("--hierarchy")) {
   if (process.argv.includes("--catch-only")) process.exit(0);
   const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
   if (actualType !== 7) throw new Error(`executed method-type loader: wasm=${actualType}, expected=7`);
-  console.log("executed method-type loader: wasm=7; unused optional signature stays lazy (JS const-method-type unsupported)");
-  const expected = await js("Ldr", "symbolicDelegateLast", desc, paths);
-  const result = await w.entryAsync("Ldr", "symbolicDelegateLast", desc)(...paths);
-  if (expected !== 42 || result !== expected) throw new Error(`uninitiated symbolic class reference: js=${expected}, wasm=${result}, expected=42`);
+  console.log("executed method-type loader: wasm=7; unused optional signature stays lazy");
+  const expected = 42, result = await w.entryAsync("Ldr", "symbolicDelegateLast", desc)(...paths);
+  if (result !== expected) throw new Error(`uninitiated symbolic class reference: wasm=${result}, expected=42`);
   const object = await w.entryAsync("Ldr", "symbolicLoader", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/ClassLoader;")(...paths) as object;
   const owner = w.sched.strand();
   let key: string;
@@ -271,7 +261,7 @@ if (!process.argv.includes("--hierarchy")) {
     const after = w.upgradeJob(slot);
     if (!after?.copies.includes(mid(winner)) || resolved !== helperKey && after.copies.includes(mid(helper))) throw new Error("promotion did not recheck the Java loader's winning helper");
     if (await w.entryAsync(key, "symbolic", "()I")() !== expected) throw new Error("copy fixture changed Java result");
-    console.log("promotion copies: unresolved helper excluded without loading; initiated helper copied on next selection; js=wasm=42");
+    console.log("promotion copies: unresolved helper excluded without loading; initiated helper copied on next selection; wasm=42");
     process.exit(0);
   }
   const handedData: WeakRef<object>[] = [], handingCompilers: WeakRef<object>[] = [];
@@ -375,30 +365,18 @@ if (!process.argv.includes("--hierarchy")) {
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
   try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }
   catch (e) { const t = w.throwable(e); if (!t || w.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
-  console.log(`uninitiated symbolic class reference: js=${expected}, wasm=${result}${w.opts.cold ? " (cold)" : " (compiled)"}${w.opts.cold ? "" : "; warm site resolutions=0"}; optional reference lazy`);
+  console.log(`uninitiated symbolic class reference: wasm=${result}${w.opts.cold ? " (cold)" : " (compiled)"}${w.opts.cold ? "" : "; warm site resolutions=0"}; optional reference lazy`);
   if (process.argv.includes("--symbolic")) process.exit(0);
 }
-const jsCustom = await js("Ldr", "customParent", desc, paths);
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
-if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: js=${jsCustom}, wasm=${wasmCustom}, expected=121`); }
-if (jsCustom !== 121) console.log(`JS loader superclass differs from parent-first resolution: ${jsCustom} (expected 121)`);
+if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: wasm=${wasmCustom}, expected=121`); }
 {
   const proxies = await w.entryAsync("Ldr", "proxyLoaders", desc)(...paths);
   if (proxies !== 8191) { failed++; console.log(`FAIL proxy defining loaders, duplicate binary names, bootstrap isolation, public cache, arrays and defensive duplicate rejection: ${proxies} (expected 8191)`); }
 }
-const jsDelegate = await js("Ldr", "delegateLast", desc, paths);
 const wasmDelegate = await w.entryAsync("Ldr", "delegateLast", desc)(...paths);
-if (jsDelegate !== 31 || wasmDelegate !== jsDelegate) { failed++; console.log(`FAIL actual delegate-last initiation and ordinary parent-first control: js=${jsDelegate}, wasm=${wasmDelegate}, expected=31`); }
+if (wasmDelegate !== 31) { failed++; console.log(`FAIL actual delegate-last initiation and ordinary parent-first control: wasm=${wasmDelegate}, expected=31`); }
 
-const jsLibraries = await js("Ldr", "libraries", desc, paths);
-if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
-try {
-  const jsForName = await js("Ldr", "resolverForName", "(Ljava/lang/String;)I", [paths[0]]);
-  if (jsForName !== 63) throw new Error(`JS Class.forName fixture: ${jsForName} (expected 63)`);
-} catch (error) {
-  if (!(error instanceof Error) || error.message !== "java/lang/ClassNotFoundException: [LShared;") throw error;
-  console.log("JS Class.forName reference-array control throws ClassNotFoundException: [LShared;");
-}
 {
   const p = new Program(loadDexes(a), program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]));
   const cache = world(p, { natives }), child = p.newLoader(p.root, null);
@@ -459,7 +437,7 @@ for (const asynchronous of [false, true]) {
   if (childSelf.ret !== `L${visible};` || childPeer.desc !== childSelf.ret || childClass.byKey.get(childSelf.key) !== childSelf) {
     failed++; console.log(`FAIL dependent loader caches: self=${childSelf.ret}, peer=${childPeer.desc}, visible=${visible}`);
   }
-  if (result !== jsLibraries || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || appDexes[0].type(retIndex) !== self.ret) {
+  if (result !== 21 || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || appDexes[0].type(retIndex) !== self.ret) {
     failed++; console.log(`FAIL ${asynchronous ? "deferred" : "synchronous"} library graph: result=${result}, visible=${visible}, self=${self.ret}, peer=${peer.desc}`);
   }
   const hostedSpec = { name: childClass.name, sup: childClass.sup, ifaces: [], methods: ["toString()Ljava/lang/String;"], fields: [], ctor: class {} };
@@ -497,14 +475,12 @@ for (const asynchronous of [false, true]) {
 }
 {
   const cold = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, cold: true, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
-  useEntry(wasmEntry(cold)); rt.mkThrowable = hostThrowable;
   const result = await cold.entryAsync("Ldr", "delegateLast", desc)(...paths);
-  if (result !== jsDelegate || !cold.stats.coldCalls) throw new Error(`cold delegate-last initiation: ${result}; cold calls=${cold.stats.coldCalls}`);
-  useEntry(wasmEntry(w));
+  if (result !== 31 || !cold.stats.coldCalls) throw new Error(`cold delegate-last initiation: ${result}; cold calls=${cold.stats.coldCalls}`);
+  useWorld(w);
 }
 {
   const resolver = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
-  useEntry(wasmEntry(resolver));
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {
@@ -634,33 +610,6 @@ async function interfaceSuperControl(): Promise<void> {
     if (cold && !current.stats.coldCalls) throw new Error("interface-super cold control did not execute the interpreter");
   }
   console.log(`interface-super/default: ${checks} Wasm cases match JDK; implFor and symbolicImplFor select the owning B declaration`);
-  await jsTier(loadDexes(dex));
-  const previous = jvmProfiler.tier;
-  let jsChecks = 0;
-  try {
-    for (const mode of ["js", "cold"] as const) {
-      jvmProfiler.tier = mode;
-      const owners = mode === "js" ? [rt, rt.fork(), rt.fork()] : [rt.fork(), rt.fork()];
-      const shared = loadDexes(dex), mirrors = new Set<object>(), before = perf.coldCalls;
-      for (const [index, owner] of owners.entries()) {
-        if (owner !== rt) shared.forEach(d => owner.loadDex(d));
-        const info = owner.link("InterfaceSuper");
-        await owner.initClass(info);
-        const scope = mode === "js" ? index : index + 3;
-        await callOn(mainThread, () => info.ctor[mangleMethod("setOffset", "(I)V")](scope * 17));
-        for (let i = 0; i < names.length; i++) {
-          const got = await callOn(mainThread, () => info.ctor[mangleMethod(names[i], "()I")]());
-          const expected = jdk[scope * names.length + i];
-          if (got !== expected) throw new Error(`JS interface-super ${mode}/${names[i]}: ${got}, expected ${expected}`);
-          jsChecks++;
-        }
-        mirrors.add(owner.classFor("InterfaceSuper"));
-      }
-      if (mirrors.size !== owners.length || mode === "cold" && mirrors.has(rt.classFor("InterfaceSuper"))) throw new Error("JS interface-super loaders aliased Class identities");
-      if (mode === "cold" && perf.coldCalls === before) throw new Error("JS interface-super cold control did not execute the interpreter");
-    }
-  } finally { jvmProfiler.tier = previous; }
-  console.log(`JS interface-super/default: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
 
 }
 
@@ -886,26 +835,6 @@ async function abstractDefaultControl(): Promise<void> {
     }
     if (cold && !w.stats.coldCalls) throw new Error("abstract-default Wasm cold path inactive");
   }
-  await jsTier(loadDexes(dex));
-  const previous = jvmProfiler.tier;
-  try {
-    for (const mode of ["js", "cold"] as const) {
-      jvmProfiler.tier = mode;
-      const owners = mode === "js" ? [rt, rt.fork(), rt.fork()] : [rt.fork(), rt.fork()], before = perf.coldCalls;
-      for (const [index, owner] of owners.entries()) {
-        if (owner !== rt) loadDexes(dex).forEach(d => owner.loadDex(d));
-        const info = owner.link("AbstractDefaultUse");
-        await owner.initClass(info);
-        for (const suffix of ["", "Class"]) {
-          const prepared = await callOn(mainThread, () => info.ctor[mangleMethod("prepare" + suffix, "()I")]());
-          const checked = await callOn(mainThread, () => info.ctor[mangleMethod("check" + suffix, "()I")]());
-          console.log(`JS ${mode}/${index}/${suffix || "interface"}: preparation=${prepared}, AME=${checked}`);
-          if (prepared !== 42 || checked !== 1) failures.push(`JS ${mode}/${index}/${suffix}`);
-        }
-      }
-      if (mode === "cold" && perf.coldCalls === before) throw new Error("abstract-default JS cold path inactive");
-    }
-  } finally { jvmProfiler.tier = previous; }
   if (failures.length) throw new Error("abstract-dominance mismatch: " + failures.join(", "));
 }
 
@@ -915,7 +844,6 @@ async function nativePathControl(): Promise<void> {
   for (const cold of [false, true]) {
     const base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
     const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, cold, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
-    useEntry(wasmEntry(target)); rt.mkThrowable = hostThrowable;
     let managed = 0;
     const callFn = target.callFn;
     target.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };

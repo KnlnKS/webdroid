@@ -1,28 +1,24 @@
-// The entry seam (B1): host code calls Java through jentry's names, once on the JS tier and once over a World next to it, and the answers, the exceptions
-// that leave the calls and the identity of the objects must be the same. (entrytier.ts then runs them on the Wasm tier alone.) Run: bun run wasm entry
-import { writeFileSync } from "node:fs";
+// The entry seam (B1): host code calls Java through jentry's names over a World, and the answers, the exceptions that leave the calls and the identity
+// of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: bun run wasm entry
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { fieldNames, rt } from "../../src/jvm/runtime";
-import { JThread, jsEntry, resumeAs, useEntry } from "../../src/jvm/natives/jentry";
+import { rt } from "../../src/jvm/runtime";
+import { JThread, resumeAs } from "../../src/jvm/natives/jentry";
 import { perf } from "../../src/perf";
-import { fieldNamesOf, runningThread, wasmEntry } from "../../src/wasm/host/entry";
-import { loadDexes, world } from "./lib";
-import { jsTier, natives } from "./oracle";
-import { AOSP } from "./paths";
-import { settled } from "../../src/wasm/host/nativesource";
+import { runningThread, wasmEntry } from "../../src/wasm/host/entry";
+import { world } from "./lib";
+import { mountPlatform, natives } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { entryCases, entryDex } from "./entrycases";
 
 const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
-await jsTier(loadDexes(dex));
-useEntry(jsEntry);
-const js = await entryCases();
+await mountPlatform(ROOT);
+const expected = readFileSync(join(JAVA, "E.expected.txt"), "utf8").trimEnd().split("\n");
 
 const w = world([dex, ...jars], { natives }), gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
 const entry = wasmEntry(w);
-useEntry(entry);
-fieldNames.find = fieldNamesOf(w);
 const missesBefore = perf.wasmFacadeMisses;
 const wasm = await entryCases();
 const facade = (await (await import("../../src/jvm/natives/jentry")).newObj("E")) as Record<string, unknown>;
@@ -30,21 +26,21 @@ void facade.noSuchField;
 const counted = perf.wasmFacadeMisses - missesBefore === 1 && rt.missing.has("facade E.noSuchField") && perf.wasmEntries > 0;
 
 let failed = 0;
-js.forEach((want, i) => { if (wasm[i] !== want) { failed++; console.log(`FAIL wasm: ${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); } });
-if (wasm.length !== js.length) { failed++; console.log(`FAIL wasm: ${wasm.length} answers for ${js.length}`); }
+expected.forEach((want, i) => { if (wasm[i] !== want) { failed++; console.log(`FAIL wasm: ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${wasm[i]}`); } });
+if (wasm.length !== expected.length) { failed++; console.log(`FAIL wasm: ${wasm.length} answers for ${expected.length}`); }
 if (!counted) { failed++; console.log("FAIL a read no field backs is not counted in perf and the missing entries"); }
 // An allocation may wait before newObj enters its constructor. Another completion owns the
 // host turn then; the constructor still belongs to the allocating caller, including a non-main caller.
 const ownerFailures = failed;
 const origin = Object.assign(new JThread(), { jname: "allocation-origin" });
 const background = Object.assign(new JThread(), { jname: "interposed-background" });
-const expected = await entry.callOn(origin, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
+const current = await entry.callOn(origin, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
 await entry.callOn(origin, () => entry.initClass("E$Owner"));
 await entry.callOn(origin, () => entry.newObj("E$Owner"));
 const immediate = w.synchronous(() => entry.callOn(origin, () => entry.newObj("E$Owner")));
 if (immediate instanceof Promise) { failed++; console.log("FAIL warm synchronous constructor became asynchronous"); }
 const immediateObject = await immediate;
-if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== expected) { failed++; console.log("FAIL synchronous constructor caller"); }
+if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL synchronous constructor caller"); }
 const originalCall = w.callFn;
 try {
   w.callFn = (key, ...a) => {
@@ -54,7 +50,7 @@ try {
     });
   };
   const delayed = await entry.callOn(origin, () => entry.newObj("E$Owner"));
-  if (await entry.callOn(origin, () => entry.vcall(delayed, "owner", "()Ljava/lang/Thread;")) !== expected) { failed++; console.log("FAIL asynchronous constructor lost allocating caller"); }
+  if (await entry.callOn(origin, () => entry.vcall(delayed, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL asynchronous constructor lost allocating caller"); }
 } finally { w.callFn = originalCall; }
 console.log(failed === ownerFailures ? "3/3 constructor ownership checks pass" : "FAIL constructor ownership checks");
 const parentFailures = failed;
@@ -93,7 +89,5 @@ try {
 }
 console.log(failed === parentFailures ? "2/2 constructor parent/monitor contexts pass" : "FAIL constructor parent/monitor contexts");
 if (gaps.length) { failed++; console.log(`FAIL gaps hit: ${[...new Set(gaps)].join("; ")}`); }
-// what the process on the Wasm tier is compared with, and the values of the natives the JS tier settled for it (it has no JS tier to settle them)
-writeFileSync(process.env.WASM_ENTRY_OUT!, JSON.stringify({ js, settled: [...settled] }));
-console.log(failed ? `${failed} failures` : `${js.length} entry calls answer alike on the JS tier and on a World`);
+console.log(failed ? `${failed} failures` : `${expected.length} entry calls answer as recorded on a World`);
 process.exit(failed ? 1 : 0);

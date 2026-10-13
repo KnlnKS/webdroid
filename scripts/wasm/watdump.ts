@@ -3,15 +3,15 @@
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, program, world } from "./lib";
-import { jsTier, natives, processState } from "./oracle";
+import { program, world } from "./lib";
+import { mountPlatform, natives, startProcess } from "./harness";
 import { AOSP, G1_DIR, ROOT } from "./paths";
 
 const [workload, filter] = process.argv.slice(2);
 const dex = join(G1_DIR, "classes.dex");
-await jsTier(loadDexes(dex));
+await mountPlatform(ROOT);
 const w = world(program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]), { natives });
-processState(w);
+await startProcess(w);
 const units: Uint8Array[] = [];
 const inst = (w as unknown as { instantiate(b: Uint8Array, i: unknown): unknown }).instantiate;
 (w as unknown as { instantiate: unknown }).instantiate = function (this: unknown, bytes: Uint8Array, imports: unknown) { units.push(bytes); return inst.call(this, bytes, imports); };

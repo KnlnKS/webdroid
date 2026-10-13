@@ -11,7 +11,7 @@ import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { buildApp } from "../../src/wasm/link/apps";
-import { natives } from "./oracle";
+import { natives } from "./harness";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
 import { AOSP, JAVA } from "./paths";

@@ -1,6 +1,6 @@
 // The classes the host implements (B2), as the cases of the hostclass suite use them: TS classes registered as specs for classes no dex defines (wdtest/*) beside the
 // registered specs of the platform's own boundary (java/net/HttpURLConnection), the Java fixture Hc that uses them, and the calls host code makes on both. The suite runs
-// the cases on the JS tier, where the host object is the Java object, and on a World, where the two are an object each; the lines must be the same.
+// the cases on a World, where the host object and the Java object are an object each; the lines must be java/hc/expected.txt.
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { androidPlatform, androidTool } from "../android-sdk";
 import { JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
 
-/** how a host method that waits enters Java again: the JS tier's, unless the harness gives the World's */
+/** how a host method that waits enters Java again: the harness gives the World's */
 export const enter: { call: (cls: string, name: string, desc: string) => Promise<unknown> } = { call: async (cls, name, desc) => scall(cls, name, desc) };
 const sleep = () => new Promise<void>((r) => setTimeout(r, 1));
 
@@ -82,8 +82,8 @@ async function run(f: () => unknown): Promise<string> {
   }
 }
 
-/** `blocking` runs the Java that waits: the JS tier's scall, or the World's entryAsync */
-export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown> = async (c, n, d) => scall(c, n, d)): Promise<string[]> {
+/** `blocking` runs the Java that waits: the World's entryAsync */
+export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown>): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
   for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "opened", "shapes", "faces", "booted"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "faces" || m === "booted" ? "I" : STR}`));
 

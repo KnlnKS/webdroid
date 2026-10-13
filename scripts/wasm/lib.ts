@@ -15,6 +15,7 @@ import { Natives } from "../../src/wasm/host/natives";
 import { hostNet } from "../../src/wasm/host/inet";
 import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
+import { useWorld } from "../../src/wasm/host/boot";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 
 export function loadDexes(path: string) {
@@ -44,6 +45,15 @@ function vfsDexes(path: string): DexFile[] | undefined {
   const zip = zipTree(bytes), names = dexEntryNames(Object.keys(zip));
   return names.length ? names.flatMap((n) => dexesIn(zip[n], n)) : undefined;
 }
+/** `w` made the realm's Java now and whenever its entries are called: the objects natives make are the current World's */
+export function current(w: World): World {
+  useWorld(w);
+  const { entry, entryAsync } = w;
+  w.entry = (...a) => { const f = entry.apply(w, a); return (...args) => f(...(useWorld(w), args)); };
+  w.entryAsync = (...a) => { const f = entryAsync.apply(w, a); return (...args) => f(...(useWorld(w), args)); };
+  return w;
+}
+/** a current World over `src` (dex and jar paths, or a Program) */
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return new World(Array.isArray(src) ? program(src) : src, { cold: typeof process !== "undefined" && process.env.WEBDROID_COLD === "1", intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts });
+  return current(new World(Array.isArray(src) ? program(src) : src, { cold: typeof process !== "undefined" && process.env.WEBDROID_COLD === "1", intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
 }

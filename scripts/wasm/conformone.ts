@@ -1,35 +1,31 @@
-// One conformance class on the Wasm tier, in this process: prints "\u0001" and ConformRunner's lines (scripts/conform/run.ts --one is the JS tier's).
+// One conformance class on the Wasm tier, in this process: prints "\u0001" and ConformRunner's lines.
 // Run by conform.ts under node: conformone.ts <dex directory> <runner class> <class> [filter]
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fieldNames, rt } from "../../src/jvm/runtime";
-import { useEntry, vcall } from "../../src/jvm/natives/jentry";
+import { rt } from "../../src/jvm/runtime";
+import { vcall } from "../../src/jvm/natives/jentry";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { extraBootEntries } from "../../src/wasm/host/hostnatives";
 import { suspendedNatives } from "../../src/wasm/host/suspend";
-import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
-import { loadDexes, world } from "./lib";
-import { jsTier, natives, processStateAsync } from "./oracle";
-import { AOSP } from "./paths";
+import { world } from "./lib";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, ROOT } from "./paths";
 import { vfs } from "../../src/shell/vfs";
 
 const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);
 const dexFiles = readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort().map((f) => join(dexDir, f));
-await jsTier(dexFiles.flatMap(loadDexes));
+await mountPlatform(ROOT);
 const jars = [0, 1, 2, 3, 4, 12, 18].map((i) => join(AOSP, PLATFORM_JARS[i]));
 // the runner's own output (60 MB of test names for the largest class, two bytes a char here) is far over ART's 512 MB limit with the suite's objects: the limit is raised
 const w = world([...dexFiles, ...jars], { heapLimit: 3 * 2 ** 30, natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 w.onGap = (id) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + w.gapList[id]); };
 for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
-useEntry(wasmEntry(w));
-fieldNames.find = fieldNamesOf(w);
-rt.mkThrowable = hostThrowable;
 if (existsSync(join(dexDir, "resources.jar"))) {
   // the suite's resources are read from this jar by the boot class loader, which the classes of a Program without loaders of its own ask
   vfs.write("/data/local/tmp/resources.jar", new Uint8Array(readFileSync(join(dexDir, "resources.jar"))));
   extraBootEntries.push("/data/local/tmp/resources.jar");
 }
-await processStateAsync(w);
+await startProcess(w);
 console.warn = () => {};
 /** a throwable's string, its first frames and its causes, on one line */
 async function describe(t: unknown): Promise<string> {

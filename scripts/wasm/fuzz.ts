@@ -1,19 +1,19 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
-// javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm, on the production JS tier and on the JDK; results must be bit-identical.
+// javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm and on the JDK; results must be bit-identical.
 // Run from the repository root: bun run wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
 // (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, world } from "./lib";
+import { world } from "./lib";
 import { compare, genCases } from "./cases";
-import { jsTier, natives } from "./oracle";
+import { mountPlatform, natives } from "./harness";
 import { ACC } from "../../src/wasm/compiler/program";
 import { irreducibleClass } from "./irfuzz";
 import { Irreducible, Flow } from "../../src/jvm/structure";
 import { prepareMethod } from "../../src/jvm/prepared";
-import { AOSP, JAVA } from "./paths";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
@@ -138,16 +138,10 @@ sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...irreducible ? []
 sh(["d8", ...(process.argv.includes("--debug") ? [] : ["--release"]), "--output", out, join(out, "F.class"), ...readdirSync(out).filter((f) => /^F\$.*\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
+await mountPlatform(ROOT);
 const w = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j))], { natives });
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
-const tier = await jsTier(loadDexes(dex));
-/** a method the JS tier never completes (a suspended frame nothing resumes) is reported and counted as a throw, so one hang does not end the run */
-const js: typeof tier = (cls, name, desc, a, instance) => {
-  let timer: Timer;
-  const hang = new Promise<never>((_, reject) => { timer = setTimeout(() => { console.log(`js tier hang in ${cls}.${name}(${a.join(", ")})`); reject(new Error("hang")); }, 20000); });
-  return Promise.race([tier(cls, name, desc, a, instance), hang]).finally(() => clearTimeout(timer));
-};
 const cyclic = irreducible ? methods.filter((m) => {
   const item = m.dex.code(m.codeOff);
   try { new Flow(prepareMethod(m.dex, item, m.desc, true), item, Infinity); return false; } catch (e) { return e instanceof Irreducible; }
@@ -155,8 +149,8 @@ const cyclic = irreducible ? methods.filter((m) => {
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, js, jdk, hit);
-console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} generated methods (wasm, js tier, jdk); ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, jdk, hit);
+console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 if (bad || blocked) console.log(`source: ${join(out, "F.java")}`);
 process.exit(bad || blocked ? 1 : 0);

@@ -1,5 +1,5 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands (plan S3): the static int(int) cases of java/Th.java run on
-// the JDK, the production JS tier and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
+// the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
 // answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH; node runs it with --experimental-wasm-jspi (run.ts).
 // Run: bun run wasm threads [case,case,... | substrate]
@@ -8,8 +8,8 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, world } from "./lib";
-import { jsTier, processState } from "./oracle";
+import { world } from "./lib";
+import { mountPlatform, startProcess } from "./harness";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
 import { suspendedNatives } from "../../src/wasm/host/suspend";
@@ -24,7 +24,7 @@ import { hasJspi } from "../../src/wasm/link/module";
 import { ALLOC_WINDOW, HEAP_LIMIT, javaFrames } from "../../src/wasm/link/exc";
 import { T } from "../../src/wasm/compiler/wasmbin";
 import { classIntrinsics } from "../../src/wasm/link/classes";
-import { AOSP, JAVA } from "./paths";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 
 if (!hasJspi()) { console.error("threads needs JSPI: run it with bun run wasm threads (node --experimental-wasm-jspi)"); process.exit(2); }
@@ -77,8 +77,8 @@ const TH: Record<string, HostFn> = {
 };
 const gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
-const js = await jsTier(loadDexes(dex));
-processState(w);
+await mountPlatform(ROOT);
+await startProcess(w);
 const callbackEntry = wasmEntry(w);
 
 let bad = 0, checks = 0;
@@ -86,7 +86,7 @@ const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000))
 const show = async (f: () => unknown) => { try { return String(await timed(Promise.resolve(f()))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
 const expect = (what: string, got: unknown, want: unknown) => { checks++; if (String(got) !== String(want)) { bad++; console.log(`MISMATCH ${what}: want ${want}, got ${got}`); } };
 
-// ---------- the Java cases against the JDK and the JS tier
+// ---------- the Java cases against the JDK
 const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
 if (substrate || only?.includes("nativeCallback")) {
   expect("native callback after a wait reenters its caller's monitor", await show(() => callbackEntry.scall("Th", "callbackOwner", "(I)I", 41)), "42");
@@ -125,19 +125,15 @@ if (!CASES.length) CASES.push(["reentrant", 3]);
 const ref = spawnSync("java", ["-Xss512k", "-cp", out, "Ref"], { input: CASES.map(([n, a]) => `Th.${n} ${a}`).join("\n") + "\n", timeout: 120000, encoding: "utf8" });
 if (ref.status !== 0) throw new Error(`the JDK run failed (${ref.error ?? ref.stderr})`);
 const jdk = ref.stdout.trim().split("\n");
-const jsDiffers: string[] = [];
 for (const [i, [name, arg]] of CASES.entries()) {
   const gapsBefore = gaps.length, want = jdk[i] === "throw" ? "throw" : jdk[i];
   if (process.env.J2W_V) console.log("case", name, arg);
   const wasm = await show(() => w.entryAsync("Th", name, "(I)I")(arg));
   if (process.env.J2W_V) console.log("  wasm", wasm);
-  const tier = await show(() => js("Th", name, "(I)I", [arg]));
   const norm = (v: string) => v.startsWith("java ") || v.startsWith("throw ") ? "throw" : v;
   checks++;
-  if (norm(wasm) !== want) { bad++; console.log(`MISMATCH wasm/jdk Th.${name}(${arg}): jdk=${want} wasm=${wasm}${gaps.length > gapsBefore ? " gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; ") : ""}`); }
-  else if (norm(tier) !== want) jsDiffers.push(`Th.${name}(${arg}): jdk=${want} js=${tier}`);
+  if (norm(wasm) !== want) { bad++; console.log(`MISMATCH Th.${name}(${arg}): jdk=${want} wasm=${wasm}${gaps.length > gapsBefore ? " gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; ") : ""}`); }
 }
-if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffers.length} cases, which the Wasm tier answers as the JDK does:\n  ${jsDiffers.join("\n  ")}`);
 
 // ---------- the substrate, directly
 if (substrate) {
@@ -251,6 +247,8 @@ if (substrate) {
     w.host.classByName = oldLookup; w.host.annotationWait = oldWait; w.sched.suspending = oldSuspending;
     delete w.host.lookupPrepare; delete w.host.lookupCaught;
   }
+  // the cases' common-pool workers stay parked across the probe
+  const parked = w.sched.strands.filter(Boolean).length;
   admissionProbe = true;
   try {
     idleBeforeResume = true;
@@ -311,7 +309,7 @@ if (substrate) {
       w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); });
       expect("root host does not prepare delivery", prepared, 1);
     } finally { readyStrand.end(); w.sched.idle(); admissionProbe = true; }
-    expect("admission releases its strands", w.sched.strands.filter(Boolean).length, 1);
+    expect("admission releases its strands", w.sched.strands.filter(Boolean).length, parked);
   } finally { admissionProbe = false; }
   const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });
   expect("lazy linking near the stack limit", await cold.entryAsync("Th", "linkDeep", "(I)I")(0), 0);

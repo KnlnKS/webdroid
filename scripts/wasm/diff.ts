@@ -1,18 +1,18 @@
-// Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
-// production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
+// Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex) and on the
+// JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, world } from "./lib";
+import { world } from "./lib";
 import { dexesIn } from "../../src/jvm/dex";
 import { descToName } from "../../src/jvm/abi";
 import { insnLen } from "../../src/jvm/opcodes";
-import { jsTier, natives } from "./oracle";
+import { mountPlatform, natives, startProcess } from "./harness";
 import { ACC } from "../../src/wasm/compiler/program";
 import { namesWasmFrames } from "../../src/wasm/link/exc";
 import { compare, genCases } from "./cases";
-import { AOSP, JAVA } from "./paths";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-"));
@@ -37,16 +37,15 @@ const dex = join(out, "classes.dex");
   }
   writeFileSync(dex, bytes);
 }
+await mountPlatform(ROOT);
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
+await startProcess(w);
 // S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
 const methods = ["W", ...(namesWasmFrames() ? ["S", "N"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
-const js = await jsTier(loadDexes(dex));
 (globalThis as any).__dbgw = w;
-// Precompiled native imports retain their suspension ABI after oracle values settle.
-const asyncEntries = !!process.env.WEBDROID_AOT;
-const entry = asyncEntries ? w.entryAsync.bind(w) : w.entry.bind(w);
-const entries = new Map(methods.map((m) => [m, entry(m.cls, m.name, m.desc)]));
+// asynchronous, as a process enters Java: S and N reach natives that wait (files, the user database)
+const entries = new Map(methods.map((m) => [m, w.entryAsync(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
   fib: [0, 1, 2, 10, 20], sieve: [0, 1, 2, 10, 1000, 100000], xorshift: [0, 1, 10, 1000], mandel: [0, 1, 5, 24], swsum: [0, 1, 7, 100, 1000],
   basics: [0, 1, 2, 5, 17], wide: [0, 1, 2, 9, 33], parts: [0, 1, 4, 9, 20], sb: [0, 1, 3, 12, 40], sw: [0, 1, 2, 3, 4, 7], cmp: [0, 1, 6, 15], bytes: [0, 1, 7, 64], chars: [0, 1, 4, 30],
@@ -55,13 +54,7 @@ const small: Record<string, number[]> = {
 };
 const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
-// the production reflection skips Field's type and receiver checks (getBoolean of an int field answers a number): its results for these are not an oracle
-const UNCHECKED = new Set(["inner", "members", "annots", "errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
-const pick = <T,>(l: T[], unchecked: boolean) => l.filter((_, i) => isUnchecked(i) === unchecked);
-const r1 = await compare(pick(cases, false), (m) => entries.get(m)!, js, pick(jdk, false), hit);
-let at = 0;
-const jdkOnly = async () => { const v = pick(jdk, true)[at++]; if (v === "throw") throw new Error("throw"); return Number(v); };
-const r2 = await compare(pick(cases, true), (m) => entries.get(m)!, jdkOnly, pick(jdk, true), hit);
+const r = await compare(cases, (m) => entries.get(m)!, jdk, hit);
 let wideBad = 0, dispatchBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
@@ -82,8 +75,8 @@ if (wideCases.length) {
   }
   console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
 }
-const bad = r1.bad + r2.bad + wideBad + dispatchBad, explained = r1.explained + r2.explained, blocked = r1.blocked + r2.blocked;
-console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
+const bad = r.bad + wideBad + dispatchBad, blocked = r.blocked;
+console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} methods`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 process.exit(bad || blocked ? 1 : 0);

@@ -23,9 +23,9 @@ import { prepareApp } from "../../src/wasm/host/appcode";
 import { fetchBundle } from "../../src/wasm/host/bundle";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import { heapUsed } from "../../src/wasm/host/stats";
-import { loadDexes } from "./lib";
-import { natives } from "./oracle";
-import { AOSP, JAVA } from "./paths";
+import { current, loadDexes } from "./lib";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { filesIn, shellIn } from "./tools";
 import type { FetchStore } from "../../src/wasm/link/aotstore";
 import type { DexFile } from "../../src/jvm/dex";
@@ -38,6 +38,7 @@ sh(["d8", "--release", "--output", out, ...filesIn(out, /^Pst(\$\w+)?\.class$/)]
 sh(["mkdir", "-p", "out2"]);
 sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Pst2(\$\w+)?\.class$/)]);
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
+await mountPlatform(ROOT);
 
 let failed = 0;
 const check = (what: string, got: unknown, want: unknown) => { if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
@@ -51,7 +52,7 @@ const platformDexes = PLATFORM_JARS.flatMap((j) => loadDexes(join(AOSP, j)));
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, guest: guestMemory, aot: aotStore, ...opts });
+const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, guest: guestMemory, aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
   const w = world(dexes, opts);
@@ -253,6 +254,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const path = "/data/local/tmp/persist-proxy.dex";
   vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(join(out, "classes.dex")))));
   const w = hosted(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : undefined });
+  await startProcess(w);
   await w.entryAsync("Pst", "setupLoader", "(Ljava/lang/String;)V")(path);
   const make = w.entryAsync("Pst", "makeProxy", "(I)I");
   check("bootstrap Proxy before worker startup executes", await make(3), 1);

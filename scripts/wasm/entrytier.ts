@@ -1,5 +1,5 @@
-// The Wasm tier alone, run with WEBDROID_TIER=wasm after the entry suite: no bytecode in the JS runtime, the platform and the fixture loaded through
-// tier.loadDex, the seam installed by the tier; its answers are the JS tier's that the entry suite recorded.
+// The entry cases run with WEBDROID_TIER=wasm after the entry suite: the platform and the fixture loaded through tier.loadDex, the seam installed by the
+// tier; its answers are java/E.expected.txt.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import "../../src/natives";
@@ -11,8 +11,8 @@ import { BytesFile } from "../../src/shell/lazyfile";
 import { dexesIn } from "../../src/jvm/dex";
 import { loadDex, loadTier, tier } from "../../src/jvm/tier";
 import { getDeclared, rt } from "../../src/jvm/runtime";
-import { settled } from "../../src/wasm/host/nativesource";
-import { AOSP } from "./paths";
+import { mountPlatform } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { entryCases, entryDex } from "./entrycases";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors";
@@ -21,8 +21,8 @@ import { callProxy, serveCalls } from "../../src/shell/process-port";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio";
 
 if (tier !== "wasm") throw new Error("run with WEBDROID_TIER=wasm");
-const recorded = JSON.parse(readFileSync(process.env.WASM_ENTRY_OUT!, "utf8")) as { js: string[]; settled: [string, unknown][] };
-for (const [key, value] of recorded.settled) settled.set(key, value);
+const expected = readFileSync(join(JAVA, "E.expected.txt"), "utf8").trimEnd().split("\n");
+await mountPlatform(ROOT);
 await loadTier();
 // every jar of the boot class path is on the device; the classes of the four the fixture needs are loaded
 PLATFORM_JARS.forEach((jar, i) => {
@@ -32,10 +32,10 @@ PLATFORM_JARS.forEach((jar, i) => {
 for (const d of dexesIn(new Uint8Array(readFileSync(entryDex())), "E")) loadDex(rt, d);
 const got = await entryCases();
 let failed = 0;
-recorded.js.forEach((want, i) => { if (got[i] !== want) { failed++; console.log(`FAIL ?tier=wasm: ${want.split(":")[0]}\n  js    ${want}\n  wasm  ${got[i]}`); } });
-if (got.length !== recorded.js.length) { failed++; console.log(`FAIL ?tier=wasm: ${got.length} answers for ${recorded.js.length}`); }
+expected.forEach((want, i) => { if (got[i] !== want) { failed++; console.log(`FAIL ?tier=wasm: ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${got[i]}`); } });
+if (got.length !== expected.length) { failed++; console.log(`FAIL ?tier=wasm: ${got.length} answers for ${expected.length}`); }
 await inMemoryControl();
-console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as on the JS tier through ?tier=wasm`);
+console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as recorded through ?tier=wasm`);
 process.exit(failed ? 1 : 0);
 
 async function inMemoryControl(): Promise<void> {

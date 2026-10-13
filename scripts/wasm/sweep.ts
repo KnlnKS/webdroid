@@ -8,7 +8,7 @@ import { loadDexes, world } from "./lib";
 import { externs } from "../../src/wasm/link/intrinsics";
 import { Program } from "../../src/wasm/compiler/program";
 import { Compiler } from "../../src/wasm/compiler/j2w";
-import { natives } from "./oracle";
+import { natives } from "./harness";
 import { mid } from "../../src/wasm/compiler/ids";
 import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module";
 import { AOSP, ROOT } from "./paths";

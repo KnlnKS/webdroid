@@ -15,8 +15,8 @@ import type { WorkerPort } from "../../src/wasm/host/compiler";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { loadDexes, world } from "./lib";
-import { jsTier, natives, processStateAsync } from "./oracle";
-import { AOSP, G1_DIR } from "./paths";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, G1_DIR, ROOT } from "./paths";
 
 const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
 if (!AOT || !out) throw new Error("usage: WEBDROID_AOT=<platform build> g1app --out DIR [workload ...]");
@@ -48,13 +48,13 @@ const run = async (w: World, reps: number) => {
   }
 };
 
-await jsTier([]);
+await mountPlatform(ROOT);
 // the first launch: no saved build; the worker makes one from the roots, and the launch's own compiling refines it
 const first = await prepareApp(request);
 const w1 = launch(first);
 first.watch(w1);
 await first.made;
-await processStateAsync(w1);
+await startProcess(w1);
 await run(w1, 100);
 const refined = await first.refine(w1, 1);
 first.close();
@@ -65,7 +65,7 @@ const second = await prepareApp(request);
 if (!second.hit) throw new Error("the saved build is not found");
 const w2 = launch(second);
 if (!w2.appAttached) throw new Error("the saved build does not attach");
-await processStateAsync(w2);
+await startProcess(w2);
 await run(w2, 0);
 second.close();
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });

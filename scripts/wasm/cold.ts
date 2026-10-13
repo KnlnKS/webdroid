@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Program, kindOf } from "../../src/wasm/compiler/program";
 import { ColdInterpreter } from "../../src/wasm/cold/interpreter";
 import { loadDexes, world } from "./lib";
-import { bitsOf, jsTier, unbits } from "./oracle";
+import { bitsOf, unbits } from "./harness";
 import { genCases } from "./cases";
 import { decodeInstructions } from "../../src/jvm/prepared";
 import { JAVA } from "./paths";
@@ -13,7 +13,7 @@ import { shellIn } from "./tools";
 const out = mkdtempSync(join(tmpdir(), "wasm-cold-")), sh = shellIn(out);
 sh(["javac", "--release", "8", "-d", out, ...["W", "S", "N", "Ref"].map((n) => join(JAVA, n + ".java"))]);
 sh(["d8", "--release", "--output", out, ...readdirSync(out).filter((n) => n.endsWith(".class")).map((n) => join(out, n))]);
-const dexes = loadDexes(join(out, "classes.dex")), prog = new Program(dexes), interpreter = new ColdInterpreter(), js = await jsTier(dexes);
+const dexes = loadDexes(join(out, "classes.dex")), prog = new Program(dexes), interpreter = new ColdInterpreter();
 const cases: [string, (number | bigint)[]][] = [
   ...[0, 1, 10, 1000].map((n): [string, number[]] => ["xorshift", [n]]),
   ...[0, 1, 5, 20].map((n): [string, number[]] => ["nested", [n]]),
@@ -24,15 +24,16 @@ const cases: [string, (number | bigint)[]][] = [
   ...genCases(prog.require("W").methods.filter((m) => ["sw", "sparse", "sparse9", "dense", "packed", "lcmp", "conv", "convl", "fcmp", "dcmp"].includes(m.name))).map(({ m, args }): [string, (number | bigint)[]] =>
     [m.name, args.map((a, i) => unbits(m.params[i], a as bigint))]),
 ];
-const expected = sh(["java", "-cp", out, "Ref"], cases.map(([name, args]) => {
+// the last line is the long-running xorshift the promotion checks call
+const expected = sh(["java", "-cp", out, "Ref"], [...cases.map(([name, args]) => {
   const m = prog.require("W").methods.find((m) => m.name === name)!;
   return `W.${name} ${args.map((a, i) => bitsOf(m.params[i], a)).join(" ")}`;
-}).join("\n") + "\n").trim().split("\n");
+}), "W.xorshift 50000"].join("\n") + "\n").trim().split("\n"), want = BigInt(expected.pop()!);
 const linked = world([join(out, "classes.dex")], { cold: true });
 let checks = 0;
 for (const [i, [name, args]] of cases.entries()) {
   const method = prog.require("W").methods.find((m) => m.name === name)!, item = method.dex.code(method.codeOff);
-  const oracle = BigInt.asIntN(64, bitsOf(method.ret, await js(method.cls, method.name, method.desc, args)));
+  const oracle = BigInt.asIntN(64, BigInt(expected[i]));
   const answer = linked.entry(method.cls, method.name, method.desc)(...args.map((a, i) => { const bits = bitsOf(method.params[i], a); return kindOf(method.params[i]) === "J" ? bits : Number(BigInt.asIntN(32, bits)); })) as number | bigint;
   if (BigInt.asIntN(64, BigInt(answer)) !== oracle) throw new Error(`${name}: linked cold entry disagrees`);
   for (const budget of [1, 7, 4096]) {
@@ -49,7 +50,7 @@ for (const [i, [name, args]] of cases.entries()) {
       }
     } catch (e) { throw new Error(`${name}(${args}), budget ${budget}: ${String(e)}`); }
     const bits = interpreter.result(frame);
-    if (bits !== oracle || bits !== BigInt(expected[i])) throw new Error(`${name}(${args}): cold ${bits}, JS ${oracle}, JDK ${expected[i]}`);
+    if (bits !== oracle) throw new Error(`${name}(${args}): cold ${bits}, JDK ${expected[i]}`);
     checks++;
   }
 }
@@ -94,7 +95,7 @@ if (!error.includes("unsupported opcode 0x71 at DEX PC 3")) throw new Error(`inv
 const coldBeforeInvoke = linked.stats.coldCalls;
 if (linked.entry("W", "fib", "(I)I")(10) !== 55 || linked.stats.coldCalls <= coldBeforeInvoke)
   throw new Error("recursive invokes bypassed the cold bridge");
-const loop = linked.entry("W", "xorshift", "(I)J"), want = await js("W", "xorshift", "(I)J", [50_000]);
+const loop = linked.entry("W", "xorshift", "(I)J");
 if (loop(50_000) !== want || !linked.stats.upgrades) throw new Error("cold back edges did not promote the method");
 if (!linked.stats.coldResumes || !linked.stats.coldResumeEntries) throw new Error("long activation never transferred to compiled resume");
 const calls = linked.stats.coldCalls;
@@ -114,4 +115,4 @@ for (let i = 0; i < 3; i++) {
 depth.value = 0;
 console.log(`active OSR: ${active.stats.coldResumes} production transfers; ${active.stats.coldResumeEntries} precise entries; held upgrades; caller depth preserved`);
 console.log(`linked cold: ${linked.stats.coldMethods} interpreted methods, ${linked.stats.coldCalls} calls`);
-console.log(`cold: ${checks} unchanged numeric/control DEX cases match JS/JDK across 1/7/4096-instruction slices and snapshot transfers; injected PC/register state, GC references and typed equality resume; standalone unsupported invokes rejected before execution; linked recursive invokes use canonical slow adapters`);
+console.log(`cold: ${checks} unchanged numeric/control DEX cases match the JDK across 1/7/4096-instruction slices and snapshot transfers; injected PC/register state, GC references and typed equality resume; standalone unsupported invokes rejected before execution; linked recursive invokes use canonical slow adapters`);

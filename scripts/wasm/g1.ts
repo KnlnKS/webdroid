@@ -1,8 +1,8 @@
-// G1 timing: all selected Bench and G1 workloads, first call and steady state, Wasm against the production JS tier,
-// in node and in headless Chrome (so Liftoff and TurboFan tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java;
-// all selected workloads are attempted and failures retained. Every measurement is a fresh process/context; runs interleave JS and Wasm.
+// G1 timing: all selected Bench and G1 workloads on the Wasm tier, first call and steady state, in node and in headless Chrome (so Liftoff and TurboFan
+// tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java or java/G1.java; all selected workloads are attempted and failures
+// retained. Every measurement is a fresh process/context; every run of a workload must answer alike.
 //   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."] [--installed DIR [--inline]]
-// --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
+// --ref compares with the numbers (and answers) of an earlier --json run and measures only its workloads, for A/B work on the compiler.
 // --installed DIR runs the Wasm tier as a launch of the installed app (g1app.ts made DIR over the platform build in WEBDROID_AOT): its saved build attached, the host's classes, and in
 // Chrome a forcibly prestarted compile worker; setup time is reported separately. The saved app's measured-demand startup list replaces the platform default in this supplemental
 // scenario. With --inline the page compiles the second tier itself, as without --installed. Ordinary/on-demand remains the primary G1 scenario.
@@ -52,13 +52,10 @@ if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file)
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
 
-// ---- one bundle per engine: oracle.ts's platform import becomes g1platform.ts, and a page's node:fs the preloaded files
+// ---- one bundle per engine: a page's node:fs is the preloaded files
 const bundle = async (browser: boolean) => {
   const r = await Bun.build({ entrypoints: [join(here, "g1run.ts")], target: browser ? "browser" : "node", outdir: join(out, browser ? "page" : "node"), define: { "import.meta.main": "false" },
-    plugins: [{ name: "g1", setup(b) {
-      b.onResolve({ filter: /tests\/platform$/ }, () => ({ path: join(here, "g1platform.ts") }));
-      if (browser) b.onResolve({ filter: /^node:fs$/ }, () => ({ path: join(here, "g1fs.ts") }));
-    } }] });
+    plugins: browser ? [{ name: "g1", setup(b) { b.onResolve({ filter: /^node:fs$/ }, () => ({ path: join(here, "g1fs.ts") })); } }] : [] });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return r.outputs[0].path;
 };
@@ -66,7 +63,7 @@ const base64 = Bun.spawnSync(["node", "-p", "typeof Uint8Array.fromBase64"]).std
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
   const r = Bun.spawnSync(["node", "--expose-gc", "--experimental-wasm-jspi", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT, ...(installedDir && { G1_APP: installedDir }) } });
   const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
-  if (!line) throw new Error(`${cfg.workload}/${cfg.mode}: ${r.stderr.toString().slice(0, 400)}`);
+  if (!line) throw new Error(`${cfg.workload}: ${r.stderr.toString().slice(0, 400)}`);
   const result = JSON.parse(line.slice(2)) as G1Result;
   if (r.exitCode) result.error ??= `node exited ${r.exitCode}: ${r.stderr.toString().slice(0, 400)}`;
   return result;
@@ -113,11 +110,11 @@ async function chromeRun() {
 // ---- measure
 const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
-interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; oracleBootMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
+interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, oracleBootMs: r.oracleBootMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
+const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
 const loads: number[] = [loadavg()[0]];
-type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
+type Row = { w: string; result: string; first: number[]; steady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
 const startSource = sourceKey();
 const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:startSource, dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
@@ -167,53 +164,47 @@ const checkSource = (where: string) => {
 for (const engine of engines) {
   let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
   checkSource(`before ${engine} setup`);
-  if (guardFailures.length) run = c => ({ mode: c.mode, workload: c.workload, result: "", times: [], error: guardFailures.join("; ") });
+  if (guardFailures.length) run = c => ({ workload: c.workload, result: "", times: [], error: guardFailures.join("; ") });
   else if (engine === "node") run = nodeRun(await bundle(false));
   else { const c = await chromeRun(); run = c.run; close = c.close; label = "Chrome " + c.version; }
   const refRows = new Map((ref?.[engine]?.rows ?? []).map((r) => [r.w, r]));
-  const got = new Map<string, { js: Sample[]; wasm: Sample[]; blocked: boolean }>();
-  for (const w of todo) if (!ref || refRows.has(w)) {
-    const r = refRows.get(w);
-    got.set(w, { js: r ? r.jsFirst.map((first, i) => ({ first, warm: 0, steady: r.jsSteady[i], completedCalls:0, result: r.result })) : [], wasm: [], blocked: false });
-  }
+  const got = new Map(todo.filter((w) => !ref || refRows.has(w)).map((w) => [w, [] as Sample[]]));
   for (let i = 0; i < runs; i++) {
     checkSource(`before ${engine} pass ${i}`);
-    for (const w of got.keys()) for (const mode of (i%2?["wasm","js"]:["js","wasm"]) as ("js"|"wasm")[]) {
-      const entry = got.get(w)!;
-      if (ref && mode === "js") continue;
+    for (const [w, samples] of got) {
       let result: G1Result;
       try {
         if (guardFailures.length) throw new Error(guardFailures.join("; "));
-        result = await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
-      catch (error) { result = { mode, workload: w, result: "", times: [], error: String(error).slice(0, 900) }; }
-      const r = sample(result);
-      entry[mode].push(r);
-      if (mode === "wasm" && (r.error || r.result !== entry.js[0]?.result)) entry.blocked = true;
+        result = await run({ cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
+      catch (error) { result = { workload: w, result: "", times: [], error: String(error).slice(0, 900) }; }
+      samples.push(sample(result));
     }
     checkSource(`after ${engine} pass ${i}`);
     loads.push(loadavg()[0]);
   }
-  const failures = [...got].flatMap(([workload, e]) => (["js", "wasm"] as const).flatMap(mode => {
-    const samples = e[mode], expected = e.js[0]?.result ?? "";
-    return samples.flatMap((s, run) => { const error = sampleError(s, expected, ref && mode === "js" ? undefined : reps + 1); return error ? [{ workload, mode, run, error, completedCalls: s.completedCalls }] : []; })
-      .concat(samples.length === (ref && mode === "js" ? refRows.get(workload)!.jsFirst.length : runs) ? [] : [{ workload, mode, run: -1, error: "incomplete run count", completedCalls: 0 }]);
-  }));
+  const failures = [...got].flatMap(([workload, samples]) => {
+    const expected = refRows.get(workload)?.result ?? samples.find((s) => !s.error)?.result ?? "";
+    return samples.flatMap((s, run) => { const error = sampleError(s, expected, reps + 1); return error ? [{ workload, run, error, completedCalls: s.completedCalls }] : []; })
+      .concat(samples.length === runs ? [] : [{ workload, run: -1, error: "incomplete run count", completedCalls: 0 }]);
+  });
   const omittedWorkloads = todo.filter(w => !got.has(w));
   const rows = [], ratios = { first: [] as number[], steady: [] as number[] }, byClass = new Map<string, { first: number[]; steady: number[] }>();
-  console.log(`\n${label}: ${runs} runs x ${reps} reps; medians, [min-max] over runs; ms`);
+  console.log(`\n${label}: ${runs} runs x ${reps} reps; medians, [min-max] over runs; ms${ref ? "; x = the reference's median over this one's" : ""}`);
   console.log(`scenario: ${report.scenario}; worker: ${installedDir && engine !== "node" && !inlineTier ? "prestarted before first call" : "inline"}; startup: ${JSON.stringify(report.startup)}`);
-  console.log("workload".padEnd(11), "js first".padStart(9), "wasm first".padStart(11), "x".padStart(6), "js steady".padStart(11), "wasm steady".padStart(12), "x".padStart(6), " wasm warm(2-11)  compile");
+  console.log("workload".padEnd(11), "first".padStart(11), ...(ref ? ["x".padStart(6)] : []), "steady".padStart(12), ...(ref ? ["x".padStart(6)] : []), " warm(2-11)  compile");
   for (const [w, e] of got) {
     const invalid = failures.filter(f => f.workload === w);
-    if (invalid.length) { console.log(w.padEnd(11), `FAILED (${invalid.map(f => `${f.mode}/${f.run}: ${f.error}`).join("; ")})`); continue; }
+    if (invalid.length) { console.log(w.padEnd(11), `FAILED (${invalid.map(f => `${f.run}: ${f.error}`).join("; ")})`); continue; }
     const f = (xs: Sample[], k: "first" | "steady" | "warm") => xs.map((x) => x[k]);
     const rng = (a: number[]) => `${med(a).toFixed(a[0] < 1 ? 3 : 1)} [${Math.min(...a).toFixed(a[0] < 1 ? 3 : 1)}-${Math.max(...a).toFixed(a[0] < 1 ? 3 : 1)}]`;
-    const xf = med(f(e.js, "first")) / med(f(e.wasm, "first")), xs = med(f(e.js, "steady")) / med(f(e.wasm, "steady"));
-    ratios.first.push(xf); ratios.steady.push(xs);
-    const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
-    bc.first.push(xf); bc.steady.push(xs);
-    rows.push({ w, result: e.js[0].result, firstRatio: xf, steadyRatio: xs, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsCompletedCalls: e.js.map((x) => x.completedCalls), wasmCompletedCalls: e.wasm.map((x) => x.completedCalls), wasmBoot: e.wasm.map((x) => x.bootMs ?? 0), wasmAhead: e.wasm.map((x) => x.ahead ?? 0), wasmAppRead: e.wasm.map((x) => x.appReadMs ?? 0), wasmWorldSetup: e.wasm.map((x) => x.worldSetupMs ?? 0), wasmWorkerStart: e.wasm.map((x) => x.workerStartMs ?? 0), prestartedWorker: e.wasm.map((x) => !!x.prestartedWorker), wasmCalls: e.wasm.map((x) => (x.stats?.methods ?? 0) - (x.setup?.methods ?? x.boot?.methods ?? 0)), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
-    console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
+    const r = refRows.get(w), xf = r ? med(r.first) / med(f(e, "first")) : 0, xs = r ? med(r.steady) / med(f(e, "steady")) : 0;
+    if (r) {
+      ratios.first.push(xf); ratios.steady.push(xs);
+      const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
+      bc.first.push(xf); bc.steady.push(xs);
+    }
+    rows.push({ w, result: e[0].result, first: f(e, "first"), completedCalls: e.map((x) => x.completedCalls), boot: e.map((x) => x.bootMs ?? 0), ahead: e.map((x) => x.ahead ?? 0), appRead: e.map((x) => x.appReadMs ?? 0), worldSetup: e.map((x) => x.worldSetupMs ?? 0), workerStart: e.map((x) => x.workerStartMs ?? 0), prestartedWorker: e.map((x) => !!x.prestartedWorker), calls: e.map((x) => (x.stats?.methods ?? 0) - (x.setup?.methods ?? x.boot?.methods ?? 0)), steady: f(e, "steady"), warm: f(e, "warm"), ...(r && { firstRatio: xf, steadyRatio: xs }) });
+    console.log(w.padEnd(11), rng(f(e, "first")).padStart(11), ...(r ? [xf.toFixed(2).padStart(6)] : []), rng(f(e, "steady")).padStart(12), ...(r ? [xs.toFixed(2).padStart(6)] : []), "  ", med(f(e, "warm")).toFixed(3), " ", med(e.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
   if (process.argv.includes("--phases")) {
     // what the engine and our compiler spent from World creation to the end of the first call, split at the end of process setup (medians over runs, ms)
@@ -221,17 +212,18 @@ for (const engine of engines) {
     console.log("\nphases (ms): boot = process setup, setup = prestarted worker work, first = the first call, rest = the calls after it;  compile = our compiler (prepare flow infer facts emit encode), module/inst = V8, class = class modules (build, link)");
     console.log("workload".padEnd(11), "part".padEnd(5), "methods".padStart(7), "units".padStart(6), "classes".padStart(7), "compile".padStart(8), ...keys.map((k) => k.padStart(7)), "module".padStart(7), "inst".padStart(6), "classB".padStart(7), "classMs".padStart(8), "KB".padStart(6), "aotD".padStart(5), "aotC".padStart(5), "dead".padStart(5), "miss".padStart(5), "aotMs".padStart(6), "read".padStart(5), "aotKB".padStart(6), "upg".padStart(4));
     for (const [w, e] of got) for (const part of ["boot", "setup", "first", "rest"] as const) {
-      const v = (f: (s: Stats) => number) => total(e.wasm.map((x) => { const end = x.stats!, b = x.boot!, setup = x.setup ?? b, first = x.firstStats ?? end; return part === "boot" ? f(b) : part === "setup" ? f(setup) - f(b) : part === "first" ? f(first) - f(setup) : f(end) - f(first); }));
-      if (!e.wasm.length || e.wasm.some(x => !x.stats || !x.boot)) continue;
+      const v = (f: (s: Stats) => number) => total(e.map((x) => { const end = x.stats!, b = x.boot!, setup = x.setup ?? b, first = x.firstStats ?? end; return part === "boot" ? f(b) : part === "setup" ? f(setup) - f(b) : part === "first" ? f(first) - f(setup) : f(end) - f(first); }));
+      if (!e.length || e.some(x => !x.stats || !x.boot)) continue;
       console.log(w.padEnd(11), part.padEnd(5), String(v((s) => s.methods)).padStart(7), String(v((s) => s.units)).padStart(6), String(v((s) => s.classes)).padStart(7), v((s) => s.compileMs).toFixed(0).padStart(8),
         ...keys.map((k) => v((s) => s.phase[k]).toFixed(0).padStart(7)), v((s) => s.moduleMs).toFixed(0).padStart(7), v((s) => s.instantiateMs).toFixed(0).padStart(6), v((s) => s.phase.classBuild).toFixed(0).padStart(7), v((s) => s.classMs).toFixed(0).padStart(8), (v((s) => s.bytes) / 1024).toFixed(0).padStart(6),
         String(v((s) => s.aot.d)).padStart(5), String(v((s) => s.aot.c)).padStart(5), String(v((s) => s.aot.dead)).padStart(5), String(v((s) => s.aot.missed)).padStart(5), v((s) => s.aot.ms).toFixed(0).padStart(6), v((s) => s.aot.readMs).toFixed(0).padStart(5), (v((s) => s.aot.bytes) / 1024).toFixed(0).padStart(6), String(v((s) => s.upgrades)).padStart(4));
     }
   }
   const complete = guardFailures.length === 0 && failures.length === 0 && omittedWorkloads.length === 0 && rows.length === todo.length && rows.length > 0;
-  if (complete) for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over all ${r.steady.length} selected ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
-  else { console.log("No full-selection geometric mean: failed or omitted workloads remain in samples/failures."); process.exitCode = 1; }
-  (report.engines as Record<string, unknown>)[engine] = { label, workerPolicy: installedDir && engine !== "node" && !inlineTier ? "prestarted-before-first-call" : "inline", selected:got.size, selectedWorkloads:todo, omittedWorkloads, complete, blocked:[...got].filter(([,e])=>e.blocked).map(([w])=>w), failures, reference:refPath||null, rows, samples:Object.fromEntries(got), geoFirst: complete ? geo(ratios.first) : null, geoSteady: complete ? geo(ratios.steady) : null };
+  const geometric = complete && ref;
+  if (geometric) for (const [cls, r] of byClass) console.log(`geometric-mean speedup (reference/this) over all ${r.steady.length} selected ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
+  if (!complete) { console.log("Failed or omitted workloads remain in samples/failures."); process.exitCode = 1; }
+  (report.engines as Record<string, unknown>)[engine] = { label, workerPolicy: installedDir && engine !== "node" && !inlineTier ? "prestarted-before-first-call" : "inline", selected:got.size, selectedWorkloads:todo, omittedWorkloads, complete, failures, reference:refPath||null, rows, samples:Object.fromEntries(got), geoFirst: geometric ? geo(ratios.first) : null, geoSteady: geometric ? geo(ratios.steady) : null };
   await close();
 }
 checkSource("final");

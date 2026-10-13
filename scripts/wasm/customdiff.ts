@@ -1,15 +1,15 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
-// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm, on the production JS tier and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
+// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { jsTier, natives, processState, processStateAsync } from "./oracle";
+import { mountPlatform, natives, startProcess } from "./harness";
 import { loadDexes, program, world } from "./lib";
 import { ACC, Program } from "../../src/wasm/compiler/program";
 import { compare, genCases } from "./cases";
 import { Pool, u2, u4 } from "./classfile";
-import { AOSP, JAVA } from "./paths";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
 import { bootstrapReferences } from "../../src/wasm/link/callsites";
@@ -150,7 +150,7 @@ for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, 
 sh(["javac", "--release", "17", "-cp", `${out}:${androidPlatform(35)}/android.jar`, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
 sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
-await jsTier(loadDexes(dex));
+await mountPlatform(ROOT);
 if (process.argv.includes("--signature-loader")) { await checkDeferredSignatures(); process.exit(0); }
 
 let forceAdmission = false, admissionTurns = 0;
@@ -216,7 +216,7 @@ let bridgeCalls = 0;
 const invokeBridge = w.host.mhInvoke;
 w.host.mhInvoke = (...args: unknown[]) => { bridgeCalls++; return invokeBridge(...args); };
 assertEagerFieldAccessors(w);
-processState(w);
+await startProcess(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
@@ -227,14 +227,15 @@ const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.n
 // ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; JDKs before 21.0.12 narrow Object.clone's
 // protected receiver to Mc and throw, so those rows take ART's receiver rule and array clone semantics.
 cases.forEach((c, i) => { if (c.m.name === "tConstClone" && jdk[i] === "throw") jdk[i] = String(Number(c.args[0]) + 1); });
-const tier = await jsTier(loadDexes(dex));
-// the production tier has its own method handle and VarHandle model (jinvoke.ts) and no Class.isRecord: the JDK alone decides those cases
-const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
-  const i = cases.findIndex((c) => c.m.cls === cls && c.m.name === name && c.args.every((a, j) => a === args[j] || Number(a) === Number(args[j])));
-  return jdk[i] === "throw" ? Promise.reject(new Error("throw")) : Promise.resolve(entries.get(cases[i].m)!.length === 0 || cases[i].m.ret === "J" ? BigInt(jdk[i]) : Number(jdk[i]));
+// JDK 22+ (JDK-8318966) allows only plain access through byte array and heap buffer views and throws; ART's view handles keep every
+// access mode, so those rows take the answers ART's (and JDK 21's) semantics give.
+const artViews: Record<string, (a: number) => number> = {
+  tDirectViews: (a) => 4 * a + 14, tInvokerViewArray: (a) => 3 * a + 1107, tInvokerViewBuffer: (a) => a + 1111,
+  tInvokerViewKinds: (a) => ((a + 65530) & 0xffff) + ((-a << 16) >> 16) + 1103,
 };
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || cls === "Bootstrap" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
-console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
+cases.forEach((c, i) => { const art = artViews[c.m.name]; if (art && jdk[i] === "throw") jdk[i] = String(art(Number(c.args[0]))); });
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, jdk, hit);
+console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (the JDK or documented ART differences); ${threw} threw`);
 const bridgeCounts: Record<string, number> = {};
 for (const name of ["inst", "tDirectAdapt", "tDirectViews"]) {
   const before = bridgeCalls, method = methods.find(m => m.cls === "Vh" && m.name === name)!;
@@ -244,7 +245,7 @@ if (bridgeCounts.inst !== 0 || !bridgeCounts.tDirectAdapt || !bridgeCounts.tDire
 console.log(`direct bridge calls: ${JSON.stringify(bridgeCounts)} (work counts, no timing claim)`);
 const cold = world([dex, ...jars], { cold: true, natives, loop });
 assertEagerFieldAccessors(cold);
-processState(cold);
+await startProcess(cold);
 const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker") || c.m.name.startsWith("tDirect"));
 for (const { m, args, i } of constantCases) {
   let value: unknown;
@@ -258,7 +259,7 @@ console.log(`${constantCases.length} constant/transformer/bootstrap cases match 
 // Actual DEX definitions in sibling namespaces must keep their Class identities through constants and polymorphic calls.
 for (const isCold of [false, true]) {
   const tier = world(new Program([], program(jars)), { cold: isCold, natives, loop });
-  processState(tier);
+  await startProcess(tier);
   const loaders = [tier.prog.newLoader(tier.prog.boot, null), tier.prog.newLoader(tier.prog.boot, null)];
   for (const loader of loaders) tier.addDexes(loadDexes(dex), loader);
   const names = loaders.map(loader => `Mh@${loader.id}`), constants = loaders.map(loader => `Mc@${loader.id}`);
@@ -347,7 +348,7 @@ async function checkDeferredSignatures(): Promise<void> {
       if (path !== signaturePath) return undefined;
       loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
     } });
-    try { await processStateAsync(tier); }
+    try { await startProcess(tier); }
     catch (e) { const t = tier.throwable(e); throw new Error(`signature bootstrap: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
     let object: object;
     try { object = await tier.entryAsync("Mh", "signatureLoader", "(Ljava/lang/String;)Ljava/lang/ClassLoader;")(signaturePath) as object; }

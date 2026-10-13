@@ -1,42 +1,40 @@
-// Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on the
-// JS tier and on a World with the registered classes added to it, and must answer alike; then the Wasm tier's own rules: what dies together, and what the tables keep.
+// Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on a
+// World with the registered classes added to it and must answer as java/hc/expected.txt records; then the Wasm tier's own rules: what dies together, and what the tables keep.
 // Run: bun run wasm hostclass
 import { runInNewContext } from "node:vm";
 import { setFlagsFromString } from "node:v8";
 import { join } from "node:path";
-import { fieldNames, rt } from "../../src/jvm/runtime";
-import { jsEntry, resumeAs, scall, useEntry } from "../../src/jvm/natives/jentry";
+import { readFileSync } from "node:fs";
+import { rt } from "../../src/jvm/runtime";
+import { resumeAs, scall } from "../../src/jvm/natives/jentry";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { fieldNamesOf, hostThrowable, onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
+import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
+import { useWorld } from "../../src/wasm/host/boot";
 import { Program } from "../../src/wasm/compiler/program";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { Block, emitBlock } from "../../src/wasm/link/sched";
 import { St } from "../../src/wasm/link/monitor";
 import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
-import { jsTier, natives, processStateAsync } from "./oracle";
-import { AOSP } from "./paths";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases";
 
 const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
-await jsTier(loadDexes(dex));
-useEntry(jsEntry);
-const js = await hostCases();
+await mountPlatform(ROOT);
+const expected = readFileSync(join(JAVA, "hc/expected.txt"), "utf8").trimEnd().split("\n");
 
 const w = world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) }), gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
 for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
-useEntry(wasmEntry(w));
-fieldNames.find = fieldNamesOf(w);
-rt.mkThrowable = hostThrowable;
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(async (cls, name, desc) => w.entryAsync(cls, name, desc)());
 
 let failed = 0;
 const fail = (what: string) => { failed++; console.log("FAIL " + what); };
-js.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); });
-if (wasm.length !== js.length) fail(`${wasm.length} answers for ${js.length}`);
+expected.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  want  ${want}\n  wasm  ${wasm[i]}`); });
+if (wasm.length !== expected.length) fail(`${wasm.length} answers for ${expected.length}`);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 
@@ -72,15 +70,15 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
     if (new Set(slots).size !== slots.length || slots.join("\n") !== worlds[0].vslots(cls).join("\n")) fail(`flat/shared dispatch layout differs for ${cls}`);
   }
   for (const x of [worlds[0], worlds[1], worlds[0]]) {
-    useEntry(wasmEntry(x)); fieldNames.find = fieldNamesOf(x);
-    await processStateAsync(x);
+    useWorld(x);
+    await startProcess(x);
     for (const m of ["runnable", "list", "http"]) {
-      const got = String(await x.entryAsync("Hc", m, "()Ljava/lang/String;")()), want = js.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
+      const got = String(await x.entryAsync("Hc", m, "()Ljava/lang/String;")()), want = expected.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
       if (got !== want) fail(`a World over a shared platform Program answers Hc.${m} ${got}, not ${want}`);
     }
   }
   if (!platform.get("java/net/HttpURLConnection")!.byKey.get("getRequestMethod()Ljava/lang/String;")!.codeOff) fail("a World changed a class of the platform Program");
-  useEntry(wasmEntry(w)); fieldNames.find = fieldNamesOf(w);
+  useWorld(w);
 }
 
 // lifetime: the Java object and the host object live and die together
@@ -180,5 +178,5 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-console.log(failed ? `${failed} failures` : `${js.length} cases answer alike on the JS tier and on a World with host classes`);
+console.log(failed ? `${failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
 process.exit(failed ? 1 : 0);

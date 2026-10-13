@@ -1,5 +1,5 @@
 // The platform build in a page: a headless Chrome tab opens the build (host/boot.ts), starts the process the way ActivityThread.main leaves it
-// (processState) and reports which modules were loaded and which missed, how many synchronous requests the page made (none are allowed) and where the time went;
+// (startProcess) and reports which modules were loaded and which missed, how many synchronous requests the page made (none are allowed) and where the time went;
 // then an iframe of the same page does it again.
 // The page also runs an app (the Pst fixture) in the World: the first load has no saved build, so a Worker compiles the app's likely methods and the page keeps them in OPFS, and runs a
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
@@ -14,8 +14,9 @@ import { JAVA, ROOT } from "./paths";
 import { filesIn, shellIn } from "./tools";
 
 const here = import.meta.dir;
+// the page has no files of its own (harness.ts is given the jars it fetched)
 const built = await Bun.build({ entrypoints: [join(here, "boot-probe-page.ts")], target: "browser", define: { "import.meta.main": "false" }, plugins: [{ name: "probe", setup(b) {
-  b.onResolve({ filter: /tests\/platform$/ }, () => ({ path: join(here, "boot-probe-platform.ts") }));
+  b.onResolve({ filter: /^node:fs$/ }, () => ({ path: join(here, "g1fs.ts") }));
 } }] });
 if (!built.success) throw new Error(built.logs.join("\n"));
 const bundle = built.outputs[0];

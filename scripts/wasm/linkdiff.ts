@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
-import { jsTier, natives, processState } from "./oracle";
-import { AOSP, JAVA } from "./paths";
+import { mountPlatform, natives, startProcess } from "./harness";
+import { AOSP, JAVA, ROOT } from "./paths";
 import { filesIn, shellIn } from "./tools";
 
 const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
@@ -38,9 +38,9 @@ const expected: Record<string, string> = {
   interfaceNowClass: icce("Found class LkI, but interface was expected"),
   classNowInterface: icce("Found interface LkC, but class was expected"),
 };
-await jsTier(loadDexes(join(out, "classes.dex")));   // makes the ICU data resident, which natives cannot wait for
+await mountPlatform(ROOT);   // makes the ICU data resident, which natives cannot wait for
 const w = world([join(out, "classes.dex"), ...jars], { natives });
-processState(w);
+await startProcess(w);
 const hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 const names = Object.keys(expected);

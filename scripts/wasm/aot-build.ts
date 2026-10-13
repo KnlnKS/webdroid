@@ -11,7 +11,7 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { externs } from "../../src/wasm/link/intrinsics";
-import { natives } from "./oracle";
+import { natives } from "./harness";
 import { rt } from "../../src/jvm/runtime";
 import { hostNatives } from "../../src/wasm/host/hostnatives";
 import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";

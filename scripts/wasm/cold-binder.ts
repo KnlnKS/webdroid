@@ -4,10 +4,9 @@ import { join } from "node:path";
 import { program, world } from "./lib";
 import { AOSP } from "./paths";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { rt, driven, type Gen, type JObj } from "../../src/jvm/runtime";
-import { useEntry, vcall } from "../../src/jvm/natives/jentry";
+import { driven, type Gen, type JObj } from "../../src/jvm/runtime";
+import { vcall } from "../../src/jvm/natives/jentry";
 import { hostStub, hostedService } from "../../src/android/binder";
-import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { nativeSource, natives } from "../../src/wasm/host/nativesource";
 import "../../src/natives";
 
@@ -16,7 +15,6 @@ let checks = 0;
 for (const cold of [false, true]) {
   const w = world(prog, { cold, natives });
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
-  useEntry(wasmEntry(w)); rt.mkThrowable = hostThrowable;
   const name = `binder-continuation-${cold}`;
   hostStub(name, "android/os/Binder");
   const ask = driven(function* (): Gen<JObj> {
