@@ -78,11 +78,7 @@ phases and counters (`mainJobs`, `hotMethods`, `osrMethods`, `rnReplay`...).
 `?jvmTier=auto|cold|js` and `?jvmHotness=1024|4096|16384` support diagnosis;
 `jvmTier=js` compiles every executed method to the fast form at once.
 
-`scripts/perf-browser.ts` measures a flow state with optional CPU throttling,
-ad-hoc swipes, CPU profiles and renderer trace totals; it forces its GC before
-warmup because a forced GC deoptimizes code that embeds weak objects.
-`scripts/launch-profile.ts` times navigation to first draw, and with
-`--launches N` repeated launches in one browser profile. In V8 CPU profiles
+`bun run lat` times launches to first draw and gated taps. In V8 CPU profiles
 the first sample carries the gap since `Profiler.start` as `(program)`;
 excluding it, microtask machinery also appears as `(program)`.
 
