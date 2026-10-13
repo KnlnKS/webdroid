@@ -862,15 +862,13 @@ function scalbn(x: number, n: number): number {
 }
 const copysign = (x: number, y: number): number => withHI(x, (HI(x) & 0x7fffffff) | (HI(y) & 0x80000000));
 
-/** round half to even (rint), exact for every double */
-const rint = (v: number): number => { const r = Math.round(v); return r - v === 0.5 && r % 2 !== 0 ? r - 1 : r; };
-const MATH_1 = ["acos", "asin", "atan", "cbrt", "ceil", "cos", "cosh", "exp", "expm1", "floor", "log", "log10", "log1p",
-  "sin", "sinh", "sqrt", "tan", "tanh"] as const;
-const STRICT_1 = { acos, asin, atan, cbrt, cos, cosh, exp, expm1, log, log10, log1p, sin, sinh, tan, tanh, sqrt: Math.sqrt };
+// sqrt, floor, ceil and rint are Wasm instructions (src/wasm/link/intrinsics.ts)
+const MATH_1 = ["acos", "asin", "atan", "cbrt", "cos", "cosh", "exp", "expm1", "log", "log10", "log1p", "sin", "sinh", "tan", "tanh"] as const;
+const STRICT_1 = { acos, asin, atan, cbrt, cos, cosh, exp, expm1, log, log10, log1p, sin, sinh, tan, tanh };
 
 // Math's natives may be the platform's (bionic's on a device); StrictMath's are fdlibm's, bit for bit
 {
-  const math: Record<string, unknown> = { "rint(D)D": rint, "IEEEremainder(DD)D": remainder };
+  const math: Record<string, unknown> = { "IEEEremainder(DD)D": remainder };
   for (const f of MATH_1) math[f + "(D)D"] = Math[f];
   for (const f of ["atan2", "hypot", "pow"] as const) math[f + "(DD)D"] = Math[f];
   rt.registerJnis("java/lang/Math", math);
@@ -881,29 +879,3 @@ const STRICT_1 = { acos, asin, atan, cbrt, cos, cosh, exp, expm1, log, log10, lo
   strict["pow(DD)D"] = pow;
   rt.registerJnis("java/lang/StrictMath", strict);
 }
-
-// §4.7 intrinsics for Math's hot pure-Java methods, whose AOSP bodies go through the raw-bit
-// natives (a BigInt for a double) or a call per step. A NaN's payload is the engine's either way.
-const absF = (v: number): number => (v <= 0 ? 0 - v : v);
-const signum = (v: number): number => (v > 0 ? 1 : v < 0 ? -1 : v);
-const floorDiv = (a: number, b: number): number => Math.floor(a / b) | 0;
-rt.intrinsic("java/lang/Math", {
-  "static abs(I)I": () => (v: number) => (v < 0 ? -v | 0 : v),
-  "static abs(J)J": () => (v: bigint) => (v < 0n ? BigInt.asIntN(64, -v) : v),
-  "static abs(F)F": () => absF,
-  "static abs(D)D": () => absF,
-  "static max(II)I": () => (a: number, b: number) => (a >= b ? a : b),
-  "static min(II)I": () => (a: number, b: number) => (a <= b ? a : b),
-  "static max(JJ)J": () => (a: bigint, b: bigint) => (a >= b ? a : b),
-  "static min(JJ)J": () => (a: bigint, b: bigint) => (a <= b ? a : b),
-  "static max(FF)F": () => Math.max,
-  "static min(FF)F": () => Math.min,
-  "static max(DD)D": () => Math.max,
-  "static min(DD)D": () => Math.min,
-  "static round(F)I": () => (v: number) => rt.f2i(Math.round(v)),
-  "static round(D)J": () => (v: number) => rt.f2l(Math.round(v)),
-  "static signum(F)F": () => signum,
-  "static signum(D)D": () => signum,
-  "static floorDiv(II)I": (base) => (a: number, b: number) => (b === 0 ? base(a, b) : floorDiv(a, b)),
-  "static floorMod(II)I": (base) => (a: number, b: number) => (b === 0 ? base(a, b) : (a - floorDiv(a, b) * b) | 0),
-});

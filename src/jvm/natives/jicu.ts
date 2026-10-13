@@ -5,9 +5,8 @@
 import { rt, driven, type Gen } from "../runtime";
 import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry";
 import type { JavaClass } from "../tier";
-import { once } from "../suspend";
-import { jarray, mangleField } from "../abi";
-import { BytesTrie, ResBundle, cString, icuItem, icuRead } from "./icudata";
+import { jarray } from "../abi";
+import { cString, icuItem, icuRead } from "./icudata";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 
@@ -52,116 +51,6 @@ const unicodeVersion = async () => {
 /** ulocdata_getCLDRVersion: supplementalData's cldrVersion */
 const cldrVersion = async () => versionString(Object.assign([0, 0, 0, 0], (await icuRootString("supplementalData.res", "cldrVersion")).split(".").map(Number)));
 
-/** LikelySubtags.Data: langInfo's likely-subtags table, decoded once for the page's realms, with its
- *  LSRs kept encoded (LSR.decodeInts) and the script names ICU4J's UScript gave them */
-interface Likely {
-  languageAliases: Map<string, string>; regionAliases: Map<string, string>; trie: Uint8Array; lsrs: Int32Array; m49: string[];
-  und: [number, number]; undZzzz: [number, number]; defaultLsr: number; scripts: Map<number, string>;
-}
-const likelyData = once(async (): Promise<Likely | null> => {
-  try {
-    const bundle = await ResBundle.open("langInfo.res"), table = bundle.get(bundle.root, "likely")!;
-    const pairs = (key: string) => {
-      const res = bundle.get(table, key), map = new Map<string, string>();
-      const a = res === undefined ? [] : bundle.strings(res);
-      for (let i = 0; i < a.length; i += 2) map.set(a[i], a[i + 1]);
-      return map;
-    };
-    const trie = bundle.binary(bundle.get(table, "trie")!), walk = new BytesTrie(trie);
-    walk.next(42);
-    const und = walk.state();
-    walk.next(42);
-    const undZzzz = walk.state();
-    walk.next(42);
-    return { languageAliases: pairs("languageAliases"), regionAliases: pairs("regionAliases"), trie, lsrs: bundle.ints(bundle.get(table, "lsrnum")!),
-      m49: bundle.strings(bundle.get(table, "m49")!), und, undZzzz, defaultLsr: walk.value(), scripts: new Map() };
-  } catch (e) { console.warn("[webdroid] likely subtags unavailable", e); return null; }
-});
-/** LikelySubtags.trieNext: a subtag's last character is marked with 0x80, an empty one is "*" */
-function trieNext(iter: BytesTrie, s: string): number {
-  let result: number;
-  if (!s) result = iter.next(42);
-  else for (let i = 0; ; i++) {
-    if (i < s.length - 1) { if (!(iter.next(s.charCodeAt(i)) & 1)) return -1; }
-    else { result = iter.next(s.charCodeAt(i) | 0x80); break; }
-  }
-  return result === 2 ? iter.value() : result === 3 ? 1 : result - 1;
-}
-/** LSR.CachedDecoder.decode */
-function* decodeLsr(d: Likely, encoded: number): Gen<[string, string, string]> {
-  if (encoded === 0) return ["", "", ""];
-  if (encoded === 1) return ["skip", "script", ""];
-  const letter = (i: number, base: number) => String.fromCharCode(i - 1 + base), lsr = encoded & 0xffffff, l = lsr % 19683, r = (lsr / 19683 | 0) % 729, code = encoded >>> 24;
-  let script = d.scripts.get(code);
-  if (script === undefined) d.scripts.set(code, script = yield scall("android/icu/lang/UScript", "getShortName", `(I)${STRING}`, code));
-  return [letter(l % 27, 97) + letter((l / 27 | 0) % 27, 97) + (l / 729 | 0 ? letter(l / 729 | 0, 97) : ""), script!,
-    r < 27 ? d.m49[r] : letter(r % 27, 65) + letter((r / 27 | 0) % 27, 65)];
-}
-/** LikelySubtags.isMacroregion */
-function* isMacroregion(region: string): Gen<boolean> {
-  const type = yield vcall(yield scall("android/icu/util/Region", "getInstance", `(${STRING})Landroid/icu/util/Region;`, region), "getType", "()Landroid/icu/util/Region$RegionType;");
-  for (const macro of ["WORLD", "CONTINENT", "SUBCONTINENT"]) if (type === (yield staticField("android/icu/util/Region$RegionType", macro))) return true;
-  return false;
-}
-/** LikelySubtags.makeMaximizedLsr(language, script, region, "", true) as subtags, "" for each when
- *  nothing matched */
-function* maximize(d: Likely, language: string, script: string, region: string): Gen<[string, string, string]> {
-  language = d.languageAliases.get(language) ?? language;
-  region = d.regionAliases.get(region) ?? region;
-  if (language === "und") language = "";
-  if (script === "Zzzz") script = "";
-  if (region === "ZZ") region = "";
-  if (language && script && region) return [language, script, region];
-  const iter = new BytesTrie(d.trie);
-  let value = trieNext(iter, language), state: [number, number] | null = null, retainScript: boolean, retainRegion = false, matchRegion = false;
-  const matchLanguage = value >= 0, matchScript = value >= 0 && script !== "", retainLanguage = value < 0 || language !== "";
-  if (value >= 0) state = iter.state();
-  else iter.reset(d.und);
-  if (value > 0) {
-    if (value === 1) value = 0;
-    retainScript = script !== "";
-  } else if ((value = trieNext(iter, script)) >= 0) {
-    retainScript = script !== "";
-    state = iter.state();
-  } else {
-    retainScript = true;
-    if (!state) iter.reset(d.undZzzz);
-    else { value = trieNext(iter.reset(state), ""); state = iter.state(); }
-  }
-  if (value > 0) retainRegion = region !== "";
-  else if ((value = trieNext(iter, region)) >= 0) {
-    if (region && !(yield* isMacroregion(region))) retainRegion = matchRegion = true;
-  } else {
-    retainRegion = true;
-    value = state ? trieNext(iter.reset(state), "") : d.defaultLsr;
-  }
-  if (!matchLanguage && !matchScript && !(matchRegion && !language)) return ["", "", ""];
-  const lsr = yield* decodeLsr(d, d.lsrs[value]);
-  if (!retainLanguage && !retainScript && !retainRegion) return lsr;
-  return [retainLanguage ? language || "und" : lsr[0], retainScript ? script : lsr[1], retainRegion ? region : lsr[2]];
-}
-const LOCALE_ID = mangleField("android/icu/util/ULocale", "localeID"), U = "android/icu/util/ULocale";
-// §4.7: ULocale.addLikelySubtags over the page's decoded table, so no realm decodes LikelySubtags.Data
-// in Java (Typeface.<clinit>: first realm 88 -> 75 ms warm, a process realm 61-109 -> 17-21 ms);
-// tests/intrinsics.test.ts compares it with the AOSP body
-rt.intrinsic(U, {
-  [`static addLikelySubtags(${ULOCALE})${ULOCALE}`]: (base) => function (this: unknown, loc: Record<string, string> | null) {
-    if (loc === null) return base.call(this, loc);
-    return after(likelyData(), driven(function* (d: Likely | null): Gen {
-      if (!d) return yield base.call(null, loc);
-      const id = loc[LOCALE_ID], at: number = yield scall(U, "parseTagString", `(${STRING}[${STRING})I`, id, jarray([null, null, null], STRING));
-      // makeMaximizedLsrFrom's locale: its name never starts "@x=" and its variant is unread when
-      // the input is returned unmatched
-      const plain = yield newObj(U, `(${STRING}${STRING}${STRING})V`, yield vcall(loc, "getLanguage", `()${STRING}`),
-        yield vcall(loc, "getScript", `()${STRING}`), yield vcall(loc, "getCountry", `()${STRING}`));
-      const [language, script, region] = [yield vcall(plain, "getLanguage", `()${STRING}`), yield vcall(plain, "getScript", `()${STRING}`), yield vcall(plain, "getCountry", `()${STRING}`)];
-      let lsr = yield* maximize(d, language, script, region);
-      if (!lsr[0] && !lsr[1] && !lsr[2]) lsr = [language, script, region];
-      const tag = yield scall(U, "createTagString", `(${STRING}${STRING}${STRING}${STRING})${STRING}`, ...lsr, at < id.length ? id.substring(at) : null);
-      return tag === null ? loc : yield newObj(U, `(${STRING})V`, tag);
-    }));
-  },
-});
 const names = (cls: string, name: string) => after(scall(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
 const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`));
 const displayOf = (method: string) => driven(function* (target: string, display: string): Gen {
@@ -175,42 +64,16 @@ export function uchar(name: string, desc: string): (...args: unknown[]) => unkno
   return (...args: unknown[]) => fn ? fn(...args) : after(linkInit("android/icu/lang/UCharacter"),
     (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
-/** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. ASCII,
- *  whose properties are fixed, is answered without it for the predicates text loops call. */
+/** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. The rest
+ *  are Wasm intrinsics (src/wasm/compiler/chars.ts). */
 function characterNatives(): Record<string, (...args: never[]) => unknown> {
-  const upper = (c: number) => c >= 65 && c <= 90, lower = (c: number) => c >= 97 && c <= 122, digit = (c: number) => c >= 48 && c <= 57;
-  const ascii = (test: (c: number) => boolean, name: string) => {
-    const icu = uchar(name, "(I)Z");
-    return (c: number) => (c < 128 ? +test(c) : icu(c));
-  };
-  const hasProperty = uchar("hasBinaryProperty", "(II)Z"), numeric = uchar("getUnicodeNumericValue", "(I)D"), charName = uchar("getName", "(I)Ljava/lang/String;");
+  const hasProperty = uchar("hasBinaryProperty", "(II)Z"), numeric = uchar("getUnicodeNumericValue", "(I)D");
   return {
-    "isDigitImpl(I)Z": ascii(digit, "isDigit"),
-    "isLetterImpl(I)Z": ascii((c) => upper(c) || lower(c), "isLetter"),
-    "isLetterOrDigitImpl(I)Z": ascii((c) => upper(c) || lower(c) || digit(c), "isLetterOrDigit"),
-    "isUpperCaseImpl(I)Z": ascii(upper, "isUpperCase"),
-    "isLowerCaseImpl(I)Z": ascii(lower, "isLowerCase"),
-    "isTitleCaseImpl(I)Z": uchar("isTitleCase", "(I)Z"),
-    "isDefinedImpl(I)Z": uchar("isDefined", "(I)Z"),
-    "isIdentifierIgnorableImpl(I)Z": uchar("isIdentifierIgnorable", "(I)Z"),
-    "isSpaceCharImpl(I)Z": uchar("isSpaceChar", "(I)Z"),
-    "isWhitespaceImpl(I)Z": uchar("isWhitespace", "(I)Z"),
-    "isMirroredImpl(I)Z": uchar("isMirrored", "(I)Z"),
-    "isUnicodeIdentifierStartImpl(I)Z": uchar("isUnicodeIdentifierStart", "(I)Z"),
-    "isUnicodeIdentifierPartImpl(I)Z": uchar("isUnicodeIdentifierPart", "(I)Z"),
     // UProperty.ALPHABETIC and IDEOGRAPHIC
     "isAlphabeticImpl(I)Z": (c: number) => hasProperty(c, 0),
     "isIdeographicImpl(I)Z": (c: number) => hasProperty(c, 17),
-    "getTypeImpl(I)I": uchar("getType", "(I)I"),
-    "getDirectionalityImpl(I)B": uchar("getDirection", "(I)I"),
-    "digitImpl(II)I": uchar("digit", "(II)I"),
-    "toLowerCaseImpl(I)I": uchar("toLowerCase", "(I)I"),
-    "toUpperCaseImpl(I)I": uchar("toUpperCase", "(I)I"),
-    "toTitleCaseImpl(I)I": uchar("toTitleCase", "(I)I"),
     // U_NO_NUMERIC_VALUE is -1; a value that is negative or not an integer is -2
     "getNumericValueImpl(I)I": (c: number) => after(numeric(c) as number | Promise<number>, (v: number) => v === -123456789 ? -1 : v < 0 || Math.floor(v + 0.5) !== v ? -2 : v | 0),
-    "getNameImpl(I)Ljava/lang/String;": charName,
-    "codePointOfImpl(Ljava/lang/String;)I": uchar("getCharFromName", "(Ljava/lang/String;)I"),
   };
 }
 

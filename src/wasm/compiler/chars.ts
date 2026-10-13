@@ -1,6 +1,6 @@
-// The java.lang.Character natives as jicu.ts characterNatives answers them: the ASCII range of the predicates text loops call inline,
-// every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, the Java the production runtime calls
-// too, which reads the ICU property data through its own loaders.
+// The java.lang.Character natives, as java_lang_Character.cpp answers them with ICU4C: the ASCII range of the predicates text loops call inline,
+// every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, which reads the ICU property data through its own
+// loaders. jicu.ts answers the natives this does not.
 import { OP } from "./code";
 import { T } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
@@ -46,7 +46,7 @@ const UCHARACTER = "android/icu/lang/UCharacter";
   // Java's white space: the controls 9 to 13 and 28 to 31, and the space; its space separators in ASCII: the space
   ascii("isWhitespaceImpl(I)Z", T.i32, (cx, c) => { within(c, 9, 5); within(c, 28, 4); c.raw(OP.i32_or).lget(0).i32(32).raw(OP.i32_eq).raw(OP.i32_or); }, "isWhitespace", "(I)Z");
   ascii("isSpaceCharImpl(I)Z", T.i32, (cx, c) => { c.lget(0).i32(32).raw(OP.i32_eq); }, "isSpaceChar", "(I)Z");
-  // properties the production runtime always asks UCharacter for
+  // properties always asked of UCharacter
   for (const [key, name, desc] of [["isTitleCaseImpl(I)Z", "isTitleCase", "(I)Z"], ["isDefinedImpl(I)Z", "isDefined", "(I)Z"], ["isIdentifierIgnorableImpl(I)Z", "isIdentifierIgnorable", "(I)Z"],
     ["isMirroredImpl(I)Z", "isMirrored", "(I)Z"], ["isUnicodeIdentifierStartImpl(I)Z", "isUnicodeIdentifierStart", "(I)Z"], ["isUnicodeIdentifierPartImpl(I)Z", "isUnicodeIdentifierPart", "(I)Z"],
     ["getTypeImpl(I)I", "getType", "(I)I"], ["getDirectionalityImpl(I)B", "getDirection", "(I)I"], ["getNameImpl(I)Ljava/lang/String;", "getName", "(I)Ljava/lang/String;"],
