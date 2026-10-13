@@ -46,8 +46,7 @@ export class FetchStore implements AotStore {
   }
   /** fetches claimed `files` on this thread, or asks the remote store for them */
   load(files: string[], first = false): void {
-    if (!files.length) return;
-    if (this.remote) { this.remote.postMessage(files); return; }
+    if (this.remote) { if (files.length) this.remote.postMessage(files); return; }
     if (first) this.queue.unshift(...files); else this.queue.push(...files);
     while (this.active < WIDTH && this.queue.length) {
       const f = this.queue.shift()!;
