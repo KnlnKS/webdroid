@@ -1,4 +1,4 @@
-// Threads, monitors, waiting natives and class initialization waits on JSPI strands (plan S3): the static int(int) cases of java/Th.java run on
+// Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
 // answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH; node runs it with --experimental-wasm-jspi (run.ts).

@@ -1,6 +1,6 @@
 # Wasm backend research
 
-Research only: micro-benchmarks, probes, corpus statistics and the platform survey; nothing in `src/` or the tests imports it. The plan is `docs/wasm-backend-plan.md`.
+Research only: micro-benchmarks, probes, corpus statistics and the platform survey; nothing in `src/` or the tests imports it. The design is `docs/wasm-architecture.md`.
 
 Setup: `cd research/wasm && bun install` (binaryen, wabt, playwright from the repo root). Timing scripts
 (`micro/*.mjs`) need Chrome and report indicative single runs.

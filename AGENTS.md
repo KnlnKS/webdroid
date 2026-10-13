@@ -59,8 +59,8 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   compares a conformance suite with its baseline in `tests/conformance/`; `--bytecode <prefixes>`
   measures a provenance cut. `bun run gen-framework` (reference AVD booted) refreshes the
   platform class path, framework-res, ICU/tz data and the recorded device colors.
-- Smoke-compile affected APKs; require zero method failures or explicitly report a reproduced
-  baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
+- Smoke-compile affected APKs (`smoke` is the Wasm sweep); require no unexplained failures or
+  explicitly report a reproduced baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
 - Inspect per-step `run.json`: `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,
   completed rendering and performance. Empty telemetry proves only observed-path coverage.
   Confirm diagnostics actually reached each relevant process.
@@ -105,13 +105,13 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   install compiled regions only against their source page epoch. Host calls exit `run_slice`;
   preserve guest-frame, signal and callback ordering. See the history for core implementation
   details and rejected performance experiments.
-- The Wasm tier (`?tier=wasm`, a page's default; headless tools `WEBDROID_TIER=wasm`, which default to `js`) is `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
+- Java runs on the Wasm tier, `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
   Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `bun run wasm <suite>` (`scripts/wasm/run.ts`);
-  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Plan: `docs/wasm-backend-plan.md`.
+  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Map: [docs/wasm-architecture.md](docs/wasm-architecture.md).
 
 ## Diagnosis
 
-`package.json` is the command index. Start with `inspect`/`dis`/`jsrc` for bytecode,
+`package.json` is the command index. Start with `inspect`/`dis` for bytecode, `wasm watdump` for generated code,
 `audit` for reachable missing APIs and `fwscan`/`fwtest` for framework evidence. Native tools are
 `scripts/nrun.ts` and `scripts/ndbg.ts`.
 

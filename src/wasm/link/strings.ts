@@ -1,4 +1,4 @@
-// java.lang.String as a struct over an i16 array (plan 3.4 and gate G5): the chars, the cached hash code and, once the host has asked
+// java.lang.String as a struct over an i16 array: the chars, the cached hash code and, once the host has asked
 // for it, the JS string. A String is then an Object like any other (it carries its vtable), so a virtual call needs no test for it,
 // and character access is an array access instead of a call of a wasm:js-string builtin. A native sees the JS string, made and
 // cached on first use; a JS string a native answers is copied into an array once.

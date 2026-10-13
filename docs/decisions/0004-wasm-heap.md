@@ -7,7 +7,7 @@ it does not pass the unresolved G1 criteria or authorize the S6 default switch.
 
 The research allocation kernels favor engine GC over the experimental linear-memory
 mark-sweep collector when live objects are retained. The later compiler measurements
-in [the backend plan](../wasm-backend-plan.md), sections 4.10 and 4.16, show a
+in the backend plan (`wasm-backend-plan.md` in Git history), sections 4.10 and 4.16, show a
 steady-state geometric mean above G1's 1.3x bar, with individual workload losses and
 slower Chrome first calls. These measurements were taken on shared hosts and require
 an idle-host repeat before final acceptance.

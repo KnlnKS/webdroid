@@ -1,4 +1,4 @@
-// jdk.internal.misc.Unsafe's object accessors, as field-id based operations (plan S2).
+// jdk.internal.misc.Unsafe's object accessors, as field-id based operations.
 //
 // An offset is a cookie: an instance field's is a small number the World gives the field when reflection hands out its offset (libraries keep offsets in 20 bits, as ART's fit), a static field's likewise, an array element's is
 // ARRAY_BASE + index * scale. Fields are reached through a generated accessor per (field, operation) that the host hands out as a

@@ -1,5 +1,5 @@
 import type { SymbolicSite } from "../compiler/sites";
-// Ahead-of-time compilation of the platform classes (plan S4): the code Compiler.buildUnit and World.classModule would produce on demand is
+// Ahead-of-time compilation of the platform classes: the code Compiler.buildUnit and World.classModule would produce on demand is
 // produced once, at build time, and stored as static assets; at run time the World loads them instead of compiling.
 //
 // What makes precompiled code link into a World that also compiles app code on demand is that nothing in it depends on what ran first:

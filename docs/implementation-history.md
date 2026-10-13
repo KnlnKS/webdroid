@@ -112,7 +112,7 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Suspended frames join one continuation list per pending operation, so an
   N-deep stack wakes in one microtask. The installed hot body omits resumption
   (built on first suspension), which keeps it within V8's inlining budget.
-  [DEX performance architecture](dex-performance-architecture.md) records the
+  The DEX performance architecture note (removed with the JS tier) recorded the
   model, diagnostics and rejected designs. At 4x CPU throttle Mihon reader
   scrolling went from 27 to about 44 presented frames/s, with input handling
   per swipe falling from 158 to about 65 ms. Earlier measured steps: smaller
@@ -7202,3 +7202,66 @@ Some test expectations were the JS tier's rather than Android's, and were correc
 - **Racy assumptions.** A thread with an empty `run()` can end before `activeCount` is read, and a oneway
   `ISessionCallback` command can land after the next `setCallback`. Both tests now wait for the state they assert.
 - **Dead code.** `bigOf` and `mkBigInteger` had no production callers and were removed.
+
+### The JS tier removed (2026-10-13)
+
+M7 deletes the DEX-to-JavaScript tier: its compiler, linker, tiering, cold path, code cache, AOT, compile Worker,
+coverage, monitors and threads, the natives only it used (reflection, invocation, `Object`'s and `Class`'s bodies),
+the tier switch, and the tools that served only it (`jsrc`, `link-table`, `build-id`, the JS smoke and `fwtest`).
+`smoke`, `fwtest` and `jbench` now run the Wasm sweeps. Sources, scripts and tests lose about 8,300 lines net.
+`src/jvm/runtime.ts` stays as the registry that natives and the Wasm host share. `jentry`'s `JThread` is now only
+the host identity that natives key per-thread state by.
+
+Porting the remaining tools and fixtures exposed these defects:
+- **Two entries for one World.** A second `wasmEntry` for a World replaced its scheduler's thread hook and its host
+  threads, which broke monitor and thread identity. Entries are now memoized per World. A harness that drives
+  several Worlds makes the right one current before each entry, so natives build objects in the World that runs.
+- **Synchronous entry into process state.** `System`'s initialization reaches natives that wait. Harnesses now
+  enter a process asynchronously, as production does.
+- **`EGL10`'s constants were null on the Wasm tier.** The host-class overlay gave a whole-host class's `<clinit>`
+  an empty body even after the spec's values had taken that slot, so `EGL_NO_CONTEXT` and its peers were never
+  stored. The empty body now applies only to an untaken initializer.
+- **`VMStack.getClosestUserClassLoader`** had no implementation on the Wasm tier, so `ObjectInputStream` found no
+  loader for an app's classes. It now walks the caller frames and answers the first class loader that is not the
+  boot loader.
+- **Browser fixtures had been silently broken** since pages defaulted to Wasm: 8 of the 9 `app.browser` probes
+  failed at the starting commit, because they loaded the JS tier's platform. They now boot the Wasm tier, implement
+  listeners as host classes, and await their calls.
+- **The headless `rt.mkThrowable`** made an `Error` with no `msg`, so process-port code that reads a throwable's
+  message reported "Invalid retained Parcel descriptor". The process-port browser test failed at the starting commit
+  too, at an earlier `TypeError`.
+- **An uncaught-exception log outside a World** called into Java. `javaRuns()` now guards it.
+
+How the dead code was found. Anything only the JS tier read was removed with it: `NativeSpec`'s `serialization`,
+`clinit`, `typeVars` and `callerSensitive`; the JS-only perf counters; and fuzz's JS coverage signal. The compiler
+consults intrinsics (`link/intrinsics.ts`, `compiler/chars.ts`) before registered natives, so a JNI registered
+under an intrinsic's key is unreachable. Those keys were pruned: `Math`'s `sqrt`, `floor`, `ceil` and `rint`,
+which are Wasm instructions, and every `Character` predicate except `isAlphabetic`, `isIdeographic` and
+`getNumericValue`. `desccheck`'s baseline was regenerated; it dropped one stale `AccessibleObject` entry.
+
+Comparison suites now check against the JDK or against answers recorded where both tiers agreed, and the
+conformance baselines come from Wasm runs alone. Two host differences are recorded rather than matched. JDK 22+
+rejects atomics on byte-array views, so customdiff takes ART's answers for those. The JDK's common pool also starts
+a different number of workers from a 4-core device's, so the threads suite counts parked workers as such a device
+would. Platform AOT output and the font index are byte-identical to the JS tier's.
+
+**The dev server had served no platform build since `oracle.ts` became `harness.ts`.** The AOT key's source list
+still named the old file, so `/aot/current.json` failed with ENOENT, every page compiled the platform on demand, and
+each e2e flow reported the 500 as a browser error. The earlier commits share the defect. Without the build, FitNotes
+needed 144 s and timed out on four steps; with it, the flow passes in 46 s.
+
+Two unit-test flakes appeared under the parallel run:
+- **`newPaint` from bare host code.** Host code with no Java frame under it enters Java on a new strand, which
+  suspends whenever a lazy link yields after the turn's 8 ms. The browser fixtures failed "constructed before
+  preloadPaint" in about one run in three. Only tests built paints this way; they now await them.
+- **The looper test's delayed post.** Its 30 ms delay could elapse while the two immediate posts compiled, about one
+  full run in four; the delay is now 250 ms.
+
+Verification at the series tip: every commit typechecks. All of these pass:
+- 1,147 unit tests, 55 of them in the browser, in 5 consecutive full runs;
+- all 18 `wasm all` suites, with no unexplained sweep failures;
+- FitNotes smoke;
+- 31 of 31 `fwtest` exercises;
+- a fresh eight-jar platform build (290,828 methods, 7 gaps);
+- the `--jobs 1` quick e2e gate: all 7 flows, with no new missing APIs, errors, required natives, draw errors,
+  settle timeouts or wedges.

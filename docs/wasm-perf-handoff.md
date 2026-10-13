@@ -1,11 +1,12 @@
-# Wasm-tier performance: handoff (2026-10-12)
+# Wasm-tier performance: handoff (2026-10-13)
 
-Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`, clean at `54735f23`. The branch is
-about 2,050 commits ahead of `main`, because it carries the whole `knlnks/bytecode-wasm` backend. Nothing is
+Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`. The branch is
+about 2,070 commits ahead of `main`, because it carries the whole `knlnks/bytecode-wasm` backend. Nothing is
 pushed or open as a PR.
 
 **Goal.** Make the Wasm tier fast enough to become the only tier, with in-app latency and FPS first: launch to
-first frame, gated taps under 150 ms, and scroll present intervals. Then delete the JS tier.
+first frame, gated taps under 150 ms, and scroll present intervals. M7 (2026-10-13) deleted the JS tier, so Wasm is
+now the only tier and the work left is speed.
 
 **Read first.**
 - [AGENTS.md](../AGENTS.md): the working and verification rules.
@@ -13,8 +14,7 @@ first frame, gated taps under 150 ms, and scroll present intervals. Then delete 
 - The newest sections of [implementation-history.md](implementation-history.md), from "Wasm rearchitecture:
   suspensions, launch profiles and background Workers (2026-10-10)" to the end. They record each measurement and
   each rejected experiment, so check them before you retry an idea.
-- [wasm-backend-plan.md](wasm-backend-plan.md) is the older design log, about 2,000 lines. Use it for reference
-  only. M7 collapses it.
+- [wasm-architecture.md](wasm-architecture.md): the map of the tier. The older design logs are in Git history.
 
 ## Milestones
 
@@ -35,7 +35,7 @@ The milestones come from the rearchitecture plan. Its main ideas:
 | M5 | Pre-linked images with direct calls and relocations | not started; value is in doubt |
 | M6 | Symbolic sites without per-site modules | dropped |
 | M2b | `system_server` and the broker stores off the page | not started |
-| M7 | Wasm default, delete the JS tier, cleanup | not started |
+| M7 | Wasm default, delete the JS tier, cleanup | done |
 
 **M1b.**
 - Done:
@@ -96,74 +96,19 @@ except its scroll row, which is `--gpu` at `f18fc7dc`. Re-measure both sides bef
 
 ## Gate state
 
-The quick gate is `WEBDROID_TIER=wasm WEBDROID_URL=… bun run e2e --jobs 1`. The last runs this session reached 5 of 7
-flows' checkpoints. The failures are not caused by the branch:
-- **`mihon-onboarding` and `mihon-app`** fail on every commit, `main` included. Mihon v0.20.4 sees v0.21.0 on
-  GitHub and covers each screen with an update dialog.
-- **`calculatorm`'s `04 7b` step** times out intermittently, also on the base commit: 2 of 4 runs.
-
-The live matrix (`--live`) was run before the loader fix:
-
-| Tier | Flows passing | Failures |
-|---|---|---|
-| Wasm | 11 of 14 | Resy (fixed since), Lichess (launch visual diff, flaky), TikTok (launch timeout) |
-| JS | 10 of 14 | TikTok, Reddit, both Mihon flows |
+The quick gate is `WEBDROID_URL=… bun run e2e --jobs 1`. It reaches 7 of 7 flows after M7, with the platform build
+served (history, "The JS tier removed"). The serial `--live` matrix last reached 13 of 14 flows; TikTok misses its
+launch budget (history, "Live matrix parity").
 
 ## Open work, in priority order
 
-### 1. The Calculator intermittent hang
-This is a hypothesis with a patch, not yet verified.
+### 1–2. Done: the Calculator hang and a reproducible gate
+The probe now lets guest time pass while an app asks for frames, and non-live flows run offline (history, "A
+reproducible quick gate").
 
-**What the hang looks like:**
-- The app has `vsyncScheduled` set and an empty main queue.
-- It renders `RuntimeShader` patterns continuously; this is the Android 12+ ripple, drawn in the Worker through
-  WebGL and then `drawImage` into a 2D pattern.
-- `present2` stalls.
-
-**Suspected cause.** The probe's quiescent settle advances the controlled guest clock once, by horizon plus window.
-A ripple that starts after that, on a slow tap, stays at its first frame and asks for frames forever.
-
-**The patch.** Advance the clock in 16 ms frames while vsync is busy, up to 2 s past the settle start. The diff below
-is against `tests/e2e/lib/probe.ts`. `installProbe` is serialized with `toString()`, so it cannot reference module
-constants.
-
-```diff
-@@ -350,6 +350,8 @@ function installProbe(cfg: ProbeConfig): void {
-     const windowMs = (q.stableFrames + 1) * q.intervalMs;
-     if (controlled) await g.wd.guestClock.advanceBy(horizonMs + windowMs);
-+    // a ripple or transition runs well inside two seconds; a spinner stops at the bound
-+    const animationEnd = controlled ? g.wd.guestClock.now() + 2000 : 0;
-     const horizonAt = t0 + (controlled ? 0 : horizonMs);
-@@ -375,6 +377,12 @@ function installProbe(cfg: ProbeConfig): void {
-       const b = await busy(dueBefore, q.stableMs);
-       if (!b.length) return done("idle", seen);
-       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
-+      // an animation the app started after the clock ran through the window (a slow tap's ripple) would
-+      // stay at its first frame and ask for frames forever: time passes while frames are asked for
-+      if (controlled && b.includes("vsync") && g.wd.guestClock.now() < animationEnd) {
-+        await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 16));
-+        await g.wd.testFrame();
-+      }
-```
-
-**To verify:**
-1. Run `bun run e2e calculatorm --jobs 1` at least 6 times with the patch and 6 times without it.
-2. If it holds, run the full quick gate.
-3. Check that no golden changes and that the other flows' step times do not grow.
-
-If it does not hold, find the redraw source in the app's process: what keeps invalidating, and whether the ripple's
-animator sees time advance. The desktop app also has a background-task chip for this, "Fix intermittent endless
-redraw in Calculator e2e".
-
-### 2. Make the gate reproducible again
-Keep Mihon's e2e flows offline from the live update check. There is a chip for this too: "Keep Mihon e2e flows
-offline from update checks". The fix belongs in the harness or in network fixtures. It must not touch app bytecode
-and must not be app-specific in the runtime. Without it, every gate run has two known failures, which hide
-regressions.
-
-### 3. Wasm parity on the live matrix, which M7 needs
-- **Lichess.** Its launch visual diff is 78–91% against a 76% limit, and it is flaky. Find out what differs in the
-  launch frame. Do not raise the limit.
+### 3. The live matrix
+- **Lichess.** Its launch diff was the same on both tiers: the reference shows a notification-permission request
+  and live content that neither tier shows. Do not raise the limit.
 - **TikTok.** Its launch times out on the Wasm tier.
   - It no longer crashes the renderer; the crash was a second process's refine (history, 2026-10-12).
   - The 4 GB shared cage still runs at 3.7–4.2 GB after 100 s.
@@ -171,7 +116,7 @@ regressions.
   - Lowering memory is the structural fix. The largest item is the pool stubs: 358,000 of them, 72% for slots never
     looked up. The proposed design passes the slot at the call site, so one stub per signature serves every
     unlinked method.
-- **Then the full matrix on both tiers:** `--live`, then `--full --jobs 1`, `corpus` and `textcmp`, run serially.
+- **Then the full matrix:** `--live`, then `--full --jobs 1`, `corpus` and `textcmp`, run serially.
 
 ### 4. First-launch compile cost (Komikku, Feeder, TikTok)
 The remaining levers:
@@ -183,27 +128,11 @@ The remaining levers:
 
 Measure each lever on Komikku's first launch, 3 matched runs or more. The history says what has already been tried.
 
-### 5. M7: make Wasm the default and delete the JS tier
-This waits on item 3.
-- JS is still the default in `src/jvm/tier.ts` (`parseTier`). The e2e and smoke tools pick Wasm through
-  `WEBDROID_TIER=wasm`; `lat` already defaults to Wasm.
-- **The Wasm tier still imports JS-tier modules.** The main ones are `src/jvm/runtime.ts` (6 imports),
-  `compiler-observer`, `tier`, `yield` and `suspend`. The bridge also uses natives registered through
-  `runtime.ts`.
-  - Untangle these first: move what Wasm needs into shared modules, then delete the compile half.
-  - `src/jvm/abi`, `dex`, `prepared`, `natives/*` and `provenance` are shared front-end code and stay.
-- **Deletion candidates:**
-  - `src/jvm/{compiler,codecache,tiering,cold,discard,link,profile,aot,compileworker,stacklines,frames,coverage}.ts`;
-  - the tier branches;
-  - `scripts/link-table.ts`, `scripts/jsrc.ts`;
-  - tier-comparison tests;
-  - unreferenced research probes in `scripts/wasm/`.
-  - Confirm each one with a search for references before deleting it.
-- **Replace the JS-tier oracle** (`scripts/wasm/oracle.ts`) with JDK-run or recorded expectations.
-- **Update the docs:**
-  - collapse `wasm-backend-plan.md` into a short architecture note;
-  - update `PLAN.md`;
-  - update the AGENTS.md architecture section, which still describes iframes, the JS tier and `inMainJob`.
+### 5. M7: done
+The JS compiler, its tiering, code cache, AOT and Worker, the tier switch and the tools that only served it
+(`jsrc`, `link-table`, `build-id`, the JS smoke and `fwtest`) are deleted; `smoke`, `fwtest` and `jbench` run the
+Wasm sweeps. The conformance baselines are rebuilt from Wasm alone. The history entry "The JS tier removed
+(2026-10-13)" lists the defects the switch exposed.
 
 ### 6. Lower value; do these only with a new measurement that justifies them
 - **M2b:** `system_server` and the broker stores in a system Worker.
@@ -234,13 +163,13 @@ This waits on item 3.
 
 ```bash
 WEBDROID_AOT_STALE=1 PORT=4191 bun run server.ts
-WEBDROID_TIER=wasm WEBDROID_URL=http://localhost:4191 bun run e2e --jobs 1
-WEBDROID_TIER=wasm WEBDROID_URL=http://localhost:4191 bun run e2e calculatorm --jobs 1
-WEBDROID_TIER=wasm WEBDROID_URL=http://localhost:4191 bun run e2e --live --jobs 1
+WEBDROID_URL=http://localhost:4191 bun run e2e --jobs 1
+WEBDROID_URL=http://localhost:4191 bun run e2e calculatorm --jobs 1
+WEBDROID_URL=http://localhost:4191 bun run e2e --live --jobs 1
 WEBDROID_URL=http://localhost:4191 bun run lat fitnotes calculatorm --gpu --warm
 WEBDROID_URL=http://localhost:4191 bun run lat fitnotes --gpu --cpuprofile
-PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH bun run wasm loaders
-WEBDROID_TIER=wasm bun run smoke apks/FitNotes.apk
+PATH=/opt/homebrew/opt/openjdk/bin:$PATH bun run wasm loaders
+bun run smoke apks/FitNotes.apk
 bun run typecheck
 bun run test
 ```
@@ -251,7 +180,7 @@ bun run test
   scenario there and delete it afterwards. `--timeline` shows the app Worker's startup marks, and `--trace` writes a
   browser-wide trace.
 - The `wasm` suites relevant to recent work are `loaders`, `persist`, `lazytest`, `linkdiff` and `hostclass`.
-- `bun run test` passes 1,212 tests at `54735f23`.
+- `bun run test` passes 1,147 tests after M7 (the JS tier's mechanism tests went with it).
 
 ## Profiling Workers during an e2e flow
 

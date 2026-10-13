@@ -1,5 +1,5 @@
-// The host boundary for natives (plan 3.5), generated from method descriptors. A native is registered once, in the production
-// runtime; the Wasm import for it is derived from its descriptor: int-like kinds as i32, long as i64, float as f32, double as
+// The host boundary for natives, generated from method descriptors. A native is registered once, in src/jvm/natives
+// or src/android; the Wasm import for it is derived from its descriptor: int-like kinds as i32, long as i64, float as f32, double as
 // f64, java.lang.String as externref, a primitive array as a (pointer, length) pair into a linear-memory scratch region the
 // stub copies it to and back from. Every other reference (a receiver, an object, an array of objects) crosses as an opaque
 // externref; the host side turns it into the value the production native expects, and a reference result back into a Java value,
