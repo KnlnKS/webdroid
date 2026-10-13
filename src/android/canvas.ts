@@ -6,6 +6,7 @@
 import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
+import { newObj, scall } from "../jvm/natives/jentry";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath, inversePath, pathAt } from "./path";
 import { NativeBitmap, bitmapAt } from "./bitmap";
@@ -478,14 +479,15 @@ const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", 
 /** the native state behind a Java canvas, which TS takes to draw through */
 export const canvasOf = (c: object): NativeCanvas => drawingCanvas((c as Record<string, bigint>)[wrapper()]);
 const peers = new FinalizationRegistry<bigint>(release);
-/** A Java Canvas drawing straight into `ctx` — a RecordingCanvas of its size when `accelerated`,
- *  which is what a hardware window hands its views — made without running a constructor, so it
- *  never suspends. The handle is released with the peer. */
-export function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): JavaCanvas {
-  const c = rt.make(accelerated ? "android/graphics/RecordingCanvas" : "android/graphics/Canvas") as JavaCanvas & Record<string, unknown>;
+/** A Java Canvas drawing straight into `ctx`: AOSP's Canvas over a native canvas, or when `accelerated` a RecordingCanvas of its size (what a hardware window hands
+ *  its views) whose native canvas is that one */
+export async function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): Promise<JavaCanvas> {
   const ptr = handle(NativeCanvas.over(ctx, w, h));
+  if (!accelerated) return newObj("android/graphics/Canvas", "(J)V", ptr);
+  const c: JavaCanvas & Record<string, bigint> = await scall("android/graphics/RecordingCanvas", "obtain", "(Landroid/graphics/RenderNode;II)Landroid/graphics/RecordingCanvas;",
+    await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", null), w, h);
+  release(c[wrapper()]);
   c[wrapper()] = ptr;
-  if (accelerated) { c[declaredField("android/graphics/RecordingCanvas", "mWidth")] = w; c[declaredField("android/graphics/RecordingCanvas", "mHeight")] = h; }
   peers.register(c, ptr);
   return c;
 }

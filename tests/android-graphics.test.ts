@@ -12,7 +12,7 @@ import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, trans
 import { Transform } from "../src/android/recording";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
-import { newObj, linkInit, vcall } from "../src/jvm/natives/jentry";
+import { newObj, linkInit, vcall, iof } from "../src/jvm/natives/jentry";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java";
 
@@ -62,10 +62,10 @@ describe("egl10", () => {
     const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
     const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
     expect(await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null)).toBe(display);
-    expect(rt.iof(display, "javax/microedition/khronos/egl/EGLDisplay")).toBe(1);
+    expect(iof(display, "javax/microedition/khronos/egl/EGLDisplay")).toBe(true);
     expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", display, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
     expect(count[0]).toBe(1);
-    expect(rt.iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(1);
+    expect(iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(true);
   });
 
   test("EGL11 rejects the no-display handle", async () => {
@@ -84,7 +84,7 @@ describe("egl10", () => {
     const none = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_CONTEXT")];
     const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
     expect(none).not.toBeNull();
-    expect(rt.iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(1);
+    expect(iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(true);
     expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
     expect(glSurfaces.current).toBeNull();
     expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, null, null, none)).toBe(1);
@@ -101,7 +101,7 @@ describe("canvas-state", () => {
     const context = {
       restore() { restores++; },
     } as unknown as OffscreenCanvasRenderingContext2D;
-    const canvas = canvasOver(context, 100, 100);
+    const canvas = await canvasOver(context, 100, 100);
 
     expect(await thrown(() => vcall(canvas, "restore", "()V"))).toBe("java/lang/IllegalStateException: Underflow in restore - more restores than saves");
     expect(await thrown(() => vcall(canvas, "restoreToCount", "(I)V", 0))).toBe("java/lang/IllegalArgumentException: Underflow in restoreToCount - more restores than saves");
@@ -166,7 +166,7 @@ describe("lighting-color-filter", () => {
     const paint = newPaint();
     await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
     expect(await vcall(filter, "getColorMultiply", "()I")).toBe(0x0080ff00);
-    expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020);
+    expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020 | 0);
     expect(matrixColor(paintOf(paint).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
     await vcall(filter, "setColorMultiply", "(I)V", 0xffffffff);
     await vcall(filter, "setColorAdd", "(I)V", 0);
@@ -378,6 +378,6 @@ describe("typed-array-font", () => {
     const id = archive.res.idFor("font", "fontawesome", archive.pkg);
     expect(id).not.toBe(0);
     const jres = await appResources(archive.res, "typed-array-font");
-    expect(rt.iof(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id), "android/graphics/Typeface")).toBe(1);
+    expect(iof(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id), "android/graphics/Typeface")).toBe(true);
   });
 });

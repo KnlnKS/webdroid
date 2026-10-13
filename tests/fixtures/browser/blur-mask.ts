@@ -1,6 +1,5 @@
 import "../../../src/natives";
-import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry";
+import { newObj, vcall, scall, linkInit, iof } from "../../../src/jvm/natives/jentry";
 import { tintedBmp } from "../../../src/android/graphics";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
@@ -18,7 +17,7 @@ async function probe() {
     await vcall(paint, "setColor", "(I)V", 0x80ff0000 | 0);
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const ctx = new OffscreenCanvas(80, 80).getContext("2d")!;
-    const canvas = canvasOver(ctx, 80, 80);
+    const canvas = await canvasOver(ctx, 80, 80);
     ctx.translate(8, 4);
     ctx.scale(2, 2);
     ctx.beginPath(); ctx.rect(10, 0, 30, 40); ctx.clip();
@@ -49,7 +48,7 @@ async function probe() {
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const offsets = new Int32Array([99, 99]);
     const alpha = await vcall(source, "extractAlpha", "(Landroid/graphics/Paint;[I)Landroid/graphics/Bitmap;", paint, offsets);
-    if (!rt.iof(alpha, "android/graphics/Bitmap")) throw new Error("Invalid alpha bitmap");
+    if (!iof(alpha, "android/graphics/Bitmap")) throw new Error("Invalid alpha bitmap");
     const native = bitmapOf(alpha);
     const pixel = await vcall(alpha, "getPixel", "(II)I", 10 - offsets[0], 10 - offsets[1]);
     extracted.push({ radius, style, width: native.w, height: native.h, offsets: Array.from(offsets), alpha: pixel >>> 24, rgb: pixel & 0xffffff,
@@ -60,7 +59,7 @@ async function probe() {
   await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", null);
   await vcall(paint, "setColor", "(I)V", 0x8000ff00 | 0);
   await vcall(paint, "setStyle", "(Landroid/graphics/Paint$Style;)V", (await linkInit("android/graphics/Paint$Style")).static("FILL_AND_STROKE"));
-  await vcall(canvasOver(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
+  await vcall(await canvasOver(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
   const shaded = Array.from(ctx.getImageData(14, 16, 1, 1).data);
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
   await vcall(alpha, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", buffer);
@@ -73,7 +72,7 @@ async function probe() {
   ctx.clearRect(0, 0, 40, 40); ctx.translate(20, 20); ctx.rotate(Math.PI / 4);
   ctx.beginPath(); ctx.rect(-8, -8, 16, 16); ctx.clip();
   const before = ctx.getTransform().toString();
-  await vcall(canvasOver(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
+  await vcall(await canvasOver(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
   const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
   const bitmap = new NativeBitmap(1, 1);
   bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);
@@ -86,28 +85,28 @@ async function probe() {
 }
 /** path effects, the other mask filters, a shadow layer, text scale and measurement under the text flags */
 async function effects() {
-  const surface = () => { const ctx = new OffscreenCanvas(60, 60).getContext("2d")!; return { ctx, canvas: canvasOver(ctx, 60, 60), alpha: (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3] }; };
+  const surface = async () => { const ctx = new OffscreenCanvas(60, 60).getContext("2d")!; return { ctx, canvas: await canvasOver(ctx, 60, 60), alpha: (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3] }; };
   const set = (paint: unknown, name: string, desc: string, value: unknown) => vcall(paint, name, desc, value);
   const rect = (canvas: unknown, paint: unknown) => vcall(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 50, 50, paint);
-  const corner = newPaint(), c = surface();
+  const corner = newPaint(), c = await surface();
   await set(corner, "setPathEffect", "(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;", await newObj("android/graphics/CornerPathEffect", "(F)V", 12));
   await rect(c.canvas, corner);
-  const shadow = newPaint(), s = surface();
+  const shadow = newPaint(), s = await surface();
   await vcall(shadow, "setShadowLayer", "(FFFI)V", 2, 6, 6, 0xff0000ff | 0);
   await vcall(s.canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 30, 30, shadow);
-  const emboss = newPaint(), e = surface();
+  const emboss = newPaint(), e = await surface();
   await set(emboss, "setColor", "(I)V", 0xff808080 | 0);
   await set(emboss, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await newObj("android/graphics/EmbossMaskFilter", "([FFFF)V", Float32Array.of(-1, -1, 1), 0.4, 8, 4));
   await rect(e.canvas, emboss);
   const shade = (x: number, y: number) => e.ctx.getImageData(x, y, 1, 1).data[0];
-  const table = newPaint(), t = surface();
+  const table = newPaint(), t = await surface();
   await set(table, "setAlpha", "(I)V", 255);
   await set(table, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", await scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 0, 0));
   await vcall(t.canvas, "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 30, 20.5, table);
   let partial = 0;
   for (const v of t.ctx.getImageData(0, 0, 60, 60).data.filter((_, i) => i % 4 === 3)) if (v && v < 255) partial++;
   const text = newPaint(), ink = async (scale: number) => {
-    const w = surface();
+    const w = await surface();
     await set(text, "setTextSize", "(F)V", 20);
     await set(text, "setTextScaleX", "(F)V", scale);
     await vcall(w.canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "IIII", 2, 40, text);

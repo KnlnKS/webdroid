@@ -34,8 +34,6 @@ import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type F
 
 import type { FrameAnnouncement } from "../shell/web-surface";
 
-const inst = <T = JObj>(cls: string): T => rt.make(cls);
-
 /** the main frame's port once its page script listens, and the page's end */
 const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });
 /** whether a bridged page's renderer shares this thread, as its first interface call found */
@@ -58,7 +56,8 @@ export class WebViewChromium extends JObj {
   view!: JObj;
   access!: JObj;
   settings!: WebSettingsAdapter;
-  client = inst("android/webkit/WebViewClient");
+  /** the app's client, or once init ran the process's default one (Chromium's null client, a plain WebViewClient) */
+  client!: JObj;
   chrome: JObj | null = null;
   dl: unknown = null;
   findListener: unknown = null;
@@ -421,12 +420,14 @@ const page = (sign: number) => function (this: P, end: number): number {
   void this.evalJs(`scrollBy(0, ${sign} * (${end ? "document.documentElement.scrollHeight" : "innerHeight"}))`);
   return 1;
 };
+let nullClient: JObj | undefined;
 const viaAccess = (name: string, desc: string) => function (this: P, ...args: unknown[]) { return vcall(this.access, name, desc, ...args); };
 rt.register({
   name: "webdroid/WebViewProvider", ctor: WebViewChromium, ifaces: [W, W + "$ViewDelegate", W + "$ScrollDelegate"],
   methods: {
     "init(Ljava/util/Map;Z)V": driven(function* (this: P, interfaces: JObj | null, privateBrowsing: number): Gen {
       if (privateBrowsing) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Private browsing is not supported in WebView.");
+      this.client = nullClient ??= yield newObj("android/webkit/WebViewClient");
       // AwContents draws its container: a ViewGroup otherwise skips onDraw
       yield vcall(this.view, "setWillNotDraw", "(Z)V", 0);
       for (const e of interfaces ? yield* awaited(toJsArray(yield vcall(interfaces, "entrySet", "()Ljava/util/Set;"))) : [])
@@ -437,7 +438,7 @@ rt.register({
     "destroy()V": function (this: P) { this.destroy(); },
     "createPrintDocumentAdapter(Ljava/lang/String;)Landroid/print/PrintDocumentAdapter;": function (this: P, name: string) { return webPrintAdapter(this, name); },
     // AOSP substitutes its default client for null
-    "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: P, c: JObj | null) { this.client = c ?? inst("android/webkit/WebViewClient"); },
+    "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: P, c: JObj | null) { this.client = c ?? nullClient!; },
     "setWebChromeClient(Landroid/webkit/WebChromeClient;)V": function (this: P, c: JObj | null) { this.chrome = c; },
     "loadUrl(Ljava/lang/String;)V": loadUrl,
     "loadUrl(Ljava/lang/String;Ljava/util/Map;)V": loadUrl,

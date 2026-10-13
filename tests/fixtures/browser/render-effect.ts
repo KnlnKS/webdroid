@@ -17,7 +17,7 @@ async function row(effect: unknown): Promise<number[]> {
   await vcall(node, "endRecording", "()V");
   await vcall(node, "setRenderEffect", `(${LE})Z`, effect);
   const ctx = new OffscreenCanvas(60, 20).getContext("2d")!;
-  await vcall(canvasOver(ctx, 60, 20, true), "drawRenderNode", "(Landroid/graphics/RenderNode;)V", node);
+  await vcall(await canvasOver(ctx, 60, 20, true), "drawRenderNode", "(Landroid/graphics/RenderNode;)V", node);
   const d = ctx.getImageData(0, 10, 60, 1).data;
   return Array.from({ length: 60 }, (_, x) => d[x * 4]);
 }

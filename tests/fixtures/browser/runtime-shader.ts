@@ -1,6 +1,5 @@
 import "../../../src/natives";
-import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../../src/jvm/natives/jentry";
+import { newObj, vcall, scall, iof } from "../../../src/jvm/natives/jentry";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
 import { bootWithFonts } from "./boot";
@@ -27,7 +26,7 @@ async function probe() {
   await vcall(node, "endRecording", "()V");
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0xff0000ff);
   const ctx = new OffscreenCanvas(64, 64).getContext("2d")!;
-  const canvas = canvasOver(ctx, 64, 64, true);
+  const canvas = await canvasOver(ctx, 64, 64, true);
   ctx.translate(10, 12); ctx.scale(2, 2);
   let rasterizations = 0;
   const drawArrays = WebGL2RenderingContext.prototype.drawArrays;
@@ -43,7 +42,7 @@ async function probe() {
   WebGL2RenderingContext.prototype.drawArrays = drawArrays;
   let invalid = false;
   try { await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "color", 1); }
-  catch (error) { invalid = !!rt.iof(error, "java/lang/IllegalArgumentException"); }
+  catch (error) { invalid = iof(error, "java/lang/IllegalArgumentException"); }
   // the framework's ripple: SkSL with a child shader, integer literals in float context, saturate()
   const ripple = await newObj("android/graphics/drawable/RippleShader", "()V");
   for (const [name, desc, ...args] of [["setOrigin", "(FF)V", 50, 50], ["setTouch", "(FF)V", 50, 50], ["setRadius", "(F)V", 40],
@@ -52,7 +51,7 @@ async function probe() {
   const ripplePaint = newPaint();
   await vcall(ripplePaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", ripple);
   const rippleCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
-  await vcall(canvasOver(rippleCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 50, 50, 40, ripplePaint);
+  await vcall(await canvasOver(rippleCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 50, 50, 40, ripplePaint);
   const rippleCenter = Array.from(rippleCtx.getImageData(50, 50, 1, 1).data);
   // RecordingCanvas.drawRipple rasterizes only under the circle, here partly off the canvas: it
   // paints what the whole-canvas raster of the same uniforms paints
@@ -66,10 +65,10 @@ async function probe() {
   await vcall(rippleNode, "endRecording", "()V");
   const regionCtx = new OffscreenCanvas(100, 100).getContext("2d")!, wholeCtx = new OffscreenCanvas(100, 100).getContext("2d")!;
   for (const c of [regionCtx, wholeCtx]) { c.translate(-10, 5); c.scale(1.5, 1.5); }
-  await vcall(canvasOver(regionCtx, 100, 100, true), "drawRenderNode", "(Landroid/graphics/RenderNode;)V", rippleNode);
+  await vcall(await canvasOver(regionCtx, 100, 100, true), "drawRenderNode", "(Landroid/graphics/RenderNode;)V", rippleNode);
   await vcall(ripple, "setOrigin", "(FF)V", 30, 20);
   await vcall(ripplePaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", ripple);
-  await vcall(canvasOver(wholeCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 20, 40, ripplePaint);
+  await vcall(await canvasOver(wholeCtx, 100, 100, true), "drawCircle", "(FFFLandroid/graphics/Paint;)V", 30, 20, 40, ripplePaint);
   const a = regionCtx.getImageData(0, 0, 100, 100).data, b = wholeCtx.getImageData(0, 0, 100, 100).data;
   let rippleDiff = 0, rippleInk = 0;
   for (let i = 0; i < a.length; i++) { rippleDiff = Math.max(rippleDiff, Math.abs(a[i] - b[i])); if (i % 4 === 3 && a[i]) rippleInk++; }
