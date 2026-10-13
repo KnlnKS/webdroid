@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
-import { APP_VERSION, VERSION, DEOPT_ABI, packModule, sameMarks } from "../../src/wasm/link/aot";
+import { APP_VERSION, VERSION, packModule, sameMarks } from "../../src/wasm/link/aot";
 import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
@@ -359,15 +359,11 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
   first.close();
   savedFiles = (await persist.load(await appKey(app, "platform")))!;
   saved = await SavedBuild.open(savedFiles);
-  check("saved modules load with their matching activation policy", !!saved, true);
+  check("saved modules load", !!saved, true);
 }
 
 if (saved) {
   const index = saved.index, store = saved;
-  const wrongPolicy = new Map(savedFiles!);
-  wrongPolicy.set("index.json", new TextEncoder().encode(JSON.stringify({ ...index, deopt: index.deopt ? 0 : DEOPT_ABI })));
-  check("saved module policy must match its index", await SavedBuild.open(wrongPolicy), undefined);
-  check("app activation policy differs from platform", world(app, { app: { index: { ...index, deopt: index.deopt ? 0 : DEOPT_ABI }, store } }).appAttached, false);
   const oldIndex = { ...index, version: APP_VERSION - 1 }, oldSaved = new Map(savedFiles!);
   oldSaved.set("index.json", new TextEncoder().encode(JSON.stringify(oldIndex)));
   check("previous app index is rejected by persistence", await SavedBuild.open(oldSaved), undefined);

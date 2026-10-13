@@ -1,6 +1,6 @@
 // An APK's own ART baseline profile (assets/dexopt/baseline.prof, docs/bytecode-first-plan.md §4.4):
 // the methods its developers measured as hot or run at startup. A first launch's compile worker
-// emits their fast bodies first, so their first calls skip the cold tier and no tap waits on their
+// emits their bodies first, so their first calls skip on-demand compiling and no tap waits on their
 // compile.
 import { unzlibSync } from "fflate";
 

@@ -26,7 +26,7 @@ const installedDir = flag("--installed", ""), inlineTier = process.argv.includes
 if (process.env.G1_APP && process.env.G1_APP !== installedDir) throw new Error("G1_APP requires the same explicit --installed directory");
 if (inlineTier && !installedDir) throw new Error("--inline requires --installed");
 const valueFlags = new Set(["--reps", "--runs", "--engines", "--json", "--ref", "--v8-flags", "--installed"]);
-const switchFlags = new Set(["--inline", "--cold", "--phases"]), only: string[] = [];
+const switchFlags = new Set(["--inline", "--phases"]), only: string[] = [];
 for (let i = 2; i < process.argv.length; i++) {
   const arg = process.argv[i];
   if (valueFlags.has(arg)) { if (!process.argv[i + 1] || arg !== "--v8-flags" && process.argv[i + 1].startsWith("--")) throw new Error(`${arg} needs a value`); i++; }
@@ -117,7 +117,7 @@ const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; first: number[]; steady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
 const startSource = sourceKey();
-const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:startSource, dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
+const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:startSource, dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
 const artifact = (dir: string, name: string) => ({ path: join(dir, name), sha256: createHash("sha256").update(readFileSync(join(dir, name))).digest("hex") });
 report.scenario = installedDir ? "installed-measured-demand-preload" : "ordinary-on-demand";
 report.classPathLayout = "bootstrap-platform/application";
@@ -127,14 +127,14 @@ report.platformIndex = process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_
 report.harnessSha256 = createHash("sha256").update(readFileSync(import.meta.path)).update(readFileSync(join(here, "g1run.ts"))).update(readFileSync(join(here, "g1report.ts"))).digest("hex");
 report.v8Flags = v8Flags;
 report.startupOverride = process.env.G1_STARTUP ?? null;
-report.primaryProtocol = !installedDir && !refPath && !v8Flags && !process.env.G1_STARTUP && !process.argv.includes("--cold");
+report.primaryProtocol = !installedDir && !refPath && !v8Flags && !process.env.G1_STARTUP;
 
 const aotDir = process.env.WEBDROID_AOT;
 if (aotDir) {
   const manifestPath = ["current.json", "latest.json"].map(name => join(dirname(resolve(aotDir)), name)).find(path => {
     if (!existsSync(path)) return false;
     const manifest = JSON.parse(readFileSync(path, "utf8"));
-    return manifest.source === startSource && [manifest.key, manifest.cold].includes(basename(resolve(aotDir)));
+    return manifest.source === startSource && manifest.key === basename(resolve(aotDir));
   });
   if (!manifestPath) throw new Error("WEBDROID_AOT requires a matching source/key in adjacent current.json or latest.json");
   report.aotManifest = { ...artifact(dirname(manifestPath), basename(manifestPath)), ...JSON.parse(readFileSync(manifestPath, "utf8")) };
@@ -175,7 +175,7 @@ for (const engine of engines) {
       let result: G1Result;
       try {
         if (guardFailures.length) throw new Error(guardFailures.join("; "));
-        result = await run({ cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
+        result = await run({ cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT }); }
       catch (error) { result = { workload: w, result: "", times: [], error: String(error).slice(0, 900) }; }
       samples.push(sample(result));
     }

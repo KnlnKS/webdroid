@@ -36,11 +36,11 @@ export function workerControl(logs: string[], phase: () => string) {
       marks: performance.getEntriesByType("mark").filter(e=>e.name.startsWith("wd:")).map(e=>[e.name.slice(3),performance.timeOrigin+e.startTime] as const), missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
     /** whether the app's Wasm code was attached from persisted code, or once `save` settles it, saved */
     codeReadiness: async (save: boolean) => {
-      const cold = globalThis.__wdCold;
-      if (!cold) return null;
-      if (save) await cold.appSettle?.();
-      return { saved: !!cold.appSaved, source: cold.appSource ?? null, attached: !!cold.appAttached,
-        kept: !!cold.appBuilds?.some(build => build.kept), persisted: save ? !!await cold.appPersisted?.() : null };
+      const wasm = globalThis.__wdWasm;
+      if (!wasm) return null;
+      if (save) await wasm.appSettle?.();
+      return { saved: !!wasm.appSaved, source: wasm.appSource ?? null, attached: !!wasm.appAttached,
+        kept: !!wasm.appBuilds?.some(build => build.kept), persisted: save ? !!await wasm.appPersisted?.() : null };
     },
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,

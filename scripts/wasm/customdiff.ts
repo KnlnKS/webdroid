@@ -244,22 +244,9 @@ for (const name of ["inst", "tDirectAdapt", "tDirectViews"]) {
 }
 if (bridgeCounts.inst !== 0 || !bridgeCounts.tDirectAdapt || !bridgeCounts.tDirectViews) throw new Error(`exact storage/fallback bridge counts: ${JSON.stringify(bridgeCounts)}`);
 console.log(`direct bridge calls: ${JSON.stringify(bridgeCounts)} (work counts, no timing claim)`);
-const cold = world([dex, ...jars], { cold: true, natives, loop });
-assertEagerFieldAccessors(cold);
-await startProcess(cold);
-const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker") || c.m.name.startsWith("tDirect"));
-for (const { m, args, i } of constantCases) {
-  let value: unknown;
-  try { value = await cold.entryAsync(m.cls, m.name, m.desc)(...args.map(Number)); } catch (e) {
-    const throwable = cold.throwable(e);
-    throw new Error(`cold ${m.name}: ${throwable ? cold.classNameOf(throwable) : String(e)} (${cold.lastMessage})`, { cause: e });
-  }
-  if (String(value) !== jdk[i]) throw new Error(`cold ${m.name}: ${value} != ${jdk[i]}`);
-}
-console.log(`${constantCases.length} constant/transformer/bootstrap cases match on the cold tier`);
 // Actual DEX definitions in sibling namespaces must keep their Class identities through constants and polymorphic calls.
-for (const isCold of [false, true]) {
-  const tier = world(new Program([], program(jars)), { cold: isCold, natives, loop });
+{
+  const tier = world(new Program([], program(jars)), { natives, loop });
   await startProcess(tier);
   const loaders = [tier.prog.newLoader(tier.prog.boot, null), tier.prog.newLoader(tier.prog.boot, null)];
   for (const loader of loaders) tier.addDexes(loadDexes(dex), loader);
@@ -273,13 +260,14 @@ for (const isCold of [false, true]) {
   const other = await tier.entryAsync(constants[1], "hVirtual", "()Ljava/lang/invoke/MethodHandle;")();
   if (await tier.entryAsync(names[0], "loaderMismatch", "(Ljava/lang/invoke/MethodHandle;)I")(other) !== 1) throw new Error("invokeExact accepted a sibling loader signature");
 }
-console.log("14 executed cross-loader constant/polymorphic/bootstrap checks preserve sibling DEX identities");
+console.log("7 executed cross-loader constant/polymorphic/bootstrap checks preserve sibling DEX identities");
 await checkDeferredSignatures();
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
   forceAdmission = name === "tInvokerConcurrent";
   const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `${cls}.${name} ${a}`).join("\n") + "\n").trim().split("\n");
-  for (const tier of [w, cold]) for (const [i, a] of waiting.entries()) {
+  for (const [i, a] of waiting.entries()) {
+    const tier = w;
     const value = await tier.entryAsync(cls, name, "(I)I")(a);
     if (String(value) !== reference[i]) throw new Error(`suspended ${name}(${a}): ${value} != ${reference[i]}`);
     suspendedCases++;
@@ -289,7 +277,8 @@ forceAdmission = false;
 if (!admissionTurns) throw new Error("VarHandle concurrency fixture must force lazy-link turns");
 console.log(`${admissionTurns} forced admission turns retain eager field accessors`);
 console.log(`${suspendedCases} suspended handle cases preserve thread, monitor ownership and exceptions`);
-for (const tier of [w, cold]) {
+{
+  const tier = w;
   try {
     const buffer = await tier.entryAsync("Vh", "artViewAllocate", "()Ljava/nio/ByteBuffer;")();
     const setAddress = tier.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
@@ -308,17 +297,19 @@ for (const tier of [w, cold]) {
     } finally { unmapExternal(mapped); }
   } catch (e) { const throwable = tier.throwable(e); throw new Error(`external view: ${throwable ? tier.classNameOf(throwable) : String(e)} (${tier.lastMessage})`, { cause: e }); }
 }
-console.log("4 external view cases preserve synchronous mutable updates and asynchronous immutable reads");
+console.log("2 external view cases preserve synchronous mutable updates and asynchronous immutable reads");
 // ART retries failed linkage (the JDK caches failures), and requires exact collector component types (the JDK adapts them).
-for (const tier of [w, cold]) {
+{
+  const tier = w;
   if (await tier.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");
   if (await tier.entryAsync("Bootstrap", "tCustomRetry", "(I)I")(0) !== 2) throw new Error("ART bootstrap failures must be retried");
   if (await tier.entryAsync("Bootstrap", "artRaceFailure", "(I)I")(0) !== 1) throw new Error("failed bootstrap contender must preserve its error and leave the successful winner installed");
   if (await tier.entryAsync("Bootstrap", "tCustomRace", "(I)I")(0) !== 1) throw new Error("racing bootstrap contenders must invoke the installed winner");
 }
-console.log("8 ART collector/retry/racing cases match on both tiers");
+console.log("4 ART collector/retry/racing cases match");
 // A plain callback with a captured async owner cannot create a child stack that outlives its caller.
-for (const tier of [w, cold]) {
+{
+  const tier = w;
   const owner = tier.sched.strand(), before = tier.rtImports().depth.value;
   const call = handleThunk(tier, "mh:syncCallbackTest", [], "I", (cx, c) => {
     c.i64(1n); cx.callMethod(c, cx.prog.resolve("java/lang/Thread", "sleep", "(J)V")!); c.i32(7);
@@ -344,9 +335,9 @@ process.exit(bad || blocked ? 1 : 0);
 async function checkDeferredSignatures(): Promise<void> {
   const signaturePath = "/data/local/tmp/mh-signatures.dex";
   vfs.mount(signaturePath, new BytesFile(new Uint8Array(readFileSync(dex))));
-  for (const isCold of [false, true]) {
+  {
     let loads = 0;
-    const tier = world(new Program(loadDexes(dex), program(jars)), { cold: isCold, natives, dexes: async path => {
+    const tier = world(new Program(loadDexes(dex), program(jars)), { natives, dexes: async path => {
       if (path !== signaturePath) return undefined;
       loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
     } });
@@ -396,7 +387,7 @@ async function checkDeferredSignatures(): Promise<void> {
     let key: string;
     try { key = await tier.resolveClass(definingLoader(tier, object), "Mh$Signature", owner); } finally { owner.end(); }
     const id = tier.hostFn("fixture:signatureId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(returnType as object);
-    if (id !== tier.idOf(key)) throw new Error(`deferred constant signature identity: cold=${isCold}, got=${id}, expected=${tier.idOf(key)}`);
+    if (id !== tier.idOf(key)) throw new Error(`deferred constant signature identity: got=${id}, expected=${tier.idOf(key)}`);
     const handle = await tier.entryAsync(name, "handle", "()Ljava/lang/invoke/MethodHandle;")();
     if (await tier.entryAsync(name, "poly", tier.prog.viewOf(name, "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;"))(handle) !== null) throw new Error("deferred polymorphic prototype must match its handle");
     if (await tier.entryAsync(name, "custom", "()Ljava/lang/Object;")() !== null) throw new Error("deferred bootstrap must retry against canonical signature identities");

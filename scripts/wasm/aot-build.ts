@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--deopt guarded|off] [--force]
+//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
 // Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
@@ -17,7 +17,7 @@ import { hostNatives } from "../../src/wasm/host/hostnatives";
 import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
 import { waitingNatives } from "../../src/wasm/host/nativesource";
 import { Compiler } from "../../src/wasm/compiler/j2w";
-import { DEOPT_ABI, packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import { synthModules } from "../../src/wasm/link/apps";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
@@ -30,16 +30,13 @@ const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c"
 const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
 const appPath = flag("--app", "");
-const deoptPolicy = flag("--deopt", "guarded");
-if (!["guarded", "off"].includes(deoptPolicy)) throw new Error("--deopt must be guarded or off");
-const deopt = deoptPolicy === "guarded" ? DEOPT_ABI : 0;
 const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([deopt, jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -82,7 +79,7 @@ function hotChunked(names: string[], size: (name: string) => number, limit: numb
 const HARD_LIMIT = 7 * 1024 * 1024;
 // Guarded capture sites made a 3 MiB estimated media group emit 8.31 MiB.
 // Keep the physical 7 MiB cap; estimate those groups with their measured expansion.
-const C_BYTES_PER_UNIT = deopt ? 42 : 14, C_BYTES_PER_METHOD = 150, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19, D_BYTES_PER_CLASS = 330;
+const C_BYTES_PER_UNIT = 14, C_BYTES_PER_METHOD = 150, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19, D_BYTES_PER_CLASS = 330;
 const classSize = (kind: "c" | "d") => (name: string): number => {
   const jc = prog.get(name)!;
   if (kind === "d") return D_BYTES_PER_CLASS + jc.methods.length * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD;
@@ -106,7 +103,7 @@ const appDexes = appPath ? loadDexes(appPath) : [];
 const platform = new Program(dexes.flat()); platform.addExterns(externs);
 const prog = appDexes.length ? new Program(appDexes, platform) : platform;
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, deopt: !!deopt, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
+const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;
@@ -127,7 +124,6 @@ const synthOf = (names: Iterable<string>) => [...names].filter((n) => n[0] === "
 const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k ? [i] : []));
 
 // ---- code modules first: they number the selectors, gaps and runtime functions the class modules' vtables then use
-const deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0, carriers: 0, carrierValues: 0, maxCarrierValues: 0 };
 const empty = new Set<number>();
 const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
@@ -142,7 +138,6 @@ cGroups.forEach((blocks, k) => {
     throw new Error(`C ${k}${name ? ` (${name})` : ""}: ${bad.message}`);
   }
   const { bytes, traces } = built;
-  for (const k of Object.keys(deoptWork) as (keyof typeof deoptWork)[]) deoptWork[k] = k === "maxCarrierValues" ? Math.max(deoptWork[k], cx.deoptWork[k]) : deoptWork[k] + cx.deoptWork[k];
   nMethods += methods.length;
   const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
     absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.blockBase[b] + m.index)) };
@@ -193,6 +188,5 @@ writeFileSync(join(out, "apps.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
-console.log("guarded capture work:", JSON.stringify(deoptWork));
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();

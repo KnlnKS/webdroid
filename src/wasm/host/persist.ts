@@ -1,7 +1,7 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, VERSION, DEOPT_ABI, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";
+import { APP_VERSION, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";
 import { compileBytes } from "../link/module";
 import type { DexFile } from "../../jvm/dex";
 import { COMPILED_CODE_DIR } from "../../shell/hostfs";
@@ -66,7 +66,7 @@ export class Persist {
 
 /** the key of the app build for dex files and a platform build: a different dex, platform build or build format finds no entry */
 export async function appKey(dexes: Iterable<DexFile>, platform: string): Promise<string> {
-  const text = [APP_VERSION, DEOPT_ABI, platform, ...[...dexes].map((d) => d.id)].join("\n");
+  const text = [APP_VERSION, platform, ...[...dexes].map((d) => d.id)].join("\n");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return new Uint8Array(digest).toHex().slice(0, 32);
 }
@@ -81,7 +81,7 @@ export class SavedBuild implements AotStore {
     let build: SavedBuild;
     try {
       const index = JSON.parse(new TextDecoder().decode(raw)) as AppIndex;
-      if (index.version !== APP_VERSION || ![0, DEOPT_ABI].includes(index.deopt ?? 0)) return undefined;
+      if (index.version !== APP_VERSION) return undefined;
       build = new SavedBuild(index);
       await Promise.all([...files].filter(([name]) => name.endsWith(".wasm")).map(async ([name, bytes]) => {
         const mod = await compileBytes(bytes);
@@ -89,7 +89,6 @@ export class SavedBuild implements AotStore {
         if (!section) throw new Error("saved module header missing");
         const header = JSON.parse(new TextDecoder().decode(section)) as UnitHeader;
         if (header.version !== VERSION) throw new Error("saved module format mismatch");
-        if (/^[as]\d+\.wasm$/.test(name) && header.deopt !== index.deopt) throw new Error("saved activation policy mismatch");
         build.modules.set(name, mod);
       }));
     } catch { return undefined; }

@@ -165,7 +165,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
 }
 
 {
-  const fresh = world([dex, ...jars], { natives, cold: true });
+  const fresh = world([dex, ...jars], { natives });
   for (const spec of natives.source!.hostSpecs!()) fresh.addHostClass(spec);
   fresh.sched.turnDue = () => true;
   const entry = wasmEntry(fresh);

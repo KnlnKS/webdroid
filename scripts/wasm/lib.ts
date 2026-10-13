@@ -55,5 +55,5 @@ export function current(w: World): World {
 }
 /** a current World over `src` (dex and jar paths, or a Program) */
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return current(new World(Array.isArray(src) ? program(src) : src, { cold: typeof process !== "undefined" && process.env.WEBDROID_COLD === "1", intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
+  return current(new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
 }

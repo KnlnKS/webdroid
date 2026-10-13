@@ -111,19 +111,6 @@ export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable
   return next(0);
 }
 
-/** Snapshot validation must not replay Java loader callbacks. */
-export function knownCatch(w: World, method: MethodInfo, pc: number, throwable: object): number {
-  const range = method.dex.code(method.codeOff).tries.find(t => pc >= t.start && pc < t.end);
-  if (!range) return -1;
-  const loader = w.prog.loaderOf(method.cls), thrown = w.classNameOf(throwable);
-  for (const [type, target] of range.handlers) {
-    const name = method.dex.rawTypeName(type);
-    const key = w.prog.initiatedBy(loader, name) ?? (loader === w.prog.boot ? w.prog.lookup(loader, name) : undefined);
-    if (key && definitionReady(w, key) && w.prog.isSubclass(thrown, key)) return target;
-  }
-  return range.catchAllAddr;
-}
-
 function callJava(w: World, owner: Strand, name: string, params: Kind[], ret: Kind | "V", body: Parameters<World["callFn"]>[3], ...args: unknown[]): unknown {
   if (w.inSynchronousJava() || owner.root) {
     const call = w.hostFn(name + ":sync", params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }));

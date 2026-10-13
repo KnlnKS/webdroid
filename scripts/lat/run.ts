@@ -40,8 +40,7 @@ const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWi
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
-  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
-  "wasmColdCalls"];
+  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries"];
 
 type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
@@ -58,15 +57,14 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   // a process Worker's state reaches the page over its control port
   const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
   const readRealm = (win: Window) => {
-    const wd = (win as any).wd, cold = win.__wdCold;
+    const wd = (win as any).wd, wasm = win.__wdWasm;
     if (!wd) return { url: win.location.href, status: "unavailable" };
     return { url: win.location.href, status: "ok", pkg: wd.app()?.pkg ?? null, ticks: wd.ticks,
       pid: new URLSearchParams(win.location.search).get("pid"), process: new URLSearchParams(win.location.search).get("process"),
       missing: [...wd.rt.missing], missingAt: Object.fromEntries([...wd.rt.missingAt ?? []].map(([name, frames]) => [name, frames.slice()])), placeholders: [...wd.rt.placeholders],
       placeholderAt: Object.fromEntries([...wd.rt.placeholderAt].map(([name, frames]) => [name, frames.slice()])), native: wd.nativeRequirements(), logs: wd.logs?.slice() ?? null,
-      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, wasm: cold ? { enabled: cold.enabled, appSaved: cold.appSaved ?? null, appAttached: cold.appAttached ?? null,
-        appSource: cold.appSource ?? null,
-        aotKey: cold.aotKey ?? null, appBuilds: cold.appBuilds?.map(b => ({ ...b })) ?? [], worker: cold.worker ? { ...cold.worker } : null } : null };
+      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, wasm: wasm ? { appSaved: wasm.appSaved ?? null, appAttached: wasm.appAttached ?? null, appSource: wasm.appSource ?? null,
+        aotKey: wasm.aotKey ?? null, appBuilds: wasm.appBuilds?.map(b => ({ ...b })) ?? [], worker: wasm.worker ? { ...wasm.worker } : null } : null };
   };
   const diagnostics = w.__wdLatRead = async () => {
     let workers;

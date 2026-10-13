@@ -36,7 +36,6 @@ import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
 import { wasmEntry } from "../../src/wasm/host/entry";
-import { useWorld } from "../../src/wasm/host/boot";
 import { mountPlatform, natives } from "./harness";
 import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
@@ -109,7 +108,7 @@ try {
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 await mountPlatform(ROOT);
-const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { ...(process.argv.includes("--cold") && { cold: true }), natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -223,14 +222,14 @@ if (!process.argv.includes("--hierarchy")) {
   if (caught !== 31) throw new Error(`executed catch loader: wasm=${caught}, expected=31`);
   console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
   {
-    const boot = world(new Program([], program([...PLATFORM_JARS.map(j => join(AOSP, j)), common, b])), { natives, cold: false });
+    const boot = world(new Program([], program([...PLATFORM_JARS.map(j => join(AOSP, j)), common, b])), { natives });
     if (boot.prog.loaderOf("Shared") !== boot.prog.boot) throw new Error("catch fixture is not boot-defined");
     const select = boot.entry("Shared", "catchOnly", "(Z)I");
     if (select(0) !== 7 || boot.prog.initiatedBy(boot.prog.boot, "CatchOnly")) throw new Error("untaken boot catch resolved its type");
     if (select(1) !== 42 || await boot.entryAsync("Shared", "catchOnly", "(Z)I")(1) !== 42) throw new Error("compiled boot catch did not preserve the original throwable");
     if (boot.prog.initiatedBy(boot.prog.boot, "CatchOnly") !== "CatchOnly" || boot.prog.initiatedBy(boot.prog.boot, "MissingCatch")) throw new Error("executed boot catches did not retain only successful resolution");
-    if (boot.stats.coldMethods || !boot.stats.methods) throw new Error("boot catch fixture did not run compiled code");
-    console.log("compiled boot catch: plain and strand select RuntimeException after missing/nonmatching catch types; cold methods 0");
+    if (!boot.stats.methods) throw new Error("boot catch fixture did not run compiled code");
+    console.log("compiled boot catch: plain and strand select RuntimeException after missing/nonmatching catch types");
   }
   if (process.argv.includes("--catch-only")) process.exit(0);
   const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
@@ -279,10 +278,10 @@ if (!process.argv.includes("--hierarchy")) {
   } finally { Compiler.prototype.buildUnit = buildUnit; }
   const resolutions = w.symbolicResolutions, stubModules = w.symbolicStubModules;
   for (let i = 0; i < 3; i++) if (await call() !== 42) throw new Error("cached symbolic operation failed");
-  if (!w.opts.cold && w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
+  if (w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
   if (w.symbolicStubModules !== stubModules) throw new Error("warm symbolic operation rebuilt stub modules");
   console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolicResolutions - resolutions}, stub modules=${w.symbolicStubModules - stubModules}`);
-  if (!w.opts.cold) {
+  {
     const method = w.prog.require(key).byKey.get("symbolic()I")!;
     const ins = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic).instructions.find(ins => ins.name === "invoke-static")!;
     const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
@@ -365,7 +364,7 @@ if (!process.argv.includes("--hierarchy")) {
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
   try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }
   catch (e) { const t = w.throwable(e); if (!t || w.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
-  console.log(`uninitiated symbolic class reference: wasm=${result}${w.opts.cold ? " (cold)" : " (compiled)"}${w.opts.cold ? "" : "; warm site resolutions=0"}; optional reference lazy`);
+  console.log(`uninitiated symbolic class reference: wasm=${result}; warm site resolutions=0; optional reference lazy`);
   if (process.argv.includes("--symbolic")) process.exit(0);
 }
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
@@ -474,12 +473,6 @@ for (const asynchronous of [false, true]) {
   if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") throw new Error("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
-  const cold = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, cold: true, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
-  const result = await cold.entryAsync("Ldr", "delegateLast", desc)(...paths);
-  if (result !== 31 || !cold.stats.coldCalls) throw new Error(`cold delegate-last initiation: ${result}; cold calls=${cold.stats.coldCalls}`);
-  useWorld(w);
-}
-{
   const resolver = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
@@ -576,7 +569,7 @@ async function interfaceSuperControl(): Promise<void> {
   if (jdk.slice(0, names.length).join(",") !== "22,22,33,11,44,22,22,55") throw new Error("interface-super JDK control changed");
   const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
   let checks = 0;
-  for (const cold of [false, true]) {
+  {
     const p = new Program(loadDexes(dex), base), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
     const code = target.dex.code(target.codeOff).insns, ref = target.dex.method(code[1]);
     if ((code[0] & 0xff) !== 0x6f || target.dex.rawType(ref.cls) !== "LInterfaceSuper$C;") throw new Error("D8 did not preserve invoke-super C.f");
@@ -587,7 +580,7 @@ async function interfaceSuperControl(): Promise<void> {
       const call = prepared.instructions.find(i => i.name === kind && m.dex.method(i.b).name === "f");
       if (!call || m.dex.rawType(m.dex.method(call.b).cls) !== `LInterfaceSuper$${owner};`) throw new Error("D8 changed ordinary default dispatch");
     }
-    const current = world(p, { cold }), mirrors = new Set<object>();
+    const current = world(p), mirrors = new Set<object>();
     for (const [index, namespace] of ["root", "first", "second"].entries()) {
       let cls = "InterfaceSuper";
       if (namespace !== "root") {
@@ -601,13 +594,12 @@ async function interfaceSuperControl(): Promise<void> {
       for (let i = 0; i < names.length; i++) {
         const expected = jdk[index * names.length + i];
         const got = await current.entryAsync(cls, names[i], "()I")();
-        if (got !== expected) throw new Error(`interface-super ${cold ? "cold" : "compiled"}/${namespace}/${names[i]}: ${got}, expected ${expected}`);
+        if (got !== expected) throw new Error(`interface-super ${namespace}/${names[i]}: ${got}, expected ${expected}`);
         checks++;
       }
       mirrors.add(await current.entryAsync(cls, "self", "()Ljava/lang/Class;")() as object);
     }
     if (mirrors.size !== 3) throw new Error("interface-super loaders aliased Class identities");
-    if (cold && !current.stats.coldCalls) throw new Error("interface-super cold control did not execute the interpreter");
   }
   console.log(`interface-super/default: ${checks} Wasm cases match JDK; implFor and symbolicImplFor select the owning B declaration`);
 
@@ -620,8 +612,8 @@ async function hotRefreshControl(): Promise<void> {
   const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
   let checks = 0;
   const check = (name: string, got: unknown, want: unknown) => { if (got !== want) throw new Error(`${name}: ${got} != ${want}`); checks++; };
-  for (const cold of [false, true]) for (const custom of [false, true]) {
-    const p = new Program(custom ? [] : loadDexes(dex), base), w = world(p, { natives, cold, holdUpgrades: () => true });
+  for (const custom of [false, true]) {
+    const p = new Program(custom ? [] : loadDexes(dex), base), w = world(p, { natives, holdUpgrades: () => true });
     const loader = custom ? p.newLoader(p.boot, null) : p.root;
     if (custom) w.addDexes(loadDexes(dex), loader);
     const suffix = custom ? "@" + loader.id : "", cls = "HotRefresh" + suffix;
@@ -683,7 +675,7 @@ async function hotRefreshControl(): Promise<void> {
   check("worker refresh result", await run(1), expected[1]);
   check("worker refresh coalesced", page.hotRefreshes, 1);
   await hotRefreshPendingControl(files, late);
-  console.log(`hot refresh: ${checks} JDK-matched checks; compiled/cold root/custom, hold, late override and worker publication/generation`);
+  console.log(`hot refresh: ${checks} JDK-matched checks; root/custom, hold, late override and worker publication/generation`);
 }
 
 async function hotRefreshPendingControl(files: string[], late: string): Promise<void> {
@@ -815,12 +807,12 @@ async function abstractDefaultControl(): Promise<void> {
   const expected = sh(["java", "-cp", join(out, "abstractDefault"), "AbstractDefaultUse"]).trim();
   if (expected !== "42\n1\n42\n1") throw new Error("binary-evolution JDK control changed: " + expected);
   const failures: string[] = [], base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
-  for (const cold of [false, true]) {
-    const p = new Program(loadDexes(dex), base), w = world(p, { cold });
+  {
+    const p = new Program(loadDexes(dex), base), w = world(p);
     for (let index = 0; index < 3; index++) {
       let cls = "AbstractDefaultUse";
       if (index) { const loader = p.newLoader(p.boot, null); w.addDexes(loadDexes(dex), loader); cls += "@" + loader.id; }
-      const mode = `Wasm ${cold ? "cold" : "compiled"}/${index}`;
+      const mode = `Wasm/${index}`;
       const abstract = symbolicImplFor(p, cls, "f()I", true);
       if (p.implFor(cls, "f", "()I") || symbolicImplFor(p, cls, "f()I") || !abstract || !(abstract.flags & ACC.ABSTRACT) || !(abstract.flags & ACC.PUBLIC)) throw new Error("compatible maximal abstracts lost metadata or retained concrete default");
       try {
@@ -832,7 +824,6 @@ async function abstractDefaultControl(): Promise<void> {
         }
       } catch (error) { console.log(mode, error); failures.push(mode + " threw before expected catch"); }
     }
-    if (cold && !w.stats.coldCalls) throw new Error("abstract-default Wasm cold path inactive");
   }
   if (failures.length) throw new Error("abstract-dominance mismatch: " + failures.join(", "));
 }
@@ -840,9 +831,9 @@ async function abstractDefaultControl(): Promise<void> {
 async function nativePathControl(): Promise<void> {
   const appPath = "/data/local/tmp/native-path-app.dex";
   vfs.mount(appPath, new BytesFile(new Uint8Array(readFileSync(app))));
-  for (const cold of [false, true]) {
+  {
     const base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
-    const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, cold, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
+    const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
     let managed = 0;
     const callFn = target.callFn;
     target.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };
@@ -943,5 +934,5 @@ async function nativePathControl(): Promise<void> {
     finally { after.end(); }
 
   }
-  console.log("native loader paths: compiled/cold app-root, multi-DEX, parent, boot and live shared-before/after identities; removed/reordered paths and custom graphs retain Java lookup");
+  console.log("native loader paths: app-root, multi-DEX, parent, boot and live shared-before/after identities; removed/reordered paths and custom graphs retain Java lookup");
 }

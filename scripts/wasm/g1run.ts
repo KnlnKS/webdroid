@@ -44,7 +44,7 @@ if (aotDir) {
   (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
 }
 
-export interface G1Config { cls: string; workload: string; reps: number; dex: string; root: string; cold?: boolean }
+export interface G1Config { cls: string; workload: string; reps: number; dex: string; root: string }
 export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; setup?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
@@ -73,7 +73,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
-  const w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.saved, ...(worker && { compiler: code.compiler }) });
+  const w = world(prog, { natives, heapUsed: collectedHeap, app: code.saved, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   let startWorker: (() => Promise<void>) | undefined;
@@ -100,7 +100,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     const { prog } = workloadProgram(cfg);
     // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
     heapBase = heapUsed();
-    w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) });
+    w = world(prog, { natives, heapUsed: collectedHeap });
   }
   out.worldSetupMs = performance.now() - setupAt;
   const gaps: string[] = [], b0 = performance.now();

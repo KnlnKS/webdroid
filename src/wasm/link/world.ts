@@ -9,12 +9,8 @@ import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { decodeInstruction, type PreparedInstruction } from "../../jvm/prepared";
-import { ColdInterpreter } from "../cold/interpreter";
 import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
-import { ColdSlowOps } from "../cold/slowops";
-import { resumeUnit, type ResumeState } from "../compiler/resume";
-import type { ColdSnapshot } from "../cold/state";
-import { coldUnit, supportsColdBody } from "../cold/runtime";
+import { compileSymbolicSite } from "../compiler/symbolic";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
@@ -41,13 +37,12 @@ import { mid, methodOf } from "../compiler/ids";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
 import { NO_INDEX, type DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
+import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 import { HotUnits } from "./hotunits";
 import { lexicalFrames } from "../../jvm/stack-format";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
-type CompiledActivation = Pick<ColdSnapshot, "item" | "method" | "owner" | "sync" | "depth" | "executedPc" | "edges">;
 let lexicalEnter: ((raw: Function | undefined, get: () => Function) => (s: Strand, ...args: unknown[]) => Promise<unknown>) | undefined;
 
 export interface WorldOptions {
@@ -85,10 +80,6 @@ export interface WorldOptions {
   compiler?: CompileService;
   /** a World that compiles for another (a worker's): classes are numbered and linked by name only, nothing is instantiated, and no code runs */
   compileOnly?: boolean;
-  /** Experimental shared opcode loop; unsupported bodies are compiled before execution. */
-  cold?: boolean;
-  /** Emit guarded activation handoffs; runtime execution still follows cold. */
-  deopt?: boolean;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
@@ -131,7 +122,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -148,13 +139,10 @@ export class World {
   traces = new Map<string, FnTrace>();
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
   private frameTraces = { get: (name: string) => {
-    const t = this.traces.get(name) ?? this.aot?.trace(name);
-    if (t?.m && !t.capturePcs) t.capturePcs = () => (this.captureScopes.get(this.sched.current()) ?? []).filter(s => s.state.method === t.m).map(s => s.pc).reverse();
-    return t;
+    return this.traces.get(name) ?? this.aot?.trace(name);
   } } as Map<string, FnTrace>;
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
-  private bridgeCaller?: Error;
   private frames: JavaFrame[] = [];
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
@@ -187,7 +175,6 @@ export class World {
   preassigned = new Map<string, number>();
   /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
   epoch = 0;
-  private deoptEpoch = new WebAssembly.Global({ value: "i32", mutable: true }, 0);
   private touching: Set<string> | null = null;
   private imtCache = new Map<number, Map<number, number>>();
   private compiled = new Map<MethodInfo, string[]>();
@@ -275,7 +262,7 @@ export class World {
       },
       capture: (exn: object) => {
         const stack = deepStack();
-        this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) || this.captureScopes.get(this.sched.current())?.length ? this.javaStack(stack.stack ?? "") : stack);
+        this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) ? this.javaStack(stack.stack ?? "") : stack);
       },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       // a frame's class, method and the source file its class def names (null without one)
@@ -748,7 +735,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId, link: x.link, nop: x.nop };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
+  rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -947,7 +934,6 @@ export class World {
     if (s.k === "ensure") { this.linkEnsure(slot); return; }
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
     const clock = this.unitClock();
-    if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, clock)) return;
     const cx = new Compiler(this), batch = s.k === "method" ? this.batch(s.m) : [];
     cx.shareHelpers();
     for (const m of batch) this.demand.methods.add(m);
@@ -1011,181 +997,13 @@ export class World {
   private linkEnsure(slot: number): void {
     const cls = this.blockClass[this.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
     const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slotAt(at);
-    const own = clinit?.k === "method" && !clinit.done && !this.opts.cold && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
+    const own = clinit?.k === "method" && !clinit.done && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
     const cx = new Compiler(this);
     cx.shareHelpers();
     const built = cx.buildUnit(own ? [own] : [], [], false, false, [cls]);
     if (own) { this.demand.methods.add(own); this.stats.methods++; }
     this.stats.units++;
     this.install(own ? [at!] : [], false, cx, this.unitImports(cx), built, slot, clock);
-  }
-  private cold?: ColdInterpreter;
-  private coldValidation?: ColdSlowOps;
-  /** Shared by slow execution and compiled resume, before transferring an activation. */
-  validateColdSnapshot(state: ColdSnapshot, owner: Strand): void {
-    (this.coldValidation ??= new ColdSlowOps(this)).validate(state, owner);
-  }
-  private coldResumes = new Map<MethodInfo, Map<number, { fn: Function; take: (s: ResumeState) => ResumeState }>>();
-  /** Called only between committed cold operations; the adapter tail-calls the returned entry. */
-  promoteCold(m: MethodInfo, cold: ColdInterpreter, frame: object, edges: number): { fn: Function; state: ResumeState } | undefined {
-    if (cold !== this.cold) throw new Error("foreign cold interpreter");
-    const slot = this.slotOf(m), sl = this.slotAt(slot);
-    if (sl?.k !== "method" || (!sl.hot && edges < HOT_BUDGET)) return;
-    const snapshot = cold.snapshot(frame); this.stats.coldSnapshotRegisters += snapshot.item.regs;
-    if (snapshot.method !== m) throw new Error("cold resume method mismatch");
-    const state: ResumeState = { ...snapshot, method: m, activation: frame };
-    // A String constructor must commit its aliases before the compiled representation can take over.
-    if (state.uninitialized.length || m.flags & ACC.SYNCHRONIZED) return;
-    this.validateColdSnapshot(state, this.sched.current());
-    let entries = this.coldResumes.get(m);
-    if (!entries) this.coldResumes.set(m, entries = new Map());
-    let entry = entries.get(state.pc);
-    if (!entry) {
-      const clock = this.unitClock(), unit = resumeUnit(new Compiler(this), m, state.pc);
-      const exports = this.instantiateUnit(unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, clock);
-      entry = { fn: exports.resume as Function, take: unit.take({
-        validate: s => { this.validateColdSnapshot(s, this.sched.current()); },
-        claim: s => { cold.transfer(s.activation); this.rt.depth.value = s.depth; this.stats.coldResumes++; },
-      }) };
-      entries = this.coldResumes.get(m);
-      if (!entries) this.coldResumes.set(m, entries = new Map());
-      entries.set(state.pc, entry); this.stats.coldResumeEntries++; this.stats.units++; this.stats.methods++;
-    }
-    const loaded = entry.take(state);
-    this.deoptFrames.set(loaded, { version: Number(this.deoptEpoch.value), blocked: 0, claimed: false, monitors: loaded.monitors.map(m => ({ ...m })) });
-    return { fn: entry.fn, state: loaded };
-  }
-  private deoptFrames = new WeakMap<object, { version: number; blocked: number; claimed: boolean; monitors: ColdSnapshot["monitors"] }>();
-  private captureScopes = new WeakMap<Strand, { state: CompiledActivation; pc: number }[]>();
-  private deoptCaptures = new WeakMap<object, { source: CompiledActivation; entered: boolean }>();
-  private coldDeoptEntries = new Map<MethodInfo, Function>();
-  private deoptFrame(state: CompiledActivation) {
-    const frame = this.deoptFrames.get(state);
-    if (!this.opts.cold || !frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
-    return frame;
-  }
-  private captureReaders?: { length: (a: object) => number; register: (a: object, i: number) => number; byte: (a: object, i: number) => number; bits: (a: object, i: number) => bigint; reference: (a: object, i: number) => object | null };
-  private captureReader() {
-    if (this.captureReaders) return this.captureReaders;
-    const mb = new ModuleBuilder(), b = declareBase(mb);
-    const exports: [string, number, VT][] = [["register", b.tData.i16, T.i32], ["byte", b.tData.i8, T.i32], ["bits", b.tData.i64, T.i64], ["reference", b.tData.ref, T.anyref]];
-    for (const [name, type, result] of exports) {
-      const c = new Code(2); c.lget(0).refCast(type).lget(1);
-      if (name === "register" || name === "byte") c.arrayGetU(type); else c.arrayGet(type);
-      mb.export(name, "func", mb.addFunc(mb.addFuncType([T.anyref, T.i32], [result]), c.finish(), "$capture:" + name));
-    }
-    const c = new Code(1); c.lget(0).refCast(T.arrayref - 0x80).arrayLen();
-    mb.export("length", "func", mb.addFunc(mb.addFuncType([T.anyref], [T.i32]), c.finish(), "$capture:length"));
-    return this.captureReaders = this.instantiate(mb.build(), {}).exports as unknown as NonNullable<World["captureReaders"]>;
-  }
-  readonly deoptImports = {
-    beginCapture: (state: CompiledActivation, pc: number) => {
-      this.deoptFrame(state);
-      let scopes = this.captureScopes.get(state.owner!);
-      if (!scopes) this.captureScopes.set(state.owner!, scopes = []);
-      scopes.push({ state, pc });
-    },
-    endCapture: (state: CompiledActivation) => {
-      const scopes = this.captureScopes.get(this.sched.current());
-      if (scopes?.at(-1)?.state !== state) throw new Error("compiled capture scope mismatch");
-      scopes.pop();
-    },
-    make: (slot: number, depth: number): CompiledActivation | null => {
-      if (!this.opts.cold) return null;
-      const sl = this.slotAt(slot);
-      if (sl?.k !== "method") throw new Error("compiled activation method missing");
-      const state: CompiledActivation = { item: sl.m.dex.code(sl.m.codeOff), method: sl.m, owner: this.sched.current(), sync: this.inSynchronousJava(), depth, executedPc: 0, edges: 0 };
-      this.deoptFrames.set(state, { version: Number(this.deoptEpoch.value), blocked: 0, claimed: false, monitors: [] });
-      return state;
-    },
-    version: (s: CompiledActivation | null) => s ? this.deoptFrame(s).version : Number(this.deoptEpoch.value),
-    last: (s: CompiledActivation | null) => s?.executedPc ?? 0,
-    blocked: (s: CompiledActivation) => this.deoptFrame(s).blocked,
-    allocation: (s: CompiledActivation | null, delta: number) => { if (s) this.deoptFrame(s).blocked += delta; },
-    monitor: (s: CompiledActivation | null, object: object, enter: number) => {
-      if (!s) return;
-      const monitors = this.deoptFrame(s).monitors, index = monitors.findIndex(m => m.object === object);
-      if (enter) { if (index < 0) monitors.push({ object, count: 1 }); else monitors[index].count++; }
-      else { if (index < 0) throw new Error("compiled monitor ownership mismatch"); if (!--monitors[index].count) monitors.splice(index, 1); }
-    },
-    snapshot: (s: CompiledActivation, pc: number, executedPc: number, depth: number): ColdSnapshot => {
-      const frame = this.deoptFrame(s);
-      if (frame.blocked) throw new Error("unsafe compiled String aliases");
-      const state: ColdSnapshot = { ...s, pc, executedPc, depth, bits: new BigInt64Array(s.item.regs), references: Array(s.item.regs).fill(null), kinds: new Uint8Array(s.item.regs), result: undefined, exception: undefined, uninitialized: [], monitors: frame.monitors.map(m => ({ ...m })) };
-      this.deoptCaptures.set(state, { source: s, entered: false }); this.stats.coldSnapshotRegisters += s.item.regs;
-      return state;
-    },
-    bits: (s: ColdSnapshot, r: number, value: bigint) => { s.bits[r] = value; },
-    reference: (s: ColdSnapshot, r: number, value: object | null) => { s.references[r] = value; s.kinds[r] = 1; },
-    capture: (s: CompiledActivation, pc: number, last: number, depth: number, map: object, bits: object, references: object): ColdSnapshot => {
-      this.deoptFrame(s);
-      const read = this.captureReader(), n = read.length(map), nb = read.length(bits), nr = read.length(references);
-      if (n !== nb + nr || n > s.item.regs) throw new Error("compiled capture layout mismatch");
-      const state = this.deoptImports.snapshot(s, pc, last, depth);
-      let bi = 0, ri = 0;
-      const seen = new Uint8Array(s.item.regs);
-      for (let i = 0; i < n; i++) {
-        const r = read.register(map, i);
-        if (r >= s.item.regs || seen[r]++) throw new Error("compiled capture register mismatch");
-        if (i >= nb) this.deoptImports.reference(state, r, read.reference(references, ri++));
-        else this.deoptImports.bits(state, r, read.bits(bits, bi++));
-      }
-      if (bi !== nb || ri !== nr) throw new Error("compiled capture value mismatch");
-      return state;
-    },
-    captureIndexed: (s: CompiledActivation, pc: number, last: number, depth: number, map: object, bits: object, references: object): ColdSnapshot => {
-      this.deoptFrame(s);
-      const read = this.captureReader(), n = read.length(map), nb = read.length(bits), nr = read.length(references);
-      const state = this.deoptImports.snapshot(s, pc, last, depth), seen = new Uint8Array(s.item.regs);
-      let offset = 0;
-      const word = () => {
-        let value = 0;
-        for (let shift = 0; shift < 35 && offset < n; shift += 7) {
-          const b = read.byte(map, offset++); value += (b & 127) * 2 ** shift;
-          if (b < 128 && value <= 0xffffffff) return value;
-        }
-        throw new Error("compiled indexed capture word mismatch");
-      };
-      while (offset < n) {
-        const r = word(), i = word();
-        if (r >= s.item.regs || seen[r]++ || i >= nb + nr) throw new Error("compiled indexed capture register mismatch");
-        if (i < nb) this.deoptImports.bits(state, r, read.bits(bits, i));
-        else this.deoptImports.reference(state, r, read.reference(references, i - nb));
-      }
-      return state;
-    },
-    target: (s: ColdSnapshot): Function => {
-      const capture = this.deoptCaptures.get(s);
-      if (!capture || capture.entered || !s.method || !s.owner) throw new Error("foreign deoptimization snapshot");
-      const frame = this.deoptFrame(capture.source);
-      this.validateColdSnapshot(s, this.sched.current());
-      let fn = this.coldDeoptEntries.get(s.method);
-      if (!fn) {
-        const clock = this.unitClock(), unit = coldUnit(this, s.method, this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports)), true);
-        fn = this.instantiateUnit(unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, this.slotOf(s.method), clock).resume as Function;
-        this.coldDeoptEntries.set(s.method, fn); this.stats.units++;
-      }
-      this.validateColdSnapshot(s, this.sched.current()); frame.claimed = true;
-      return fn;
-    },
-  };
-  enterColdDeopt(state: ColdSnapshot, cold: ColdInterpreter): object {
-    const capture = this.deoptCaptures.get(state);
-    if (cold !== this.cold || !capture || capture.entered || !this.deoptFrames.get(capture.source)?.claimed) throw new Error("deoptimization already entered or foreign");
-    this.validateColdSnapshot(state, this.sched.current());
-    capture.entered = true;
-    const frame = cold.restore(state.item, state); this.rt.depth.value = state.depth; this.stats.coldDeopts++; this.stats.coldCalls++;
-    return frame;
-  }
-  canDeopt(m: MethodInfo): boolean { return !(m.flags & ACC.SYNCHRONIZED) && supportsColdBody(m, false); }
-  private installCold(slot: number, m: MethodInfo, clock: { start: number; accounted: number }): boolean {
-    if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
-    const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
-    const unit = coldUnit(this, m, cold);
-    if (!unit) return false;
-    this.install([slot], false, unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, clock);
-    this.demand.methods.add(m); this.stats.coldMethods++; this.stats.methods++; this.stats.units++;
-    return true;
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
@@ -1301,7 +1119,7 @@ export class World {
     return refs.units.length ? this.job(installed, copies, refs, s.hot ? refresh!.generation : undefined) : undefined;
   }
   private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, refresh?: number, merge?: boolean): UpgradeJob {
-    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** what a compile worker must be told of this World's class loading to compile `units` as it would: the initiating identities their code resolves, and the
    *  hierarchies of those classes. A unit that reaches a class whose definition is not ready is left out */
@@ -1390,7 +1208,7 @@ export class World {
   /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
   private sound(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const head = result.header;
-    return head.version === VERSION && (head.deopt ?? 0) === (job.cold ? DEOPT_ABI : 0) && !!job.cold === !!this.opts.cold && epoch === this.epoch && head.natives.every((id) => this.nativeBound(id));
+    return head.version === VERSION && epoch === this.epoch && head.natives.every((id) => this.nativeBound(id));
   }
   /** takes the numbering of a worker's unit and links what it names; its module and imports, undefined if the numbering does not follow this World's */
   private received(result: UnitResult) {
@@ -1403,7 +1221,7 @@ export class World {
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
-    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []), deopt: this.deoptImports };
+    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []) };
     this.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
@@ -1496,7 +1314,7 @@ export class World {
   private sharedFns: Record<string, Function> = {};
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host, h: this.sharedFns,
-      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)), deopt: this.deoptImports };
+      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)) };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
@@ -1508,7 +1326,6 @@ export class World {
     return out;
   }
   symbolicResolutions = 0;
-  private symbolicOps?: ColdSlowOps;
   private symbolicOperations = new Map<string, Function>();
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
   private symbolicSites = new Map<string, { slot: WebAssembly.Global; ready?: boolean }>();
@@ -1521,7 +1338,6 @@ export class World {
       const cx = new Compiler(this), table = cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
-      this.symbolicOps ??= new ColdSlowOps(this);
       const pending = fresh.map(([name, cls, index, pc, inputs, output]) => {
         const method = methodAt(this.prog.require(cls), index);
         if (!method) throw new Error(`Missing symbolic site method ${name}`);
@@ -1551,7 +1367,6 @@ export class World {
   }
   private symbolicSync(): number { return +(this.inSynchronousJava() || this.sched.current().root); }
   private symbolicResolver(method: MethodInfo, pc: number, slot: number, inputs: SymbolicSite[4], output: SymbolicSite[5]) {
-    const ops = this.symbolicOps!;
     const run = () => {
       this.symbolicResolutions++;
       const owner = this.sched.current(), clock = this.unitClock(), ins = decodeInstruction(method.dex.code(method.codeOff).insns, pc);
@@ -1566,7 +1381,7 @@ export class World {
           this.accountCompilation(clock);
         }
         else {
-          const { cx, built } = ops.compileSite(method, ins, inputs, output);
+          const { cx, built } = compileSymbolicSite(this, method, ins, inputs, output);
           this.stats.units++;
           operation = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock).m as Function;
           const mb = cx.mb;
@@ -1919,7 +1734,7 @@ export class World {
     this.epoch++;
     this.opts.compiler?.namespaces();
     this.cha = new Cha(this.prog); this.implemented.clear(); this.allocatedIndex = undefined;
-    this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
+    this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names), kept = keepApp();
@@ -2012,7 +1827,7 @@ export class World {
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
-    this.coldResumes.clear(); this.implemented.clear(); this.allocatedIndex = undefined;
+    this.implemented.clear(); this.allocatedIndex = undefined;
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
     this.noteLate(added);
@@ -2071,12 +1886,10 @@ export class World {
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   invalidate(slot: number): void {
     this.hotUnits.forget(slot);
-    this.deoptEpoch.value = Number(this.deoptEpoch.value) + 1;
     const helper = this.helperInvalidations.get(slot);
     if (helper) { helper(); this.stats.invalidated++; return; }
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       const s = this.slotAt(x);
-      if (s?.k === "method") this.coldResumes.delete(s.m);
       if (s?.k === "ensure" || !s?.done) continue;
       const stub = s.stub ?? this.aot?.stub(x);
       if (!stub) continue;
@@ -2139,8 +1952,7 @@ export class World {
   }
   private javaStack(stack: string, count = Infinity, lines = true): JavaFrame[] {
     // Each callFn enters a fresh engine stack. Keep only that stack's frames,
-    // then append its suspended callers; parse once so recursive cold PCs retain
-    // their activation order. The marker's name is explicit, even in minified builds.
+    // then append its suspended callers. The marker's name is explicit, even in minified builds.
     // A caller that has not suspended is still on the physical stack, beyond its call's marker.
     const segments = (text: string) => {
       const out: string[][] = [[]];
@@ -2250,12 +2062,6 @@ export class World {
     return suspend ? this.callFn(name, all, ret, body) : this.hostFn(name, all, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }));
   }
   private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
-  /** A cold activation keeps the same physical caller frames across its slow
-   * operations. Its DEX PCs are resolved from the live activation when read. */
-  withBridgeCaller<T>(stack: Error, run: () => T): T {
-    const prior = this.bridgeCaller; this.bridgeCaller = stack;
-    try { return run(); } finally { this.bridgeCaller = prior; }
-  }
   // The compiled call must not retain the emitter closure and its Compiler.
   // Build it in a separate activation from the persistent token/caller state.
   private callRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare: ((cx: Compiler) => void) | undefined, state: { d: WebAssembly.Global; v: WebAssembly.Global; thr: WebAssembly.Global }): (slot: number) => Function {
@@ -2297,8 +2103,7 @@ export class World {
       token = token % 0x3fffffff + 1;
       // Java callers stay on the physical stack until the call suspends; only then are their frames captured.
       const javaCaller = !this.sched.current().root || this.inSynchronousJava();
-      const caller: BridgeStack = { stack: this.bridgeCaller, prior: this.bridgeStacks.get(s), done: false };
-      this.bridgeCaller = undefined;
+      const caller: BridgeStack = { prior: this.bridgeStacks.get(s), done: false };
       this.bridgeStacks.set(s, caller);
       const leave = () => {
         caller.done = true;

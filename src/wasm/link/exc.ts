@@ -135,7 +135,7 @@ const wasmFrame = (line: string) => FRAME.exec(line) ?? WEBKIT_FRAME.exec(line);
 export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = wasmFrame(line)?.[1]; return name ? [name] : []; });
 /** Java frames, innermost first. WebKit names functions but does not report module offsets. */
 export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = Infinity, lines = true): JavaFrame[] {
-  const out: JavaFrame[] = [], occurrences = new Map<string, number>(), captures = new Map<string, number>();
+  const out: JavaFrame[] = [];
   let chunk: string | undefined;
   for (const line of stack.split("\n")) {
     if (out.length >= count) break;
@@ -151,13 +151,7 @@ export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = 
     const off = m![2] === undefined ? undefined : parseInt(m![2], 16);
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
     if (off !== undefined) while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
-    const occurrence = occurrences.get(t.name) ?? 0; occurrences.set(t.name, occurrence + 1);
-    const marked = off === undefined ? -1 : at < 0 ? 0 : t.pcs[at];
-    let pc = t.currentPcs?.()[occurrence] ?? marked;
-    if (marked === -2 || pc === -1) {
-      const capture = captures.get(id) ?? 0; captures.set(id, capture + 1);
-      pc = t.capturePcs?.()[capture] ?? (marked === -2 ? 0 : -1);
-    }
+    const pc = off === undefined ? -1 : at < 0 ? 0 : t.pcs[at];
     out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff && pc >= 0 ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
   }
   return out;

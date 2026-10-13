@@ -23,8 +23,7 @@ export function bindWorld(w: World): void {
     wasmMethods: () => stats.methods, wasmCompileMs: () => stats.compileMs, wasmModules: () => stats.instances, wasmModuleMs: () => stats.moduleMs + stats.instantiateMs,
     wasmBytes: () => stats.bytes, wasmAotLoaded: () => stats.aot.d + stats.aot.c, wasmAotMissed: () => stats.aot.missed, wasmAotMs: () => stats.aot.ms + stats.aot.readMs,
     wasmClasses: () => stats.classes, wasmSuspensions: () => sched.suspensions, wasmCrossings: () => crossings.n,
-    wasmColdMethods: () => stats.coldMethods, wasmColdCalls: () => stats.coldCalls, wasmColdResumes: () => stats.coldResumes,
-    wasmColdDeopts: () => stats.coldDeopts, wasmColdSlowCalls: () => stats.coldSlowCalls, wasmUpgrades: () => stats.upgrades,
+    wasmUpgrades: () => stats.upgrades,
     wasmPrepareMs: () => stats.phase.prepare, wasmFlowMs: () => stats.phase.flow, wasmInferMs: () => stats.phase.infer,
     wasmFactsMs: () => stats.phase.facts, wasmEmitMs: () => stats.phase.emit, wasmEncodeMs: () => stats.phase.encode, wasmClassBuildMs: () => stats.phase.classBuild,
   };

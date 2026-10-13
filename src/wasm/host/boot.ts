@@ -39,12 +39,12 @@ import { onProcessExit, processExited } from "../../process-exit";
 const TAB_HEAP = 2048 * 1024 * 1024;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type ColdStatus = { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
+type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
 declare global {
-  var __wdCold: ColdStatus | undefined;
+  var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
   var __wdAot: Promise<FetchStore | undefined> | undefined;
-  interface Window { __wdCold?: ColdStatus }
+  interface Window { __wdWasm?: WasmStatus }
 }
 
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
@@ -58,14 +58,11 @@ const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
-/** Process Worker URLs inherit the tab's query. */
-const browserCold = (): boolean => typeof location !== "undefined" && new URLSearchParams(location.search).get("cold") === "1";
-
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = measureCompile("residual.wasmSetup", () => new World(prog, { cold: browserCold(), holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
+  const w = measureCompile("residual.wasmSetup", () => new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
   bindWorld(w);
-  globalThis.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
+  globalThis.__wdWasm = { stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
@@ -100,7 +97,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
-    if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { aotKey: store?.key, called: () => made.calledMethods() });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, called: () => made.calledMethods() });
     return made;
   };
   if (typeof location === "undefined") {
@@ -176,7 +173,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       if (made.saved) w.attachApp(made.saved);
       mark(made.hit ? "appCodeSaved" : "appCode");
       made.start(w);
-      if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { worker: made.compiler.stats, appSaved: made.hit, appSource: made.source, appPersisted: () => made.persisted, appAttached: w.appAttached, appBuilds: made.builds, appSettle: () => made.settle(w) });
+      if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { worker: made.compiler.stats, appSaved: made.hit, appSource: made.source, appPersisted: () => made.persisted, appAttached: w.appAttached, appBuilds: made.builds, appSettle: () => made.settle(w) });
       // no app code runs until the modules of the build and of earlier launches have arrived
       store.ready = Promise.all([store.ready, made.launchReady]).then(() => {});
       await store.ready;
@@ -229,9 +226,8 @@ export function openAot(): Promise<FetchStore | undefined> {
   return globalThis.__wdAot ??= (async () => {
     const current = await fetch("/aot/current.json");
     if (!current.ok) return undefined;
-    // the cold interpreter deoptimizes into guarded code; other processes load the build without the guards
-    const manifest = await current.json() as { key: string; cold?: string };
-    const store = new FetchStore(`/aot/${browserCold() && manifest.cold ? manifest.cold : manifest.key}/`, aotPort);
+    const manifest = await current.json() as { key: string };
+    const store = new FetchStore(`/aot/${manifest.key}/`, aotPort);
     const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
     // the natives the modules import as Suspending were chosen when the build was made
     declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);

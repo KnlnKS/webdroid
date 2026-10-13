@@ -7,7 +7,7 @@ import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { parseMethodDesc, isWide } from "../../jvm/abi";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
-import { Flow, Go, Irreducible, structureAny } from "../../jvm/structure";
+import { Flow, Go, structureAny } from "../../jvm/structure";
 import { mid } from "./ids";
 import { constClass, emitStoreCheck } from "../link/classes";
 import { emitPolymorphic } from "./poly";
@@ -81,25 +81,12 @@ export class MC {
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
-  private deopt?: { version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; beginCapture: number; endCapture: number; target: number; epoch: number; enabled: number; sig: number };
-  private activationLocal = -1;
-  private versionLocal = -1;
-  private executedLocal = -1;
-  private deoptState = -1;
-  private deoptTarget = -1;
-  private stringAliases = false;
-  private capturePC = -1;
-  private captureLocals = new Map<number, VT>();
-  constructor(public cx: Compiler, public m: MethodInfo, private resume?: { pc: number; bits: number; reference: number }) {
+  constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
-    if (resume) this.root.localOffset = 1;
-    if (cx.deopt && (resume || cx.w.canDeopt(m))) {
-      this.deopt = { ...cx.deopt, sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
-    }
     this.tries = this.item.tries.length > 0;
-    this.outlining = cx.counting || !!resume || cx.w.longLoops.has(mid(m));
-    this.deferred = cx.counting && !resume;
+    this.outlining = cx.counting || cx.w.longLoops.has(mid(m));
+    this.deferred = cx.counting;
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
@@ -174,35 +161,18 @@ export class MC {
       const n = performance.now(); phase[name] += n - t; t = n; endCompile(span); span = beginCompile(next);
     };
     const analysis = cx.methodAnalyses.get(m);
-    let prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
-    if (this.resume) {
-      const instruction = prepared.instructions.find((i) => i.pc === this.resume!.pc);
-      if (!instruction) throw new Error("invalid resume PC");
-      if (instruction.op >= 0x0a && instruction.op <= 0x0d) throw new Error("resume needs pending result or exception support");
-      const leaders = Uint8Array.from(prepared.leaders); leaders[this.resume.pc] = 1;
-      prepared = { ...prepared, leaders };
-    }
-    this.prepared = prepared;
+    const prepared = this.prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
     lap("prepare", "wasm.flow");
     let flow: Flow;
-    try {
-      if (this.resume) {
-        const entries = new Set([this.resume.pc]);
-        for (;;) {
-          try { flow = new Flow(prepared, item, Infinity, [...entries]); break; }
-          catch (e) { if (!(e instanceof Irreducible)) throw e; const before = entries.size; for (const pc of e.heads) entries.add(pc); if (entries.size === before) throw e; }
-        }
-      } else flow = structureAny(prepared, item, Infinity);
-    } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
+    try { flow = structureAny(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow", "wasm.infer");
-    this.typing = !this.resume && analysis ? analysis.typing
-      : inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions, this.resume?.pc);
+    this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
     lap("infer", "wasm.facts");
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
-    if (!this.resume) this.findShadows();
+    this.findShadows();
     this.findWaiting();
     this.entryFacts = analyze(this);
     lap("facts", "wasm.emit");
@@ -213,7 +183,7 @@ export class MC {
       const w = this.typing.param(reg);
       if (w >= 0) {
         const k = this.typing.kind[w], native = k === KF || k === KD;
-        if (native) { if (!this.resume) c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); }
+        if (native) { c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); }
         else this.webLocal[w] = pi;
       }
       pi++; reg += wide ? 2 : 1;
@@ -221,26 +191,6 @@ export class MC {
     if (!m.isStatic) param(false);
     for (const p of m.params) param(isWide(p));
     this.allocateWebs();
-    if (this.resume) {
-      c.nullableLocals = true;
-      const seen = new Set<number>();
-      this.typing.entry!.forEach((web, register) => {
-        if (web < 0 || seen.has(web)) return;
-        seen.add(web);
-        const kind = this.typing.kind[web], local = this.local(web);
-        this.resumeRegisters.push({ register, kind });
-        c.defer((c) => {
-          c.raw(0x20, 0).i32(register);
-          if (kind === KR) c.call(this.resume!.reference).anyConvertExtern();
-          else {
-            c.call(this.resume!.bits);
-            if (kind !== KJ && kind !== KD) c.raw(OP.i32_wrap_i64);
-            if (kind === KF || kind === KD) c.raw(kind === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64);
-          }
-          c.lset(local);
-        });
-      });
-    }
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
     if (this.outlining) this.findCyclicRegions();
@@ -251,37 +201,24 @@ export class MC {
       if (m.ret !== "V") this.resultLocal = c.newLocal(cx.vtOf(kindOf(m.ret)));
       if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     }
-    if (this.resume || this.deopt || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (hasLoops && this.deferred) this.fuelLocal = c.newLocal(T.i32);
-    if (this.deopt) {
-      // Resume rejects uninitialized aliases; only this activation's String operations can block later handoff.
-      this.stringAliases = this.prepared.instructions.some(ins => ins.name === "new-instance" ? this.dex.typeName(ins.b) === "java/lang/String" : ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && this.dex.typeName(this.dex.method(ins.b).cls) === "java/lang/String");
-      this.activationLocal = c.newLocal(T.externref); this.versionLocal = c.newLocal(T.i32); this.executedLocal = c.newLocal(T.i32); this.deoptState = c.newLocal(T.externref); this.deoptTarget = c.newLocal(T.funcref);
-      c.gget(this.deopt.enabled).if_();
-      if (this.resume) c.raw(0x20, 0);
-      else c.i32(cx.w.slotOf(m)).lget(this.entryDepth).call(cx.deopt!.make);
-      c.ltee(this.activationLocal).call(this.deopt.version).lset(this.versionLocal);
-      c.lget(this.activationLocal).call(this.deopt.last).lset(this.executedLocal); c.end();
-    }
-    if (this.deopt && this.blockIns.reduce((n, block) => n + block.filter((ins, i) => (i === 0 || ins.name.startsWith("invoke")) && !(ins.op >= 0x0a && ins.op <= 0x0d) && this.typing.reached(ins.pc)).length, 0) > 1) this.capturePC = c.newLocal(T.i32);
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
-      this.beginCapture(); this.emitRegion(0);
-      c.unreachable(); this.finishCapture();
+      this.emitRegion(0);
+      c.unreachable();
       return c;
     }
     this.regionLocal = c.newLocal(T.i32);
-    if (this.resume) c.i32(this.regionOfPc.get(this.resume.pc)!).lset(this.regionLocal);
     if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     this.push("$disp"); c.loop();
     if (this.tries) {
       this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
     }
-    this.beginCapture();
     // the method's own entry is region 0 and falls into it; only a jump from a handler or another region chooses by region (and gives other strands a turn)
     const n = regions.length;
     for (let k = n - 1; k >= 1; k--) { this.push("$R" + k); c.block(); }
@@ -293,7 +230,6 @@ export class MC {
     }
     this.emitRegion(0); c.unreachable();
     for (let k = 1; k < n; k++) { this.pop(); c.end(); this.emitRegion(k); c.unreachable(); }
-    this.finishCapture();
     if (this.tries) {
       this.pop(); c.end();                          // try_table
       c.unreachable();
@@ -308,7 +244,6 @@ export class MC {
     } finally { endCompile(span); }
   }
   /** the local holding the depth before this method's frame, if it counts one */
-  resumeRegisters: { register: number; kind: number }[] = [];
   private entryDepth = -1;
   private fuelLocal = -1;
   /** Every bytecode back edge can hold the browser thread, including finite arithmetic loops. */
@@ -329,7 +264,7 @@ export class MC {
       this.stateType = this.cx.mb.addType({ k: "struct", fields: types.map((t) => ({ t, mut: true })) });
       this.stateLocal = this.root.newLocal(refNull(this.stateType));
     }
-    const own = (this.chunks.length ? 5 : 4) + types.length + (this.resume ? 1 : 0);
+    const own = (this.chunks.length ? 5 : 4) + types.length;
     for (const ch of this.chunks) {
       ch.locals = [...ch.code.locals].sort((a, b) => a - b);
       // State fields retain method indices; native chunks declare only their used locals.
@@ -350,7 +285,7 @@ export class MC {
       d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
       d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
       d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();
-      const slot = this.cx.counting || this.resume ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
+      const slot = this.cx.counting ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
       if (slot < COUNT_SLOTS) d.i32(slot).call(this.cx.imp.long);
       d.i32(1).ret();
       ch.dispatch = this.cx.mb.addFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), d.finish(), "$dispatch:" + name);
@@ -360,10 +295,6 @@ export class MC {
     for (const ch of this.chunks) {
       ch.code.materialize();
       this.cx.mb.setBody(ch.f, ch.code.finish());
-    }
-    if (this.resume) {
-      this.root.localTypes = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
-      this.root.nparams = 1;
     }
     this.root.materialize();
     return this.root;
@@ -626,7 +557,6 @@ export class MC {
       this.cx.emitLeave(c, ch.entry, false);
       this.loadState(c, ch.locals);
     });
-    if (this.deopt) { c.lget(this.controlLocal).i32(-1).raw(OP.i32_eq).if_(); this.push("deoptChunk"); this.transferDeopt(); this.pop(); c.end(); }
     c.lget(this.controlLocal).i32(1).raw(OP.i32_eq).brIf(0);
     c.lget(this.controlLocal).i32(2).raw(OP.i32_eq).if_(); this.push("if");
     if (this.resultLocal >= 0) c.lget(this.resultLocal);
@@ -654,90 +584,13 @@ export class MC {
       this.leave(); this.code.ret();
     }
   }
-  private captureOrder?: { ordered: { local: number; type: VT }[]; indices: Map<number, number> };
-  private captureLayout() {
-    if (this.captureOrder) return this.captureOrder;
-    const locals = [...this.captureLocals].sort(([a], [b]) => a - b).map(([local, type]) => ({ local, type }));
-    const ordered = [...locals.filter(v => v.type !== T.anyref), ...locals.filter(v => v.type === T.anyref)];
-    return this.captureOrder = { ordered, indices: new Map(ordered.map((v, i) => [v.local, i])) };
-  }
-  private beginCapture(): void {
-    if (this.capturePC >= 0) { this.push("$captureRoot"); this.code.block(); }
-  }
-  private finishCapture(): void {
-    if (this.capturePC < 0) return;
-    const c = this.code, d = this.deopt!;
-    this.pop(); c.end();
-    // Shared payload calls resolve their Java PC from the owned capture scope.
-    c.pc = -2;
-    c.lget(this.activationLocal).lget(this.capturePC).call(d.beginCapture);
-    // Cleanup also covers host exceptions; Java exceptions then reach the original handler.
-    c.block(T.exnref).tryTable(null, [[3, 0, 0]]);
-    c.lget(this.activationLocal).lget(this.capturePC).lget(this.executedLocal).lget(this.entryDepth).lget(this.deoptState);
-    this.cx.captureIndexedValues(c, this.captureLayout().ordered, this.deoptState, this.item.regs);
-    c.lset(this.deoptState).lget(this.deoptState).call(d.target).lset(this.deoptTarget);
-    c.lget(this.activationLocal).call(d.endCapture);
-    c.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(d.sig).returnCallRef(d.sig);
-    c.end().unreachable().end();
-    c.lget(this.activationLocal).call(d.endCapture).throwRef();
-  }
-  private transferDeopt(): void {
-    if (this.chunk) this.chunkReturn(-1);
-    else if (this.capturePC >= 0) this.code.br(this.depth("$captureRoot"));
-    else this.code.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(this.deopt!.sig).returnCallRef(this.deopt!.sig);
-  }
-  private deoptAt(ins: Ins, previous?: number): void {
-    const d = this.deopt, c = this.code;
-    if (!d || !this.typing.reached(ins.pc) || ins.op >= 0x0a && ins.op <= 0x0d) return;
-    c.pc = ins.pc;
-    c.gget(d.enabled).gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne, OP.i32_and).if_(); this.push("deoptChanged");
-    if (this.stringAliases) { c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe"); }
-    if (!this.tries && previous !== undefined) c.i32(previous).lset(this.executedLocal);
-    const values = Array.from(this.typing.before(ins.pc)).flatMap((web, register) => web < 0 ? [] : [{ register, local: this.local(web), type: this.storage(this.typing.kind[web]) }]);
-    this.cx.deoptWork.sites++; this.cx.deoptWork.values += values.length;
-    if (this.capturePC >= 0) {
-      for (const v of values) this.captureLocals.set(v.local, v.type);
-      c.locals.add(this.executedLocal);
-      c.defer(c => this.cx.captureIndexedMap(c, values, this.captureLayout().indices));
-      c.lset(this.deoptState).i32(ins.pc).lset(this.capturePC);
-      if (this.tries) c.i32(ins.pc).lset(this.pcLocal);
-      this.transferDeopt();
-    } else {
-      c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth);
-      this.cx.captureValues(c, values, this.item.regs); c.lset(this.deoptState);
-      c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
-    }
-    if (this.stringAliases) { this.pop(); c.end(); }
-    this.pop(); c.end();
-  }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
     this.facts = cloneFacts(this.entryFacts[b]);
-    let previous: number | undefined;
-    for (const [i, ins] of inss.entries()) {
-      const active = !this.consumed.has(ins.pc), transfer = !!NO_THROW[ins.op] && (endsBlock(ins.op) || branchTargets(this.item, ins).length > 0);
-      if (active && (ins === inss[0] || ins.name.startsWith("invoke"))) this.deoptAt(ins, previous);
-      // A nonthrowing transfer must record its PC before taking the outgoing edge.
-      if (this.deopt && !this.tries && active && transfer && this.typing.reached(ins.pc)) c.i32(ins.pc).lset(this.executedLocal);
+    for (const ins of inss) {
       this.emit(ins);
-      if (this.deopt && !this.consumed.has(ins.pc) && this.typing.reached(ins.pc)) {
-        const d = this.deopt; this.cur = ins;
-        if (ins.name === "monitor-enter" || ins.name === "monitor-exit") {
-          c.gget(d.enabled).if_(); c.lget(this.activationLocal); this.get("L", ins.a); c.externConvertAny().i32(+(ins.name === "monitor-enter")).call(d.monitor).end();
-        }
-        const allocation = ins.name === "new-instance" && this.dex.typeName(ins.b) === "java/lang/String";
-        const constructor = ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && this.dex.typeName(this.dex.method(ins.b).cls) === "java/lang/String";
-        if (allocation || constructor) c.gget(d.enabled).if_().lget(this.activationLocal).i32(allocation ? 1 : -1).call(d.allocation).end();
-        let j = i + 1; while (j < inss.length && this.consumed.has(inss[j].pc)) j++;
-        const next = inss[j];
-        // Handlers need the last committed PC even when a throwing instruction never exits
-        // its block. Without handlers, internal polls materialize it only on invalidation.
-        const committed = this.consumed.has(ins.pc + ins.len) ? ins.pc + ins.len : ins.pc;
-        if (this.tries ? !next || !NO_THROW[next.op] || endsBlock(next.op) || branchTargets(this.item, next).length : !next && !transfer && !endsBlock(ins.op)) c.i32(committed).lset(this.executedLocal);
-        previous = committed;
-      }
       step(this, ins, this.facts);
     }
     const last = inss[inss.length - 1];

@@ -1,7 +1,7 @@
 import { never, processExited } from "../process-exit";
 
 // Suspended activations share one Promise per pending operation. Every frame on the stack that
-// is waiting for it (compiled, cold or a generator native) joins the same continuation list, and
+// is waiting for it (compiled code or a generator native) joins the same continuation list, and
 // when the operation settles the list resumes innermost to outermost in a single microtask:
 // resuming an N-deep stack costs one Promise hop, not N.
 

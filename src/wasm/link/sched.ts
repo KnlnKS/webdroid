@@ -331,7 +331,7 @@ export class Sched {
       }
       this.idle();
       // Immediate imports retain their engine stacks. Clear the quota only
-      // when the import actually suspends, including a forced cold-loop yield.
+      // when the import actually suspends.
       if (r instanceof Promise) { s.nested = 0; this.suspensions++; }
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
       return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; }) : r;

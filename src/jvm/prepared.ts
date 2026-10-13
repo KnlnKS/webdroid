@@ -491,11 +491,3 @@ export function prepareMethod(
     };
   } finally { endCompile(span); }
 }
-
-/** The cold tier's view of a preparation: it keeps only the instructions the analysis annotated
- *  and decodes the rest when they first run, so a cold method does not hold its decoded body. */
-export function coldInstructions(code: CodeItem, prepared: PreparedMethod): (pc: number) => PreparedInstruction {
-  const annotated = new Map<number, PreparedInstruction>();
-  for (const instruction of prepared.instructions) if (instruction.constKind || instruction.nullRecv) annotated.set(instruction.pc, instruction);
-  return (pc) => annotated.get(pc) ?? decodeInstruction(code.insns, pc);
-}

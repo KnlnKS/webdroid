@@ -63,7 +63,7 @@ const manifestFile = Bun.file(join(AOT_ROOT, "current.json"));
 if (await manifestFile.exists()) {
   const manifest = await manifestFile.json() as AotManifest;
   if (manifest.source !== sourceKey()) throw new Error("vendor/wasm-aot is a build of other sources; run bun run aot");
-  for (const key of [manifest.key, ...manifest.cold ? [manifest.cold] : []]) await cp(join(AOT_ROOT, key), join(out, "aot", key), { recursive: true });
+  await cp(join(AOT_ROOT, manifest.key), join(out, "aot", manifest.key), { recursive: true });
   await Bun.write(join(out, "aot/current.json"), JSON.stringify(manifest));
   await Bun.write(join(out, "_headers"), "/aot/*/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 }

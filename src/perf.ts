@@ -28,7 +28,7 @@ export const perf = {
   // the World's work (host/stats.ts bindWorld): methods compiled on demand and the time that took (compiler), modules built and instantiated and their time, platform and
   // app build modules loaded and missed, classes linked, stack switches, and natives called (Java to host)
   wasmMethods: 0, wasmCompileMs: 0, wasmModules: 0, wasmModuleMs: 0, wasmBytes: 0, wasmAotLoaded: 0, wasmAotMissed: 0, wasmAotMs: 0, wasmClasses: 0, wasmSuspensions: 0, wasmCrossings: 0,
-  wasmColdMethods: 0, wasmColdCalls: 0, wasmColdResumes: 0, wasmColdDeopts: 0, wasmColdSlowCalls: 0, wasmUpgrades: 0,
+  wasmUpgrades: 0,
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,
   bootMs: 0,
 };

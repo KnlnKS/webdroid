@@ -15,7 +15,6 @@ export interface UpgradeJob {
   unit: number;
   /** A refresh may replace only this live hot-unit generation in the source World. */
   refresh?: number;
-  cold?: boolean;
   /** first-tier code of methods already linked, merged into one module (World.mergeJob) */
   merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
@@ -69,7 +68,6 @@ export class UnitCompiler {
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.longLoops = new Set(job.long);
     w.stats.units = job.unit;
-    w.opts.cold = !!job.cold;
     const cx = new Compiler(w);
     w.beginTouch();
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");

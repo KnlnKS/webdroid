@@ -3,12 +3,12 @@
 import { Compiler } from "../compiler/j2w";
 import { mid } from "../compiler/ids";
 import { compileModule } from "./module";
-import { APP_VERSION, DEOPT_ABI, packModule, unitHeader, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot";
+import { APP_VERSION, packModule, unitHeader, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot";
 import { methodCount, type MethodInfo } from "../compiler/program";
 import type { World } from "./world";
 
 /** the estimated size of a code module (the bytes per dex code unit and per method aot-build measured) where the next class starts another */
-const MODULE_BYTES = 1 << 20, BYTES_PER_METHOD = 150;
+const MODULE_BYTES = 1 << 20, BYTES_PER_METHOD = 150, BYTES_PER_UNIT = 14;
 /** the same for a data module: a module is loaded whole when any of its classes is first used, so these are small; the figures are aot-build's */
 /** synthetic functions to a module */
 const SYNTH_GROUP = 64;
@@ -31,7 +31,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
     const end = Math.min(at + SYNTH_GROUP, all.length);
     let group = all.slice(at, end);
     for (;;) {
-      const cx = new Compiler(w, w.aot ? w.aot.deopt === DEOPT_ABI : !!w.opts.cold || !!w.opts.deopt);
+      const cx = new Compiler(w);
       w.beginTouch();
       const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes);
       if (!bad) {
@@ -55,7 +55,7 @@ export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: U
   { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
   const skipped = new Map<string, string>();
   for (;;) {
-    const cx = new Compiler(w, w.aot ? w.aot.deopt === DEOPT_ABI : !!w.opts.cold || !!w.opts.deopt);
+    const cx = new Compiler(w);
     w.beginTouch();
     const built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), [], false, true), touch = w.endTouch(), bad = check(built.bytes);
     if (!bad) return { cx, built, touch, skipped };
@@ -69,7 +69,6 @@ export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: U
 export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBuild {
   const aot = w.aot;
   if (!aot) throw new Error("an app build needs the platform build");
-  const bytesPerUnit = aot.deopt === DEOPT_ABI ? 42 : 14;
   const prefix = w.since(aot.platformMarks), base = w.numbering(), byClass = new Map<string, MethodInfo[]>();
   for (const m of methods) { const list = byClass.get(m.cls); if (list) list.push(m); else byClass.set(m.cls, [m]); }
   // the methods of platform classes that a platform code module holds are a patch to that module: loaded after it, they replace what a class of the app made it undo or lack. The other
@@ -84,7 +83,7 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
     const groups: MethodInfo[][] = [[]];
     let bytes = 0;
     for (const list of lists) {
-      const size = list.reduce((n, m) => n + BYTES_PER_METHOD + bytesPerUnit * (m.codeOff ? m.dex.code(m.codeOff).insns.length : 0), 0);
+      const size = list.reduce((n, m) => n + BYTES_PER_METHOD + BYTES_PER_UNIT * (m.codeOff ? m.dex.code(m.codeOff).insns.length : 0), 0);
       if (bytes && bytes + size > MODULE_BYTES) { groups.push([]); bytes = 0; }
       groups[groups.length - 1].push(...list); bytes += size;
     }
@@ -129,5 +128,5 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
   w.replay(demand.infos);
   const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
-  return { index: { version: APP_VERSION, deopt: aot.deopt, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
+  return { index: { version: APP_VERSION, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
 }

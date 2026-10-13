@@ -51,7 +51,7 @@ export class Code {
   ltee(i: number): this { return this.local(0x22, i, true); }
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
-  private mark(): void { if (this.pc >= 0 || this.pc === -2) this.marks.push(this.b.length, this.pc); }
+  private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
   /** the functions called directly, and the number of calls through a table or a reference: what a body may run besides its own instructions */
   targets: number[] = [];
   indirect = 0;

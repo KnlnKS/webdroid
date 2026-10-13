@@ -3,10 +3,10 @@ export function installLatencyObserver(counters: string[]) {
   if (window !== window.top || location.pathname !== "/") return;
   const host = window as any;
   const snapshot = () => {
-    const wd = host.wd, cold = window.__wdCold;
+    const wd = host.wd, wasm = window.__wdWasm;
     const rows = [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
       perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
-      compilerWorker: cold?.worker ? { ...cold.worker } : null, appBuilds: cold?.appBuilds?.map(build => ({ ...build })) ?? [] }];
+      compilerWorker: wasm?.worker ? { ...wasm.worker } : null, appBuilds: wasm?.appBuilds?.map(build => ({ ...build })) ?? [] }];
     if (new URLSearchParams(location.search).get("perfProbe") !== "1") return rows;
     const registry = host.wd?.counterReceipts?.();
     const found = new Map(rows.map(row => [row.url, row]));

@@ -7,7 +7,6 @@ import { COMPILED_CODE_DIR } from "../../src/shell/hostfs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { DEOPT_ABI, type AppIndex, type AotIndex } from "../../src/wasm/link/aot";
 import { AOT_ROOT } from "./aot-key";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import type { AotProfile } from "../../src/shell/aot-profile";
@@ -20,8 +19,6 @@ const SETTLE_MS = 10_000;
 const byUse = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([name]) => name);
 
 const { key } = await (await fetch(new URL("/aot/current.json", BASE))).json() as { key: string };
-const policy = (JSON.parse(readFileSync(join(AOT_ROOT, key, "index.json"), "utf8")) as AotIndex).deopt ?? 0;
-if (![0, DEOPT_ABI].includes(policy)) throw new Error("unknown AOT activation policy");
 const ordered = new Set<string>();
 const uses = { linked: new Map<string, number>(), called: new Map<string, number>() };
 /** the platform methods the launches' realms ran: what a zygote has the engine compile ahead (World.warm) */
@@ -60,7 +57,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       });
       await page.waitForTimeout(SETTLE_MS);
       const {processes,profiles} = await collectLaunch(page, deadline, errors);
-      for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const id of await realm.evaluate(() => globalThis.__wdCold?.called?.() ?? []).catch(() => [] as string[])) warm.add(id);
+      for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const id of await realm.evaluate(() => globalThis.__wdWasm?.called?.() ?? []).catch(() => [] as string[])) warm.add(id);
       console.log(`${apk} ${launch}: ${processes.length} healthy process diagnostics, ${url.href}`);
       const wanted = [...new Set(profiles.flatMap(profile => profile.wanted))];
       const used = profiles.flatMap(profile => profile.worlds);
@@ -98,7 +95,7 @@ if (classes) {
 async function settleBuilds(page: import("playwright").Page): Promise<void> {
   for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate" | "url">[]) {
     const built = await realm.evaluate(async () => {
-      const settle = globalThis.__wdCold?.appSettle;
+      const settle = globalThis.__wdWasm?.appSettle;
       return settle ? (await settle()) ?? null : undefined;
     }).catch(() => undefined);
     if (built !== undefined) console.log(`${realm.url()}: ${built ? `settled build ${built.methods} methods, ${built.modules} modules${built.kept ? "" : ", not kept"}` : "nothing to settle"}`);
@@ -133,8 +130,6 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
       } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error; }
     }, [COMPILED_CODE_DIR, entry, names] as const);
     if (!files) { console.log(`app build ${entry}: evicted while listed, skipped`); continue; }
-    const app = JSON.parse(Buffer.from(files[names.indexOf("index.json")], "base64").toString()) as AppIndex;
-    if ((app.deopt ?? 0) !== policy) throw new Error(`app build ${entry}: activation policy differs from platform`);
     for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
     names.forEach((name, i) => writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(files[i], "base64")));
     writeFileSync(join(dir, `app.${entry}.json`), JSON.stringify(names));

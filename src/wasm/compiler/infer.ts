@@ -38,13 +38,11 @@ interface WebAnalysis {
   links: number[];
   /** instructions the fixpoint reached (an unreachable one has no operand webs) */
   reached: Uint8Array;
-  entryNodes?: Int32Array;
-  before(pc: number): Int32Array;
   ranges(visit: (node: number, instruction: number) => void): void;
 }
 
 /** analysis of the method, or why it was skipped */
-export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs?: readonly PreparedInstruction[], entryPc?: number): WebAnalysis | string {
+export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs?: readonly PreparedInstruction[]): WebAnalysis | string {
   const R_ = code.regs;
   const ins = instrs ?? decodeInstructions(code.insns);
   if (!ins.length) return "empty";
@@ -179,21 +177,6 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     }
     for (const s of cfg.succ[b]) joinInto(s, st);
   }
-  const before = (pc: number): Int32Array => {
-    const i = cfg.pcToIdx[pc];
-    if (i === undefined || i < 0 || !reached[i]) throw new Error("invalid-resume-pc");
-    const b = cfg.blockOfIdx[i];
-    const entryNodes = inState[b]!.slice();
-    for (let j = cfg.firstIdx[b]; j < i; j++) {
-      const e = effs[j];
-      if (e.d >= 0) { entryNodes[e.d] = defNode[j]; if (e.dm & WIDE) entryNodes[e.d + 1] = defNode[j]; }
-    }
-    liveOut(b);
-    for (let j = cfg.lastIdx[b]; j >= i; j--) stepLive(j);
-    for (let r = 0; r < R_; r++) if (!(tmp[r >> 5] & (1 << r))) entryNodes[r] = -1;
-    return entryNodes;
-  };
-  const entryNodes = entryPc === undefined ? undefined : before(entryPc);
   const ranges = (visit: (node: number, instruction: number) => void) => {
     const touch = (node: number, i: number) => { if (node >= 0) visit(find(node), i); };
     for (const node of paramNode) touch(node, 0);
@@ -215,7 +198,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
       for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
     }
   };
-  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useSlot, paramNode, links, reached, entryNodes, before, ranges };
+  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useSlot, paramNode, links, reached, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -235,9 +218,6 @@ function componentMask(a: WebAnalysis): (root: number) => number {
 export interface Typing {
   /** kind (I, F, R, J or D) of each web */
   kind: number[];
-  /** Register webs immediately before the requested resume instruction. */
-  entry?: Int32Array;
-  before(pc: number): Int32Array;
   /** Inclusive intervals include definitions, uses, block edges and EH pre-state. */
   ranges(): { start: number[]; end: number[] };
   /** whether the instruction at `pc` can execute at all */
@@ -250,8 +230,8 @@ export interface Typing {
   param(reg: number): number;
 }
 /** Webs by lowest kind bit left in their component: an unconstrained int/float/null constant is an int. Throws when the code cannot be typed. */
-export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs: readonly PreparedInstruction[], entryPc?: number): Typing {
-  const a = analyzeWebs(dex, code, desc, isStatic, instrs, entryPc);
+export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs: readonly PreparedInstruction[]): Typing {
+  const a = analyzeWebs(dex, code, desc, isStatic, instrs);
   if (typeof a === "string") throw new Error("type inference " + a);
   const maskOf = componentMask(a), id = new Int32Array(a.mask.length).fill(-1), kind: number[] = [];
   const web = (node: number): number => {
@@ -268,8 +248,7 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   };
   const idxOfPc = a.pcToIdx;
   return {
-    kind, entry: a.entryNodes?.map(web),
-    before(pc) { return a.before(pc).map(web); },
+    kind,
     ranges() {
       const start: number[] = [], end: number[] = [];
       a.ranges((node, i) => { const w = web(node); if (w >= 0) { start[w] = Math.min(start[w] ?? i, i); end[w] = Math.max(end[w] ?? i, i); } });
