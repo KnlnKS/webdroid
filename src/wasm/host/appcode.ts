@@ -110,6 +110,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
 
   /** how much `world` built on demand that the saved build lacks */
   function fresh(world: World): number {
+    world.noteAheadRuns();
     const d = world.demand;
     if (seen.world !== world) seen = { world, methods: 0, classes: 0, infos: 0 };
     if (d.methods.size > seen.methods) {

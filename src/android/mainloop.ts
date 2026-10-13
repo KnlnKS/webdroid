@@ -14,6 +14,7 @@ import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
 import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield";
+import { compileAhead } from "../jvm/tier";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
  *  inline */
@@ -22,6 +23,8 @@ export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued
 /** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
  *  a message that keeps reposting itself cannot starve input or rendering. */
 const SLICE_MS = 16;
+/** how long the main thread waits before its idle time goes to compiling ahead */
+const AHEAD_QUIET_MS = 100;
 
 export class NativeLooper {
   private callbacks: (() => unknown)[] = [];
@@ -60,7 +63,10 @@ export class NativeLooper {
   private idle(timeout: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = timeout > 0 ? setGuestTimeout(() => this.signal(), timeout) : undefined;
-      this.waiter = () => { clearGuestTimeout(timer); resolve(); };
+      // a main thread that stays waiting has time for code its next messages will want
+      const ahead = this === mainLooper && (timeout < 0 || timeout > 2 * AHEAD_QUIET_MS)
+        ? setTimeout(() => compileAhead(() => this.waiter === waiter), AHEAD_QUIET_MS) : undefined;
+      const waiter = this.waiter = () => { clearGuestTimeout(timer); clearTimeout(ahead); resolve(); };
     });
   }
 }

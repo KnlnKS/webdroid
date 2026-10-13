@@ -36,8 +36,10 @@ export function turnElapsed(): number {
 /** Input the page is answering: background work (native budget slices, compiled-code imports)
  *  stands aside until this long after the latest event. */
 const RESPONSIVE_MS = 250;
-let responsiveUntil = 0;
-export function noteInput(): void { responsiveUntil = Math.max(responsiveUntil, performance.now() + RESPONSIVE_MS); }
+let responsiveUntil = 0, lastInput = -Infinity;
+export function noteInput(): void { lastInput = performance.now(); responsiveUntil = Math.max(responsiveUntil, lastInput + RESPONSIVE_MS); }
+/** how long ago the latest input arrived */
+export const sinceInput = (now = performance.now()): number => now - lastInput;
 export const answeringInput = (now = performance.now()): boolean => now < responsiveUntil;
 /** resolves once no input has arrived for the responsive window */
 export async function inputSettled(): Promise<void> {

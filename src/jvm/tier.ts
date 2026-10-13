@@ -15,6 +15,8 @@ export interface TierBackend {
   warm?(stop: () => boolean): Promise<boolean>;
   /** the app has shown its first frame */
   launched?(): void;
+  /** compiles code the app is likely to call soon in slices, while `idle` says the app's main thread still waits */
+  ahead?(idle: () => boolean): Promise<void>;
 }
 let backend: TierBackend | undefined;
 export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
@@ -38,6 +40,8 @@ export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint
 export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
 /** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
 export function appLaunched(): void { backend?.launched?.(); }
+/** the main thread has waited a while: spend the time compiling ahead while `idle` holds */
+export function compileAhead(idle: () => boolean): void { void backend?.ahead?.(idle); }
 /** the zygote's warm-up of the platform code launches use */
 export const warmCode = (stop: () => boolean): Promise<boolean> => backend?.warm?.(stop) ?? Promise.resolve(true);
 

@@ -89,6 +89,8 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?
 interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
 /** the most methods a first-tier unit holds (World.batch) */
 const BATCH = 32;
+/** the methods a unit compiled ahead of their first call holds (World.ahead), how many methods its calls are taken from, and the most it compiles in a World */
+const AHEAD_UNIT = 16, AHEAD_ROOTS = 4096, AHEAD_MAX = 8192;
 /** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
  *  are loose, a compile worker merges up to MERGE_MAX of their methods into one module */
 const MERGE_AT = 1024, MERGE_MAX = 512;
@@ -122,7 +124,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, ahead: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -938,6 +940,7 @@ export class World {
     const cx = new Compiler(this), batch = s.k === "method" ? this.batch(s.m) : [];
     cx.shareHelpers();
     for (const m of batch) this.demand.methods.add(m);
+    this.noteRun(batch);
     const built = s.k === "method" ? cx.buildUnit(batch) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += Math.max(1, batch.length);
@@ -1536,21 +1539,82 @@ export class World {
     } finally { word[0] = 0; }
     return n;
   }
-  /** Direct callees followed by guarded implementations, preserving their planning order. */
-  private callees(m: MethodInfo): MethodInfo[] {
-    const direct: MethodInfo[] = [], guarded: MethodInfo[] = [], dex = m.dex;
+  // ---------- compiling ahead of the first call, in idle time
+  /** methods that ran, the latest last, then methods compiled ahead: what is compiled ahead are the methods they call */
+  private aheadRoots: MethodInfo[] = [];
+  /** methods to compile ahead, the next last */
+  private aheadQueue: MethodInfo[] = [];
+  /** the slots of methods compiled ahead that have not been seen to run: a build is made of what runs */
+  private aheadUnran = new Set<number>();
+  private noteRun(ms: MethodInfo[]): void {
+    if (this.opts.build || this.opts.compileOnly) return;
+    this.aheadRoots.push(...ms);
+    if (this.aheadRoots.length > AHEAD_ROOTS) this.aheadRoots.splice(0, this.aheadRoots.length - AHEAD_ROOTS / 2);
+  }
+  /** the methods compiled ahead that have run since joining the World's demand, and their calls are compiled ahead in turn */
+  noteAheadRuns(): void {
+    for (const at of this.aheadUnran) {
+      const s = this.peek(at);
+      if (s?.k !== "method" || !s.done) { this.aheadUnran.delete(at); continue; }
+      if (!s.hot && !this.requested.has(at) && !(at < COUNT_SLOTS && this.counts()[at])) continue;
+      this.aheadUnran.delete(at);
+      this.demand.methods.add(s.m);
+      this.noteRun([s.m]);
+    }
+  }
+  /** the slot of `t` if it is worth compiling ahead: its class is linked and neither compiled code nor a build's module holds it */
+  private aheadSlot(t: MethodInfo): number {
+    const rt = this.classes.get(t.cls);
+    if (!rt || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) return -1;
+    const slot = rt.slotBase + t.index, s = this.slotAt(slot);
+    return s?.k !== "method" || s.done || s.pending || this.aot?.holds(slot) ? -1 : slot;
+  }
+  /** Idle time: compiles the first-tier code of the methods that the methods that ran call when the call has one target, then what those call, in units of AHEAD_UNIT,
+   *  until `until`, so that an interaction's first calls find their code rather than compile it. Whether any is left. */
+  ahead(until: number): boolean {
+    this.noteAheadRuns();
+    while (performance.now() < until && this.stats.ahead < AHEAD_MAX) {
+      const unit: MethodInfo[] = [];
+      while (unit.length < AHEAD_UNIT) {
+        const t = this.aheadQueue.pop();
+        if (t) { if (!unit.includes(t) && this.aheadSlot(t) >= 0) unit.push(t); continue; }
+        const root = this.aheadRoots.pop();
+        if (!root) break;
+        if (root.codeOff) for (const { t } of this.calls(root)) if (t && this.aheadSlot(t) >= 0) this.aheadQueue.push(t);
+      }
+      if (!unit.length) return false;
+      const clock = this.unitClock(), cx = new Compiler(this);
+      cx.shareHelpers();
+      const built = cx.buildUnit(unit), group = unit.map((m) => this.slotOf(m));
+      this.stats.units++; this.stats.methods += unit.length; this.stats.ahead += unit.length;
+      this.install(group, false, cx, this.unitImports(cx), built, group[0], clock);
+      for (const at of group) this.aheadUnran.add(at);
+      // what these call is likely next in turn, after what the methods that ran call
+      this.aheadRoots.unshift(...unit);
+    }
+    return this.stats.ahead < AHEAD_MAX;
+  }
+  /** `m`'s calls: the method each one reaches when that is known (a static or direct call, or a virtual call with one implementation) and a virtual call's implementations */
+  private *calls(m: MethodInfo): Generator<{ t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
+    const dex = m.dex;
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (needsSymbolicSite(this, m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
       const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.cha.targets(decl, mr.name, desc);
-      const t = targets ? targets.length === 1 ? targets[0] : undefined : this.prog.resolve(decl, mr.name, desc);
+      yield { t: targets ? targets.length === 1 ? targets[0] : undefined : this.prog.resolve(decl, mr.name, desc), targets, decl, name: mr.name, desc };
+    }
+  }
+  /** Direct callees followed by guarded implementations, preserving their planning order. */
+  private callees(m: MethodInfo): MethodInfo[] {
+    const direct: MethodInfo[] = [], guarded: MethodInfo[] = [];
+    for (const { t, targets, decl, name, desc } of this.calls(m)) {
       if (t && t !== m && this.inlinable(t) && !direct.includes(t)) direct.push(t);
       if (!targets) continue;
-      const key = `${decl}.${mr.name}${desc}`;
+      const key = `${decl}.${name}${desc}`;
       let choices = this.plan.get(key);
-      if (!choices) this.plan.set(key, choices = targets.length > 1 ? this.likely(decl, mr.name, desc) : []);
+      if (!choices) this.plan.set(key, choices = targets.length > 1 ? this.likely(decl, name, desc) : []);
       for (const choice of choices) if (!guarded.includes(choice)) guarded.push(choice);
     }
     return direct.concat(guarded);

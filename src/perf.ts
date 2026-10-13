@@ -25,10 +25,10 @@ export const perf = {
   // constructs the compiler has no translation for, which compiled code reached, natives that answered a Promise from a plain import (nativeSuspended: each
   // is a native to classify as suspending, suspend.ts), calls the engine refused to suspend
   wasmEntries: 0, wasmFacadeMisses: 0, wasmGaps: 0, wasmNativeSuspended: 0, wasmSuspendErrors: 0,
-  // the World's work (host/stats.ts bindWorld): methods compiled on demand and the time that took (compiler), modules built and instantiated and their time, platform and
-  // app build modules loaded and missed, classes linked, stack switches, and natives called (Java to host)
+  // the World's work (host/stats.ts bindWorld): methods compiled (on demand, or ahead in idle time: wasmAhead) and the time that took (compiler), modules built and
+  // instantiated and their time, platform and app build modules loaded and missed, classes linked, stack switches, and natives called (Java to host)
   wasmMethods: 0, wasmCompileMs: 0, wasmModules: 0, wasmModuleMs: 0, wasmBytes: 0, wasmAotLoaded: 0, wasmAotMissed: 0, wasmAotMs: 0, wasmClasses: 0, wasmSuspensions: 0, wasmCrossings: 0,
-  wasmUpgrades: 0,
+  wasmUpgrades: 0, wasmAhead: 0,
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,
   bootMs: 0,
 };

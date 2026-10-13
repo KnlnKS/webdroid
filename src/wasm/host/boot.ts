@@ -15,7 +15,7 @@ import { packedArchives } from "../../shell/packedarchive";
 import { Program } from "../compiler/program";
 import { fetchPlatformJars, jarDexes } from "../../android/framework";
 import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance";
-import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop } from "../../jvm/yield";
+import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput } from "../../jvm/yield";
 import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
 import { externs, intrinsics } from "../link/intrinsics";
@@ -50,6 +50,9 @@ declare global {
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
 const START_MS = 15_000;
+/** a slice of idle time spent compiling ahead (World.ahead): an input that arrives meanwhile waits no longer than this */
+const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
+let aheading = false;
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
 const hostLoop: HostLoop = {
@@ -144,6 +147,17 @@ export async function bootWasmTier(): Promise<TierBackend> {
       world?.addDexes([dex]);
     },
     launched,
+    async ahead(idle) {
+      // a launch from a saved build has the code that earlier launches ran: what it lacks is compiled as it runs, without the garbage of compiling more
+      if (aheading || starting || !world || !appDexes.length || code?.hit) return;
+      // a failure leaves it off for the rest of the process: the code is compiled on demand as before
+      aheading = true;
+      // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and not
+      // while the app may still be answering an input
+      const quiet = () => idle() && !yieldStats.pending() && sinceInput() > AHEAD_AFTER_INPUT_MS;
+      try { while (quiet() && world.ahead(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
+      catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
+    },
     async warm(stop) {
       // a build without the list (or the guarded build) leaves the platform's code to its first calls
       const list = await store?.fetchBytes("warm.json").catch(() => undefined);

@@ -454,6 +454,11 @@ export class AotRuntime {
     return false;
   }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
+  /** whether a code module of the build holds `slot`'s class, which its first call loads */
+  holds(slot: number): boolean {
+    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    return c >= 0 && this.cState[c] !== DEAD;
+  }
   /** whether the attached app build has `slot`'s code loaded */
   fromAppBuild(slot: number): boolean {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
