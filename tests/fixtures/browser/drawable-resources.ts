@@ -1,10 +1,9 @@
 import "../../../src/natives";
-import { loadFramework, loadPlatformDex } from "../../../src/android/framework";
-import { rt } from "../../../src/jvm/runtime";
+import { loadFramework } from "../../../src/android/framework";
 import { vcall, newObj, scall } from "../../../src/jvm/natives/jentry";
 import { canvasOver } from "../../../src/android/canvas";
 import { edges } from "../../../src/android/graphics";
-import { mountPlatformData } from "../../../src/shell/apex";
+import { bootPlatform } from "./boot";
 import { initDeviceLocales } from "../../../src/android/resnative";
 import { applyDeviceConfiguration } from "../../../src/android/resources";
 
@@ -13,9 +12,7 @@ const D = "Landroid/graphics/drawable/Drawable;", THEME = "Landroid/content/res/
 
 /** framework drawables through the system Resources under Theme.Material, drawn as the view stack draws them */
 async function probe() {
-  mountPlatformData();
-  await Promise.all([loadFramework(), loadPlatformDex()]);
-  rt.linkNatives();
+  await Promise.all([loadFramework(), bootPlatform()]);
   // the system Resources as the zygote leaves them: the device's languages and configuration
   await initDeviceLocales();
   await applyDeviceConfiguration();

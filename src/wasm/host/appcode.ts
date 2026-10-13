@@ -1,4 +1,4 @@
-// The app's compiled code before a launch (the counterpart of what src/shell/device.ts does with src/jvm/codecache.ts and aot.ts on the JS tier): a build saved by an earlier launch is
+// The app's compiled code before a launch: a build saved by an earlier launch is
 // loaded, and a launch without one has a worker compile the methods the app is likely to run for the next launch to find, once the launch is under way (`watch`) and its loader's
 // shared libraries, which the build resolves through, are bound. A launch also notes what its World compiled and built on demand despite the build, and once that has settled a
 // worker makes the build again with it, so the launches after the next find it too. A compile worker for the

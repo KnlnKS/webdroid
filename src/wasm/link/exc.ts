@@ -4,7 +4,7 @@ import { Code, OP } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 
-/** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT: the JS tier throws OutOfMemoryError past it too */
+/** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT, which natives throw OutOfMemoryError past too */
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
@@ -74,7 +74,7 @@ const dotted = (n: string) => n.replace(/\//g, ".");
 const PRETTY: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double" };
 /** a class name as java.lang.Class.getTypeName prints it */
 const pretty = (n: string): string => n[0] === "#" ? PRETTY[n[1]] : n[0] !== "[" ? dotted(n) : pretty(n[1] === "[" ? n.slice(1) : n[1] === "L" ? n.slice(2, -1) : PRETTY[n[1]]) + "[]";
-/** The message ART and the JS tier give the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
+/** The message ART gives the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
 export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string, linkMessage: (id: number) => string): string | null {
   switch (kind) {
     case SLOT.aioobe: return `length=${b}; index=${a}`;

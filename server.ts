@@ -5,7 +5,6 @@ import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/pr
 import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
-import { buildId } from "./scripts/build-id";
 import { aotFile, aotManifest } from "./scripts/wasm/aot-serve";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
@@ -83,34 +82,13 @@ function stampOf(...globs: string[]): number {
   for (const glob of globs) for (const f of new Bun.Glob(glob).scanSync()) stamp = Math.max(stamp, Bun.file(f).lastModified);
   return stamp;
 }
-/** scripts/build-id.ts, recomputed when a source file has changed since */
-let build: { stamp: number; id: Promise<string> } | null = null;
-async function buildIdResponse(): Promise<Response> {
-  const stamp = stampOf("src/**/*.ts");
-  if (build?.stamp !== stamp) build = { stamp, id: buildId() };
-  return new Response(await build.id, { headers: { "content-type": "text/plain", "cache-control": "no-cache" } });
-}
-
-/** a compile worker (src/jvm/compileworker.ts, src/wasm/host/compile-worker.ts) bundled for the page, rebuilt when a source file has changed since */
+/** a worker (src/wasm/host/compile-worker.ts, src/process-worker.ts) bundled for the page, rebuilt when a source file has changed since */
 const workerBuilds = new Map<string, { stamp: number; code: Promise<string> }>();
 async function compileWorker(entry: string): Promise<Response> {
   const stamp = stampOf("src/**/*.ts");
   let build = workerBuilds.get(entry);
   if (build?.stamp !== stamp) workerBuilds.set(entry, build = { stamp, code: Bun.build({ entrypoints: [entry], target: "browser" }).then((r) => r.outputs[0].text()) });
   return new Response(await build.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
-}
-
-/** scripts/link-table.ts for a bytecode switch, rerun when a source file or platform jar has changed */
-const linkTables = new Map<string, { stamp: number; json: Promise<string> }>();
-async function linkTable(req: Request): Promise<Response> {
-  const bytecode = new URL(req.url).searchParams.get("bytecode") ?? "";
-  const stamp = stampOf("src/**/*.ts", "vendor/aosp/*.jar");
-  let entry = linkTables.get(bytecode);
-  if (entry?.stamp !== stamp) {
-    const run = Bun.spawn(["bun", "scripts/link-table.ts", bytecode], { stdout: "pipe", stderr: "inherit" });
-    linkTables.set(bytecode, entry = { stamp, json: new Response(run.stdout).text() });
-  }
-  return new Response(await entry.json, { headers: { "content-type": "application/json", "cache-control": "no-cache" } });
 }
 
 const server: Bun.Server<SocketData> = Bun.serve({
@@ -127,11 +105,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
       // a browser resolves every *.localhost name to this loopback server, each its own site
       return Response.json(`${url.protocol}//*.localhost:${url.port}`);
     },
-    "/compile-worker.js": () => compileWorker("src/jvm/compileworker.ts"),
     "/wasm-compile-worker.js": () => compileWorker("src/wasm/host/compile-worker.ts"),
     "/process-worker.js": () => compileWorker("src/process-worker.ts"),
-    "/link-table.json": linkTable,
-    "/build-id": buildIdResponse,
     "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),
       { headers: { "content-type": "application/json" } }),
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),

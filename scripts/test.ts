@@ -31,7 +31,7 @@ async function run(file: string, i: number): Promise<{ pass: number; fail: numbe
   const command = await bundleForNode(entry, [], [alias]).catch((e: Error) => e);
   if (command instanceof Error) return { pass: 0, fail: 1, out: command.message };
   const [node, ...flags] = command, bundle = flags.pop()!, nodeshim = flags.pop()!;
-  const p = Bun.spawn([node, ...flags, "--test-reporter=spec", "--import", nodeshim, bundle], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, WEBDROID_TIER: "wasm" }, timeout: FILE_TIMEOUT_MS });
+  const p = Bun.spawn([node, ...flags, "--test-reporter=spec", "--import", nodeshim, bundle], { cwd: root, stdout: "pipe", stderr: "pipe", timeout: FILE_TIMEOUT_MS });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   removeBundle(command);
   const count = (k: string) => Number(new RegExp(`^ℹ ${k} (\\d+)`, "m").exec(out)?.[1] ?? 0);

@@ -1,6 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, scall, implement } from "../../../src/jvm/natives/jentry";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, scall, classNameOf } from "../../../src/jvm/natives/jentry";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
@@ -14,9 +14,8 @@ import { pixelStore } from "../../../src/native/gles3-pixels";
 import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../../src/native/host";
 import { allocateDirectNow, bufferBytes, directReady, nativeOrder } from "../../../src/jvm/natives/jnio";
-import { loadPlatformDex } from "../../../src/android/framework";
+import { bootPlatform, listener } from "./boot";
 import { startMainLooper } from "../../../src/android/mainloop";
-import { mountPlatformData } from "../../../src/shell/apex";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
@@ -116,13 +115,13 @@ async function clientArrays() {
   const vertices = nativeOrder(allocateDirectNow(24)), indices = nativeOrder(allocateDirectNow(12));
   const f32 = (b: typeof vertices) => { const bytes = bufferBytes(b); return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2); };
   new Uint32Array(f32(indices).buffer, f32(indices).byteOffset, 3).set([0, 1, 2]);
-  call("glEnableVertexAttribArray", "(I)V", 0);
+  await call("glEnableVertexAttribArray", "(I)V", 0);
   const pixels: number[][] = [];
   for (let i = 0; i < 2; i++) {
-    call("glVertexAttribPointer", "(IIIZILjava/nio/Buffer;)V", 0, 2, g.FLOAT, 0, 0, vertices);
+    await call("glVertexAttribPointer", "(IIIZILjava/nio/Buffer;)V", 0, 2, g.FLOAT, 0, 0, vertices);
     f32(vertices).set([-1, -1, 3, -1, -1, 3]);
     g.clear(g.COLOR_BUFFER_BIT);
-    call("glDrawElements", "(IIILjava/nio/Buffer;)V", g.TRIANGLES, 3, g.UNSIGNED_INT, indices);
+    await call("glDrawElements", "(IIILjava/nio/Buffer;)V", g.TRIANGLES, 3, g.UNSIGNED_INT, indices);
     const pixel = new Uint8Array(4); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, pixel); pixels.push([...pixel]);
   }
   const result = { pixels, created, error: g.getError(), unbound: g.getParameter(g.ARRAY_BUFFER_BINDING) === null && g.getParameter(g.ELEMENT_ARRAY_BUFFER_BINDING) === null };
@@ -213,46 +212,44 @@ function externalTexture() {
 }
 
 async function probe() {
-  await loadPlatformDex();
-  mountPlatformData();
-  rt.linkNatives();
+  await bootPlatform();
   await startMainLooper();
   await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
   const c14 = await linkInit("android/opengl/EGL14");
   const call14 = (name: string, desc: string, ...args: unknown[]) => scall("android/opengl/EGL14", name, desc, ...args);
   const E10 = "Ljavax/microedition/khronos/egl/", E14 = "Landroid/opengl/";
-  const display10 = vcall(e10, "eglGetDisplay", "(Ljava/lang/Object;)" + E10 + "EGLDisplay;", null);
-  const context10 = vcall(e10, "eglCreateContext", `(${E10}EGLDisplay;${E10}EGLConfig;${E10}EGLContext;[I)${E10}EGLContext;`, display10, null, null, Int32Array.of(0x3098, 2, 0x3038));
-  const surface10 = vcall(e10, "eglCreatePbufferSurface", `(${E10}EGLDisplay;${E10}EGLConfig;[I)${E10}EGLSurface;`, display10, null, Int32Array.of(0x3057, 4, 0x3056, 4, 0x3038));
+  const display10 = await vcall(e10, "eglGetDisplay", "(Ljava/lang/Object;)" + E10 + "EGLDisplay;", null);
+  const context10 = await vcall(e10, "eglCreateContext", `(${E10}EGLDisplay;${E10}EGLConfig;${E10}EGLContext;[I)${E10}EGLContext;`, display10, null, null, Int32Array.of(0x3098, 2, 0x3038));
+  const surface10 = await vcall(e10, "eglCreatePbufferSurface", `(${E10}EGLDisplay;${E10}EGLConfig;[I)${E10}EGLSurface;`, display10, null, Int32Array.of(0x3057, 4, 0x3056, 4, 0x3038));
   const first = new JThread(), second = new JThread();
   setCurThread(first);
-  const bound10 = vcall(e10, "eglMakeCurrent", `(${E10}EGLDisplay;${E10}EGLSurface;${E10}EGLSurface;${E10}EGLContext;)Z`, display10, surface10, surface10, context10);
-  const interval10 = vcall(rt.make("javax/microedition/khronos/egl/EGL11"), "eglSwapInterval", `(${E10}EGLDisplay;I)Z`, display10, 1);
+  const bound10 = await vcall(e10, "eglMakeCurrent", `(${E10}EGLDisplay;${E10}EGLSurface;${E10}EGLSurface;${E10}EGLContext;)Z`, display10, surface10, surface10, context10);
+  const interval10 = await vcall(rt.make("javax/microedition/khronos/egl/EGL11"), "eglSwapInterval", `(${E10}EGLDisplay;I)Z`, display10, 1);
   const firstGL = gl, firstTables = tables();
   gl?.clearColor(1, 0, 0, 1);
   const suspended = vcall(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
   rt.st(second.root);
   const emptySecond = gl === null && glSurfaces.current === null;
-  const display14 = call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
+  const display14 = await call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
   const configs: unknown[] = [null];
-  call14("eglChooseConfig", `(${E14}EGLDisplay;[II[${E14}EGLConfig;II[II)Z`, display14, null, 0, configs, 0, 1, new Int32Array(1), 0);
+  await call14("eglChooseConfig", `(${E14}EGLDisplay;[II[${E14}EGLConfig;II[II)Z`, display14, null, 0, configs, 0, 1, new Int32Array(1), 0);
   const no14 = c14.static("EGL_NO_CONTEXT");
   if (!no14) throw new Error("EGL14 has no EGL_NO_CONTEXT handle");
-  const context14 = call14("eglCreateContext", `(${E14}EGLDisplay;${E14}EGLConfig;${E14}EGLContext;[II)${E14}EGLContext;`, display14, configs[0], no14, Int32Array.of(0x3098, 2, 0x3038), 0);
-  const surface14 = call14("eglCreatePbufferSurface", `(${E14}EGLDisplay;${E14}EGLConfig;[II)${E14}EGLSurface;`, display14, configs[0], Int32Array.of(0x3057, 2, 0x3056, 2, 0x3038), 0);
-  const bound14 = call14("eglMakeCurrent", `(${E14}EGLDisplay;${E14}EGLSurface;${E14}EGLSurface;${E14}EGLContext;)Z`, display14, surface14, surface14, context14);
+  const context14 = await call14("eglCreateContext", `(${E14}EGLDisplay;${E14}EGLConfig;${E14}EGLContext;[II)${E14}EGLContext;`, display14, configs[0], no14, Int32Array.of(0x3098, 2, 0x3038), 0);
+  const surface14 = await call14("eglCreatePbufferSurface", `(${E14}EGLDisplay;${E14}EGLConfig;[II)${E14}EGLSurface;`, display14, configs[0], Int32Array.of(0x3057, 2, 0x3056, 2, 0x3038), 0);
+  const bound14 = await call14("eglMakeCurrent", `(${E14}EGLDisplay;${E14}EGLSurface;${E14}EGLSurface;${E14}EGLContext;)Z`, display14, surface14, surface14, context14);
   const isolated = gl !== firstGL && tables() !== firstTables;
-  call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 99);
+  await call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 99);
   rt.st(first.root);
-  const firstError = vcall(e10, "eglGetError", "()I");
+  const firstError = await vcall(e10, "eglGetError", "()I");
   const restored = gl === firstGL && tables() === firstTables;
-  const sameContext10 = vcall(e10, "eglGetCurrentContext", "()" + E10 + "EGLContext;") === context10;
+  const sameContext10 = await vcall(e10, "eglGetCurrentContext", "()" + E10 + "EGLContext;") === context10;
   rt.st(second.root);
-  const secondError = call14("eglGetError", "()I");
+  const secondError = await call14("eglGetError", "()I");
   // a Java EGLContext names its native context by handle, a new object per call as JNI makes them
-  const sameContext14 = vcall(call14("eglGetCurrentContext", "()" + E14 + "EGLContext;"), "equals", "(Ljava/lang/Object;)Z", context14) === 1;
-  call14("eglReleaseThread", "()Z");
+  const sameContext14 = await vcall(await call14("eglGetCurrentContext", "()" + E14 + "EGLContext;"), "equals", "(Ljava/lang/Object;)Z", context14) === 1;
+  await call14("eglReleaseThread", "()Z");
   await suspended;
   rt.st(first.root);
   const restoredAfterRelease = gl === firstGL;
@@ -264,9 +261,8 @@ async function probe() {
   const pixel = [...ctx.getImageData(1, 1, 1, 1).data];
   rt.su();
   const mainEmpty = gl === null;
-  const callback = rt.make("java/lang/Object");
-  implement(callback, "run", "()V", () => gl === firstGL);
-  const callbackRestored = vcallOn(first, callback, "run", "()V");
+  let callbackRestored = false;
+  await vcallOn(first, listener("java/lang/Runnable", "run", "()V", () => { callbackRestored = gl === firstGL; }), "run", "()V");
   setCurThread(mainThread);
   return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
@@ -323,27 +319,27 @@ async function surfaceTexture() {
     g.bindFramebuffer(g.FRAMEBUFFER, null); g.deleteFramebuffer(fbo);
     return [...px];
   };
-  const thrown = (f: () => unknown) => { try { f(); return "ok"; } catch (e) { return Reflect.get(e as object, "constructor").$i.name; } };
+  const thrown = async (f: () => unknown) => { try { await f(); return "ok"; } catch (e) { return classNameOf(e); } };
   a.makeCurrent(pbuffer());
   const name = put(tables().textures, gl!.createTexture());
   const st = await newObj("android/graphics/SurfaceTexture", "(I)V", name), matrix = new Float32Array(16);
   const red = new OffscreenCanvas(1, 1), g2 = red.getContext("2d")!;
   g2.fillStyle = "red"; g2.fillRect(0, 0, 1, 1);
   presentSurface(surfaceTextureOf(st)!.surface, red.transferToImageBitmap());
-  vcall(st, "updateTexImage", "()V");
-  vcall(st, "getTransformMatrix", "([F)V", matrix);
-  const latched = { matrix: [...matrix], stamped: vcall(st, "getTimestamp", "()J") > 0n, texel: texel(name) };
+  await vcall(st, "updateTexImage", "()V");
+  await vcall(st, "getTransformMatrix", "([F)V", matrix);
+  const latched = { matrix: [...matrix], stamped: await vcall(st, "getTimestamp", "()J") > 0n, texel: texel(name) };
   b.makeCurrent(pbuffer());
-  const otherContext = thrown(() => vcall(st, "updateTexImage", "()V"));
+  const otherContext = await thrown(() => vcall(st, "updateTexImage", "()V"));
   a.makeCurrent(pbuffer());
-  vcall(st, "detachFromGLContext", "()V");
+  await vcall(st, "detachFromGLContext", "()V");
   const deleted = tables().textures[name] === null;
   b.makeCurrent(pbuffer());
   const moved = put(tables().textures, gl!.createTexture());
-  vcall(st, "attachToGLContext", "(I)V", moved);
+  await vcall(st, "attachToGLContext", "(I)V", moved);
   const attached = texel(moved);
-  vcall(st, "release", "()V");
-  const released = [vcall(st, "isReleased", "()Z"), thrown(() => vcall(st, "updateTexImage", "()V"))];
+  await vcall(st, "release", "()V");
+  const released = [await vcall(st, "isReleased", "()Z"), await thrown(() => vcall(st, "updateTexImage", "()V"))];
   b.makeCurrent(null);
   return { latched, otherContext, deleted, attached, released };
 }

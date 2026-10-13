@@ -6,7 +6,8 @@
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { ACC, rt } from "../src/jvm/runtime";
+import { rt } from "../src/jvm/runtime";
+import { ACC } from "../src/jvm/dex";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef } from "../src/jvm/dex";
 import { prepareMethod } from "../src/jvm/prepared";

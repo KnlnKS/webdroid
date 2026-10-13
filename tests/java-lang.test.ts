@@ -9,7 +9,6 @@ import { loadDex } from "../src/jvm/tier";
 import { scall, thrown, loadLibcore, mountApexData } from "./java";
 import { detached } from "../src/jvm/natives/jthrowable";
 
-rt.linkNatives();
 await loadLibcore();
 await mountApexData();
 
@@ -361,7 +360,7 @@ describe("string-trim", () => {
 
 describe("invoke-polymorphic-custom", () => {
   test("VarHandles, method handles and record methods", async () => {
-    loadDex(rt, new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/InvokeProbe.dex"))), true);
+    loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/InvokeProbe.dex"))), true);
     const missing = rt.missing.size, call = (name: string) => scall("InvokeProbe", name, "()Ljava/lang/String;");
     expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
     expect(await call("methodHandles")).toBe("103,107,n7");

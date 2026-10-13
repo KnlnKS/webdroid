@@ -2,7 +2,7 @@ import { compilerJob, compilerInput, postCompilerReceipt, invalidateCompilerRece
 import { beginCompile, endCompile, measureCompile, compilerReceiptsEnabled } from "../../jvm/compiler-observer";
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
-// per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run (src/jvm/compileworker.ts picks them the same way).
+// per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run.
 import { Program, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program";
 import { defineProxy, type ProxyDefinition } from "../link/proxy";
 import { World } from "../link/world";

@@ -15,10 +15,10 @@ describe("webfragment", () => {
     visited: (() => void | Promise<void>) | null = null;
     provider: WebViewChromium | null = null;
   }
-  /** a WebView's provider, its view a stand-in: these exercise the provider's navigation alone */
+  /** a WebView's provider without its view: these exercise the provider's navigation alone */
   const webView = async (client: FragmentClient | null = null) => {
     const p = rt.make("webdroid/WebViewProvider") as WebViewChromium;
-    p.view = new JObj(); p.settings = rt.make("webdroid/WebSettings");
+    p.view = null as never; p.settings = rt.make("webdroid/WebSettings");
     p.client = client ?? await newObj("android/webkit/WebViewClient");
     if (client) client.provider = p;
     return p;
@@ -34,7 +34,6 @@ describe("webfragment", () => {
       "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V": function (this: FragmentClient) { this.events.push(["commit"]); },
     },
   });
-  rt.linkNatives();
 
   test("fragment navigation updates the URL and finishes without starting or committing a document", async () => {
     const client = new FragmentClient(), view = await webView(client);
@@ -84,11 +83,10 @@ describe("webview-keys", () => {
   rt.register({ name: "test/WebAccess", ctor: Access, methods: {
     "super_dispatchKeyEvent(Landroid/view/KeyEvent;)Z": function (this: Access, event: unknown) { this.events.push(event); return 1; },
   } });
-  rt.linkNatives();
 
   test("WebView keys the client claims, and keys the page cannot take, go through View's dispatch", async () => {
     const view = rt.make("webdroid/WebViewProvider") as WebViewChromium, client = new KeyClient(), access = new Access();
-    view.view = new JObj(); view.access = access; view.client = await newObj("android/webkit/WebViewClient");
+    view.view = null as never; view.access = access; view.client = await newObj("android/webkit/WebViewClient");
     const back = await newObj("android/view/KeyEvent", "(II)V", 0, 4);
     const escape = await newObj("android/view/KeyEvent", "(II)V", 1, 111);
     expect(await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", back)).toBe(1);

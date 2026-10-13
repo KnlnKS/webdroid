@@ -13,9 +13,9 @@
 // so its first match in ICU's search order uses the sentinel exactly when the flag was set.
 
 import { rt, driven, type Gen } from "../runtime";
-import { jarray, mangleField, mangleMethod } from "../abi";
+import { jarray } from "../abi";
 import { javaClassSets } from "../regex-sets";
-import { after, newObj } from "./jentry";
+import { newObj } from "./jentry";
 import { handle, deref, release } from "../../android/handles";
 
 interface Derived { find: RegExp; sticky: RegExp; whole: RegExp }
@@ -590,34 +590,6 @@ const matcherNatives: Record<string, (...args: never[]) => unknown> = {
   "getNativeFinalizer()J": () => FREE,
 };
 rt.registerJnis("com/android/icu/util/regex/MatcherNative", matcherNatives);
-
-// §4.7: Scanner moves its Matcher between a few patterns for every token, and each usePattern
-// opens a MatcherNative (a handle and a registered native allocation). A Matcher keeps the one it
-// opened for each pattern instead. usePattern's resetForInput sets its input, which resets all of
-// a MatcherNative's state, so a kept one answers as a new one would.
-const MATCHER = "java/util/regex/Matcher";
-const MF = Object.fromEntries(["nativeMatcher", "parentPattern", "text", "groups", "matchFound", "modCount"].map((n) => [n, mangleField(MATCHER, n)]));
-const NATIVE_PATTERN = mangleField("java/util/regex/Pattern", "nativePattern");
-const RESET_FOR_INPUT = mangleMethod("resetForInput", "()V"), GROUP_COUNT = mangleMethod("groupCount", "()I");
-const keptMatchers = new WeakMap<object, Map<unknown, unknown>>();
-rt.intrinsic(MATCHER, {
-  "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;": (base) => function (this: Record<string, any>, p: Record<string, any> | null) {
-    if (p === null || this[MF.text] === null) return base.call(this, p);
-    let kept = keptMatchers.get(this);
-    if (!kept) keptMatchers.set(this, kept = new Map());
-    kept.set(this[MF.parentPattern][NATIVE_PATTERN], this[MF.nativeMatcher]);
-    const native = kept.get(p[NATIVE_PATTERN]);
-    if (native === undefined) return base.call(this, p);
-    this[MF.nativeMatcher] = native;
-    this[MF.parentPattern] = p;
-    return after(this[RESET_FOR_INPUT](), () => after(this[GROUP_COUNT](), (n: number) => {
-      this[MF.groups] = new Int32Array((n + 1) * 2);
-      this[MF.matchFound] = 0;
-      this[MF.modCount]++;
-      return this;
-    }));
-  },
-});
 
 function* syntaxError(e: unknown, source: string): Gen<never> {
   throw yield newObj("java/util/regex/PatternSyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", (e as Error).message, source, -1);

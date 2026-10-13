@@ -1,10 +1,10 @@
 // How host code enters Java on the Wasm tier: the Entry that src/jvm/natives/jentry.ts selects with `useEntry`, over one World. A Java object
 // is a facade (bridge.ts) to host code, one per object; a Java exception that leaves a call is thrown as the facade of the throwable, which
-// stands where the JS tier's JThrowable does. A call from host code that no Java frame is under (an event, a Suspending native after its first wait) runs on a new
-// strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise, as on the JS tier. A native that a
+// stands where a native's JThrowable does. A call from host code that no Java frame is under (an event, a Suspending native after its first wait) runs on a new
+// strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime";
-import { JThread, curThread, mainThread, resumeAs, setCurThread } from "../../jvm/natives/jentry";
+import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit } from "../../jvm/natives/jentry";
 import { Strand as HostStrand } from "../../jvm/suspend";
 import { processExited, never } from "../../process-exit";
 import { mangleField } from "../../jvm/abi";
@@ -64,6 +64,7 @@ function makeEntry(w: World): Entry {
     if (!host) { host = new HostStrand(jthreadOf(s.thread)); hostStrands.set(s, host); javaStrands.set(host, s); }
     return host;
   };
+  sched.onThreadEnd = (rec) => threadExit.hook?.(jthreadOf(rec));
   sched.onThread = (_, idle) => { if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(sched.current())); };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
@@ -211,7 +212,7 @@ function makeEntry(w: World): Entry {
       return enter(() => invoke(m, null, args));
     },
     newObj(cls, desc = "()V", ...args) {
-      // a class of natives takes the constructors of its superclass, as the JS tier's object does through its prototype
+      // a class of natives takes the constructors of its superclass
       const c = prog.get(cls), ctor = c?.byKey.get("<init>" + desc) ?? (c && !c.dex ? prog.resolve(cls, "<init>", desc) : undefined);
       if (!ctor) throw missing(`newObj ${cls}.<init>${desc}`);
       return enter(() => chain(alloc(cls), (o) => chain(invoke(ctor, o, args), () => scoped(() => bridge.toHost(o)))));

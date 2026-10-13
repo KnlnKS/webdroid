@@ -33,8 +33,8 @@ class Stream {
     this.capacity = Math.max(config.BufferCapacityInFrames, this.frames * 4);
     this.size = this.capacity;
     this.buffer = mem.malloc(this.frames * track.frameBytes());
-    const thread = new JThread(); thread.jname = "AAudio callback"; thread.alive = 1;
-    this.cpu = new Cpu(thread, thread.jname); this.cpu.nativeRuntime = parent.nativeRuntime;
+    const thread = new JThread(); thread.jname = "AAudio callback";
+    this.cpu = new Cpu(thread, thread.jname);
     this.cpu.lastFrameAt = Infinity;
     bindCpu(thread, this.cpu);
   }
@@ -68,7 +68,7 @@ class Stream {
   async close(): Promise<number> {
     this.change(AAUDIO_STREAM_STATE_CLOSED); this.track.release();
     await this.pumping;
-    this.cpu.jthread.alive = 0; this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
+    this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
   }
   wait(input: number, out: () => number, nanos: bigint): number | Promise<number> {

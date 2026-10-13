@@ -2,14 +2,13 @@ import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import "../src/natives";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
-import { rt, getDeclared } from "../src/jvm/runtime";
+import { getDeclared } from "../src/jvm/runtime";
 import { loadDex } from "../src/jvm/tier";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
 import { nativeParcel } from "../src/android/parcel";
 import { DexFile } from "../src/jvm/dex";
 
-rt.linkNatives();
 
 async function input(bytes: Int8Array) {
   return newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", await newObj("java/io/ByteArrayInputStream", "([B)V", bytes));
@@ -26,7 +25,7 @@ async function encode(value: unknown) {
 
 describe("object-stream-external", () => {
   // on the boot class path, where ObjectInputStream resolves a class when no app code is on the stack
-  loadDex(rt, new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/SerializationProbe.dex"))), true);
+  loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/SerializationProbe.dex"))), true);
   const oracle = "aced00057372001a53657269616c697a6174696f6e50726f6265245061796c6f616400000000000000070c000078707716ffffffffffffffef075bcd150008c080eda0bdedba8071007e00017704000003e77871007e0001";
   const makeValue = () => newObj("SerializationProbe$Value", "(JI)V", -17n, 123456789);
   function checkValue(value: object) {

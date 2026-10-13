@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.*;
 
 /** Threads, monitors, parking and class initialization: static int(int) cases whose answers do not depend on timing (the harness compares the JDK,
- *  the JS tier and the Wasm tier); the natives are bound by scripts/wasm/threads.ts. */
+ *  and the Wasm tier); the natives are bound by scripts/wasm/threads.ts. */
 public class Th {
   static native int admissionIdentity();
   static int linkAdmissionIdentity(int ignored) { return admissionIdentity(); }

@@ -21,10 +21,10 @@
 // bytecode we run and the screenshots we score against come from the same platform build.
 import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
-import { rt } from "../src/jvm/runtime";
-import { constObject, loadJarDexes, mountLocalPlatformData, openDexes, writeGenerated } from "./lib";
+import { constObject, mountLocalPlatformData, openDexes, writeGenerated } from "./lib";
 import "../src/natives";
-import { mangleStaticField } from "../src/jvm/abi";
+import { loadTier } from "../src/jvm/tier";
+import { descToName } from "../src/jvm/abi";
 import { insnLen } from "../src/jvm/opcodes";
 import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "../src/jvm/bootclasspath";
 import { loadPlatformJar } from "../src/android/framework";
@@ -191,9 +191,9 @@ async function recordCharsets() {
  *  Device config keeps the flags a class on the boot class path that reads DeviceConfig or
  *  Settings.Config names, which is what an app process can ask for. */
 async function recordSettings() {
+  await loadTier();
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`${OUT}/${jar}`).arrayBuffer()), i);
   await mountLocalPlatformData();
-  rt.linkNatives();
   const { publicSettings } = await import("../src/android/settings");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
     .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const);
@@ -270,36 +270,30 @@ async function recordInputDevices() {
 }
 
 // --- verify: every id the framework's own R classes name must resolve in the paired table ---
-const jarDexes = await loadJarDexes(JAR);
-// the R classes are dex, but their <clinit> runs on java.* natives
-console.log(`${JAR}: ${jarDexes.length} dex, ${rt.dexIndex.size} classes`);
+const jarDexes = await openDexes(JAR);
+console.log(`${JAR}: ${jarDexes.length} dex, ${jarDexes.reduce((n, d) => n + d.classDefCount, 0)} classes`);
 
 const tableOf = async (apk: string) =>
   new Arsc(unzipSync(new Uint8Array(await Bun.file(apk).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
 const paired = await tableOf(RES);
 
-/** every (name, id) pair the R$<type> classes in the framework dex declare */
-async function rIds(): Promise<Map<string, number>> {
+/** every (name, id) pair the R$<type> classes in the framework dex declare: the ids are constants,
+ *  their static values; styleables are int[] built in <clinit>, and not what a table answers for */
+function rIds(): Map<string, number> {
   const out = new Map<string, number>();
-  for (const name of rt.dexIndex.keys()) {
-    if (!/^(android|com\/android\/internal)\/R\$/.test(name)) continue;
-    const type = name.slice(name.indexOf("$") + 1);
-    const info = rt.link(name);
-    await rt.initClass(info);
-    const ctor = info.ctor as Record<string, unknown>;
-    const { dex, def } = info;
-    if (!dex || !def) continue;
-    for (const sf of def.staticFields) {
-      const f = dex.field(sf.fieldIdx).name;
-      const v = ctor[mangleStaticField(f)];
-      // styleables are int[]; the scalar ids are what a table has to answer for
-      if (typeof v === "number" && v >>> 24 === 0x01) out.set(`${type}/${f}`, v);
-    }
+  for (const dex of jarDexes) for (let i = 0; i < dex.classDefCount; i++) {
+    const def = dex.classDef(i), name = descToName(dex.type(dex.classDef2Type(i)));
+    if (!/^(android|com\/android\/internal)\/R\$/.test(name) || !def.staticValuesOff) continue;
+    const type = name.slice(name.indexOf("$") + 1), values = dex.encodedArray(def.staticValuesOff);
+    def.staticFields.forEach((sf, j) => {
+      const v = values[j];
+      if (typeof v === "number" && v >>> 24 === 0x01) out.set(`${type}/${dex.field(sf.fieldIdx).name}`, v);
+    });
   }
   return out;
 }
 
-const ids = await rIds();
+const ids = rIds();
 // "an entry exists at this id" is not the test — a table whose ids shifted still answers
 // almost every one. The name at the id has to be the name the bytecode compiled against.
 const check = (a: Arsc) => {

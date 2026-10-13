@@ -5,11 +5,11 @@ import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { scall, mountApexData, loadFrameworkJar, thrown } from "./java";
 import { vfs } from "../src/shell/vfs";
+import { jarray } from "../src/jvm/abi";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
 
-rt.linkNatives();
 
 describe("ssl-relay-peer", () => {
   test("a relay-terminated peer presents a chain the relay CA issued, which hostname and trust checks accept", async () => {
@@ -120,7 +120,6 @@ describe("http-stream", () => {
         this.log.push(`put ${await vcall(uri, "toString", "()Ljava/lang/String;")} ${await vcall(cookies, "toString", "()Ljava/lang/String;")}`);
       },
     } });
-    rt.linkNatives();
     const handler = new Handler();
     await viaProxy((request) => {
       const url = new URL(request.url).searchParams.get("url")!, start = url.endsWith("/start");
@@ -257,7 +256,7 @@ describe("localsocket", () => {
     const [a, b] = [await socket(pair[0]), await socket(pair[1])];
     vfs.write("/tmp/passed.txt", Uint8Array.of(42));
     const file = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/passed.txt");
-    const fds = rt.oa(1, "Ljava/io/FileDescriptor;");
+    const fds = jarray(new Array(1).fill(null), "Ljava/io/FileDescriptor;");
     fds[0] = await vcall(file, "getFD", "()Ljava/io/FileDescriptor;");
     await vcall(a, "setFileDescriptorsForSend", "([Ljava/io/FileDescriptor;)V", fds);
     await vcall(await vcall(a, "getOutputStream", "()Ljava/io/OutputStream;"), "write", "(I)V", 7);

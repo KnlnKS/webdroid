@@ -3,7 +3,7 @@ import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
 // compiler <- link <- host: the compiler and the linker run in a page, a worker and node, so only host/ may reach the runtime, the natives and
-// the services; and only src/jvm/tier.ts, by a dynamic import, may reach src/wasm, so the JS tier's bundle carries none of it.
+// the services; and only src/jvm/tier.ts, by a dynamic import, may reach src/wasm, so a page loads the tier while the rest of its code starts.
 const SHARED_FRONT_END = new Set(["abi", "dex", "opcodes", "prepared", "structure", "stack-format", "compiler-observer"]);
 
 test("src/wasm keeps its layers", () => {

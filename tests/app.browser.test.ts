@@ -33,6 +33,8 @@ beforeAll(async () => {
     if (path === "/font-index.json") return new Response(fontIndex, { headers: { "content-type": "application/json" } });
     if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return file(`/node_modules/harfbuzzjs/dist${path}`);
     if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm", { "content-type": "application/wasm" });
+    // no saved platform build: the page compiles what it runs
+    if (path.startsWith("/aot/")) return new Response(null, { status: 404 });
     if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return file(path);
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
@@ -138,9 +140,9 @@ test.concurrent("framework drawables resolve dimensions, tint, enabled states an
   }
 }, PAGE_TIMEOUT);
 
-test.concurrent("drawable spans align suspended virtual drawing and text shadows preserve state", async () => {
+test.concurrent("drawable spans align their drawable and text shadows preserve state", async () => {
   const result = await probe("drawableSpan");
-  for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, loads: 1, draws: 1, aligned: true, restored: true, hierarchy: true });
+  for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, aligned: true, restored: true, hierarchy: true });
   expect(result).toMatchObject({ getters: [1, 10, 2, 0xffff0000 | 0], red: true, shadowRestored: true });
 }, PAGE_TIMEOUT);
 

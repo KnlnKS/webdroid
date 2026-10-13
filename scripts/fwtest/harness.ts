@@ -5,8 +5,8 @@ import { rt, JObj, declaredField } from "../../src/jvm/runtime";
 import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry";
 
 const reached: string[] = [];
-/** how a harness makes dex files known to the Java that runs: the JS tier's, unless the harness gives the World's */
-export const loader = { loadDex: (dex: DexFile) => rt.loadDex(dex) };
+/** how a harness makes dex files known to the Java that runs: the driver gives its World's */
+export const loader = { loadDex: (_dex: DexFile): void => { throw new Error("no World to load into"); } };
 rt.onMissing = (w) => { reached.push(w); };
 
 /** what each exercise reported, for a driver that compares them with its expectations */

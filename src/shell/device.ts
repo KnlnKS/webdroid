@@ -3,7 +3,7 @@
 
 import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
-import { appLaunched, loadAppCode, loadDex, tier, tierReady, warmCode } from "../jvm/tier";
+import { appLaunched, loadAppCode, loadDex, tierReady, warmCode } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -12,8 +12,6 @@ import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
 import { deviceNightMode } from "../android/settings";
-import { loadCode, loadPlatformCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
-import { compileAhead } from "../jvm/aot";
 import { qualify as componentClass } from "../jvm/roots";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
@@ -63,7 +61,7 @@ export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present
 function present(): void {
   if (!screen) return;
   screen(fb.transferToImageBitmap());
-  if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); }
+  if (!perf.presentations++) { mark("firstPresented"); appLaunched(); }
   notePresent();
 }
 
@@ -100,30 +98,20 @@ function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: s
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
 let zygote: Promise<void> | null = null, booting = false;
-/** What a device's zygote holds before it forks an app: the framework package, the boot class
- *  path indexed and the natives linked. It needs no app, so a page starts it while the app
- *  downloads. Natives link after the platform is indexed, never before: a native whose super or
- *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed.
- *  `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
+/** What a device's zygote holds before it forks an app: the framework package and the boot class
+ *  path indexed. It needs no app, so a page starts it while the app downloads. `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
 export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promise<void> {
   return zygote ??= (async () => {
-    // the JS tier's link table and persisted bodies; the Wasm tier links and persists its own code (wasm/host/appcode.ts)
-    const table = tier === "js" ? fetchLinkTable() : null;
-    // persisted platform bodies first: zygoteInit runs platform code, as a device's runs its boot image
-    await Promise.all([loadFramework(), loadPlatformDex(), tier === "js" && loadPlatformCode()]);
-    if (tier === "js") {
-      useLinkTable(await table, rt.linkFingerprint());
-      await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
-    }
+    await Promise.all([loadFramework(), loadPlatformDex()]);
     // the platform code launches use is compiled while the zygote waits, once per tab: a package arriving
     // stops it, and the spare that replaces a Worker taken early (processes.ts launch) goes through it
-    if (warmed && tier === "wasm") {
+    if (warmed) {
       await tierReady();
       if (await warmCode(() => booting)) warmed();
     }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
-    await Promise.all([processBitness, host, tier === "wasm" && tierReady()]);
+    await Promise.all([processBitness, host, tierReady()]);
     await zygoteInit();
   })();
 }
@@ -144,27 +132,21 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     .flatMap((name) => name ? [componentClass(pkg, name)] : []);
   // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
   // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
-  const loadAppDexes = async () => {
-    await inflateTree(zip, isDexEntry);
-    for (const name of dexEntryNames(Object.keys(zip))) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
-    mark("dexLoaded");
-  };
   fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
-  // The Wasm tier's World is the zygote's, and the app code a previous launch saved continues what the zygote numbered (host/appcode.ts): the app's dex files and its code
+  // The World is the zygote's, and the app code a previous launch saved continues what the zygote numbered (host/appcode.ts): the app's dex files and its code
   // join the World once the zygote has run, before any of the app's Java
-  if (tier === "wasm") {
-    await startZygote();
-    await loadAppDexes();
-    await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
-  }
+  await startZygote();
+  await inflateTree(zip, isDexEntry);
+  for (const name of dexEntryNames(Object.keys(zip))) for (const d of dexesIn(zip[name], name)) loadDex(d);
+  mark("dexLoaded");
+  await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   applicationNightOverride = nightOverride(await getPrefs(pkg, "__system_uimode").get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
   await deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
-  const code = tier === "js" ? loadCode(processName ?? pkg) : undefined;
-  await Promise.all([startZygote(), restoreRoots()]);
+  await restoreRoots();
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
@@ -175,10 +157,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     else vfs.mount(apkPath(sp.name), sp.source);
   }
   mark("startZygote"); onStatus("Loading app code…");
-  if (tier === "js") await loadAppDexes();
-  await code;
-  if (tier === "js") compileAhead({ dexes: dexEntryNames(Object.keys(zip)).map((name) => [name, zip[name]]),
-    profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);

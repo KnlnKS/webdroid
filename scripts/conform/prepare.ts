@@ -1,5 +1,5 @@
 // Fetches a suite's jars and test sources and compiles them with ConformRunner to dex under conform-cache/<suite>
-// (cached by runner source content); shared by the JS tier's runner (run.ts) and the Wasm tier's (scripts/wasm/conform.ts).
+// (cached by runner source content), for scripts/wasm/conform.ts.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { SUITES } from "./suites";
@@ -78,7 +78,7 @@ export async function prepare(suiteName: string): Promise<{ suite: (typeof SUITE
       await Bun.write(stamp, runnerSources);
     } finally { rmSync(nextDex, { recursive: true, force: true }); }
   }
-  // the suite's resource roots as a jar, which the Wasm tier's system class loader reads (the JS tier reads the roots, run.ts)
+  // the suite's resource roots as a jar, which the system class loader reads
   if (suite.source?.resources?.length && !existsSync(`${dexDir}/resources.jar`)) {
     const roots = suite.source.resources.flatMap((r) => ["-C", `${CACHE}/src/${suiteName}/${suite.source!.root}/${r}`, "."]);
     run(["jar", "cf", `${dexDir}/resources.jar`, ...roots]);

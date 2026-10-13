@@ -1,38 +1,25 @@
-import { existsSync } from "node:fs";
 import type { DexFile } from "../src/jvm/dex";
 import { dexesFrom } from "./dexes";
 export { dexesOf } from "./dexes";
 import { openInstall } from "../src/shell/install";
-import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
 
 type Zip = Record<string, Uint8Array>;
 
-/** an apk or a split install, as the one merged tree the shell boots — entries materialise on
- *  read, so there is nothing for a caller to filter down to */
 /** the reference build's files (ICU, tz, bionic) at their device paths, read from vendor/aosp */
 export async function mountLocalPlatformData(): Promise<void> {
   const { mountPlatformData } = await import("../src/shell/apex");
   mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()) }));
 }
 
+/** an apk or a split install, as the one merged tree the shell boots — entries materialise on
+ *  read, so there is nothing for a caller to filter down to */
 export async function openApk(path: string): Promise<Zip> {
   return openInstall(new Uint8Array(await Bun.file(path).arrayBuffer())).zip;
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {
   return dexesFrom(new Uint8Array(await Bun.file(path).arrayBuffer()), path);
-}
-
-export async function loadDexes(path: string): Promise<DexFile[]> {
-  const dexes = await openDexes(path);
-  for (const d of dexes) rt.loadDex(d);
-  return dexes;
-}
-
-export async function loadJarDexes(path: string): Promise<DexFile[]> {
-  if (!existsSync(path)) throw new Error(`no ${path} — run \`bun run gen-framework\` with the reference AVD booted`);
-  return loadDexes(path);
 }
 
 export function dumpXml(n: XmlNode, maxDepth = Infinity, depth = 0, out: string[] = []): string[] {

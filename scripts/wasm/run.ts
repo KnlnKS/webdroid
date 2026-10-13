@@ -18,7 +18,7 @@
 //   threads      threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK)
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
 //   conform      the scripts/conform suites against their baselines: conform <suite|quick> [class] [--update]; conform-quick (a few classes of each kind) is in `all`
-//   fwtest       the framework delegates of scripts/fwtest.ts over a World (not part of `all`)
+//   fwtest       the framework delegates of scripts/fwtest/ over a World (not part of `all`)
 //   desccheck    the registered descriptors against the baseline, and every intrinsic's key against the platform's methods
 //   g1           the jbench workloads timed in node and headless Chrome (not part of `all`); g1startup writes the startup list of a build made with the G1 dex as its app
 //   boot-probe   a headless Chrome page starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
@@ -84,7 +84,7 @@ async function runSuite(name: string, args: string[]): Promise<number> {
     }
     return status;
   }
-  if (name === "entry") return (await exec(name, args, process.env)) || exec("entrytier", [], { ...process.env, WEBDROID_TIER: "wasm" });
+  if (name === "entry") return (await exec(name, args, process.env)) || exec("entrytier", [], process.env);
   if (name === "hostclass" && !process.env.WEBDROID_AOT && await exec(name, args, process.env)) return 1;
   if ((name !== "aottest" && name !== "persist" && name !== "hostclass") || process.env.WEBDROID_AOT) return exec(name, args, process.env);
   const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));

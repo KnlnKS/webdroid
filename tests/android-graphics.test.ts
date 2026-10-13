@@ -11,15 +11,13 @@ import { NativeRenderNode } from "../src/android/rendernode";
 import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
 import { Transform } from "../src/android/recording";
 import { rt } from "../src/jvm/runtime";
-import { mangleStaticField } from "../src/jvm/abi";
-import { newObj, linkInit, vcall, iof } from "../src/jvm/natives/jentry";
+import { newObj, linkInit, vcall, iof, staticField } from "../src/jvm/natives/jentry";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java";
 
 beforeAll(loadSystemFonts);
 
 describe("egl14-query-context", () => {
-  rt.linkNatives();
 
   const originalOffscreenCanvas = Object.getOwnPropertyDescriptor(globalThis, "OffscreenCanvas");
   beforeAll(async () => {
@@ -57,7 +55,6 @@ describe("egl14-query-context", () => {
 });
 
 describe("egl10", () => {
-  rt.linkNatives();
   test("EGL10 returns configurations with their declared Java type", async () => {
     const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
     const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
@@ -70,7 +67,7 @@ describe("egl10", () => {
 
   test("EGL11 rejects the no-display handle", async () => {
     const egl = rt.make("javax/microedition/khronos/egl/EGL11");
-    const noDisplay = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_DISPLAY")];
+    const noDisplay = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_DISPLAY");
     const configs = [null], count = new Int32Array([-1]);
     expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", noDisplay, new Int32Array([0x3038]), configs, 1, count)).toBe(0);
     expect([configs[0], count[0]]).toEqual([null, -1]);
@@ -81,7 +78,7 @@ describe("egl10", () => {
 
   test("EGL10 reports its no-context handle until a context is bound", async () => {
     const egl = rt.make("javax/microedition/khronos/egl/EGL10");
-    const none = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_CONTEXT")];
+    const none = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_CONTEXT");
     const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
     expect(none).not.toBeNull();
     expect(iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(true);
@@ -93,7 +90,6 @@ describe("egl10", () => {
 });
 
 describe("canvas-state", () => {
-  rt.linkNatives();
   beforeAll(loadFrameworkJar);
 
   test("canvas root state rejects unmatched restores", async () => {
@@ -111,7 +107,6 @@ describe("canvas-state", () => {
 });
 
 describe("font-metrics", () => {
-  rt.linkNatives();
   const TF = "android/graphics/Typeface";
   /** a Java FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
   const metrics = (fm: object, cls = "FontMetrics") =>
@@ -159,7 +154,6 @@ describe("font-metrics", () => {
 });
 
 describe("lighting-color-filter", () => {
-  rt.linkNatives();
 
   test("lighting filters retain alpha and update an attached paint's RGB transform", async () => {
     const filter = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0xff104020);
@@ -209,7 +203,6 @@ describe("matrix", () => {
     }
   });
 
-  rt.linkNatives();
 
   test("Matrix.set copies independently and null restores identity", async () => {
     const source = await newObj("android/graphics/Matrix", "()V");
@@ -248,7 +241,6 @@ describe("matrix", () => {
 });
 
 describe("matrix-fit", () => {
-  rt.linkNatives();
   const values = async (m: unknown) => { const v = new Float32Array(9); await vcall(m, "getValues", "([F)V", v); return [...v]; };
   const fit = async (name: string) => (await linkInit("android/graphics/Matrix$ScaleToFit")).static(name);
   const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/RectF", "(FFFF)V", l, t, r, b);
@@ -277,7 +269,6 @@ describe("matrix-fit", () => {
 });
 
 describe("path-copy", () => {
-  rt.linkNatives();
   const fillType = async (name: string) => (await linkInit("android/graphics/Path$FillType")).static(name);
 
   test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
@@ -370,7 +361,6 @@ describe("recorded-transform", () => {
 });
 
 describe("typed-array-font", () => {
-  rt.linkNatives();
 
   test("Resources resolve referenced font resources", async () => {
     const bytes = new Uint8Array(await Bun.file("apks/Resy.apk").arrayBuffer());

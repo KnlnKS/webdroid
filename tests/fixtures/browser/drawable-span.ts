@@ -1,8 +1,8 @@
 import "../../../src/natives";
-import { implement, newObj, vcall, iof } from "../../../src/jvm/natives/jentry";
+import { newObj, vcall, iof } from "../../../src/jvm/natives/jentry";
 import { newPaint, setFontMetrics } from "../../../src/android/paint";
 import { declaredField } from "../../../src/jvm/runtime";
-import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
+import { canvasOver } from "../../../src/android/canvas";
 import { bootWithFonts } from "./boot";
 
 async function probe() {
@@ -16,11 +16,6 @@ async function probe() {
     const drawable = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff00ff00);
     await vcall(drawable, "setBounds", "(IIII)V", 2, 3, 14, 17);
     const span = await newObj("android/text/style/ImageSpan", "(Landroid/graphics/drawable/Drawable;I)V", drawable, alignment);
-    let loads = 0, draws = 0;
-    implement(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;", async () => { loads++; await Promise.resolve(); return drawable; });
-    implement(drawable, "draw", "(Landroid/graphics/Canvas;)V", async (canvas: JavaCanvas) => {
-      await Promise.resolve(); draws++; canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(2, 3, 12, 14);
-    });
     const metrics = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
     setFontMetrics(metrics, true, 0, 0, 0, 0, 0);
     const width = await vcall(span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", paint, "x", 0, 1, metrics);
@@ -29,7 +24,7 @@ async function probe() {
     await vcall(span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", await canvasOver(ctx, 60, 70), "x", 0, 1, 5, 10, 40, 50, paint);
     const pixels = ctx.getImageData(0, 0, 60, 70).data;
     const y = alignment === 0 ? 36 : alignment === 1 ? 36 - metric(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "descent") : 26;
-    results.push({ width, fm, loads, draws, aligned: pixels[(y * 60 + 7) * 4 + 1] === 255 && pixels[((y - 1) * 60 + 7) * 4 + 3] === 0,
+    results.push({ width, fm, aligned: pixels[(y * 60 + 7) * 4 + 1] === 255 && pixels[((y - 1) * 60 + 7) * 4 + 3] === 0,
       restored: ctx.getTransform().isIdentity, hierarchy: iof(span, "android/text/style/DynamicDrawableSpan") });
   }
   await vcall(paint, "setShadowLayer", "(FFFI)V", 1, 10, 2, 0xffff0000);

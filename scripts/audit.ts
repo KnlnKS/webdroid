@@ -63,7 +63,6 @@ console.log(`${apk}: ${appClasses} app classes${fwDexes.length ? ` + ${p.size - 
 console.log(`reachable: ${r.methods.size} method bodies, ${r.instantiated.size} instantiated types, ${r.classes.size} classes touched ` +
   `(load ${(t1 - t0).toFixed(0)}ms, closure ${(t2 - t1).toFixed(0)}ms)`);
 
-rt.linkNatives();
 const isFramework = (k: string) => FRAMEWORK_RE.test(k);
 /** a class we already answer for, so it is not work whatever the program says */
 const registeredClass = (k: string) => nativeClassSupport(rt, k.split(".")[0]) !== "missing";

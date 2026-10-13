@@ -1,6 +1,5 @@
 import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os";
 import { appHost } from "../android/apphost";
-import { jvmCoverage } from "../jvm/coverage";
 import { rt } from "../jvm/runtime";
 import { realmWd } from "./realmwd";
 import { processExited } from "../process-exit";
@@ -30,7 +29,7 @@ export function workerControl(logs: string[], phase: () => string) {
       identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
       placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
-      coverage: jvmCoverage.snapshot(), compositor: Reflect.get(local,"compositorStatus") ?? null,
+      compositor: Reflect.get(local,"compositorStatus") ?? null,
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
       yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
       main: { ...mainDbg }, perf: { ...perf },

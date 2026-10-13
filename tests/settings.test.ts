@@ -34,7 +34,6 @@ async function observer(tag: string): Promise<JObj> {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 beforeAll(async () => {
-  rt.linkNatives();
   await install("org.webdroid.test.settings.twin", 35, [], 1);
   await install("org.webdroid.test.settings.other", 35, [], 2);
   app = await bootApp(await install("org.webdroid.test.settings", 35, [], 1));

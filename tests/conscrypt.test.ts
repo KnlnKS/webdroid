@@ -1,10 +1,8 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { rt } from "../src/jvm/runtime";
 import { vcall, newObj } from "../src/jvm/natives/jentry";
 import { scall, mountApexData, thrown } from "./java";
 
-rt.linkNatives();
 const hex = (b: Int8Array) => Buffer.from(b).toString("hex");
 const bytes = (h: string) => new Int8Array(Buffer.from(h, "hex"));
 const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);

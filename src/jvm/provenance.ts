@@ -46,35 +46,18 @@ export function isBytecode(name: string): boolean {
 /** §2: the only classes whose AOSP bytecode bodies a TS spec may stand in for (anywhere else a spec
  *  implements natives only), by exact name or package prefix (ending in `/`), each with why AOSP's
  *  bytecode cannot answer for it. In libcore's namespaces a spec needs an entry even for natives. */
-export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${string}`> = {
-  "java/lang/Object": "vm: object model",
-  "java/lang/Class": "vm: class objects over the JVM's link state",
-  "java/lang/ClassLoader": "vm: defining loaders",
-  "java/lang/String": "vm: Java strings are JS strings",
-  "java/lang/Thread": "vm: threads over cooperative suspension",
-  "java/lang/Throwable": "vm: stack capture from JS frames",
-  "java/lang/System": "vm: arraycopy, clocks, identity hashes and caller-sensitive library loading over libcore's class",
-  "java/lang/StringBuilder": "intrinsic: libcore's appends are 8-15x slower (§4.7, tests/intrinsics.test.ts)",
-  "java/lang/StringBuffer": "intrinsic: as StringBuilder",
-  "java/lang/reflect/": "vm: reflection over the JVM's link state",
-  "java/lang/invoke/": "vm: method handles and var handles",
-  "java/lang/ref/": "vm: references over JS weak references",
-  "jdk/internal/misc/Unsafe": "vm: field and array access",
-  "sun/misc/Unsafe": "vm: field and array access",
-  "dalvik/system/": "vm: dex files, class loaders, VMRuntime and VMStack",
-  "libcore/util/NativeAllocationRegistry": "vm: native allocations released with their owner",
-  "java/net/HttpURLConnection": "boundary: HTTP over the fetch proxy",
-  "android/icu/util/ULocale": "intrinsic: addLikelySubtags over a page-shared decode of langInfo's table, so no realm decodes LikelySubtags.Data (Typeface.<clinit> warm: first realm 88 -> 75 ms, a process realm 61-109 -> 17-21 ms; §4.7, tests/intrinsics.test.ts)",
-  "javax/net/ssl/": "boundary: TLS at the relay",
-  "com/android/okhttp/HttpHandler": "boundary: HTTP over the fetch proxy",
-  "com/android/okhttp/HttpsHandler": "boundary: HTTPS over the fetch proxy",
-  "com/android/org/conscrypt/SSLParametersImpl": "boundary: TLS at the relay",
-  "javax/microedition/khronos/": "boundary: GL over the browser's WebGL",
-  "android/net/ssl/SSLSockets": "boundary: TLS at the relay, whose sockets are not Conscrypt's",
-  "android/webkit/WebViewFactory": "boundary: the WebView provider over the browser",
+export const TS_SPECS: Record<string, string> = {
+  "java/net/HttpURLConnection": "HTTP over the fetch proxy",
+  "javax/net/ssl/": "TLS at the relay",
+  "com/android/okhttp/HttpHandler": "HTTP over the fetch proxy",
+  "com/android/okhttp/HttpsHandler": "HTTPS over the fetch proxy",
+  "com/android/org/conscrypt/SSLParametersImpl": "TLS at the relay",
+  "javax/microedition/khronos/": "GL over the browser's WebGL",
+  "android/net/ssl/SSLSockets": "TLS at the relay, whose sockets are not Conscrypt's",
+  "android/webkit/WebViewFactory": "the WebView provider over the browser",
 };
 
-/** classes of the platform jars that the host implements whole: the JS tier does not load their bytecode, and neither does the Wasm tier run their initializers */
+/** classes of the platform jars that the host implements whole: the Wasm tier does not run their initializers */
 export const hostWhole = (name: string): boolean => name.startsWith("javax/microedition/khronos/");
 
 /** the TS_SPECS key that allows `name`, if any */

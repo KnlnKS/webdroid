@@ -1,4 +1,4 @@
-// Compiled app code persisted across launches (the Wasm tier's counterpart of src/jvm/codecache.ts): the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
+// Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
 import { APP_VERSION, VERSION, DEOPT_ABI, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";

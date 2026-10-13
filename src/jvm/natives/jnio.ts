@@ -1,17 +1,16 @@
 // java.nio's buffers and charset coders are libcore's. This is their native boundary: NativeConverter
 // and CharsetUtils over charset.ts's converters, MappedByteBuffer's natives, and how TS reads a
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
-// read-only mapping or an early non-movable array, jmemory.ts), else a heap buffer's array.
+// read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
+import { rt, JObj, declaredField } from "../runtime";
 import { after, scall, newObj, iof, classNameOf } from "./jentry";
-import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
-import { jarray, mangleField, mangleMethod } from "../abi";
+import { jarray } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, isLive, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes, memoryAt, writeAt } from "./jmemory";
+import { isExternal, isLive, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -159,20 +158,6 @@ function readOnlyMapping(source: FileSource, offset: number, size: number, fd: J
 }
 export const readOnlyBuffer = (bytes: Uint8Array): JBuffer | Promise<JBuffer> => readOnlyMapping(new BytesFile(bytes), 0, bytes.length);
 
-const guestArrays = new FinalizationRegistry<number>((address) => mem.free(address));
-/** VMRuntime.newNonMovableArray's byte[]: guest memory, as ART's non-moving space is the memory
- *  native code sees, so the array and its address are the same bytes. Where the memory is not
- *  shared, committing the native ABI's address space (mem.init) would detach the array, so until
- *  then it is a host array instead. */
-export function nonMovableBytes(n: number): Int8Array {
-  if (!mem.attached()) return hostBytes(n);
-  const address = mem.calloc(1, Math.max(1, n));
-  if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${n} byte allocation in the non-moving space`);
-  const array = new Int8Array(mem.buf, address, n);
-  guestArrays.register(array, address);
-  return array;
-}
-
 rt.registerJnis("java/nio/MappedByteBuffer", {
   "isLoaded0(JJJ)Z": function (address: bigint, length: bigint) { return +(!isExternal(address) || isResident(address, Number(length))); },
   "load0(JJ)V": function (address: bigint, length: bigint) { return isExternal(address) ? pagesIn(address, Number(length)) : undefined; },
@@ -252,149 +237,3 @@ rt.registerJnis("libcore/util/CharsetUtils", {
   },
 });
 
-// §4.7 intrinsics: element access at a position or index of a ByteBuffer and its typed views,
-// the loops GL and media code run per vertex and sample. A direct buffer's address is read once
-// a call as plane 0's Number offset, not through ix's and Memory.peek*'s BigInt arithmetic; one
-// elsewhere over an array (a host array, jmemory.ts) goes through the array as a heap buffer's. An
-// inaccessible buffer, a bounds or read-only failure, an external mapping or another plane's
-// native memory is the AOSP body's. Each is compiled with its fields' own names (intrinsicCompiler).
-const DBB = "java/nio/DirectByteBuffer", HBB = "java/nio/HeapByteBuffer";
-const FIELDS: Record<string, string> = {
-  position: mangleField("java/nio/Buffer", "position"), limit: mangleField("java/nio/Buffer", "limit"), address: mangleField("java/nio/Buffer", "address"),
-  memoryRef: mangleField(DBB, "memoryRef"), isAccessible: mangleField(DBB + "$MemoryRef", "isAccessible"),
-  ...Object.fromEntries(["hb", "offset", "isReadOnly", "bigEndian", "nativeByteOrder"].map((n) => [n, mangleField("java/nio/ByteBuffer", n)])),
-};
-const word = new BigInt64Array(1), words = new Int32Array(word.buffer);
-const scratch = new DataView(new ArrayBuffer(8)), scratchBytes = new Int8Array(scratch.buffer);
-const env = {
-  M: mem, X: scratch, XB: scratchBytes,
-  /** plane 0's offset of a direct buffer's address, else -1 */
-  low: (address: bigint): number => { word[0] = address; return words[1] === 0 ? words[0] >>> 0 : -1; },
-  sw16: (v: number) => (((v & 0xff) << 8) | ((v >>> 8) & 0xff)) << 16 >> 16,
-  sw32: (v: number) => ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24),
-  sw64: (v: bigint) => { scratch.setBigInt64(0, v, true); return scratch.getBigInt64(0, false); },
-  f32: (bits: number) => { scratch.setInt32(0, bits, true); return scratch.getFloat32(0, true); },
-  bits32: (v: number) => { scratch.setFloat32(0, v, true); return scratch.getInt32(0, true); },
-  f64: (bits: bigint) => { scratch.setBigInt64(0, bits, true); return scratch.getFloat64(0, true); },
-  bits64: (v: number) => { scratch.setFloat64(0, v, true); return scratch.getBigInt64(0, true); },
-};
-const compile = intrinsicCompiler(FIELDS, env);
-
-/** an element type: its size and descriptor, how a direct buffer loads and stores it at native
- *  address A (byte-swapped when s), and the DataView accessor a heap buffer's bytes go through */
-interface Kind { name: string; d: string; n: number; load: string; store: string; view: string }
-const KINDS: Kind[] = [
-  { name: "Short", d: "S", n: 2, load: "s ? sw16(M.ld16u(A)) : M.ld16s(A)", store: "M.st16(A, s ? sw16(v) : v)", view: "Int16" },
-  { name: "Char", d: "C", n: 2, load: "s ? sw16(M.ld16u(A)) & 0xffff : M.ld16u(A)", store: "M.st16(A, s ? sw16(v) : v)", view: "Uint16" },
-  { name: "Int", d: "I", n: 4, load: "s ? sw32(M.ld32(A)) : M.ld32(A)", store: "M.st32(A, s ? sw32(v) : v)", view: "Int32" },
-  { name: "Long", d: "J", n: 8, load: "s ? sw64(M.ld64(A)) : M.ld64(A)", store: "M.st64(A, s ? sw64(v) : v)", view: "BigInt64" },
-  { name: "Float", d: "F", n: 4, load: "s ? f32(sw32(M.ld32(A))) : M.ldf32(A)", store: "if (s) M.st32(A, sw32(bits32(v))); else M.stf32(A, v)", view: "Float32" },
-  { name: "Double", d: "D", n: 8, load: "s ? f64(sw64(M.ld64(A))) : M.ldf64(A)", store: "if (s) M.st64(A, sw64(bits64(v))); else M.stf64(A, v)", view: "Float64" },
-];
-const BYTE: Kind = { name: "", d: "B", n: 1, load: "M.ld8s(A)", store: "M.st8(A, v)", view: "Int8" };
-
-// the guards, which leave `at`: the element's byte index from the buffer's start
-const GET = (n: number) => `const p = this.$position; if (this.$limit - p < ${n}) return base.call(this); const at = p;`;
-const INDEX = (n: number) => `if (i < 0 || this.$limit - i < ${n}) return base.call(this, i); const at = i;`;
-const PUT = (n: number) => `if (this.$isReadOnly) return base.call(this, v); const p = this.$position; if (this.$limit - p < ${n}) return base.call(this, v); const at = p;`;
-const PUT_INDEX = (n: number) => `if (this.$isReadOnly || i < 0 || this.$limit - i < ${n}) return base.call(this, i, v); const at = i;`;
-/** an element access: a load, or a store followed by `tail` */
-type Op = { store: boolean; tail: string };
-type Access = (k: Kind, params: string, guard: string, op: Op, advance: boolean) => Intrinsic;
-const heapLoad = (k: Kind) => k.n === 1 ? "return hb[I];"
-  : `${Array.from({ length: k.n }, (_, j) => `XB[${j}] = hb[I + ${j}];`).join(" ")} return X.get${k.view}(0, !this.$bigEndian);`;
-const heapStore = (k: Kind) => k.n === 1 ? "hb[I] = v;"
-  : `X.set${k.view}(0, v, !this.$bigEndian); ${Array.from({ length: k.n }, (_, j) => `hb[I + ${j}] = XB[${j}];`).join(" ")}`;
-const heapAccess = (k: Kind, op: Op) => op.store ? heapStore(k) + op.tail : heapLoad(k);
-/** the element at `at` of a buffer's array from its offset */
-const arrayAccess = (k: Kind, params: string, op: Op, advance: boolean) => `
-  const I = this.$offset + at;
-  if (I < 0 || I + ${k.n} > hb.length) return base.call(this${params && ", " + params});
-  ${advance ? `this.$position = p + ${k.n};` : ""}
-  ${heapAccess(k, op)}`;
-/** a direct buffer over a host byte[] (jmemory's hostBytes), given `a` and `hb`: its address is
- *  outside guest memory, and the array holds its bytes */
-const HOST_ARRAY = "a < 0 && hb !== null";
-/** a direct buffer's element at `at`, after `guard`; `advance` moves the position past it */
-const direct: Access = (k, params, guard, op, advance) => compile(params, `
-  if (!this.$memoryRef.$isAccessible) return base.call(this${params && ", " + params});
-  ${guard}
-  const a = low(this.$address);
-  if (a < 0 || a + at < 0 || a + at + ${k.n} > 4294967296) {
-    const hb = this.$hb;
-    if (!(${HOST_ARRAY})) return base.call(this${params && ", " + params});
-    ${arrayAccess(k, params, op, advance)}
-    return;
-  }
-  ${advance ? `this.$position = p + ${k.n};` : ""}
-  const A = a + at, s = !this.$nativeByteOrder;
-  ${op.store ? k.store + ";" + op.tail : `return ${k.load};`}`);
-/** a heap buffer's element at `at` of its array from its offset */
-const heap: Access = (k, params, guard, op, advance) => compile(params, `
-  ${guard}
-  const hb = this.$hb;
-  ${arrayAccess(k, params, op, advance)}`);
-
-const LOAD: Op = { store: false, tail: "" }, PUT_RET: Op = { store: true, tail: " return this;" }, PUT_VOID: Op = { store: true, tail: "" };
-/** `checked`: whether an unchecked store still refuses a read-only buffer (a heap buffer's _put does) */
-function accessors(k: Kind, make: Access, checked: boolean): Record<string, Intrinsic> {
-  const get = "get" + k.name, put = "put" + k.name, ret = "Ljava/nio/ByteBuffer;";
-  const table: Record<string, Intrinsic> = {
-    [`${get}()${k.d}`]: make(k, "", GET(k.n), LOAD, true),
-    [`${get}(I)${k.d}`]: make(k, "i", INDEX(k.n), LOAD, false),
-    [`${put}(${k.d})${ret}`]: make(k, "v", PUT(k.n), PUT_RET, true),
-    [`${put}(I${k.d})${ret}`]: make(k, "i, v", PUT_INDEX(k.n), PUT_RET, false),
-  };
-  if (k !== BYTE) {
-    table[`${get}Unchecked(I)${k.d}`] = make(k, "i", "const at = i;", LOAD, false);
-    table[`${put}Unchecked(I${k.d})V`] = make(k, "i, v", `${checked ? "if (this.$isReadOnly) return base.call(this, i, v); " : ""}const at = i;`, PUT_VOID, false);
-  }
-  return table;
-}
-const directTables = [BYTE, ...KINDS].map((k) => accessors(k, direct, false));
-// DirectByteBuffer's getChar and putChar check their bounds by their own steps; theirs stay AOSP's
-for (const sig of ["getChar()C", "getChar(I)C", "putChar(C)Ljava/nio/ByteBuffer;", "putChar(IC)Ljava/nio/ByteBuffer;"]) delete directTables[2][sig];
-/** a bulk copy between a typed view's `elements` and its direct buffer's bytes: those in guest
- *  memory at a + i, or those of its host array */
-type Copy = { guest: string; host: string };
-// in the buffer's native order
-const bulk = (copy: Copy) => compile("i, array, offset, length", `
-  if (!this.$memoryRef.$isAccessible || !this.$nativeByteOrder || array === null || length <= 0 || offset < 0 || offset > array.length - length)
-    return base.call(this, i, array, offset, length);
-  const a = low(this.$address), size = array.BYTES_PER_ELEMENT, n = length * size, hb = this.$hb;
-  const elements = new Uint8Array(array.buffer, array.byteOffset + offset * size, n);
-  if (a < 0 || a + i < 0 || a + i + n > 4294967296) {
-    const I = this.$offset + i;
-    if (!(${HOST_ARRAY}) || I < 0 || I + n > hb.length) return base.call(this, i, array, offset, length);
-    const bytes = new Uint8Array(hb.buffer, hb.byteOffset + I, n);
-    ${copy.host}
-  } else { ${copy.guest} }`);
-const PUT_BULK: Copy = { guest: "M.write(a + i, elements);", host: "bytes.set(elements);" };
-const GET_BULK: Copy = { guest: "elements.set(M.bytes(a + i, n));", host: "elements.set(bytes);" };
-for (const k of KINDS) Object.assign(directTables[0], { [`putUnchecked(I[${k.d}II)V`]: bulk(PUT_BULK), [`getUnchecked(I[${k.d}II)V`]: bulk(GET_BULK) });
-rt.intrinsic(DBB, Object.assign({}, ...directTables));
-rt.intrinsic(HBB, Object.assign({}, ...[BYTE, ...KINDS].map((k) => accessors(k, heap, true))));
-
-// a typed view's element is its ByteBuffer's, through that buffer's unchecked accessor at the
-// element's byte offset; a read from an external mapping waits for its pages
-for (const k of KINDS) {
-  const view = `java/nio/ByteBufferAs${k.name}Buffer`, ret = `Ljava/nio/${k.name}Buffer;`;
-  const viewCompile = intrinsicCompiler({ ...FIELDS, bb: mangleField(view, "bb"), byteOffset: mangleField(view, "byteOffset"), isReadOnly: mangleField(`java/nio/${k.name}Buffer`, "isReadOnly"),
-    getU: mangleMethod(`get${k.name}Unchecked`, `(I)${k.d}`), putU: mangleMethod(`put${k.name}Unchecked`, `(I${k.d})V`),
-    getA: mangleMethod("getUnchecked", `(I[${k.d}II)V`), putA: mangleMethod("putUnchecked", `(I[${k.d}II)V`) }, env);
-  const bulkGuard = "array === null || offset < 0 || length < 0 || offset > array.length - length || length > this.$limit - this.$position";
-  const ix = `(at << ${Math.log2(k.n)}) + this.$byteOffset`;
-  rt.intrinsic(view, {
-    [`get()${k.d}`]: viewCompile("", `const at = this.$position; if (at >= this.$limit) return base.call(this); this.$position = at + 1;
-      return this.$bb.$getU(${ix});`),
-    [`get(I)${k.d}`]: viewCompile("at", `if (at < 0 || at >= this.$limit) return base.call(this, at); return this.$bb.$getU(${ix});`),
-    [`put(${k.d})${ret}`]: viewCompile("v", `if (this.$isReadOnly) return base.call(this, v); const at = this.$position; if (at >= this.$limit) return base.call(this, v);
-      this.$position = at + 1; this.$bb.$putU(${ix}, v); return this;`),
-    [`put(I${k.d})${ret}`]: viewCompile("at, v", `if (this.$isReadOnly || at < 0 || at >= this.$limit) return base.call(this, at, v); this.$bb.$putU(${ix}, v); return this;`),
-    [`get([${k.d}II)${ret}`]: viewCompile("array, offset, length", `if (${bulkGuard}) return base.call(this, array, offset, length);
-      const at = this.$position, read = this.$bb.$getA(${ix}, array, offset, length); this.$position += length;
-      return read instanceof Promise ? read.then(() => this) : this;`),
-    [`put([${k.d}II)${ret}`]: viewCompile("array, offset, length", `if (this.$isReadOnly || ${bulkGuard}) return base.call(this, array, offset, length);
-      const at = this.$position; this.$bb.$putA(${ix}, array, offset, length); this.$position += length; return this;`),
-  });
-}

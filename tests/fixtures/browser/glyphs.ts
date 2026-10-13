@@ -3,6 +3,7 @@ import { cssFace } from "../../../src/android/cssfonts";
 import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping";
 import { NativePaint } from "../../../src/android/paint";
 import type { Ctx2D } from "../../../src/android/recording";
+import { bootPlatform } from "./boot";
 
 const W = 120, H = 80;
 /** ink box of an alpha channel, and how many pixels are saturated color */
@@ -22,6 +23,7 @@ function scan(ctx: Ctx2D) {
  *  file (ink boxes, and how many pixels one covers and the other does not), and an emoji glyph,
  *  which has no outline, in color */
 export default async function glyphs() {
+  await bootPlatform();
   const bytes = async (file: string) => new Uint8Array(await (await fetch(`/vendor/aosp/system/fonts/${file}`)).arrayBuffer());
   const roboto = NativeFont.of(await bytes("Roboto-Regular.ttf"), 0, 400, false), emoji = NativeFont.of(await bytes("NotoColorEmoji.ttf"), 0, 400, false);
   const families = [new NativeFamily([roboto]), new NativeFamily([emoji], "und-Zsye")];

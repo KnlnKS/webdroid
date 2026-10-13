@@ -20,7 +20,7 @@ export interface HostSpec {
   methods: string[];
   /** the Java-visible instance fields and the host properties that hold them */
   fields: [javaName: string, prop: string][];
-  /** the dex class's own `<clinit>` runs (its statics are the platform's); without it a class the spec implements is initialized as the JS tier does, with none */
+  /** the dex class's own `<clinit>` runs (its statics are the platform's); without it a class the spec implements is initialized with the spec's statics, or none */
   platformClinit?: boolean;
   /** the host values of static fields the class is initialized with, by field name */
   statics?: Record<string, unknown>;
@@ -38,7 +38,7 @@ export interface NativeSource {
   late?(cls: string, key: string): HostFn;
   /** a Java throwable raised by a native, by class and message */
   thrown(e: unknown): { cls: string; msg: string | null; obj?: object; java?: object } | undefined;
-  /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
+  /** the Java class name of an object a native made, if `v` is one: a native result the Bridge copies into the Wasm heap */
   classOf?(v: unknown): string | undefined;
   /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" (or by name alone) */
   stores?(cls: string, run: () => void): Record<string, unknown>;

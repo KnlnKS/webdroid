@@ -1,8 +1,7 @@
-// The registered natives of the production runtime as the Wasm tier's NativeSource.
+// The registered natives (rt.register specs and rt.registerJni functions) as the Wasm tier's NativeSource.
 import { rt, JObj, type NativeSpec } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { mangleMethod, splitSig } from "../../jvm/abi";
-import { TS_SPECS, tsSpecAllowance } from "../../jvm/provenance";
 import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
@@ -14,17 +13,17 @@ const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).fil
 export const lookup = (cls: string, key: string, isStatic: boolean) => {
   const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key], id = cls + "." + key;
   const own = (typeof spec === "function" ? spec : typeof spec === "string" ? owner!.ctor.prototype[spec] : undefined) as HostFn | undefined;
-  // a registered JNI function is tracked already; a spec's placeholder is recorded here, where the JS tier records it as it installs the spec
+  // a registered JNI function is tracked already; a spec's placeholder is recorded here
   return hostNatives.get(id) ?? (own ? rt.trackPlaceholder(id, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined);
 };
 /** the values of natives that read the ICU data asynchronously, resolved once before they run (a native cannot suspend yet) */
 export const settled = new Map<string, unknown>();
-/** the registered classes the host implements: all but those the VM itself is (the Wasm tier runs those as Wasm) and those that stand in for bytecode for speed */
-export const hostSpec = (spec: NativeSpec): HostSpec | null => /^(vm|intrinsic)/.test(TS_SPECS[tsSpecAllowance(spec.name) ?? ""] ?? "") ? null : {
+/** a registered class, which the host implements */
+export const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
-};
-const hostSpecs = (): HostSpec[] => [...rt.natives.values()].flatMap((spec) => hostSpec(spec) ?? []);
+});
+const hostSpecs = (): HostSpec[] => [...rt.natives.values()].map(hostSpec);
 export const nativeSource: NativeSource = {
   hostSpecs,
   find: (cls, key, isStatic, hasBody) => {
@@ -49,7 +48,7 @@ export const nativeSource: NativeSource = {
   thrown: (e) => {
     const java = refOf(e);
     if (java) return { cls: "", msg: null, java };
-    // a JS error escaping a native is the Java throwable the JS tier makes of it (rt.jx): a TypeError on null is a NullPointerException, a typed array too long an OutOfMemoryError.
+    // a JS error escaping a native is the Java throwable rt.jx makes of it: a TypeError on null is a NullPointerException, a typed array too long an OutOfMemoryError.
     // A suspension the engine refused is the harness's to see
     // or a stack overflow, which the World turns into a StackOverflowError at the boundary
     if (e instanceof Error && e.name !== "SuspendError" && !(e instanceof RangeError && e.message.includes("call stack"))) e = rt.jx(e);

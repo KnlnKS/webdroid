@@ -13,7 +13,8 @@ import { AOSP, JAVA, ROOT } from "./paths";
 import { shellIn } from "./tools";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
 import { bootstrapReferences } from "../../src/wasm/link/callsites";
-import { hostBytes, hostAddress, mapExternal, unmapExternal } from "../../src/jvm/natives/jmemory";
+import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory";
+import { mem } from "../../src/native/mem";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe";
 import { decodeInstructions } from "../../src/jvm/prepared";
@@ -295,11 +296,12 @@ for (const tier of [w, cold]) {
       const owner = "java/nio/Buffer", f = cx.prog.resolveField(owner, "address", "J")!;
       c.lget(0).refCast(cx.structFor(owner)).lget(1).structSet(cx.structFor(owner), cx.fieldIndex(owner, f));
     });
-    const bytes = hostBytes(8), view = new DataView(bytes.buffer); view.setInt32(0, 41);
-    setAddress(buffer, hostAddress(bytes)!);
-    if (await tier.entryAsync("Vh", "artViewUpdate", "(Ljava/nio/ByteBuffer;I)I")(buffer, 7) !== 41 || view.getInt32(0) !== 48) throw new Error("mutable external view update must stay atomic");
+    const address = BigInt(mem.va(mem.malloc(8))), view = () => new DataView(memorySync(address, 8).slice().buffer);
+    memorySync(address, 8).set([0, 0, 0, 41]);
+    setAddress(buffer, address);
+    if (await tier.entryAsync("Vh", "artViewUpdate", "(Ljava/nio/ByteBuffer;I)I")(buffer, 7) !== 41 || view().getInt32(0) !== 48) throw new Error("mutable external view update must stay atomic");
     let faults = 0;
-    const mapped = mapExternal({ size: 8, read: async (at, n) => { faults++; return new Uint8Array(bytes.buffer).slice(at, at + n); } }, 0, 8);
+    const mapped = mapExternal({ size: 8, read: async (at, n) => { faults++; return memorySync(address, 8).slice(at, at + n); } }, 0, 8);
     try {
       setAddress(buffer, mapped);
       if (await tier.entryAsync("Vh", "artViewRead", "(Ljava/nio/ByteBuffer;)I")(buffer) !== 48 || faults !== 1) throw new Error("immutable mapped view must retain paged whole-width reads");

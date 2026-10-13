@@ -1,4 +1,4 @@
-// What the harnesses run Java with: the production runtime's natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
+// What the harnesses run Java with: the registered natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
 import { existsSync, openSync, readFileSync, readSync } from "node:fs";
 import "../../src/natives";

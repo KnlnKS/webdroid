@@ -11,9 +11,8 @@ import { javaVM, jniInit, pinnedCount, resolveByExport } from "./jni";
 import { mem } from "./mem";
 import { handle, deref } from "../android/handles";
 
-rt.linkNatives();
-// The members and natives under test are the same Java on both tiers (tests/fixtures/JniProbe.java).
-loadDex(rt, new DexFile(new Uint8Array(await Bun.file(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)).arrayBuffer())));
+// The members and natives under test are tests/fixtures/JniProbe.java.
+loadDex(new DexFile(new Uint8Array(await Bun.file(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)).arrayBuffer())));
 
 const TYPES = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
 /** slots of the JNIEnv function table (jni.h) */
@@ -452,7 +451,7 @@ test("RegisterNatives binds a native after its class has run", async () => {
   } finally { rt.jniResolver = previous; setCurThread(mainThread); }
 });
 
-// A class initializer or a callback that waits parks the Cpu's call chain on a Promise (the JS tier), or the strand that called it (the Wasm tier).
+// A class initializer or a callback that waits parks the strand that called it.
 test("JNI callbacks retain their caller after suspended class initialization", async () => {
   setA64(true); jniInit();
   const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);

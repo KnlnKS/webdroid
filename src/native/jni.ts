@@ -5,7 +5,7 @@
 import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
-import { rt, type Runtime, type Gen } from "../jvm/runtime";
+import { rt, type Gen } from "../jvm/runtime";
 import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8 } from "../jvm/abi";
 import { after, curThread } from "../jvm/natives/jentry";
 import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory";
@@ -50,7 +50,7 @@ function object(h: number, cpu: Cpu | null = cur): unknown {
   if (h & WEAK_BIT) { const w = weaks[h & ~WEAK_BIT]; return (w instanceof WeakRef ? w.deref() : w) ?? null; }
   return locals(cpu!).refs[h] ?? null;
 }
-/** the object behind a reference as native code written against the production runtime (libandroid, bitmap) reads it */
+/** the object behind a reference as the host natives (libandroid, bitmap) read it */
 export const deref = (h: number, cpu: Cpu | null = cur): unknown => vm.host(object(h, cpu));
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
@@ -99,7 +99,7 @@ function fieldId(f: JniField): number {
   return id;
 }
 
-interface Registered { owner: Runtime | null; c: JniClass; cls: string; name: string; sig: string; fn: number; isStatic: boolean; critical: boolean; params: string[]; ret: string; label: string }
+interface Registered { c: JniClass; cls: string; name: string; sig: string; fn: number; isStatic: boolean; critical: boolean; params: string[]; ret: string; label: string }
 export const registered: Registered[] = [];
 
 const classOf = (clsRef: number): JniClass | null => {
@@ -200,13 +200,12 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
 function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Gen<unknown> {
   const { params, ret } = r;
   yield cpu.idleBase();
-  const prevCur = cur, previousRuntime = cpu.nativeRuntime, previousClass = cpu.nativeClass;
-  cpu.nativeRuntime = r.owner ?? rt;
+  const prevCur = cur, previousClass = cpu.nativeClass;
   cpu.nativeClass = r.c;
   cur = cpu;
   if (!r.critical) pushFrame(cpu);
   try {
-    const list: CallArg[] = r.critical ? [] : [envFor(cpu), toRef(r.isStatic ? vm.mirror(r.c, cpu.nativeRuntime) : self)];
+    const list: CallArg[] = r.critical ? [] : [envFor(cpu), toRef(r.isStatic ? vm.mirror(r.c) : self)];
     for (let i = 0; i < params.length; i++) {
       const t = params[i], v = args[i];
       switch (t[0]) {
@@ -239,7 +238,7 @@ function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[
     const exc = cpu.exc;
     if (exc) { cpu.exc = null; throw vm.raise(exc); }
     return out;
-  } finally { if (!r.critical) popFrame(cpu); cpu.nativeRuntime = previousRuntime; cpu.nativeClass = previousClass; cur = prevCur; }
+  } finally { if (!r.critical) popFrame(cpu); cpu.nativeClass = previousClass; cur = prevCur; }
 }
 
 let envTable = 0;
@@ -304,14 +303,13 @@ export function jniInit(): void {
   });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const n = a.str().replace(/\./g, "/");
-    const owner = cpu.nativeRuntime ?? rt;
     const found = (c: JniClass | null): number => {
       if (!c) { pend(cpu, vm.noClass(n)); return 0; }
-      return toRef(vm.mirror(c, owner), cpu);
+      return toRef(vm.mirror(c), cpu);
     };
     const rejected = (e: unknown): number => { failed(cpu, e); return 0; };
     try {
-      const result = vm.resolve ? vm.resolve(n, owner, cpu.nativeClass) : vm.find(n, owner, cpu.nativeClass);
+      const result = vm.resolve ? vm.resolve(n, cpu.nativeClass) : vm.find(n, cpu.nativeClass);
       return result instanceof Promise ? result.then(found).catch(rejected) : found(result);
     } catch (e) { return rejected(e); }
   });
@@ -518,7 +516,7 @@ export function jniInit(): void {
 
 function registerNative(c: JniClass, name: string, sig: string, fn: number): void {
   const { isStatic, critical } = vm.nativeKind(c, name, sig), { params, ret } = parseMethodDesc(sig);
-  const rec: Registered = { owner: vm.owner(c), c, cls: c.name, name, sig, fn, isStatic, critical, params, ret, label: c.name.split("/").pop() + "." + name };
+  const rec: Registered = { c, cls: c.name, name, sig, fn, isStatic, critical, params, ret, label: c.name.split("/").pop() + "." + name };
   registered.push(rec);
   vm.bind(c, name, sig, isStatic, native(rec), params.length);
 }
@@ -528,15 +526,15 @@ const native = (rec: Registered): ((...a: never[]) => unknown) =>
 
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */
 export function resolveByExport(lookup: (sym: string) => number | undefined): void {
-  rt.jniResolver = function (this: Runtime, cls: string, sig: string) {
+  rt.jniResolver = (cls: string, sig: string) => {
     const [name, desc] = splitSig(sig);
     const mangle = (s: string) => s.replace(/_/g, "_1").replace(/;/g, "_2").replace(/\[/g, "_3").replace(/\//g, "_").replace(/[^A-Za-z0-9_]/g, (c) => "_0" + c.charCodeAt(0).toString(16).padStart(4, "0"));
     const short = "Java_" + mangle(vm.binaryName(cls)) + "_" + mangle(name);
     const fn = lookup(short) ?? lookup(short + "__" + mangle(vm.binaryName(desc.slice(1, desc.indexOf(")")))));
     if (fn === undefined) return null;
-    const c = vm.find(cls, this);
+    const c = vm.find(cls);
     if (!c) return null;
     registerNative(c, name, desc, fn);
-    return this.jni.get(cls + "|" + sig) ?? null;
+    return rt.jni.get(cls + "|" + sig) ?? null;
   };
 }

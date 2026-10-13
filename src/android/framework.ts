@@ -37,7 +37,7 @@ export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
  *  Hijrah data from core-oj.jar) */
 export function loadPlatformJar(bytes: Uint8Array, i: number): void {
   mountPlatformJar(bytes, i);
-  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(rt, d, true);
+  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(d, true);
 }
 /** the jar's file and the resources the boot class loader reads from it, without its classes */
 export function mountPlatformJar(bytes: Uint8Array, i: number): void {

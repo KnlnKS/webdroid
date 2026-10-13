@@ -1,4 +1,4 @@
-import { rt, type Runtime, type Gen } from "../jvm/runtime";
+import { rt, type Gen } from "../jvm/runtime";
 import { curThread, mainThread } from "../jvm/natives/jentry";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
@@ -69,7 +69,7 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
 }
 
 /** `caller` is the java.lang.Class whose code loads the library: JNI_OnLoad finds classes through its loader, as ART's loader override has it */
-export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt, caller: unknown = null): Promise<void> {
+export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, caller: unknown = null): Promise<void> {
   if (!NATIVE_ABIS.includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
@@ -83,15 +83,14 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   const cpu = cpuFor(curThread);
   return rt.drive(function* (): Gen<void> {
     yield libcReady(cpu);
-    const mod: Module = yield loadModule(name, bytes, false, owner, cpu);
+    const mod: Module = yield loadModule(name, bytes, false, cpu);
     const onload = mod.exports.get("JNI_OnLoad");
     if (!onload) return;
-    const previous = cpu.nativeRuntime, previousClass = cpu.nativeClass;
-    cpu.nativeRuntime = owner;
+    const previousClass = cpu.nativeClass;
     cpu.nativeClass = caller === null ? null : vm.classOf(caller);
     pushFrame(cpu);
     try { yield cpu.call(onload, [javaVM.addr, 0]); }
-    finally { popFrame(cpu); cpu.nativeRuntime = previous; cpu.nativeClass = previousClass; }
+    finally { popFrame(cpu); cpu.nativeClass = previousClass; }
   }());
 }
 

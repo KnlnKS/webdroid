@@ -5,7 +5,8 @@
 //   bun run desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ACC, rt } from "../src/jvm/runtime";
+import { rt } from "../src/jvm/runtime";
+import { ACC } from "../src/jvm/dex";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef, DexFile } from "../src/jvm/dex";
 import { jarDexes } from "../src/android/framework";

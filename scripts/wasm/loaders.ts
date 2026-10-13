@@ -417,10 +417,10 @@ for (const asynchronous of [false, true]) {
   wasmEntry(layered);
   const jni = wasmJni(layered);
   for (const name of ["Ldr", childClass.name, visible!]) {
-    const owner = jni.find(name, null)!;
+    const owner = jni.find(name)!;
     const expected = p.lookup(p.loaderOf(name), "Shared")!;
-    if (p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;") !== `([L${expected};Ljava/lang/String;)L${expected};` || jni.find("[LShared;", null, owner)?.name !== `[L${expected};`) {
-      failed++; console.log(`FAIL JNI descriptor/array namespace of ${name}: expected=${expected}, descriptor=${p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;")}, array=${jni.find("[LShared;", null, owner)?.name}`);
+    if (p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;") !== `([L${expected};Ljava/lang/String;)L${expected};` || jni.find("[LShared;", owner)?.name !== `[L${expected};`) {
+      failed++; console.log(`FAIL JNI descriptor/array namespace of ${name}: expected=${expected}, descriptor=${p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;")}, array=${jni.find("[LShared;", owner)?.name}`);
     }
   }
   const shared = jni.find(visible!, null)!;

@@ -5,7 +5,7 @@
 //   bun scripts/font-index.ts > font-index.json
 import { runUnderNode } from "./wasm/undernode";
 
-if (process.versions.bun) process.exit(await runUnderNode(import.meta.path, [], { ...process.env, WEBDROID_TIER: "wasm" }));
+if (process.versions.bun) process.exit(await runUnderNode(import.meta.path, []));
 console.log = console.error; // stdout is the index
 await import("../tests/platform");
 const { rt, awaited } = await import("../src/jvm/runtime");

@@ -8,8 +8,7 @@ import { pendingTransitions } from "./android/server/atm";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { newObj, vcall, scall, strictThreadOwnership } from "./jvm/natives/jentry";
-import { threadStates } from "./jvm/natives/jthread";
+import { newObj, vcall, scall } from "./jvm/natives/jentry";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
 import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
@@ -18,9 +17,7 @@ import { drainPointers } from "./shell/pointer-input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { mark, perf, perfReset } from "./perf";
-import { loadTier, tier, wasmThreads } from "./jvm/tier";
-import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
-import { configureJvmCoverage } from "./jvm/coverage";
+import { loadTier, wasmThreads } from "./jvm/tier";
 import { onMain } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
 import { setWebLayer, webViewInfo } from "./android/webframes";
@@ -46,13 +43,7 @@ import { imeActive } from "./android/ime";
 import { systemInputLayer } from "./shell/system-input";
 import { onProcessExit } from "./process-exit";
 
-strictThreadOwnership();
 const params = new URLSearchParams(location.search);
-const hotThreshold = Number(params.get("jvmHotness") ?? DEFAULT_HOT_THRESHOLD);
-if (!JVM_HOT_THRESHOLDS.includes(hotThreshold)) throw new Error(`invalid jvmHotness ${hotThreshold}`);
-configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(params.get("jvmTier")), hotThreshold });
-configureJvmCoverage(params.get("fuzzCoverage") === "1");
-const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
 const back = async () => {
   if (hasFocusedWindow()) { await pressBack(); return; }
@@ -68,11 +59,9 @@ setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
 void fetchPlatformJars();
-if (tier === "wasm") void loadTier().then(() => mark("tierLoaded"), () => {});
+void loadTier().then(() => mark("tierLoaded"), () => {});
 // the next app's process loads its runtime while the page waits for a package to open, as a device's zygote waits forked
 processBroker().prestartWorker();
-// the worker serves persisted compiled code (src/jvm/codecache.ts), so V8 can cache it
-void navigator.serviceWorker?.register("/webview-worker.js").catch(() => {});
 
 if (process.env.NODE_ENV !== "production") {
   mountDiagnostics(document.querySelector<HTMLElement>("#side")!);
@@ -176,7 +165,7 @@ jitStats.on = params.get("jit") !== "0";
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
   ...local,
-  vfs, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0,
+  vfs, perfReset, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0,
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
@@ -260,7 +249,7 @@ const wd = {
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
-  threads: tier === "wasm" ? wasmThreads : threadStates,
+  threads: wasmThreads,
   redraw,
   testFrame: async () => {
     await local.testFrame();

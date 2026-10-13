@@ -23,7 +23,6 @@ rt.register({ name: "webdroid/test/Inline", ctor: class extends JObj {}, ifaces:
   methods: { "execute(Ljava/lang/Runnable;)V": (r: JObj) => vcall(r, "run", "()V") } });
 
 beforeAll(async () => {
-  rt.linkNatives();
   app = await bootApp(await packageRecord(pkg, { target: 34, permissions: ["READ_PHONE_STATE", "ACCESS_WIFI_STATE", "WAKE_LOCK"].map((name) => "android.permission." + name) }));
   phone = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "phone");
   subscriptions = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "telephony_subscription_service");

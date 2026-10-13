@@ -2,7 +2,6 @@
 // (cpu.zig), and the async call driver that runs slices, suspends on host promises, delivers
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
-import type { Runtime } from "../jvm/runtime";
 import type { JniClass } from "./jnivm";
 import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry";
 import { rt } from "../jvm/runtime";
@@ -105,7 +104,6 @@ export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }
 interface LoopTurn { own(): void; release(): void }
 
 export class Cpu {
-  nativeRuntime: Runtime | null = null;
   /** the class declaring the native method this thread is running, whose loader FindClass resolves in */
   nativeClass: JniClass | null = null;
   parent: Cpu | null = null;

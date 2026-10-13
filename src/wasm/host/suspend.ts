@@ -1,4 +1,4 @@
-// Which natives wait, and how they are imported (plan section 4). A native that answers a Promise, is written as a generator that yields
+// Which natives wait, and how they are imported. A native that answers a Promise, is written as a generator that yields
 // Java results (`driven`) or is an async function is a Suspending import: the Wasm stack that called it waits for the Promise and other strands run
 // meanwhile. Every other native is a plain import, since a Suspending import suspends even when its function answers a value (about 50 ns against 4).
 // The rule JSPI imposes is that no JS frame may sit between the `promising` entry of a strand and the import that suspends: a native on the
@@ -115,7 +115,7 @@ let calling: HostContext | null = null;
 /** whether native `fn` answers a Promise on every call, which only a Suspending import can take */
 export const waitsAlways = (fn: HostFn): boolean => fn.constructor === AsyncFunction;
 
-/** the Wasm tier's form of a production native: a generator native runs under an async driver of its own (not Runtime.drive, whose strand bookkeeping is the JS tier's) */
+/** the Wasm tier's form of a registered native: a generator native runs under an async driver of its own, not Runtime.drive */
 export function hostForm(fn: HostFn): HostFn {
   const g = (fn as Native).$g;
   if (!g) return fn;

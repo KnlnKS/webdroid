@@ -68,20 +68,19 @@ export function wasmJni(w: World): JniVm {
   const nest = <T>(f: (s: Strand) => T): T => onNestedStrand(w, f);
 
   const vm: JniVm = {
-    find(name, _owner, from) {
+    find(name, from) {
       // the loader of the class whose native method asks, as ART's FindClass has it; a thread that attached by itself asks the default namespace
       if (!from) return exists(name) ? cls(name) : null;
       if (name[0] === "[") { const key = view(from, name); return exists(key) ? cls(key) : null; }
       const key = prog.lookup(prog.loaderOf(from.name), name);
       return key === undefined ? null : cls(key);
     },
-    resolve(name, _owner, from) {
+    resolve(name, from) {
       return nest(s => {
         const result = w.resolveClass(from ? prog.loaderOf(from.name) : prog.root, name, s);
         return result instanceof Promise ? result.then(cls) : cls(result);
       });
     },
-    owner: () => null,
     // a class key carries the namespace of its loader (program.ts), which is no part of its name
     binaryName: javaName,
     mirror: (c) => mirror(c),

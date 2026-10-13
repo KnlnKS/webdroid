@@ -1,6 +1,6 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { awaited, rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
+import { awaited, rt, JObj, driven, declaredField, type Gen } from "../runtime";
 import { concat } from "../abi";
 import { vcall, after, newObj } from "./jentry";
 import { E, ERRSTR } from "../../native/abi";
@@ -255,12 +255,7 @@ rt.registerJnis("sun/nio/ch/IOUtil", {
 // no thread here blocks in the kernel, so there is none to signal out of a blocking call
 rt.registerJnis("sun/nio/ch/NativeThread", { "current()J": () => 0n, "signal(J)V": () => {} });
 
-// java.io serialization's natives: ObjectStreamClass asks whether a class has a static initializer
-// (the default serialVersionUID hashes it), and the object streams convert float and double
-// arrays to and from big-endian bytes
-const hasClinit = (info: ClassInfo) => info.def
-  ? info.def.directMethods.some((m) => info.dex!.method(m.methodIdx).name === "<clinit>")
-  : !!rt.natives.get(info.name)?.methods?.["<clinit>()V"];
+// java.io serialization's natives: the object streams convert float and double arrays to and from big-endian bytes
 function floatBytes(size: 4 | 8) {
   const view = new DataView(new ArrayBuffer(8));
   return {
@@ -279,11 +274,5 @@ function floatBytes(size: 4 | 8) {
   };
 }
 const F4 = floatBytes(4), F8 = floatBytes(8);
-rt.registerJnis("java/io/ObjectStreamClass", {
-  "hasStaticInitializer(Ljava/lang/Class;Z)Z": (cls: { ci?: ClassInfo }, inherit: number) => {
-    for (let info = cls.ci ?? null; info; info = inherit ? info.superInfo : null) if (hasClinit(info)) return 1;
-    return 0;
-  },
-});
 rt.registerJnis("java/io/ObjectOutputStream", { "floatsToBytes([FI[BII)V": F4.toBytes, "doublesToBytes([DI[BII)V": F8.toBytes });
 rt.registerJnis("java/io/ObjectInputStream", { "bytesToFloats([BI[FII)V": F4.fromBytes, "bytesToDoubles([BI[DII)V": F8.fromBytes });

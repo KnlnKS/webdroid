@@ -9,7 +9,7 @@ import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread } from "../jvm/natives/jentry";
 import { logUncaught, dispatchUncaught } from "../jvm/natives/jthrowable";
-import { threadExit } from "../jvm/natives/jthread";
+import { threadExit } from "../jvm/natives/jentry";
 import { readTs, fail, clockTime, utf8 } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock";
@@ -208,11 +208,9 @@ function semWait(cpu: Cpu, s: { count: number; waiters: (() => void)[] }, ts: nu
 function newThread(parent: Cpu): Cpu {
   const jt = new JThread();
   jt.jname = `pthread-${++threadSeq}`;
-  jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
   cpu.parent = parent;
   cpu.signalMask = parent.signalMask;
-  cpu.nativeRuntime = parent.nativeRuntime;
   bindCpu(jt, cpu);
   return cpu;
 }
@@ -228,7 +226,6 @@ function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<
       cpu.signals.length = 0;
       await cpu.awaitIdleBase();
       cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
-      cpu.jthread.alive = 0;
       exit();
       resolve();
     }

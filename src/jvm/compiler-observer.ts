@@ -1,7 +1,6 @@
 export type CompilePhase =
-  `js.${"decode" | "cfg" | "type" | "coldBuild" | "hotEmit" | "parseBind" | "classLink"}` |
   `wasm.${"prepare" | "flow" | "infer" | "facts" | "emit" | "encode" | "classBuild" | "module" | "instantiate"}` |
-  `residual.${"jsClass" | "jsWorker" | "wasmSetup" | "wasmBuild" | "wasmUpgrade"}`;
+  `residual.${"wasmSetup" | "wasmBuild" | "wasmUpgrade"}`;
 type Span = { phase: CompilePhase; start: number; children: number };
 export type CompileReceipt = { schema: 1; source: string; url: string; bornAt: number; at: number; sequence: number;
   spans: number; elapsedMs: number; phases: Readonly<Partial<Record<CompilePhase, number>>>; open: readonly CompilePhase[]; errors: readonly string[]; dropped: number };
@@ -11,10 +10,6 @@ const stack: Span[] = [], phases: Partial<Record<CompilePhase, number>> = {}, er
 let sequence = 0, spans = 0, elapsedMs = 0, dropped = 0;
 function error(message: string): void { if (errors.length < 8) errors.push(message); else dropped++; }
 export const compilerReceiptsEnabled = enabled;
-export function beginPreparation(phase: "decode" | "cfg" | "type"): Span | null {
-  if (!enabled) return null;
-  return beginCompile(stack.some(s => s.phase.startsWith("wasm.")) ? "wasm.prepare" : `js.${phase}`);
-}
 export function beginCompile(phase: CompilePhase): Span | null {
   if (!enabled) return null;
   if (stack.length === 128) { error("compiler span depth exceeded"); return null; }

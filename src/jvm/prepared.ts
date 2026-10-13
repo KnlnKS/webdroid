@@ -1,4 +1,4 @@
-import { beginPreparation, endCompile } from "./compiler-observer";
+import { beginCompile, endCompile } from "./compiler-observer";
 import { isWide, parseMethodDesc } from "./abi";
 import type { CodeItem, DexFile } from "./dex";
 import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes";
@@ -29,9 +29,6 @@ export interface PreparedMethod {
   /** registers a numeric constant may reach: only these can hold 0 standing for null */
   readonly nullable: ReadonlySet<number>;
 }
-
-export type PreparationPhase = "decode" | "cfg" | "type";
-type PreparationObserver = (phase: PreparationPhase, ms: number) => void;
 
 type MutableInstruction = { -readonly [K in keyof PreparedInstruction]: PreparedInstruction[K] };
 type Defs = Map<number, ReadonlySet<MutableInstruction>>;
@@ -458,16 +455,10 @@ export function prepareMethod(
   code: CodeItem,
   desc: string,
   isStatic: boolean,
-  observe?: PreparationObserver,
 ): PreparedMethod {
-  let span = beginPreparation("decode");
+  const span = beginCompile("wasm.prepare");
   try {
-    let started = observe ? performance.now() : 0;
     const instructions = decodeInstructions(code.insns);
-    if (observe) observe("decode", performance.now() - started);
-
-    started = observe ? performance.now() : 0;
-    endCompile(span); span = beginPreparation("cfg");
     const leaders = new Uint8Array(code.insns.length + 1);
     leaders[0] = 1;
     let end = 0;
@@ -485,15 +476,10 @@ export function prepareMethod(
       for (const [, address] of region.handlers) leaders[address] = 1;
       if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
     }
-    if (observe) observe("cfg", performance.now() - started);
-
-    started = observe ? performance.now() : 0;
-    endCompile(span); span = beginPreparation("type");
     const signature = parseMethodDesc(desc);
     const carriers = constantCarriers(instructions);
     annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
     markSignOnly(dex, code, instructions);
-    if (observe) observe("type", performance.now() - started);
 
     return {
       instructions,

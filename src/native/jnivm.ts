@@ -1,10 +1,6 @@
-// The Java side of JNI, as the tier that runs Java provides it. jni.ts keeps the tables of references and the marshalling between guest words and Java
-// values; every question it asks of a class, an object, a field, a method or an array goes through this interface, so that a reference in a JNI table
-// is whatever the tier holds a Java object as (a JS value on the JS tier, a Wasm reference on the Wasm tier, src/wasm/host/jni.ts) and is never read
-// through the JS tier's object model.
-import type { Runtime } from "../jvm/runtime";
-import { jsVm } from "./jnijs";
-
+// The Java side of JNI, as the World provides it (src/wasm/host/jni.ts). jni.ts keeps the tables of references and the marshalling between guest words and Java
+// values; every question it asks of a class, an object, a field, a method or an array goes through this interface, so a reference in a JNI table is the
+// Wasm reference itself.
 /** a class JNI has found; its jclass is `mirror` */
 export interface JniClass { readonly name: string }
 /** a field JNI has found: `key` names it within `cls`, the class that declares it */
@@ -14,16 +10,14 @@ export interface JniMethod { cls: JniClass; name: string; desc: string; isStatic
 
 export interface JniVm {
   // ---------- classes
-  /** FindClass: the class `name` of the library's loader (`owner`), or of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
-  find(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null;
+  /** FindClass: the class `name` of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
+  find(name: string, from?: JniClass | null): JniClass | null;
   /** Executed FindClass may enter a Java loader and suspend; export binding uses the known-class lookup above. */
-  resolve?(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
-  /** the runtime a class was loaded by, when it is not the default one */
-  owner(c: JniClass): Runtime | null;
+  resolve?(name: string, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
   /** a class name or descriptor in the binary names JNI's short names spell */
   binaryName(name: string): string;
   /** the java.lang.Class of a class */
-  mirror(c: JniClass, owner?: Runtime | null): unknown;
+  mirror(c: JniClass): unknown;
   /** the class a java.lang.Class stands for */
   classOf(mirror: unknown): JniClass | null;
   /** the java.lang.Class of an object's class */
@@ -88,10 +82,10 @@ export interface JniVm {
   newBuffer(address: number | bigint, capacity: number): unknown;
   bufferAddress(o: unknown): bigint | null;
   bufferCapacity(o: unknown): number;
-  /** a Java object as native code written against the production runtime (libandroid, bitmap) reads it */
+  /** a Java object as the host natives (libandroid, bitmap) read it */
   host(o: unknown): unknown;
 }
 
-/** the tier that runs Java: the JS tier's until the Wasm tier installs its own */
-export let vm: JniVm = jsVm;
+/** the World's, which useWorld installs */
+export let vm: JniVm = null!;
 export function useJniVm(next: JniVm): void { vm = next; }

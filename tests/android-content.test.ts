@@ -114,7 +114,6 @@ describe("package-checksums", () => {
     name: "test/ChecksumListener", ctor: ChecksumListener, ifaces: ["android/content/pm/IOnChecksumsReadyListener"],
     methods: { "onChecksumsReady(Ljava/util/List;)V": function (this: ChecksumListener, checksums: unknown) { this.checksums = checksums; } },
   });
-  rt.linkNatives();
 
   test("the package service reports installed APK checksums and signing certificates", async () => {
     const bytes = new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer());
@@ -143,7 +142,6 @@ describe("package-checksums", () => {
 });
 
 describe("package-installer", () => {
-  rt.linkNatives();
 
   test("a session stages what AOSP's Session writes, and abandoning it drops the file", async () => {
     const installer = await vcall(await hostedService("package"), "getPackageInstaller", "()Landroid/content/pm/IPackageInstaller;");
@@ -166,7 +164,6 @@ describe("package-installer", () => {
 });
 
 describe("package-game-info", () => {
-  rt.linkNatives();
 
   test("installed game metadata survives the package service's ApplicationInfo", async () => {
     const pkg = "test.game.info";
@@ -188,7 +185,6 @@ describe("package-game-info", () => {
 });
 
 describe("package-intent-filters", () => {
-  rt.linkNatives();
 
   test("manifest filters resolve through AOSP's IntentFilter, uri-relative groups included", async () => {
     const pkg = "test.filters", a = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
@@ -222,7 +218,6 @@ describe("package-intent-filters", () => {
 });
 
 describe("package-permissions", () => {
-  rt.linkNatives();
   const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
 
   test("PackageInfo aligns requested permission flags with actual package grants", async () => {
@@ -290,7 +285,6 @@ describe("packagearchive", () => {
 
 describe("pending-intents", () => {
 
-  rt.linkNatives();
 
   test("activity-stack pending intents match on the final intent and retain the preceding stack", async () => {
     const explicit = async (cls: string, extra: string) => {
@@ -456,7 +450,6 @@ describe("pending-intents", () => {
 });
 
 describe("resolver-file", () => {
-  rt.linkNatives();
   test("resolver file opens decode paths and reject missing files without creating them", async () => {
     await loadLibcore();
     const resolver = await vcall(await app(), "getContentResolver", "()Landroid/content/ContentResolver;");
@@ -598,7 +591,6 @@ describe("resource-type-id-offset", () => {
 });
 
 describe("resource-value-density", () => {
-  rt.linkNatives();
   test("resource values retain selected density and resolved reference identity", async () => {
     const table = new Arsc(Uint8Array.of(2, 0, 8, 0, 8, 0, 0, 0));
     const config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
@@ -638,7 +630,6 @@ describe("resource-value-density", () => {
 });
 
 describe("service-bind", () => {
-  rt.linkNatives();
 
   test("a failed service binding still requires one unbind", async () => {
     const context = await app(), intent = await newIntent();
@@ -652,7 +643,6 @@ describe("service-bind", () => {
 });
 
 describe("window-context", () => {
-  rt.linkNatives();
 
   test("display and window contexts retain display identity and own their window service", async () => {
     const source = await app(), screen = await defaultDisplay();

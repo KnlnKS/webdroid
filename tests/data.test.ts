@@ -42,7 +42,6 @@ import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from ".
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
 
-rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });

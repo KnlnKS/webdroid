@@ -247,6 +247,8 @@ export class Sched {
   suspensions = 0;
   /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
   onThread: ((t: ThreadRec, idle: boolean) => void) | null = null;
+  /** a Java thread's body has run and it has exited */
+  onThreadEnd: ((t: ThreadRec) => void) | null = null;
   /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
    *  each call, and a thousand of them in one entry would end in StackOverflowError): whether the strand running has made enough entries that a native should return by waiting once */
   owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
@@ -489,6 +491,7 @@ export class Sched {
       }));
       try { await s.call(done, obj); } catch (e) { console.error("[wasm thread exit]", e); }
       s.end();
+      this.onThreadEnd?.(s.thread);
     }
   }
 

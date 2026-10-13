@@ -1,10 +1,8 @@
 // Every native module, in dependency order. The browser shell and scripts/audit.ts import
 // THIS, never their own copy of the list — a drifted copy makes audit report implemented
-// classes as missing. smoke.ts, jsrc.ts and nrun.ts deliberately load a partial list instead:
-// a registered native shadows the dex class, and those three exist to compile or dump the
-// app's own bytecode.
+// classes as missing. nrun.ts deliberately loads a partial list instead: a registered native
+// shadows the dex class, and it exists to run the app's own bytecode.
 import "./jvm/natives/jbox";
-import "./jvm/natives/jfloat";
 import "./jvm/natives/jlang";
 import "./jvm/natives/fdlibm";
 import "./jvm/natives/jcoll";
@@ -12,15 +10,12 @@ import "./jvm/natives/jvalues";
 import "./jvm/natives/jmath";
 import "./jvm/natives/jio";
 import "./jvm/natives/jdex";
-import "./jvm/natives/jsync";
 import "./jvm/natives/jregex";
 import "./jvm/natives/jicu";
 import "./jvm/natives/jexpat";
-import "./jvm/natives/jreflect";
 import "./jvm/natives/junsafe";
 import "./jvm/natives/jvmruntime";
 import "./jvm/natives/jmemory";
-import "./jvm/natives/jinvoke";
 import "./jvm/natives/jnio";
 import "./jvm/natives/conscrypt";
 import "./jvm/natives/conscrypt-x509";

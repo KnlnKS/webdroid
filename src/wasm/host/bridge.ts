@@ -1,9 +1,9 @@
-// The host side of object references that cross the native boundary (plan 3.5). A Java object reaches the host as an opaque value and
+// The host side of object references that cross the native boundary. A Java object reaches the host as an opaque value and
 // is only ever looked into through generated Wasm accessors: the length and elements of an array, and one getter/setter per field. For
-// the duration of a native call a reference becomes the value the production native expects (a typed array copy for a primitive array
+// the duration of a native call a reference becomes the value the native expects (a typed array copy for a primitive array
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
-// through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
+// through, host arrays are allocated in the Wasm heap, and an object a native made (a Struct*) is copied field by field.
 import { failed } from "../compiler/linkage";
 import { demangle, mangleField } from "../../jvm/abi";
 import { rt, JObj } from "../../jvm/runtime";
@@ -29,14 +29,14 @@ const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Flo
 /** the primitive array class whose elements a typed array holds */
 const ARRAY_OF: [Function, string][] = [[Int8Array, "[B"], [Uint8Array, "[Z"], [Uint16Array, "[C"], [Int16Array, "[S"], [Int32Array, "[I"], [BigInt64Array, "[J"], [Float32Array, "[F"], [Float64Array, "[D"]];
 
-/** a field value as the production runtime holds it: floats and doubles are numbers, a long a bigint, a boolean 0 or 1 */
+/** a field value as host code holds it: floats and doubles are numbers, a long a bigint, a boolean 0 or 1 */
 export const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (i32[0] = v as number, f32[0]) : desc === "D" ? (i64[0] = v as bigint, f64[0]) : v;
 export const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32[0] = v as number, i32[0]) : desc === "D" ? (f64[0] = v as number, i64[0])
   : desc === "J" ? BigInt(v as bigint) : desc === "Z" ? +(v as boolean) : v;
 
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
-/** what host code probes any object for (promises, serializers, error reporters, the JS runtime of a class loader: one namespace here), which is no read of a Java field */
+/** what host code probes any object for (promises, serializers, error reporters: one namespace here), which is no read of a Java field */
 const PROBES = new Set(["then", "toJSON", "message", "stack", "jsStack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
@@ -176,7 +176,7 @@ export class Bridge implements HostBridge {
     this.accessors.set(key, fn = op === "get" ? (o: object) => any(o, i) : (o: object, v: unknown) => any(o, i, v));
     return fn;
   }
-  /** a throwable's facade stands where the production runtime's JThrowable does (`instanceof`, `msg`, `cause`) */
+  /** a throwable's facade stands where a native's JThrowable does (`instanceof`, `msg`, `cause`) */
   private facade(o: object, name: string): object {
     const fields = this.fieldsOf(name), bridge = this, throwable = this.w.prog.isSubclass(name, THROWABLE);
     const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : JObj.prototype), {

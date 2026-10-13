@@ -24,7 +24,7 @@ class Monitor {
 }
 
 /** whether `s` holds what `owner` holds: the same strand, a strand that native code of the other entered Java on (the same thread, up the chain of `parent`s), or
- *  one of its thread's other strands when either is the thread's root (host code that enters Java outside any job shares the thread's locks, as in the JS tier) */
+ *  one of its thread's other strands when either is the thread's root (host code that enters Java outside any job shares the thread's locks) */
 export const owns = (owner: Strand | null, s: Strand): boolean => {
   if (owner === s) return true;
   if (owner === null || owner.thread !== s.thread) return false;

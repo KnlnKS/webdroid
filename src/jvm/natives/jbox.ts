@@ -1,8 +1,6 @@
 // java.lang's boxes run from libcore. TS makes and reads them through these helpers, over each
-// class's own `value` field; §4.7 intrinsics box and unbox, and format and parse integers.
-import { mangleField, mangleStaticField, doubleToLongBits, floatToIntBits, intBitsToFloat, longBitsToDouble } from "../abi";
-import { rt, type Intrinsic } from "../runtime";
-import { tier } from "../tier";
+// class's own `value` field.
+import { mangleField } from "../abi";
 import { classNameOf } from "./jentry";
 
 type Obj = Record<string, any>;
@@ -25,160 +23,14 @@ export function unbox(o: unknown): number | bigint | undefined {
   return d === null ? undefined : (o as Obj)[VALUE[d]];
 }
 
-// The small values valueOf shares, from each class's cache once it has initialized (AOSP's
-// valueOf initializes it; before that a box is made fresh, as `new Integer(v)` would make it).
-const CACHE: Partial<Record<BoxDesc, [cls: string, lo: number, hi: number]>> = {
-  I: ["java/lang/Integer$IntegerCache", -128, 127], J: ["java/lang/Long$LongCache", -128, 127],
-  S: ["java/lang/Short$ShortCache", -128, 127], B: ["java/lang/Byte$ByteCache", -128, 127],
-  C: ["java/lang/Character$CharacterCache", 0, 127],
-};
-const CACHE_FIELD = mangleStaticField("cache");
-const caches: Partial<Record<BoxDesc, Obj[]>> = {};
-function cacheOf(desc: BoxDesc): Obj[] | undefined {
-  const known = caches[desc];
-  if (known) return known;
-  const info = rt.link(CACHE[desc]![0]);
-  if (info.state === 2) return caches[desc] = info.ctor[CACHE_FIELD];
-  return undefined;
-}
-const ctors: Partial<Record<BoxDesc, new () => Obj>> = {};
-function ctorOf(desc: BoxDesc): new () => Obj {
-  const known = ctors[desc];
-  if (known) return known;
-  const info = rt.link(CLASS[desc]);
-  rt.ensureCompiled(info);
-  return ctors[desc] = info.ctor;
-}
-let booleans: [Obj, Obj] | null = null;
-/** Boolean.FALSE and TRUE: Boolean's initializer only makes them */
-function booleanValues(): [Obj, Obj] {
-  if (booleans) return booleans;
-  const info = rt.link(CLASS.Z);
-  if (rt.initClass(info)) throw new Error("java.lang.Boolean did not initialize synchronously");
-  return booleans = [info.ctor[mangleStaticField("FALSE")], info.ctor[mangleStaticField("TRUE")]];
-}
-
-/** the Wasm tier's boxes are Java's own, which valueOf makes without suspending (boot.ts) */
+/** Java's own boxes, which valueOf makes without suspending (wasm/host/boot.ts) */
 export const wasmBox = { make: null as ((desc: BoxDesc, v: number | bigint) => unknown) | null };
 /** the box `valueOf(v)` of the `desc` class gives */
 export function box(desc: BoxDesc, v: number | bigint | boolean): Obj {
-  if (tier === "wasm") return wasmBox.make!(desc, typeof v === "boolean" ? +v : v) as Obj;
-  if (desc === "Z") return booleanValues()[v ? 1 : 0];
-  const range = CACHE[desc];
-  if (range && Number(v) >= range[1] && Number(v) <= range[2]) {
-    const cache = cacheOf(desc);
-    if (cache) return cache[Number(v) - range[1]];
-  }
-  const o = new (ctorOf(desc))();
-  o[VALUE[desc]] = v;
-  return o;
+  return wasmBox.make!(desc, typeof v === "boolean" ? +v : v) as Obj;
 }
 export const boxInt = (v: number) => box("I", v);
 export const boxLong = (v: bigint) => box("J", v);
 export const boxFloat = (v: number) => box("F", v);
 export const boxDouble = (v: number) => box("D", v);
 export const boxBool = (v: number | boolean) => box("Z", v);
-/** A primitive read out of an Object-typed slot. A bare JS number has no toString()/hashCode()
- *  for the caller, and the slot lost the declared width, so the value's own shape names it. */
-export function boxObject(v: unknown): unknown {
-  if (typeof v === "number") return Number.isInteger(v) ? boxInt(v) : boxDouble(v);
-  if (typeof v === "bigint") return boxLong(v);
-  return v;
-}
-
-/** Compiles §4.7 intrinsics from source in which `$name` is the property `fields[name]`, so each
- *  load is named and stays monomorphic where a keyed one would not. The body sees `base` and the
- *  values `env` and the call's `extra` name. */
-export const intrinsicCompiler = (fields: Record<string, string>, env: Record<string, unknown> = {}) =>
-  (params: string, body: string, extra: Record<string, unknown> = {}): Intrinsic => (base) => {
-    const scope = { ...env, ...extra };
-    return new Function("base", ...Object.keys(scope), `return function(${params}){${body.replace(/\$(\w+)/g, (_, f: string) => fields[f])}}`)(base, ...Object.values(scope));
-  };
-
-// the boxes' intrinsics: $I is Integer.value, ...
-const compile = intrinsicCompiler(VALUE);
-
-/** valueOf: the cache's box, else a new one; a cache not initialized yet is AOSP's to initialize.
- *  The constructor is bound when the class compiles: one looked up lazily is not a constant to
- *  V8, which then allocates every box instead of eliding the short-lived ones. */
-const valueOf = (desc: BoxDesc): Intrinsic => (base) => {
-  const range = CACHE[desc], C = rt.link(CLASS[desc]).ctor, make = `const o = new C(); o.$${desc} = v; return o;`;
-  if (!range) return compile("v", make, { C })(base);
-  const [, lo, hi] = range, suffix = desc === "J" ? "n" : "";
-  let cache: Obj[] | undefined;
-  const cached = (v: number | bigint) => (cache ??= cacheOf(desc)) === undefined ? base(v) : cache[Number(v) - lo];
-  return compile("v", `if (v >= ${lo}${suffix} && v <= ${hi}${suffix}) return cached(v); ${make}`, { C, cached })(base);
-};
-const getter = (desc: BoxDesc) => compile("", `return this.$${desc};`);
-/** equals of a final class: the same class and value (a null or other object is not equal) */
-const equals = (desc: BoxDesc): Intrinsic => (base) =>
-  compile("o", `return o instanceof C && o.$${desc} === this.$${desc} ? 1 : 0;`, { C: rt.link(CLASS[desc]).ctor })(base);
-
-/** Character.digit's ASCII part: 0-35, or -1 for anything else */
-const ASCII_DIGIT = new Int8Array(128).fill(-1);
-for (let c = 0; c < 128; c++) {
-  if (c >= 48 && c <= 57) ASCII_DIGIT[c] = c - 48;
-  else if (c >= 97 && c <= 122) ASCII_DIGIT[c] = c - 87;
-  else if (c >= 65 && c <= 90) ASCII_DIGIT[c] = c - 55;
-}
-/** the most digits of `radix` a double holds exactly */
-const EXACT_DIGITS = Array.from({ length: 37 }, (_, r) => (r < 2 ? 0 : Math.floor(53 / Math.log2(r))));
-/** An ASCII number in `radix` whose magnitude a double holds exactly, as a number; undefined for
- *  anything else (null, a bad radix or digit, a lone sign, too many digits), which AOSP answers. */
-function asciiNumber(s: string | null, radix: number): number | undefined {
-  if (s === null || radix < 2 || radix > 36) return undefined;
-  const n = s.length;
-  let i = 0, neg = false;
-  if (n > 0) { const c = s.charCodeAt(0); if (c === 45 || c === 43) { neg = c === 45; i = 1; } }
-  if (i === n || n - i > EXACT_DIGITS[radix]) return undefined;
-  let r = 0;
-  for (; i < n; i++) {
-    const c = s.charCodeAt(i), d = c < 128 ? ASCII_DIGIT[c] : -1;
-    if (d < 0 || d >= radix) return undefined;
-    r = r * radix + d;
-  }
-  return neg ? -r || 0 : r;
-}
-const radixOr10 = (r: number) => (r >= 2 && r <= 36 ? r : 10);
-
-rt.intrinsic(CLASS.I, {
-  "static valueOf(I)Ljava/lang/Integer;": valueOf("I"),
-  "intValue()I": getter("I"),
-  "hashCode()I": getter("I"),
-  "equals(Ljava/lang/Object;)Z": equals("I"),
-  "compareTo(Ljava/lang/Integer;)I": compile("o", "const a = this.$I, b = o.$I; return a < b ? -1 : a > b ? 1 : 0;"),
-  "static toString(I)Ljava/lang/String;": () => (i: number) => "" + i,
-  "static toString(II)Ljava/lang/String;": () => (i: number, radix: number) => i.toString(radixOr10(radix)),
-  "static toHexString(I)Ljava/lang/String;": () => (i: number) => (i >>> 0).toString(16),
-  "static toOctalString(I)Ljava/lang/String;": () => (i: number) => (i >>> 0).toString(8),
-  "static toBinaryString(I)Ljava/lang/String;": () => (i: number) => (i >>> 0).toString(2),
-  "static parseInt(Ljava/lang/String;I)I": (base) => (s: string | null, radix: number) => {
-    const v = asciiNumber(s, radix);
-    return v !== undefined && v >= -2147483648 && v <= 2147483647 ? v : base(s, radix);
-  },
-});
-rt.intrinsic(CLASS.J, {
-  "static valueOf(J)Ljava/lang/Long;": valueOf("J"),
-  "longValue()J": getter("J"),
-  "equals(Ljava/lang/Object;)Z": equals("J"),
-  "static toString(J)Ljava/lang/String;": () => (v: bigint) => "" + v,
-  "static toString(JI)Ljava/lang/String;": () => (v: bigint, radix: number) => v.toString(radixOr10(radix)),
-  "static toHexString(J)Ljava/lang/String;": () => (v: bigint) => BigInt.asUintN(64, v).toString(16),
-  "static parseLong(Ljava/lang/String;I)J": (base) => (s: string | null, radix: number) => {
-    const v = asciiNumber(s, radix);
-    return v !== undefined ? BigInt(v) : base(s, radix);
-  },
-});
-rt.intrinsic(CLASS.Z, {
-  "static valueOf(Z)Ljava/lang/Boolean;": () => (v: number) => booleanValues()[v],
-  "booleanValue()Z": getter("Z"),
-});
-rt.intrinsic(CLASS.S, { "static valueOf(S)Ljava/lang/Short;": valueOf("S") });
-rt.intrinsic(CLASS.B, { "static valueOf(B)Ljava/lang/Byte;": valueOf("B") });
-rt.intrinsic(CLASS.C, { "static valueOf(C)Ljava/lang/Character;": valueOf("C"), "charValue()C": getter("C"), "equals(Ljava/lang/Object;)Z": equals("C") });
-rt.intrinsic(CLASS.F, { "static valueOf(F)Ljava/lang/Float;": valueOf("F"), "floatValue()F": getter("F") });
-rt.intrinsic(CLASS.D, { "static valueOf(D)Ljava/lang/Double;": valueOf("D"), "doubleValue()D": getter("D") });
-
-// the raw bit conversions ART implements natively
-rt.registerJnis(CLASS.F, { "floatToRawIntBits(F)I": floatToIntBits, "intBitsToFloat(I)F": intBitsToFloat });
-rt.registerJnis(CLASS.D, { "doubleToRawLongBits(D)J": doubleToLongBits, "longBitsToDouble(J)D": longBitsToDouble });

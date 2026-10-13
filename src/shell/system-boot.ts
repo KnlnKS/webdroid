@@ -6,7 +6,7 @@ import { applyDeviceConfiguration } from "../android/resources";
 import { initDeviceLocales } from "../android/resnative";
 import { scall } from "../jvm/natives/jentry";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime";
-import { loadAppCode, loadTier, tier } from "../jvm/tier";
+import { loadAppCode, loadTier } from "../jvm/tier";
 import { startZygote, setSystemDisplayTarget } from "./device";
 import { connectProcess } from "./process-endpoint";
 import { processBroker } from "./processes";
@@ -22,12 +22,12 @@ export function bootSystemOwner(): Promise<void> {
     setProcessIdentity(PROCESS_PID, 1000);
     setProcessName("system_server");
     fixProcessBitness([]);
-    if (tier === "wasm") await loadTier();
+    await loadTier();
     await Promise.all([loadFramework(), loadPlatformDex()]);
     // app processes start meanwhile: their calls to system services wait for its endpoint
     const broker = processBroker();
     broker.connect("android", "system_server", PROCESS_PID);
-    if (tier === "wasm") await loadAppCode({ launch: [] });
+    await loadAppCode({ launch: [] });
     hostWindowManager();
     setSystemDisplayTarget();
     await startZygote();

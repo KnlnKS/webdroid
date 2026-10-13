@@ -1,5 +1,4 @@
-// The entry cases run with WEBDROID_TIER=wasm after the entry suite: the platform and the fixture loaded through tier.loadDex, the seam installed by the
-// tier; its answers are java/E.expected.txt.
+// The entry cases through the page's seam: the platform and the fixture loaded through tier.loadDex; its answers are java/E.expected.txt.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import "../../src/natives";
@@ -9,8 +8,8 @@ import { BOOT_JAR_PATHS } from "../../src/jvm/bootclasspath";
 import { vfs } from "../../src/shell/vfs";
 import { BytesFile } from "../../src/shell/lazyfile";
 import { dexesIn } from "../../src/jvm/dex";
-import { loadDex, loadTier, tier } from "../../src/jvm/tier";
-import { getDeclared, rt } from "../../src/jvm/runtime";
+import { loadDex, loadTier } from "../../src/jvm/tier";
+import { getDeclared } from "../../src/jvm/runtime";
 import { mountPlatform } from "./harness";
 import { AOSP, JAVA, ROOT } from "./paths";
 import { entryCases, entryDex } from "./entrycases";
@@ -20,7 +19,6 @@ import { descriptorTransport } from "../../src/native/process-fd";
 import { callProxy, serveCalls } from "../../src/shell/process-port";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio";
 
-if (tier !== "wasm") throw new Error("run with WEBDROID_TIER=wasm");
 const expected = readFileSync(join(JAVA, "E.expected.txt"), "utf8").trimEnd().split("\n");
 await mountPlatform(ROOT);
 await loadTier();
@@ -29,13 +27,13 @@ PLATFORM_JARS.forEach((jar, i) => {
   const bytes = new Uint8Array(readFileSync(join(AOSP, jar)));
   if ([0, 1, 5, 12].includes(i)) loadPlatformJar(bytes, i); else vfs.mount(BOOT_JAR_PATHS[i], new BytesFile(bytes));
 });
-for (const d of dexesIn(new Uint8Array(readFileSync(entryDex())), "E")) loadDex(rt, d);
+for (const d of dexesIn(new Uint8Array(readFileSync(entryDex())), "E")) loadDex(d);
 const got = await entryCases();
 let failed = 0;
-expected.forEach((want, i) => { if (got[i] !== want) { failed++; console.log(`FAIL ?tier=wasm: ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${got[i]}`); } });
-if (got.length !== expected.length) { failed++; console.log(`FAIL ?tier=wasm: ${got.length} answers for ${expected.length}`); }
+expected.forEach((want, i) => { if (got[i] !== want) { failed++; console.log(`FAIL ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${got[i]}`); } });
+if (got.length !== expected.length) { failed++; console.log(`FAIL ${got.length} answers for ${expected.length}`); }
 await inMemoryControl();
-console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as recorded through ?tier=wasm`);
+console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as recorded through the page's seam`);
 process.exit(failed ? 1 : 0);
 
 async function inMemoryControl(): Promise<void> {

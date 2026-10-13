@@ -6,7 +6,7 @@ import { StoredParcel } from "../src/shell/stored-parcel";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel";
 import { handle, release as releaseHandle, take } from "../src/android/handles";
 import { newObj, vcall, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
-import { rt, JObj } from "../src/jvm/runtime";
+import { JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
 import { mkAssetFd } from "../src/android/resnative";
@@ -26,7 +26,6 @@ import { type JBuffer, addressOf, directAddress, bufferBytes, readBufferBytes, w
 import { memoryAt } from "../src/jvm/natives/jmemory";
 import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path";
 
-rt.linkNatives();
 
 describe("android-pfd", () => {
   test("document descriptors share seekable writes and commit on last close", async () => {

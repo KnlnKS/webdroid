@@ -44,7 +44,6 @@ rt.register({ name: "webdroid/test/Provider", ctor: class extends JObj {}, sup: 
     mkPfd(new TextEncoder().encode("hello"), (bytes: Uint8Array) => { written.push(new TextDecoder().decode(bytes)); }),
 } });
 
-rt.linkNatives();
 // framework-res: CursorWindow sizes itself from Resources.getSystem()
 await loadPlatform();
 await startMainLooper();

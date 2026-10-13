@@ -19,7 +19,6 @@ export async function inventory(args: string[]): Promise<void> {
   const cached = `fuzz-cache/android-${sdk}/framework.jar`;
   const frameworkPath = option(args, "--framework", existsSync(cached) ? cached : "vendor/aosp/framework.jar")!;
   const [xml, frameworkDexes] = await Promise.all([sdkApiXml(sdk), openDexes(frameworkPath)]);
-  rt.linkNatives();
   let catalog = buildCatalog({ sdk, xml, runtime: rt, frameworkDexes });
   if (!args.includes("--no-reached")) {
     const reached: ReachedSurface = { classes: new Map(), methods: new Map(), fields: new Map() };

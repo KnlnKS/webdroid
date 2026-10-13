@@ -1,6 +1,6 @@
 import { spawnCompilerWorker } from "../../shell/compiler-workers";
 import { measureCompile } from "../../jvm/compiler-observer";
-// The Wasm tier's entry (src/jvm/tier.ts loads it under ?tier=wasm). Each realm (the page, every process Worker) has a World over the platform build
+// The Wasm tier's entry (src/jvm/tier.ts loads it). Each realm (the page, every process Worker) has a World over the platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark } from "../../perf";
 import { FetchStore } from "../link/aotstore";
@@ -67,12 +67,16 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
   bindWorld(w);
   globalThis.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
-  // the JS tier notes the class a site cannot link as it links it
+  // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
-  // the frames of Java code, as the JS tier names them: a method the host implements is not one
+  // the frames of Java code: a method the host implements is not one
   rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
+  rt.userClassLoader = () => {
+    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return loader.object; }
+    return null;
+  };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
-  rt.registered = (spec) => { const host = hostSpec(spec); if (host) w.addHostClass(host); };
+  rt.registered = (spec) => w.addHostClass(hostSpec(spec));
   return w;
 }
 

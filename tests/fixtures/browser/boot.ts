@@ -3,18 +3,30 @@ import { mountPlatformData } from "../../../src/shell/apex";
 import { preloadPaint } from "../../../src/android/paint";
 import { initDeviceLocales } from "../../../src/android/resnative";
 import { loadPlatformDex } from "../../../src/android/framework";
-import { rt } from "../../../src/jvm/runtime";
+import { JObj, rt } from "../../../src/jvm/runtime";
+import { tierReady } from "../../../src/jvm/tier";
 import { startMainLooper } from "../../../src/android/mainloop";
 import { callOn, mainThread } from "../../../src/jvm/natives/jentry";
 
-/** framework.jar on the class path and the natives linked, then the font map the zygote preloads
- *  (whose locale scripts are ICU's) and its text paints, as a page boots */
-export async function bootWithFonts(): Promise<void> {
+/** the Wasm tier and the platform class path, as a page boots */
+export async function bootPlatform(): Promise<void> {
+  await tierReady();
   await loadPlatformDex();
-  rt.linkNatives();
   mountPlatformData();
+}
+/** the platform, then the font map the zygote preloads (whose locale scripts are ICU's) and its text paints, as a page boots */
+export async function bootWithFonts(): Promise<void> {
+  await bootPlatform();
   await startMainLooper();
   await callOn(mainThread, () => rt.drive(loadSystemFontMap()));
   await initDeviceLocales();
   await preloadPaint();
 }
+
+let listeners = 0;
+/** an object of a host class that implements the interface `iface`, answering `name` with `fn` */
+export const listener = (iface: string, name: string, desc: string, fn: (...a: any[]) => unknown): object => {
+  const cls = "fixture/Listener" + listeners++;
+  rt.register({ name: cls, ctor: class extends JObj {}, ifaces: [iface], methods: { [name + desc]: fn } });
+  return rt.make(cls);
+};

@@ -45,7 +45,6 @@ describe("fuzz-catalog", () => {
       methods: { "<init>()V": function () {}, ...stubs(0, "answer()I") },
       statics: { VALUE: 42 },
     });
-    runtime.linkNatives();
     const catalog = buildCatalog({ sdk: 33, xml: XML, runtime, frameworkDexes: [] });
     const status = new Map(catalog.members.map((member) => [`${member.owner}.${member.signature}`, member.support]));
     expect(status.get("android/example/Value.<init>()V")).toBe("delegate");

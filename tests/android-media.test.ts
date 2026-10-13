@@ -17,7 +17,6 @@ beforeAll(loadFrameworkJar);
 const app = async () => bootApp(await packageRecord("org.webdroid.test.media"));
 
 describe("audio-attributes", () => {
-  rt.linkNatives();
 
   test("AudioAttributes maps legacy music streams", async () => {
     const builder = await newObj("android/media/AudioAttributes$Builder");
@@ -48,7 +47,6 @@ describe("audio-attributes", () => {
 });
 
 describe("media-codec-capabilities", () => {
-  rt.linkNatives();
 
   test("video codec capabilities expose the advertised height range", async () => {
     const previous = Object.getOwnPropertyDescriptor(globalThis, "VideoDecoder");
@@ -78,7 +76,6 @@ describe("media-codec-capabilities", () => {
 });
 
 describe("media-retriever", () => {
-  rt.linkNatives();
 
   test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", async () => {
     await app();
@@ -105,7 +102,6 @@ describe("media-retriever", () => {
 });
 
 describe("mediadrm", () => {
-  rt.linkNatives();
 
   test("MediaDrm reports the browser device's unsupported schemes", async () => {
     const uuid = await newObj("java/util/UUID", "(JJ)V", 0n, 0n);
@@ -119,7 +115,6 @@ describe("mediasession", () => {
   rt.register({ name: "test/SessionCallback", ctor: class extends JObj {}, sup: "android/media/session/MediaSession$Callback", methods: {
     "onCommand(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V": (command: string) => { commands.push(command); },
   } });
-  rt.linkNatives();
 
   test("MediaSession keeps controller identity and dispatches commands through the callback looper", async () => {
     const context = await app();
@@ -152,7 +147,6 @@ describe("mediasession", () => {
 });
 
 describe("sound-pool", () => {
-  rt.linkNatives();
 
   const loadListener = () => {
     const loaded: number[][] = [];

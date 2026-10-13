@@ -93,9 +93,7 @@ export class ColdSlowOps {
   }
 
   private prepareAnalysis(m: MethodInfo): Analysis {
-    const start = performance.now(), item = m.dex.code(m.codeOff), prepareSpan = beginCompile("wasm.prepare");
-    let prepared: ReturnType<typeof prepareMethod>;
-    try { prepared = prepareMethod(m.dex, item, m.desc, m.isStatic); } finally { endCompile(prepareSpan); }
+    const start = performance.now(), item = m.dex.code(m.codeOff), prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
     this.w.stats.phase.prepare += performance.now() - start;
     const infer = performance.now(), inferSpan = beginCompile("wasm.infer");
     let typing: ReturnType<typeof inferTyping>;

@@ -1,4 +1,4 @@
-// The descriptor checks for the Wasm tier. The registered specs and JNI delegates are the same set as on the JS tier, so scripts/desccheck.ts's mismatches must be
+// The descriptor checks of the Wasm tier's own additions; the registered specs and JNI delegates are scripts/desccheck.ts's, whose mismatches must be
 // the accepted ones in tests/fixtures/desccheck-baseline.json. What the Wasm tier adds: every intrinsic (a method run as generated code instead of its body or a
 // native) is keyed by class, name and descriptor, and a key the platform class does not declare never applies and nothing says so.
 // Run: bun run wasm desccheck

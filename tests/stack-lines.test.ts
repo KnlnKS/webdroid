@@ -1,10 +1,8 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { vcall } from "../src/jvm/natives/jentry";
-import { rt } from "../src/jvm/runtime";
 import { scall, loadLibcore } from "./java";
 
-rt.linkNatives();
 await loadLibcore();
 
 test("a trace names each frame's source file and line from the DEX's debug info", async () => {

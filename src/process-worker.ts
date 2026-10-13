@@ -22,19 +22,18 @@ async function prepare({ clock, aot, jars, warm }: Prestart) {
   (await import("./guest-clock")).attachGuestClockPort(clock);
   await import("./natives");
   (await import("./android/framework")).receivePlatformJars(jars);
-  const [control, port, jentry, core, coverage, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
-    import("./shell/worker-control"), import("./shell/process-port"), import("./jvm/natives/jentry"), import("./native/core"),
-    import("./jvm/coverage"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),
+  const [control, port, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
+    import("./shell/worker-control"), import("./shell/process-port"), import("./native/core"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),
     import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"), import("./jvm/natives/jvmruntime"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
   await tier.useAotPort(aot);
-  const runtime = Promise.all([skia.loadSkia(), tier.tier === "wasm" ? tier.loadTier() : undefined]);
+  const runtime = Promise.all([skia.loadSkia(), tier.loadTier()]);
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
   jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
   void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }), warm ? () => globalThis.postMessage({ kind: "warmed" }) : undefined)).catch(() => {});
-  return { control, port, jentry, core, coverage, packages, device, config, runtime };
+  return { control, port, core, packages, device, config, runtime };
 }
 
 let prepared: ReturnType<typeof prepare> | undefined, started = false;
@@ -54,10 +53,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: 
     const { processPresentation } = await import("./shell/process-endpoint");
     processPresentation.visible = false;
     closeControl = p.port.serveCalls(data.control, p.control.workerControl(logs, () => phase));
-    p.jentry.strictThreadOwnership();
-    const params = new URLSearchParams(location.search);
-    p.core.jitStats.on = params.get("jit") !== "0";
-    p.coverage.configureJvmCoverage(params.get("fuzzCoverage") === "1");
+    p.core.jitStats.on = new URLSearchParams(location.search).get("jit") !== "0";
     phase = "packages";
     const boot = await p.packages.loadProcessPackages(data.bootstrap);
     if (!boot) throw new Error("Process package unavailable");

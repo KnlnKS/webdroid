@@ -1,9 +1,7 @@
 import "../../../src/natives";
-import { rt } from "../../../src/jvm/runtime";
-import { vcall, scall, implement } from "../../../src/jvm/natives/jentry";
+import { vcall, scall } from "../../../src/jvm/natives/jentry";
+import { bootPlatform, listener } from "./boot";
 import { canvasOver } from "../../../src/android/canvas";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { mountPlatformData } from "../../../src/shell/apex";
 
 const SRC = "Landroid/graphics/ImageDecoder$Source;";
 const image = async (name: string) => { const b = new Uint8Array(await (await fetch(`/tests/fixtures/images/${name}`)).arrayBuffer()); return new Int8Array(b.buffer); };
@@ -12,13 +10,10 @@ const pixels = async (b: unknown) => {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out.push(await vcall(b, "getPixel", "(II)I", x, y) >>> 0);
   return out;
 };
-const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => implement(rt.make("java/lang/Object"), name, desc, fn);
 
 /** Decoded pixels, ImageDecoder's post-processing and an animated GIF's frames, which need the browser's decoders */
 async function probe() {
-  await loadPlatformDex();
-  mountPlatformData();
-  rt.linkNatives();
+  await bootPlatform();
   const decode = async (name: string) => { const b = await image(name); return scall("android/graphics/BitmapFactory", "decodeByteArray", "([BII)Landroid/graphics/Bitmap;", b, 0, b.length); };
   const png = await pixels(await decode("alpha.png")), jpeg = await pixels(await decode("opaque.jpg")), rotated = await pixels(await decode("rotated.jpg"));
   const truncated = await decode("truncated.png");
@@ -26,15 +21,15 @@ async function probe() {
   const decoded = async (bytes: Int8Array, header: (d: unknown) => unknown) => scall("android/graphics/ImageDecoder", "decodeBitmap",
     `(${SRC}Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;`,
     await scall("android/graphics/ImageDecoder", "createSource", `([B)${SRC}`, bytes),
-    listener("onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`, header));
+    listener("android/graphics/ImageDecoder$OnHeaderDecodedListener", "onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`, header));
   const upright = await decoded(await image("rotated.jpg"), software);
   const processed = await decoded(await image("opaque.jpg"), async (d) => {
     await software(d);
     await vcall(d, "setPostProcessor", "(Landroid/graphics/PostProcessor;)V",
-      listener("onPostProcess", "(Landroid/graphics/Canvas;)I", async (c: unknown) => { await vcall(c, "drawColor", "(I)V", 0xff0000ff | 0); return -1; }));
+      listener("android/graphics/PostProcessor", "onPostProcess", "(Landroid/graphics/Canvas;)I", async (c: unknown) => { await vcall(c, "drawColor", "(I)V", 0xff0000ff | 0); return -1; }));
   });
   let invalid = "";
-  try { await decoded(await image("opaque.jpg"), (d) => vcall(d, "setPostProcessor", "(Landroid/graphics/PostProcessor;)V", listener("onPostProcess", "(Landroid/graphics/Canvas;)I", () => -2))); }
+  try { await decoded(await image("opaque.jpg"), (d) => vcall(d, "setPostProcessor", "(Landroid/graphics/PostProcessor;)V", listener("android/graphics/PostProcessor", "onPostProcess", "(Landroid/graphics/Canvas;)I", () => -2))); }
   catch (e) { invalid = await vcall(e, "toString", "()Ljava/lang/String;"); }
   const gif = await scall("android/graphics/ImageDecoder", "decodeDrawable", `(${SRC})Landroid/graphics/drawable/Drawable;`,
     await scall("android/graphics/ImageDecoder", "createSource", `([B)${SRC}`, await image("anim.gif")));

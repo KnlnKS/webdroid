@@ -7,9 +7,8 @@
 // Interface dispatch — the thing a constant-pool walk cannot speak to at all — falls out of
 // the same rule, with no special case.
 
-import { DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "./dex";
+import { ACC, DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "./dex";
 import { insnLen } from "./opcodes";
-import { ACC } from "./runtime";
 import { descToName } from "./abi";
 
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */

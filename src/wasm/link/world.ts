@@ -1616,7 +1616,7 @@ export class World {
     return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), sched: this.sched, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
-  /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
+  /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises one */
   makeThrowable(cls: string, msg: string | null): object {
     let make = this.throwMakers.get(cls);
     if (!make) {

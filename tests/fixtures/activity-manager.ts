@@ -71,7 +71,6 @@ const serviceIntent = async () => {
   return intent;
 };
 
-rt.linkNatives();
 await startMainLooper();
 const manifest = { name: "manifest", attrs: [attr("package", PKG)], children: [
   { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, 35)], children: [] },

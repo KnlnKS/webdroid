@@ -71,7 +71,7 @@ export async function restoreRoots(): Promise<void> {
   }
 }
 
-/** the OPFS directory of the Wasm tier's compiled app code (src/wasm/host/persist.ts): not user data, so a reset keeps it, as it keeps the JS tier's code cache */
+/** the OPFS directory of the Wasm tier's compiled app code (src/wasm/host/persist.ts): not user data, so a reset keeps it */
 export const COMPILED_CODE_DIR = "wd-wasm-apps";
 
 export async function clearRoots(): Promise<void> {

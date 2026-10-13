@@ -13,7 +13,7 @@
 // there because that said so.
 
 import { startMainLooper } from "./mainloop";
-import { rt, JObj, noops, declaredField, type Gen } from "../jvm/runtime";
+import { rt, noops, declaredField, type Gen } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles";
 import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
@@ -39,39 +39,9 @@ import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } f
 
 const delegate = rt.registerJnis.bind(rt);
 
-// ── the libcore plumbing framework bytecode stands on ──────────────────────────────────
-// Not native methods but classes, and only reachable when AOSP bytecode runs: every graphics
-// class hands its finalizer to NativeAllocationRegistry from a <clinit>, so without it the
-// class fails to initialize before any of the work below is reached.
-class JFreeRunnable extends JObj { free = () => {}; }
-rt.register({
-  name: "webdroid/FreeRunnable", ctor: JFreeRunnable, ifaces: ["java/lang/Runnable"],
-  methods: { "run()V": function (this: JFreeRunnable) { this.free(); } },
-});
-/** a class's free function, which runs on each native allocation once its Java owner is
- *  collected, or at once when the returned Runnable runs, as libcore's Cleaner does */
-class JNativeAllocationRegistry extends JObj { free = 0n; }
-const freeNative = (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); };
-const collected = new FinalizationRegistry<{ fn: bigint; ptr: bigint }>(({ fn, ptr }) => freeNative(fn, ptr));
-const mkRegistry = (_loader: unknown, free: bigint) => Object.assign(new JNativeAllocationRegistry(), { free });
-rt.register({
-  name: "libcore/util/NativeAllocationRegistry", ctor: JNativeAllocationRegistry,
-  methods: {
-    "<init>(Ljava/lang/ClassLoader;JJ)V": function (this: JNativeAllocationRegistry, _loader: unknown, free: bigint) { this.free = free; },
-    "static createMalloced(Ljava/lang/ClassLoader;J)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
-    "static createMalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
-    "static createNonmalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
-    "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;": function (this: JNativeAllocationRegistry, referent: object | null, ptr: bigint) {
-      if (!referent) rt.npe();
-      const fn = this.free, token = {};
-      collected.register(referent!, { fn, ptr }, token);
-      const run = rt.make("webdroid/FreeRunnable") as JFreeRunnable;
-      run.free = () => { if (collected.unregister(token)) freeNative(fn, ptr); };
-      return run;
-    },
-    "static applyFreeFunction(JJ)V": freeNative,
-  },
-});
+// libcore's NativeAllocationRegistry runs as its bytecode; the Cleaner it registers for each
+// allocation frees it through the class's free function, a handle here (handles.ts)
+delegate("libcore/util/NativeAllocationRegistry", { "applyFreeFunction(JJ)V": (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); } });
 
 // Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
 const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);

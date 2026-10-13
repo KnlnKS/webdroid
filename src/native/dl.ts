@@ -8,7 +8,7 @@ import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, 
 import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu";
 import type { TombstoneFrame } from "./tombstone";
 import { trampSlot, RET_SENTINEL } from "./abi";
-import { rt, type Runtime, type Gen } from "../jvm/runtime";
+import { rt, type Gen } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jentry";
 import { shareable } from "../jvm/suspend";
 import { vfs } from "../shell/vfs";
@@ -43,15 +43,15 @@ function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** where lib<name>.so comes from: the booted apk's lib/<abi>/, for any ABI the tier runs, else a
  *  device library at its path in the VFS */
-function libSource(name: string, owner: Runtime = rt): { device?: string; read: () => Promise<Uint8Array | null> } | null {
-  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (owner.hasClasspath(path)) return { read: async () => owner.readClasspath(path) }; }
+function libSource(name: string): { device?: string; read: () => Promise<Uint8Array | null> } | null {
+  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (rt.hasClasspath(path)) return { read: async () => rt.readClasspath(path) }; }
   const device = linkerHooks.deviceLib(name);
   return device ? { device, read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
 
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
  *  what an image whose machine code the tier cannot run yet can still be proved to do. */
-export async function loadModule(name: string, bytes?: Uint8Array, link = false, owner: Runtime = rt, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
+export async function loadModule(name: string, bytes?: Uint8Array, link = false, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
   name = basename(name);
   const have = byName.get(name);
   if (have) { have.refs++; return have; }
@@ -59,7 +59,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   if (p) return p;
   // driven: initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
   const q = shareable(rt.drive(function* (): Gen<Module> {
-    const source = bytes ? null : libSource(name, owner), b: Uint8Array | null = bytes ?? (source ? yield source.read() : null);
+    const source = bytes ? null : libSource(name), b: Uint8Array | null = bytes ?? (source ? yield source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
     mod.path = source?.device;
@@ -73,7 +73,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     for (const n of mod.needed) {
       const have = byName.get(n);
       if (have) have.refs++;
-      else if (!hostLibNames().includes(n) && libSource(n, owner)) yield loadModule(n, undefined, link, owner, cpu);
+      else if (!hostLibNames().includes(n) && libSource(n)) yield loadModule(n, undefined, link, cpu);
     }
     yield* resolveIfuncs(mod, cpu);
     if (mod.tls) linkerHooks.placeTls?.(mod);
@@ -222,8 +222,8 @@ export const libdl: Record<string, HostFn> = {
     const opened = (mod: Module) => { if (flags & RTLD_NODELETE) mod.nodelete = true; return handleOf({ mod }); };
     if (have) { have.refs++; return opened(have); }
     if (flags & RTLD_NOLOAD) { dlerrorMsg = `dlopen failed: library "${name}" wasn't loaded and RTLD_NOLOAD prevented it`; return 0; }
-    if (!libSource(name, cpu.nativeRuntime ?? rt)) { dlerrorMsg = `dlopen failed: library "${name}" not found`; return 0; }
-    try { return opened(await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu)); }
+    if (!libSource(name)) { dlerrorMsg = `dlopen failed: library "${name}" not found`; return 0; }
+    try { return opened(await loadModule(name, undefined, false, cpu)); }
     catch (e) { dlerrorMsg = String((e as Error).message ?? e); return 0; }
   },
   dlsym: (_cpu, a) => {

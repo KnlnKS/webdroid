@@ -41,10 +41,6 @@ function context(client: Client): Promise<RendererContext> {
 }
 worker.addEventListener("fetch", (event) => {
   const request = event.request, original = new URL(request.url);
-  if (original.origin === worker.location.origin && original.pathname.startsWith("/wd-code/")) {
-    event.respondWith(caches.open("wd-code").then((cache) => cache.match(request)).then((hit) => hit || new Response("", { status: 404 })));
-    return;
-  }
   // an apk asset, or a device font the WebView's settings name, from the app
   if (original.origin === worker.location.origin && /^\/(asset|system\/fonts|data\/fonts)\//.test(original.pathname)) {
     event.respondWith((async () => {

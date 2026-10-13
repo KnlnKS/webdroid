@@ -1,6 +1,6 @@
 import { expect, test, beforeAll, afterAll, describe } from "bun:test";
 import "../src/natives";
-import { rt, JObj, declaredField } from "../src/jvm/runtime";
+import { JObj, declaredField } from "../src/jvm/runtime";
 import { classNameOf, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { stringHash } from "../src/jvm/abi";
 import { packageUid } from "../src/android/packages";
@@ -22,7 +22,6 @@ const pkg = "org.webdroid.test.notify";
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
 let manager: JObj, app: JObj;
 let closePreferences: () => void;
-rt.linkNatives();
 
 beforeAll(async () => {
   app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));

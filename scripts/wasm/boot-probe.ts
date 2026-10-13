@@ -3,7 +3,6 @@
 // then an iframe of the same page does it again.
 // The page also runs an app (the Pst fixture) in the World: the first load has no saved build, so a Worker compiles the app's likely methods and the page keeps them in OPFS, and runs a
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
-// The page is not under ?tier=wasm: the natives it binds are the oracle's, which read the JS runtime's classes, and that tier refuses to link them (until the tab's own boot runs there).
 //   bun run wasm boot-probe          (after bun run aot)
 import { join } from "node:path";
 import { existsSync, mkdtempSync } from "node:fs";

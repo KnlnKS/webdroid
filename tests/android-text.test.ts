@@ -14,7 +14,6 @@ beforeAll(loadSystemFonts);
 const textPaintField = (p: object, name: string) => (p as Record<string, number>)[declaredField("android/text/TextPaint", name)];
 
 describe("locale-span", () => {
-  rt.linkNatives();
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
     await loadLibcore();
     const locales = await scall("android/os/LocaleList", "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
@@ -39,7 +38,6 @@ describe("locale-span", () => {
 });
 
 describe("metric-spans", () => {
-  rt.linkNatives();
 
   test("style spans preserve existing italics for drawing and measurement", async () => {
     const italic = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2);
@@ -85,7 +83,6 @@ describe("spanned-append", () => {
     "charAt(I)C": (index: number) => "abcabc".charCodeAt(index),
     "toString()Ljava/lang/String;": () => { throw new Error("range append must not stringify the whole sequence"); },
   } });
-  rt.linkNatives();
 
   test("StringBuilder appends a CharSequence range through charAt", async () => {
     const builder = await newObj("java/lang/StringBuilder", "()V");
@@ -96,7 +93,6 @@ describe("spanned-append", () => {
 });
 
 describe("style-wrap", () => {
-  rt.linkNatives();
   test("style wrappers remain distinct while forwarding draw and measure state", async () => {
     const wrap = (style: unknown) => scall("android/text/style/CharacterStyle", "wrap", "(Landroid/text/style/CharacterStyle;)Landroid/text/style/CharacterStyle;", style);
     const style = await newObj("android/text/style/AbsoluteSizeSpan", "(I)V", 23);
@@ -117,7 +113,6 @@ describe("style-wrap", () => {
 });
 
 describe("styled-null", () => {
-  rt.linkNatives();
   test("explicit style arrays mask null font values", async () => {
     const S = 0x7f0f0000, A = 0x7f010001;
     const res = await fakeStyles(["fallback", "custom-family"], {
@@ -135,7 +130,6 @@ describe("styled-null", () => {
 
 describe("text-appearance-span", () => {
   test("text appearances combine font style and apply state colors", async () => {
-    rt.linkNatives();
     const valueOf = (c: number) => scall("android/content/res/ColorStateList", "valueOf", "(I)Landroid/content/res/ColorStateList;", c | 0);
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
@@ -154,7 +148,6 @@ describe("text-appearance-span", () => {
 
 
   test("SuperscriptSpan shifts the existing baseline by half the ascent without resizing text", async () => {
-    rt.linkNatives();
     const span = await newObj("android/text/style/SuperscriptSpan", "()V");
     const paint = newPaint("android/text/TextPaint");
     (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
@@ -171,7 +164,6 @@ describe("text-appearance-span", () => {
 });
 
 describe("text-platform", () => {
-  rt.linkNatives();
 
   test("TypefaceSpan retains and applies a supplied typeface", async () => {
     const typeface = await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "monospace", 1);
@@ -186,7 +178,6 @@ describe("text-platform", () => {
 });
 
 describe("tts-span", () => {
-  rt.linkNatives();
 
   test("TtsSpan builders preserve pronunciation arguments and parcel values", async () => {
     for (const name of ["Text", "Verbatim"]) {

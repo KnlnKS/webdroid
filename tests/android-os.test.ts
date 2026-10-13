@@ -13,7 +13,6 @@ import { binderTransport, importBinder } from "../src/android/binder";
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
     await loadLibcore(); await loadFrameworkJar();
-    rt.linkNatives();
     const P = "Landroid/os/Parcel;", parcel = await scall("android/os/Parcel", "obtain", `()${P}`);
     const bundle = await newObj("android/os/Bundle");
     await vcall(bundle, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", "s", "text");
@@ -36,7 +35,6 @@ describe("bundle-parcel", () => {
 describe("bitmap-parcel", () => {
   test("a Bitmap survives a Parcel round trip with its flags, geometry and pixels", async () => {
     await loadLibcore(); await loadFrameworkJar();
-    rt.linkNatives();
     const config = await linkInit("android/graphics/Bitmap$Config");
     const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 3, 2, config.static("ARGB_8888"));
     await vcall(b, "setDensity", "(I)V", 320);
@@ -84,7 +82,7 @@ describe("looper", () => {
   });
 
   test("the main looper runs posts in order, a delayed one after its delay, and host jobs between them", async () => {
-    await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
+    await loadLibcore(); await loadFrameworkJar();
     const events: string[] = [];
     const runnable = (name: string) => fnRunnable(() => { events.push(name); });
     const t0 = performance.now();
@@ -102,7 +100,7 @@ describe("looper", () => {
   });
 
   test("a HandlerThread loops on its own thread, with a tid of its own, until it quits", async () => {
-    await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
+    await loadLibcore(); await loadFrameworkJar();
     const thread = await newObj("android/os/HandlerThread", "(Ljava/lang/String;)V", "worker");
     expect(await vcall(thread, "getThreadId", "()I")).toBe(-1);
     await vcall(thread, "start", "()V");
@@ -123,7 +121,6 @@ const PKG = "org.webdroid.test.os";
 const app = async () => bootApp(await packageRecord(PKG, { application: [{ name: "service", attrs: [{ name: "name", str: ".Worker", ns: "", resId: 0, type: TV.STRING, data: 0 }], children: [] }] }));
 
 describe("job-scheduler", () => {
-  rt.linkNatives();
   test("enqueued work reaches a bound service's JobServiceEngine and finishing unbinds it", async () => {
     const events: string[] = [];
     rt.register({ name: "test/jobs/Engine", ctor: class extends JObj {},
@@ -156,7 +153,6 @@ describe("job-scheduler", () => {
 });
 
 describe("parcel-string16", () => {
-  rt.linkNatives();
 
   test("String16 keeps lone surrogates in short, long and unaligned strings", async () => {
     const strings = ["a\ud800", "x\udc00".repeat(20) + "😀", "\ud800y".repeat(9000)];
@@ -173,7 +169,6 @@ describe("parcel-string16", () => {
 });
 
 describe("environment", () => {
-  rt.linkNatives();
   beforeAll(app);
 
   test("system properties distinguish configured keys from absent names", async () => {
@@ -197,7 +192,6 @@ describe("environment", () => {
 });
 
 describe("uname", () => {
-  rt.linkNatives();
 
   test("uname reports the reference kernel", async () => {
     await loadLibcore();
@@ -238,7 +232,6 @@ describe("remotecallbacklist", () => {
   rt.register({ name: "test/TwitchRemoteCallback", ctor: Callback, ifaces: ["android/os/IInterface"], methods: {
     "asBinder()Landroid/os/IBinder;": function (this: Callback) { return this.binder; },
   } });
-  rt.linkNatives();
   function callback(binder: unknown) {
     const result = new Callback(); result.binder = binder; return result;
   }

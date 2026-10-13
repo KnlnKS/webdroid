@@ -1,20 +1,6 @@
-// Which engine runs Java: the Wasm tier (`?tier=wasm`, a page's default) or the JS tier (`?tier=js`). Headless tools choose with WEBDROID_TIER
-// and default to the JS tier, which the scripts that run Java under Bun still need. The Wasm tier's code is loaded by a dynamic import. `JavaClass` is what host code holds of a loaded
-// class instead of the JS tier's `ClassInfo.ctor`, with an implementation for each tier.
-import type { ClassInfo, Runtime } from "./runtime";
+// The Wasm tier's host as the places that load code see it: loaded by a dynamic import, so a page opens the tier's build while the rest starts.
+// `JavaClass` is what host code holds of a loaded class.
 import type { DexFile } from "./dex";
-import { lateMethod, mangleMethod, mangleStaticField } from "./abi";
-
-export type Tier = "js" | "wasm";
-
-function parseTier(value: string | null | undefined, fallback: Tier): Tier {
-  if (value == null) return fallback;
-  if (value === "js" || value === "wasm") return value;
-  throw new Error(`invalid tier ${value}: js or wasm`);
-}
-
-export const tier: Tier = typeof location !== "undefined" ? parseTier(new URLSearchParams(location.search).get("tier"), "wasm")
-  : parseTier(typeof process !== "undefined" ? process.env.WEBDROID_TIER : undefined, "js");
 
 export interface ThreadState { name: string; state: string; blocker?: string; owner?: string; strands?: number[] }
 /** what the Wasm tier's host provides the places that load code */
@@ -33,20 +19,20 @@ export interface TierBackend {
 let backend: TierBackend | undefined;
 export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
 let loading: Promise<void> | undefined;
-/** loads the Wasm tier's host; only under `tier === "wasm"`. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
+/** loads the Wasm tier's host. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
 export function loadTier(): Promise<void> {
   return loading ??= import("../wasm/host/boot").then(async (host) => { backend = await host.bootWasmTier(); });
 }
 
 /** a process Worker's Wasm modules come from the page's store of the platform build: the page serves the port, the Worker uses it */
 export function serveAot(port: MessagePort): void {
-  if (tier === "wasm") void import("../wasm/host/boot").then((host) => host.serveAot(port)); else port.close();
+  void import("../wasm/host/boot").then((host) => host.serveAot(port));
 }
 export async function useAotPort(port: MessagePort): Promise<void> {
-  if (tier === "wasm") (await import("../wasm/host/boot")).useAotPort(port); else port.close();
+  (await import("../wasm/host/boot")).useAotPort(port);
 }
 
-/** the Wasm tier's compiled app code, once the app's dex files are loaded; the JS tier has its own (jvm/aot.ts) */
+/** the Wasm tier's compiled app code, once the app's dex files are loaded */
 export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> { await backend?.appCode?.(roots); }
 /** settles once the Wasm tier can run Java */
 export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
@@ -55,12 +41,11 @@ export function appLaunched(): void { backend?.launched?.(); }
 /** the zygote's warm-up of the platform code launches use */
 export const warmCode = (stop: () => boolean): Promise<boolean> => backend?.warm?.(stop) ?? Promise.resolve(true);
 
-/** `dex` made known to the Java that runs: to `runtime` on the JS tier, to the one Wasm World on the Wasm tier, whose loaders share a namespace */
-export function loadDex(runtime: Runtime, dex: DexFile, platform = false): void {
-  if (tier !== "wasm") return runtime.loadDex(dex, platform);
+/** `dex` made known to the one World, whose loaders share a namespace */
+export function loadDex(dex: DexFile, platform = false): void {
   // the browser's platform classes are the tab's build and Program, not something a World is given, and may be loaded before the tab's build is open
   if (!backend && platform) return;
-  if (!backend) throw new Error("?tier=wasm: loadTier() has not run");
+  if (!backend) throw new Error("loadTier() has not run");
   backend.loadDex(dex, platform);
 }
 
@@ -80,38 +65,4 @@ export interface JavaClass {
   call(name: string, desc: string): (...args: unknown[]) => unknown;
   /** method `name``desc` of this class run on `self` without virtual dispatch (a super constructor call) */
   special(name: string, desc: string): (self: object, ...args: unknown[]) => unknown;
-}
-
-const classes = new WeakMap<ClassInfo, JavaClass>();
-/** a class of the JS tier */
-export function jsClass(info: ClassInfo): JavaClass {
-  let cls = classes.get(info);
-  if (cls) return cls;
-  const ctor = info.ctor as Record<string, unknown> & (new () => object);
-  const prop = (name: string, desc?: string) => desc ? info.staticFieldTable.get(name + ":" + desc) ?? (info.native ? mangleStaticField(name) : undefined) : mangleStaticField(name);
-  const missing = (name: string, desc: string) => new Error(`${info.name}.${name}${desc} is not defined`);
-  cls = {
-    name: info.name,
-    new: () => new ctor(),
-    static: (name, desc) => ctor[prop(name, desc) ?? ""],
-    setStatic: (name, value, desc) => {
-      const key = prop(name, desc);
-      if (key !== undefined) ctor[key] = value;
-      return key !== undefined;
-    },
-    setStatics: (entries, desc) => { for (const [name, value] of entries) cls!.setStatic(name, value, desc); },
-    has: (name, desc) => mangleMethod(name, desc) in ctor.prototype,
-    call: (name, desc) => {
-      const fn = ctor[mangleMethod(name, desc)] ?? lateMethod.find?.(ctor, name, desc);
-      if (typeof fn !== "function") throw missing(name, desc);
-      return (fn as (...args: unknown[]) => unknown).bind(ctor);
-    },
-    special: (name, desc) => {
-      const fn = (ctor.prototype as Record<string, unknown>)[mangleMethod(name, desc)];
-      if (typeof fn !== "function") throw missing(name, desc);
-      return (self, ...args) => (fn as (...args: unknown[]) => unknown).apply(self, args);
-    },
-  };
-  classes.set(info, cls);
-  return cls;
 }

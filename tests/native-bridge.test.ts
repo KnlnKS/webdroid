@@ -14,7 +14,6 @@ import { EglContext } from "../src/android/glsurface";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current";
 import { gles3Init } from "../src/native/gles3";
 
-rt.linkNatives();
 
 /** Host-call arguments: integer-class reads consume `ints`, 64-bit reads `longs`, string reads `strings`. */
 function args(ints: number[] = [], longs: bigint[] = [], strings: string[] = []): ArgReader {

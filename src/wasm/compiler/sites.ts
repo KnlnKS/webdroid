@@ -69,9 +69,7 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     if (!m.codeOff || cx.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
     const phase = cx.w.stats.phase, item = m.dex.code(m.codeOff);
     let t = performance.now();
-    const prepareSpan = beginCompile("wasm.prepare");
-    let prepared: ReturnType<typeof prepareMethod>;
-    try { prepared = prepareMethod(m.dex, item, m.desc, m.isStatic); } finally { endCompile(prepareSpan); }
+    const prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
     phase.prepare += performance.now() - t; t = performance.now();
     const inferSpan = beginCompile("wasm.infer");
     let typing: Typing;

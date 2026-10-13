@@ -7,6 +7,7 @@
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
 import { openApk, dexesOf, mountLocalPlatformData } from "./lib";
 import { rt } from "../src/jvm/runtime";
+import { loadDex, loadTier } from "../src/jvm/tier";
 import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jcoll";
 import "../src/jvm/natives/jvalues";
@@ -20,7 +21,8 @@ import { perf } from "../src/perf";
 const args = process.argv.slice(2);
 const [apk, lib] = args.filter((a) => !a.startsWith("--"));
 const zip = await openApk(apk);
-for (const dex of dexesOf(zip)) rt.loadDex(dex);
+await loadTier();
+for (const dex of dexesOf(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
 await mountLocalPlatformData();

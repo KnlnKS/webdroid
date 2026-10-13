@@ -1,12 +1,11 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry";
-import { rt } from "../src/jvm/runtime";
 import { vfs } from "../src/shell/vfs";
+import { jarray } from "../src/jvm/abi";
 import { scall, loadLibcore } from "./java";
 import { decodeString, encodeString } from "../src/jvm/charset";
 
-rt.linkNatives();
 await loadLibcore();
 
 describe("charset", () => {
@@ -58,12 +57,12 @@ describe("mapped-files", () => {
       await vcall(b, "flip", "()Ljava/nio/Buffer;");
       return b;
     };
-    const out = rt.oa(2, "Ljava/nio/ByteBuffer;");
+    const out = jarray(new Array(2).fill(null), "Ljava/nio/ByteBuffer;");
     out[0] = await direct([1, 2, 3]); out[1] = await direct([4, 5]);
     expect(await vcall(channel, "write", "([Ljava/nio/ByteBuffer;)J", out)).toBe(5n);
     expect([...vfs.read("/tmp/nio-vector.bin")!]).toEqual([1, 2, 3, 4, 5]);
     await vcall(channel, "position", "(J)Ljava/nio/channels/FileChannel;", 0n);
-    const into = rt.oa(2, "Ljava/nio/ByteBuffer;");
+    const into = jarray(new Array(2).fill(null), "Ljava/nio/ByteBuffer;");
     into[0] = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 2);
     into[1] = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 3);
     expect(await vcall(channel, "read", "([Ljava/nio/ByteBuffer;)J", into)).toBe(5n);

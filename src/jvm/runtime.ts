@@ -1,35 +1,14 @@
-// Class registry, linking, initialization, native registration, and the `R` helper
-// surface that compiled code calls. See abi.ts for the value model.
-//
-// Lifecycle: link (ctor shell + fields + types) → init (compile methods, run <clinit>, which
-// may suspend). Instances only exist after init, so prototype methods are always present
-// when virtual dispatch happens.
+// The registry host code shares with the Wasm tier: the native specs and JNI functions the natives modules register, what Java reaches that
+// nothing implements, the class path's resources, and the conversions natives make (strings, thrown JS errors).
 
-import { nameFrame } from "./frames";
-import { turnElapsed, wakeSoon, yieldToLoop } from "./yield";
-import { Strand, SUSPENDED, javaFace, publicFace, setPublic, setJava, suspendWith, xname } from "./suspend";
+import { Strand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
-import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash, parseMethodDesc } from "./abi";
-import { compileClass, compileLazyMethod, installLazy, methodKey, type LazyMethod } from "./compiler";
-import type { CompiledCtor, ResumeBody, JvmFunction } from "./tiering";
-import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
-import { insnLen } from "./opcodes";
-import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
-import { initialize } from "./clinit";
+import { charsToString, dotName } from "./abi";
 import { isBytecode, isStageD } from "./provenance";
-import { perf } from "../perf";
-import { tier } from "./tier";
-import { jvmCoverage } from "./coverage";
-import { Monitors, owns, type Monitor } from "./monitor";
 
-export const ACC = { PRIVATE: 0x2, STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
-// DEX type IDs cap distinct class definitions at 65,535 per file.
-const CLASS_INDEX_BASE = 0x10000;
-
-/** Root of the unified JS/Java object hierarchy (java.lang.Object). */
+/** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
 export class JObj {
-  declare static $i: ClassInfo;
+  declare static $i: { name: string };
 }
 // a Java object inspects as its class and message, not its reachable heap (debuggers, test diffs)
 Object.defineProperty(JObj.prototype, Symbol.for("nodejs.util.inspect.custom"), {
@@ -44,29 +23,16 @@ export interface NativeSpec {
   /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) or alias to prototype prop */
   methods?: Record<string, ((...a: never[]) => unknown) | string>;
   statics?: Record<string, unknown>;
-  serialization?: { uid: bigint; fields: { name: string; desc: string; prop: string }[] };
   /** java-visible public instance fields: java name → JS property name on the TS class */
   fields?: Record<string, string> | string[];
-  /** run once at init — for expensive static setup */
-  clinit?: () => void | Promise<void>;
   /** the platform class's `<clinit>` runs at init, so its statics are the platform's */
   platformClinit?: boolean;
-  /** the class's own type-variable names ("E", "K,V"). A bytecode class carries these in its
-   *  signature annotation; a native one declares them here, and each interface it implements is
-   *  reported parameterized with as many of them as that interface declares — which is how a
-   *  serializer walking List<Foo> up to Collection<E> finds Foo. */
-  typeVars?: string;
-  /** Static native entries receiving the calling runtime as a final host-only argument. */
-  callerSensitive?: string[];
 }
 
 /** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
 export type Gen<T = any> = Generator<unknown, T, any>;
 /** the value of `v` once it settles, typed: `yield* awaited(x)` where `yield x` is any */
 export function* awaited<T>(v: T | Promise<T>): Gen<T> { return yield v; }
-/** makes a method's TS body from its AOSP body; `C` is the class, not yet holding instances */
-export type Intrinsic = (base: (this: any, ...args: any[]) => any, C?: any) => (this: any, ...args: any[]) => any;
-
 const placeholderMethods = new WeakSet<Function>();
 
 export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
@@ -89,76 +55,11 @@ export function without(methods: NativeSpec["methods"], ...keys: string[][]): No
   return out;
 }
 
-/** an object V8 stores properties into as a hash table: adding one is then no map transition */
-function dictionaryMode(o: object): void { (o as { $d?: number }).$d = 0; delete (o as { $d?: number }).$d; }
-
-const copiedDefaults = new WeakMap<object, Map<string, JvmFunction>>();
-
-export class ClassInfo {
-  staticFieldTable = new Map<string, string>();
-  ctor: any;
-  superInfo: ClassInfo | null = null;
-  interfaces: ClassInfo[] = [];
-  types = new Set<string>();          // all names this is assignable to
-  state = 0;                          // 0 linked, 1 initing, 2 inited, 3 erroneous (<clinit> failed)
-  initError: unknown = null;          // what the failed <clinit> threw
-  initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
-  initBy: Strand | null = null;      // the strand running the in-flight clinit (JLS recursive-request check)
-  stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
-  fieldTable = new Map<string, string>(); // own instance fields: name → mangled
-  ownMethods: string[] = [];          // mangled prototype methods declared here
-  dex?: DexFile; def?: ClassDef;
-  native = false;
-  flags = 0;
-  jclass: any = null;                 // java.lang.Class instance (lazy, made by jlang)
-  compiled = false;
-  /** method bodies not yet generated (see compiler installLazy); undefined when eager */
-  lazy?: LazyMethod[];
-  defaultsCopied = false;         // interface default methods already copied down
-  constructor(public name: string, public owner?: Runtime) {}
-  get isInterface(): boolean { return (this.flags & ACC.INTERFACE) !== 0; }
-  assignableTo(target: ClassInfo): boolean {
-    if (!this.types.has(target.name)) return false;
-    if (!this.owner?.parent && !target.owner?.parent) return true;
-    return this === target || !!this.superInfo?.assignableTo(target) || this.interfaces.some((i) => i.assignableTo(target));
-  }
-}
-
-/** the prototype property prefix whose `1` says an instance is of the named type */
-export const TYPE_MARK = "$I$";
-
 /** the app heap's limit, as Runtime.maxMemory reports it */
 export const HEAP_LIMIT = 512 * 1024 * 1024;
-/** development and test builds make a read of a field a native class lacks throw, when it happens */
-const STRICT_FIELDS = process.env.NODE_ENV !== "production";
-
-/** the runtime that loaded each dex first, by id: where a frame of its code finds its class */
-const dexOwners = new Map<string, Runtime>();
-export const runtimeOfDex = (id: string): Runtime | undefined => dexOwners.get(id);
 
 export class Runtime {
-  classes = new Map<string, ClassInfo>();
   natives = new Map<string, NativeSpec>();
-  dexes: DexFile[] = [];
-  dexIndex = new Map<string, number>();
-  cv(method: string): void { jvmCoverage.hit(method); }
-  private refCache = new Map<string, Map<string, string>>();
-  /** every method the loaded dexes reference on class `cls`, name+desc → desc: the surface a
-   *  framework interface has as far as this app is concerned, which is what a proxy over it or a
-   *  JNI method id on it can be checked against when no bytecode declares the interface */
-  methodRefs(cls: string): Map<string, string> {
-    let m = this.refCache.get(cls);
-    if (m) return m;
-    this.refCache.set(cls, (m = new Map()));
-    const descriptor = cls.startsWith("[") ? cls : `L${cls};`;
-    for (const dex of this.dexes) for (const i of dex.methodsOf(descriptor)) {
-      const r = dex.method(i);
-      const d = dex.methodDesc(i);
-      m.set(r.name + d, d);
-    }
-    return m;
-  }
-  links = new Map<DexFile, DexLink>();
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
@@ -174,55 +75,22 @@ export class Runtime {
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
   }
   classpathLocations = new Map<string, string>();
-  /** set by jlang: make core exceptions without going through class init */
-  mkThrowable: (cls: string, msg: string | null) => any = (cls, msg) => {
-    const e = new Error(`${cls}: ${msg}`);
-    (e as any).$javaClass = cls;
-    return e;
-  };
+  /** makes a Java exception by class name (set by the Wasm tier's host); before a World, an Error that carries the class and message as a throwable does */
+  mkThrowable: (cls: string, msg: string | null) => any = (cls, msg) => Object.assign(new Error(`${cls}: ${msg}`), { $javaClass: cls, msg });
   /** report listeners: the reports reach the console either way */
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
-  /** the running strand, a thread as one call chain: every compiled frame that can suspend reads it
-   *  on entry, where a field load costs less than a call, and resumes as it. One slot, the root
-   *  runtime's: a forked loader's runtime reads it through its prototype and never writes its own. */
+  /** the running strand, a thread as one call chain (set by jentry) */
   cur = new Strand(null, true);
-  /** the running thread */
-  th(): unknown { return this.cur.thread; }
-  /** strand hooks (set by jentry): a resumed activation pins its strand (st) and releases it when it
-   *  finishes or suspends again (su), so a parked worker never leaves its identity behind for what
-   *  the event loop runs next. One running from its caller's call leaves the strand to that caller,
-   *  which goes on as itself whether or not the callee suspended. */
+  /** strand hooks (set by jentry): a resumed native takes its strand (st) and releases it when it finishes or suspends again (su) */
   st: (s: Strand) => void = () => {};
   su: () => void = () => {};
-  /** `f` as strand `s` of the running thread; then as the strand that ran before, unless `f` left
-   *  the turn to another (a native that parked released it) */
+  /** `f` with `s` as the running strand */
   within<T>(s: Strand, f: () => T): T {
-    if (this.parent) return this.parent.within(s, f);
     const was = this.cur;
     this.cur = s;
     try { return f(); } finally { if (this.cur === s) this.cur = was; }
-  }
-  monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
-  /** monitor-enter and monitor-exit, given the monitor the compiled site loaded from the object: a
-   *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call.
-   *  The holder is a strand (Monitors' owns, its common case first) */
-  me(obj: object | string | null | 0, m?: Monitor) {
-    const s = this.cur;
-    if (m !== undefined && (m.depth === 0 || m.owner === s || owns(m, s))) {
-      if (m.depth++ === 0) m.owner = s;
-      return;
-    }
-    return this.monitors.enter(obj, s);
-  }
-  mx(obj: object | string | null | 0, m?: Monitor) {
-    const s = this.cur;
-    if (m !== undefined && (m.owner === s || owns(m, s)) && (m.depth > 1 || m.entrants.length === 0)) {
-      if (--m.depth === 0) m.owner = null;
-      return;
-    }
-    this.monitors.exit(obj, s);
   }
   /**
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
@@ -245,203 +113,19 @@ export class Runtime {
       input = value; threw = false;
     }
   }
-  /**
-   * A compiled frame whose callee suspended: once `pending` settles, continue the saved frame in
-   * the method's resumable body, at resume point `r` (or at `next` when 0).
-   */
-  /** a hot frame suspending at site `r` (0: a fuel yield, waiting on `fu`), with registers `v` */
-  dfr(resume: () => ResumeBody, self: unknown, r: number, next: number, th: unknown, t: unknown, u: unknown, ex: unknown,
-    fu: Promise<unknown>, ...v: unknown[]): Promise<unknown> {
-    const pending = (r ? u instanceof Promise ? u : t : fu) as Promise<unknown>;
-    const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
-    return suspendWith(pending, (value, threw) => {
-      if (threw) { F.e = true; F.x = value; } else F.val = value;
-      return resume().call(self, F);
-    });
-  }
-  fuel = 4096;
-  /** what compiled code reaches the calling conventions through (suspend.ts) */
-  readonly S = SUSPENDED;
-  readonly pub = publicFace;
-  readonly jf = javaFace;
-  /** the classes whose throwables skip their stack capture while a call their handlers discard
-   *  runs (discard.ts); one object, which forked realms share */
-  quiet = { types: null as string | null };
-
-  hotSourceBytes = 0;
-  parent: Runtime | null = null;
-  platformClasses = new Set<string>();
-  platformParent = false;
-  classLoader: unknown = null;
-  /** BaseDexClassLoader's shared library loaders, asked before this runtime's own classes or after */
-  libraries: { before: Runtime[]; after: Runtime[] } | null = null;
-  private libraryDefining(name: string): Runtime | null {
-    if (this.platformClasses.has(name)) return null;
-    for (const lib of this.libraries!.before) if (lib.defines(name)) return lib;
-    if (this.dexIndex.has(name)) return null;
-    for (const lib of this.libraries!.after) if (lib.defines(name)) return lib;
-    return null;
-  }
-  defines(name: string): boolean { return this.dexIndex.has(name) || !!this.libraries && !!this.libraryDefining(name); }
-  // Share host services and thread hooks; loader definitions and compiled call sites stay private.
-  fork(): Runtime {
-    return Object.assign(Object.create(this) as Runtime, {
-      parent: this, classes: new Map(), dexes: [], dexIndex: new Map(), links: new Map(), refCache: new Map(), jni: new Map(),
-      classpath: {}, classpathLocations: new Map(), libraries: null,
-    });
-  }
-
-  loadDex(dex: DexFile, platform = false) {
-    if (dex.classDefCount >= CLASS_INDEX_BASE) throw new Error(`${dex.name}: too many class definitions`);
-    this.refCache.clear();
-    const dexIndex = this.dexes.length;
-    this.dexes.push(dex);
-    if (!dexOwners.has(dex.id)) dexOwners.set(dex.id, this);
-    if (platform) markPlatformDex(dex.id);
-    for (let i = 0; i < dex.classDefCount; i++) {
-      const name = descToName(dex.type(dex.classDef2Type(i)));
-      if (this.dexIndex.has(name)) continue;
-      this.dexIndex.set(name, dexIndex * CLASS_INDEX_BASE + i);
-      if (!platform) continue;
-      this.platformClasses.add(name);
-      // a class linked before the platform arrived: a stub now has a definition, and a native
-      // spec now has platform methods to fall through to
-      const linked = this.classes.get(name);
-      if (linked?.stub) this.classes.delete(name);
-      else if (linked?.native && linked.compiled) this.fallThrough(linked);
-    }
-  }
-
-  dexAtClassLocation(location: number): DexFile { return this.dexes[Math.floor(location / CLASS_INDEX_BASE)]; }
-  /** the first dex definition of `name`, whether or not a native spec answers for it */
-  classDefOf(name: string): { dex: DexFile; def: ClassDef } | null {
-    const loc = this.dexIndex.get(name);
-    if (loc === undefined) return null;
-    const dex = this.dexAtClassLocation(loc);
-    return { dex, def: dex.classDef(loc & (CLASS_INDEX_BASE - 1)) };
-  }
-
-  private ifaceNames: Set<string> | null = null;
-  /** Which registered natives are interfaces: an `ifaces` entry names one by definition, and an
-   *  interface never declares a superclass. Class.isInterface is what a serializer walking a
-   *  generic supertype tests before it looks at the implemented interfaces at all. */
-  private nativeIfaces(): Set<string> {
-    if (this.ifaceNames) return this.ifaceNames;
-    const named = new Set<string>();
-    for (const spec of this.natives.values()) for (const i of spec.ifaces ?? []) named.add(i);
-    this.ifaceNames = new Set([...named].filter((n) => !this.natives.get(n)?.sup));
-    return this.ifaceNames;
-  }
-
   register(spec: NativeSpec) {
     if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
       if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
       return;
     }
-    if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
-    this.ifaceNames = null;
     this.registered?.(spec);
   }
-  /** a spec registered after the Wasm tier's World was made (a module a split bundle loads later) */
+  /** a spec registered after the World was made (a module a split bundle loads later) */
   registered?: (spec: NativeSpec) => void;
-  /** §4.7 intrinsics: per bytecode class and mangled method, what makes a TS body over the class's
-   *  own fields from the AOSP body it stands for (which it calls for cases it does not cover) */
-  intrinsics = new Map<string, Map<string, Intrinsic>>();
-  intrinsic(cls: string, table: Record<string, Intrinsic>) {
-    const methods = this.intrinsics.get(cls) ?? new Map<string, Intrinsic>();
-    for (const [sig, make] of Object.entries(table)) methods.set(mangleMethod(...splitSig(sig.replace(/^static /, ""))), make);
-    this.intrinsics.set(cls, methods);
-  }
   markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
-  /** an instance of `cls`, its constructor not run: the class linked and its methods defined */
-  make(cls: string): any {
-    const info = this.link(cls);
-    this.ensureCompiled(info);
-    return new info.ctor();
-  }
-  /** Link every native spec, yielding to the event loop every `sliceMs` when one is given: a
-   *  process realm's boot shares the page's main thread with the presented app. */
-  linkNatives(onError?: (name: string, e: unknown) => void): void;
-  linkNatives(onError: ((name: string, e: unknown) => void) | undefined, sliceMs: number): Promise<void>;
-  linkNatives(onError?: (name: string, e: unknown) => void, sliceMs?: number): void | Promise<void> {
-    const names = [...this.natives.keys()];
-    const link = (from: number, until: number): number => {
-      let i = from;
-      for (; i < names.length && performance.now() < until; i++) { try { this.link(names[i]); } catch (e) { onError?.(names[i], e); } }
-      return i;
-    };
-    if (sliceMs === undefined) { link(0, Infinity); return; }
-    return (async () => { for (let i = 0; i < names.length; await yieldToLoop()) i = link(i, performance.now() + sliceMs); })();
-  }
-
-  /** what a link table depends on: the shape of every native spec a platform class backs, and the
-   *  dex indexed so far, which the zygote reads before an app's dex arrives */
-  linkFingerprint(): string {
-    let text = "";
-    for (const name of [...this.natives.keys()].filter((n) => this.dexIndex.has(n)).sort()) {
-      const spec = this.natives.get(name)!;
-      text += `${name}<${spec.sup ?? ""}|${spec.ifaces ?? ""}|${!!spec.platformClinit}|${Object.keys(spec.methods ?? {})};`;
-    }
-    for (const d of this.dexes) text += d.id;
-    return hash36(text);
-  }
-
-  dexLink(dex: DexFile): DexLink {
-    let link = this.links.get(dex);
-    if (!link) this.links.set(dex, link = new DexLink(this, dex));
-    return link;
-  }
-
-  /** the property an instance field of `cls` (or a superclass) lives in, bytecode or spec */
-  fieldProp(cls: string, name: string): string | undefined { return instanceFieldOf(this.link(cls), name); }
-
-  /** compile-time: mangled property name for an instance field ref */
-  resolveInstanceField(dex: DexFile, fieldIdx: number): string {
-    const fr = dex.field(fieldIdx);
-    const clsName = descToName(dex.type(fr.cls));
-    try {
-      const info = this.link(clsName), prop = instanceFieldOf(info, fr.name);
-      if (prop) return prop;
-      const absent = mangleField(clsName, fr.name);
-      this.absentField(info, info.ctor?.prototype, fr.name, absent);
-      return absent;
-    } catch { /* class missing: link reported it */ }
-    return mangleField(clsName, fr.name);
-  }
-
-  /** compile-time: static field access site info */
-  resolveStaticField(dex: DexFile, fieldIdx: number): { prop: string; typeIdx: number } {
-    const fr = dex.field(fieldIdx), prop = mangleStaticField(fr.name);
-    try {
-      const start = this.link(descToName(dex.type(fr.cls)));
-      const field = findStaticOwner(start, fr.name, dex.type(fr.type));
-      if (field) return { prop: field.prop, typeIdx: field.info === start ? fr.cls : -1 };
-      // a native class declares every static it has (a <clinit> hook may still be adding some)
-      if (start.state === 2) this.absentField(start, start.ctor, fr.name, prop);
-    } catch { /* class missing */ }
-    return { prop, typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
-  }
-
-  /** A field a native class lacks. Compiling is not running (profiles compile ahead), so outside
-   *  production the report and a NoSuchFieldError wait for the first read, and a write makes it
-   *  an ordinary property; production reports it now and reads undefined. */
-  private absentField(info: ClassInfo, holder: Record<string, unknown> | undefined, name: string, prop: string) {
-    if (!info.native || info.stub || !holder) return;
-    const what = `field ${info.name}.${name}`;
-    if (!STRICT_FIELDS) return this.noteMissing(what);
-    if (prop in holder) return;
-    const R = this;
-    Object.defineProperty(holder, prop, {
-      configurable: true,
-      get() { R.noteMissing(what); throw R.mkThrowable("java/lang/NoSuchFieldError", `${info.name}.${name} is not a field of the native class`); },
-      set(value: unknown) { Object.defineProperty(this, prop, { value, writable: true, enumerable: true, configurable: true }); },
-    });
-  }
-
-  /** set by jinvoke: run an invoke-custom call site's bootstrap, giving the function it calls */
-  linkCallSite: (runtime: Runtime, dex: DexFile, callSite: number) => (...a: never[]) => unknown =
-    (runtime) => { throw runtime.unimplemented("invoke-custom"); };
+  /** an instance of `cls`, its constructor not run (set by the Wasm tier's host) */
+  make: (cls: string) => any = (cls) => { throw new Error(`no World makes ${cls}`); };
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
@@ -464,7 +148,7 @@ export class Runtime {
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary
    *  consults it before giving up). `thread` is the Java thread that asked: its Cpu runs the
    *  initialisers, whichever thread is current by then. */
-  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, caller?: unknown) => Promise<void>) | null = null;
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, caller?: unknown) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
   nativeAbis: readonly string[] = [];
@@ -474,10 +158,9 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
-  /** the Java frames calling into the runtime here, innermost first (set by jlang) */
+  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (set by the World) */
   javaFrames: () => string[] = () => [];
-  /** when an array, every throwable filling in its stack is appended (a diagnostic, capped at 500) */
-  throwables: unknown[] | null = null;
+  userClassLoader: () => object | null = () => null;
   /** where each missing entry was first reached */
   missingAt = new Map<string, string[]>();
   noteMissing(what: string) {
@@ -514,441 +197,19 @@ export class Runtime {
     return wrapper as unknown as F;
   }
 
-  /** placeholder for a missing super method: logs + returns a thrower for .call() */
-  nsm(what: string): (...a: unknown[]) => never {
-    return () => { throw this.unimplemented(what); };
-  }
-
   unimplemented(what: string): Error {
     this.noteMissing(what);
     return this.mkThrowable("java/lang/UnsupportedOperationException", "webdroid missing: " + what);
   }
 
-  /** what a call site into an auto-stubbed class throws (link() already logged the class) */
-  ncdfe(name: string): Error {
-    // link first: an unlinked exception class inherits its super's ClassInfo, so compiled
-    // `catch (NoClassDefFoundError)` — which matches on ClassInfo.types — would miss it
-    this.link("java/lang/NoClassDefFoundError");
-    return this.mkThrowable("java/lang/NoClassDefFoundError", "Failed resolution of: L" + name + ";");
-  }
-
-  /** sync: get linked ClassInfo (creates ctor shell, fields, types) */
-  link(name: string): ClassInfo {
-    let info = this.classes.get(name);
-    if (info) return info;
-    if (tier === "wasm" && !this.natives.has(name) && name[0] !== "[") throw new Error(`?tier=wasm: ${name} is Java code, which the Wasm tier runs: enter it through jentry`);
-    const library = this.libraries && this.libraryDefining(name);
-    if (library) return library.link(name);
-    if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name) && (!this.platformParent || this.platformClasses.has(name)))) return this.parent.link(name);
-    if (name[0] === "[") return this.linkArray(name);
-    info = new ClassInfo(name, this);
-    this.classes.set(name, info);
-
-    const native = this.natives.get(name);
-    if (native) {
-      info.native = true;
-      if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
-      info.ctor = native.ctor;
-      this.adopt(info, name !== "java/lang/Object" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
-      this.markTypes(info);
-      // a spec declared over a bytecode superclass inherits its fields and methods
-      const sup = info.superInfo;
-      if (sup && !sup.native && Object.getPrototypeOf(native.ctor) === JObj) {
-        Object.setPrototypeOf(native.ctor, sup.ctor);
-        Object.setPrototypeOf(native.ctor.prototype, sup.ctor.prototype);
-        this.ensureCompiled(sup);
-      }
-      this.setupNativeMembers(info, native);
-      this.copyDefaults(info);
-      return info;
-    }
-
-    const loc = this.dexIndex.get(name);
-    if (loc === undefined) {
-      // auto-stub: unknown framework class → empty JObj subclass, logged for triage. It keeps
-      // instanceof/check-cast/catch matching/field types working; resolving it from a call
-      // site (DexLink.init/rdp0/rsf) throws NoClassDefFoundError as ART does.
-      this.noteMissing("class " + name);
-      info.stub = true;
-      info.native = true;
-      // Object stubbing means the natives never loaded; it must not become its own super,
-      // or every super-chain walk (copyDefaults, findStaticOwner) runs until the stack ends.
-      info.superInfo = name === "java/lang/Object" ? null : this.link("java/lang/Object");
-      info.types.add(name).add("java/lang/Object");
-      info.ctor = new Function("S", `return class ${name.replace(/[^A-Za-z0-9_$]/g, "_")}$stub extends S {}`)(JObj);
-      info.ctor.$i = info;
-      this.markTypes(info);
-      info.state = 2;
-      info.compiled = true;
-      return info;
-    }
-    const { dex, def } = this.classDefOf(name)!;
-    info.dex = dex;
-    info.def = def;
-    info.flags = def.flags;
-    this.adopt(info, def.superIdx === NO_INDEX ? null : descToName(dex.type(def.superIdx)), def.interfaces.map((i) => descToName(dex.type(i))));
-    // instance field table + ctor shell with field defaults
-    let fieldsInit = "";
-    for (const f of def.instanceFields) {
-      const fr = dex.field(f.fieldIdx);
-      const fname = fr.name;
-      const mangled = mangleField(name, fname);
-      info.fieldTable.set(fname, mangled);
-      fieldsInit += `this.${mangled}=${defaultVal(dex.type(fr.type))};`;
-    }
-    info.ctor = info.isInterface ? class {}
-      : new Function("S", fieldsInit ? `return class extends S {constructor(){super();${fieldsInit}}}` : "return class extends S {}")(info.superInfo?.ctor ?? JObj);
-    // every method goes on under two names (suspend.ts): as a dictionary, the prototype takes them
-    // without a hidden-class transition each, and V8 makes it fast again once it serves lookups
-    dictionaryMode(info.ctor.prototype);
-    info.ctor.$i = info;
-    this.markTypes(info);
-    if (this.platformClasses.has(name) && def.virtualMethods.some((m) => m.codeOff && dex.method(m.methodIdx).name === "finalize" && dex.methodDesc(m.methodIdx) === "()V"))
-      this.claimOnStore(info, def, dex);
-    const staticNames = new Map<string, number>();
-    for (const f of def.staticFields) {
-      const name = dex.field(f.fieldIdx).name;
-      staticNames.set(name, (staticNames.get(name) ?? 0) + 1);
-    }
-    for (const f of def.staticFields) {
-      const fr = dex.field(f.fieldIdx);
-      const desc = dex.type(fr.type), prop = mangleStaticField(fr.name, staticNames.get(fr.name)! > 1 ? desc : undefined);
-      info.staticFieldTable.set(fr.name + ":" + desc, prop);
-      // a float or double static starts as a double: V8 turns a function whose own property changes
-      // from a small integer to a double into a dictionary, and its static calls stop inlining
-      if (desc === "D" || desc === "F") info.ctor[prop] = 0.5;
-      info.ctor[prop] = defaultValue(desc);
-    }
-    return info;
-  }
-
   /** the handle-table owner hook (src/android/handles.ts) */
   claimHandle?: (owner: object, h: bigint) => void;
-  /** A platform class whose finalize() frees the native handle in one of its long fields: storing
-   *  a handle there makes the object its owner, since no finalizer runs here. */
-  private claimOnStore(info: ClassInfo, def: ClassDef, dex: DexFile): void {
-    const R = this;
-    for (const f of def.instanceFields) {
-      const fr = dex.field(f.fieldIdx);
-      if (dex.type(fr.type) !== "J") continue;
-      const prop = info.fieldTable.get(fr.name)!, slot = prop + "$v";
-      Object.defineProperty(info.ctor.prototype, prop, {
-        get(this: Record<string, bigint>) { return this[slot]; },
-        set(this: Record<string, bigint>, h: bigint) { this[slot] = h; R.claimHandle?.(this, h); },
-      });
-    }
-  }
-
-  /** Marks the class's prototype with every type it is assignable to, so a compiled instance-of
-   *  or check-cast in the root runtime is one property read. A forked loader's classes stay
-   *  unmarked: its same-named types are distinct classes, which only `iof` tells apart. */
-  private markTypes(info: ClassInfo) {
-    if (this.parent || info.owner?.parent || !info.ctor) return;
-    const proto = info.ctor.prototype as Record<string, unknown>;
-    for (const t of info.types) proto[TYPE_MARK + t] ??= 1;
-  }
-
-  /** link the supertypes and take on every name the class is assignable to */
-  private adopt(info: ClassInfo, sup: string | null, ifaces: string[]) {
-    info.superInfo = sup ? this.link(sup) : null;
-    info.types.add(info.name);
-    if (info.superInfo) for (const t of info.superInfo.types) info.types.add(t);
-    for (const i of ifaces) {
-      const ii = this.link(i);
-      info.interfaces.push(ii);
-      for (const t of ii.types) info.types.add(t);
-    }
-  }
-
-  private setupNativeMembers(info: ClassInfo, spec: NativeSpec) {
-    const proto = spec.ctor.prototype as Record<string, unknown>;
-    const ctorAny = spec.ctor as any;
-    const methods = { ...spec.methods } as Record<string, unknown>;
-    // AOSP's (Context, AttributeSet) constructor delegates to the defStyle ones, so a widget
-    // that spells only the two-arg form must not let a SUBCLASS reach the superclass's
-    // three-arg native instead and skip its attribute parsing (Material passes its own
-    // default style to every widget it wraps).
-    const two = methods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"];
-    if (two) for (const extra of ["I)V", "II)V"]) {
-      const k = "<init>(Landroid/content/Context;Landroid/util/AttributeSet;" + extra;
-      methods[k] ??= two;
-    }
-    for (const [key, impl] of Object.entries(methods)) {
-      let k = key, isStatic = false;
-      if (k.startsWith("static ")) { isStatic = true; k = k.slice(7); }
-      const [mname, desc] = splitSig(k);
-      const mangled = mangleMethod(mname, desc);
-      const target: Record<string, unknown> = isStatic ? ctorAny : proto;
-      const fn = typeof impl === "string" ? proto[impl] : impl;
-      if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
-      // a caller-sensitive static also takes its caller's runtime
-      const arity = parseMethodDesc(desc).params.length + (isStatic && spec.callerSensitive?.includes(k) ? 1 : 0);
-      setPublic(target, mangled, this.trackPlaceholder(`${spec.name}.${k}`, fn, (f) => { if (target[mangled] === f) setPublic(target, mangled, fn, arity); }), arity);
-      if (!isStatic) info.ownMethods.push(mangled);
-      if (mname === "<init>") proto[directName(spec.name, mangled)] = target[xname(mangled)];
-    }
-    // A static written as a getter is resolved on first READ, not here: link order is
-    // registration order, so a static whose value is an instance of another class would
-    // otherwise link that class before its own module had registered it — and get a stub.
-    // First read replaces the accessor with the value, so identity still holds.
-    for (const fname of Object.keys(spec.statics ?? {})) {
-      const key = mangleStaticField(fname);
-      const d = Object.getOwnPropertyDescriptor(spec.statics!, fname)!;
-      if (!d.get) { ctorAny[key] = d.value; continue; }
-      const pin = (owner: object, value: unknown) => Object.defineProperty(owner, key, { value, writable: true, configurable: true });
-      Object.defineProperty(ctorAny, key, {
-        configurable: true,
-        get: () => { const v = d.get!.call(spec.statics); pin(ctorAny, v); return v; },
-        // a subclass declaring a static of the same name writes through this inherited
-        // accessor; that value is its own field, not this class's
-        set(this: object, v: unknown) { pin(this, v); },
-      });
-    }
-    const fl = spec.fields ?? [];
-    if (Array.isArray(fl)) for (const n of fl) info.fieldTable.set(n, n);
-    else for (const [jname, prop] of Object.entries(fl)) info.fieldTable.set(jname, prop);
-    // serialized state is the class's own instance fields, which JNI and reflection also reach
-    for (const f of spec.serialization?.fields ?? []) if (!info.fieldTable.has(f.name)) info.fieldTable.set(f.name, f.prop);
-    ctorAny.$i = info;
-    info.state = spec.clinit || spec.platformClinit ? 0 : 2;
-    info.compiled = true;
-    if (this.platformClasses.has(info.name)) this.fallThrough(info);
-  }
-
-  /**
-   * A native spec that leaves out a method the platform class declares answers with the
-   * platform's: its body, compiled against the native object on first call, or its JNI binding
-   * when the platform declares it native. Only gaps are filled: a virtual method or constructor
-   * the prototype chain already reaches, other than java.lang.Object's, keeps its native
-   * implementation.
-   */
-  private fallThrough(info: ClassInfo) {
-    const { dex, def } = this.classDefOf(info.name)!;
-    const proto = info.ctor.prototype;
-    // the platform's compile-time constants (encoded static values) for statics the spec omits
-    if (def.staticValuesOff) dex.encodedArray(def.staticValuesOff).forEach((value, i) => {
-      const prop = mangleStaticField(dex.field(def.staticFields[i].fieldIdx).name);
-      if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = this.encToJs(dex, value);
-    });
-    const lists = [def.directMethods, def.virtualMethods], R = this, cls = info.name, platformClinit = this.natives.get(cls)?.platformClinit;
-    // the rest of a platform <clinit>'s statics, which it sets
-    if (platformClinit) for (const f of def.staticFields) {
-      const fr = dex.field(f.fieldIdx), prop = mangleStaticField(fr.name);
-      if (!Object.hasOwn(info.ctor, prop)) info.ctor[prop] = defaultValue(dex.type(fr.type));
-    }
-    const fill = ([list, index, mangled, kind]: Gap) => {
-      const m = lists[list][index], isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
-      const superProto = info.superInfo?.ctor.prototype;
-      if (kind === 2) { target[mangled] = superProto[mangled]; target[xname(mangled)] = superProto[xname(mangled)]; return; }
-      if (!isStatic) info.ownMethods.push(mangled);
-      if (kind === 0) { installLazy(this, dex, info, m, true, mangled); return; }
-      // resolved on first call, and kept: a call site that captured this stub keeps calling it
-      let fn: ((...a: never[]) => unknown) | null = null;
-      const arity = parseMethodDesc(methodKey(dex, m.methodIdx).desc).params.length;
-      setPublic(target, mangled, function (this: unknown, ...args: unknown[]) {
-        if (!fn) {
-          const { name, desc } = methodKey(dex, m.methodIdx);
-          if (!(fn = R.jniFn(cls, name + desc))) throw R.ulink(cls, name, desc);
-          setPublic(target, mangled, fn, arity);
-        }
-        return fn.apply(this, args as never[]);
-      }, arity);
-    };
-    const known = gapsOf(cls);
-    if (known) { known.forEach(fill); return; }
-    const found: Gap[] = [];
-    lists.forEach((list, l) => list.forEach((m, index) => {
-      if (m.flags & ACC.ABSTRACT) return;
-      const { name, mangled } = methodKey(dex, m.methodIdx);
-      const isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
-      // statics and private methods belong to their class; the rest may be inherited
-      const own = isStatic || l === 0 && name !== "<init>";
-      // what a subclass reaches from java.lang.Object alone is no implementation of the spec's
-      const base = proto === JObj.prototype ? undefined : JObj.prototype[mangled as never];
-      if (name === "<clinit>" ? !platformClinit : own ? Object.hasOwn(target, mangled) : mangled in target && target[mangled] !== base) return;
-      // a spec whose JS class does not extend its declared superclass's still inherits from it
-      const inherited = own ? undefined : info.superInfo?.ctor?.prototype?.[mangled];
-      const gap: Gap = [l, index, mangled, inherited && inherited !== base ? 2 : m.flags & ACC.NATIVE ? 1 : 0];
-      found.push(gap);
-      fill(gap);
-    }));
-    recordGaps(cls, found);
-  }
-
-  /** the fields `m` reads or writes on native classes that those classes do not have: a
-   *  platform body touching them would read undefined, or leave its write unseen */
-  absentFields(dex: DexFile, m: EncodedMethod): string[] {
-    const absent = new Set<string>(), insns = dex.code(m.codeOff).insns;
-    for (let pc = 0; pc < insns.length; pc += insnLen(insns, pc)) {
-      const op = insns[pc] & 0xff;
-      if (op < 0x52 || op > 0x6d) continue;
-      const fr = dex.field(insns[pc + 1]), owner = descToName(dex.type(fr.cls));
-      let info: ClassInfo;
-      try { info = this.link(owner); } catch { continue; }
-      if (!info.native || info.stub) continue;
-      if (op < 0x60 ? !instanceFieldOf(info, fr.name) : !findStaticOwner(info, fr.name, dex.type(fr.type))) absent.add(`${owner}.${fr.name}`);
-    }
-    return [...absent];
-  }
-
-  private linkArray(desc: string): ClassInfo {
-    const info = new ClassInfo(desc);
-    this.classes.set(desc, info);
-    info.types.add(desc).add("java/lang/Object").add("java/lang/Cloneable").add("java/io/Serializable");
-    info.superInfo = this.link("java/lang/Object");
-    info.ctor = null;
-    info.state = 2;
-    return info;
-  }
-
-  frameMethod<F extends Function>(fn: F, name?: string): F { return nameFrame(this, fn, name); }
-
-  /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
-  initClass(info: ClassInfo, from?: ClassInfo): Promise<void> | null {
-    if (info.owner && info.owner !== this) return info.owner.initClass(info, from);
-    // Preparation (defining the methods) is NOT initialization: every reentrancy escape of
-    // initialize returns without running <clinit>, and a caller that then looks a method up on a
-    // still-uncompiled prototype silently inherits the SUPERCLASS's method instead.
-    this.ensureCompiled(info);
-    return info.state === 2 ? null : initialize(this, info, from);
-  }
-
-  ensureCompiled(info: ClassInfo): void {
-    if (info.owner && info.owner !== this) return info.owner.ensureCompiled(info);
-    // The JS prototype chain only carries inherited methods once the super is compiled too.
-    if (info.superInfo && !info.superInfo.compiled) this.ensureCompiled(info.superInfo);
-    if (info.compiled || !info.def) { this.copyDefaults(info); return; }
-    info.compiled = true;
-    const t0 = performance.now();
-    const dex = info.dex!;
-    compileClass(this, dex, info);
-    perf.compileMs += performance.now() - t0;
-    perf.classesCompiled++;
-    for (const m of info.def.virtualMethods) {
-      const mangled = methodKey(dex, m.methodIdx).mangled;
-      if (!info.isInterface && m.flags & ACC.ABSTRACT) setJava(info.ctor.prototype, mangled, this.abstractBody(info, mangled), parseMethodDesc(demangle(mangled)![1]).params.length);
-      if (m.codeOff) info.ownMethods.push(mangled);
-    }
-    this.copyDefaults(info);
-  }
-
-  private declaredMethodFlags(info: ClassInfo, mangled: string): number | undefined {
-    if (info.def && info.dex) {
-      const dex = info.dex;
-      return info.def.virtualMethods.find(m => methodKey(dex, m.methodIdx).mangled === mangled)?.flags;
-    }
-    if (info.ownMethods.includes(mangled)) return 0;
-    const proto = info.ctor?.prototype, java = xname(mangled);
-    if (info.native && proto && (Object.hasOwn(proto, java) || Object.hasOwn(proto, mangled))) {
-      const entry = proto[java] ?? proto[mangled];
-      if (typeof entry === "function" && copiedDefaults.get(proto)?.get(mangled) !== entry) return 0;
-    }
-    return undefined;
-  }
-
-  /** Select declarations rather than defaults previously copied onto a prototype. */
-  private interfaceDeclarations(info: ClassInfo, mangled: string): [ClassInfo, number][] {
-    const own = info.isInterface ? this.declaredMethodFlags(info, mangled) : undefined;
-    if (own !== undefined) return [[info, own]];
-    const seen = new Set<ClassInfo>(), candidates: [ClassInfo, number][] = [];
-    const visit = (c: ClassInfo) => {
-      if (seen.has(c)) return;
-      seen.add(c);
-      const flags = this.declaredMethodFlags(c, mangled);
-      if (flags !== undefined && !(flags & (ACC.STATIC | ACC.PRIVATE))) candidates.push([c, flags]);
-      c.interfaces.forEach(visit);
-    };
-    for (let c: ClassInfo | null = info; c; c = c.superInfo) c.interfaces.forEach(visit);
-    return candidates.filter(([c]) => !candidates.some(([other]) => other !== c && other.assignableTo(c)));
-  }
-
-  private abstractBody(info: ClassInfo, mangled: string): JvmFunction {
-    return () => { throw this.mkThrowable("java/lang/AbstractMethodError", `${info.name}.${mangled}`); };
-  }
-
-  private interfaceBody(info: ClassInfo, mangled: string, includeAbstract: boolean): JvmFunction | undefined {
-    const maximal = this.interfaceDeclarations(info, mangled), defaults = maximal.filter(([, flags]) => !(flags & ACC.ABSTRACT));
-    if (defaults.length > 1) return () => { throw this.mkThrowable("java/lang/IncompatibleClassChangeError", `Conflicting default methods for ${info.name}.${mangled}`); };
-    const target = defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
-    if (!target) return undefined;
-    const [c, flags] = target;
-    if (flags & ACC.ABSTRACT) return this.abstractBody(c, mangled);
-    this.ensureCompiled(c);
-    return c.ctor.prototype[xname(mangled)] ?? this.nsm(`${c.name}.${mangled} (super)`);
-  }
-
-  interfaceSuper(info: ClassInfo, mangled: string): JvmFunction {
-    return this.interfaceBody(info, mangled, true) ?? this.nsm(`${info.name}.${mangled} (super)`);
-  }
-
-  /** The default body a platform fallthrough yields to, as HashMap's computeIfAbsent does to Map's. */
-  interfaceDefault(info: ClassInfo, mangled: string): JvmFunction | undefined {
-    return this.interfaceBody(info, mangled, false);
-  }
-
-  private copyDefaults(info: ClassInfo) {
-    if (!info.ctor || info.defaultsCopied) return;
-    info.defaultsCopied = true;
-    const seen = new Set<ClassInfo>(), methods = new Set<string>();
-    const visit = (c: ClassInfo) => {
-      if (seen.has(c)) return;
-      seen.add(c);
-      this.ensureCompiled(c);
-      c.ownMethods.forEach(m => methods.add(m));
-      c.interfaces.forEach(visit);
-    };
-    for (let c: ClassInfo | null = info; c; c = c.superInfo) c.interfaces.forEach(visit);
-    for (const mangled of methods) {
-      // A real class declaration wins; an inherited copied default can be overridden by a subinterface.
-      let declared = false;
-      for (let c: ClassInfo | null = info; c; c = c.superInfo) if (this.declaredMethodFlags(c, mangled) !== undefined) { declared = true; break; }
-      if (declared) continue;
-      const fn = this.interfaceBody(info, mangled, true);
-      if (fn) {
-        const proto = info.ctor.prototype;
-        setJava(proto, mangled, fn, parseMethodDesc(demangle(mangled)![1]).params.length);
-        let copied = copiedDefaults.get(proto);
-        if (!copied) copiedDefaults.set(proto, copied = new Map());
-        copied.set(mangled, fn);
-      }
-    }
-  }
-
-  encToJs(dex: DexFile, v: EncVal): unknown {
-    if (v !== null && typeof v === "object") {
-      if (Array.isArray(v)) return v.map((x) => this.encToJs(dex, x));
-      if (v.kind === "type") return this.classFor(descToName(dex.type(v.idx)));
-      if (v.kind === "enum") {
-        const fr = dex.field(v.idx);
-        const info = this.link(descToName(dex.type(fr.cls)));
-        const field = findStaticOwner(info, fr.name, dex.type(fr.type));
-        return field?.info.ctor[field.prop];
-      }
-      return null;
-    }
-    if (typeof v === "boolean") return v ? 1 : 0;
-    return v;
-  }
-
-  /** java.lang.Class object for a class name — filled in by jlang module */
+  /** java.lang.Class object for a class name (set by the Wasm tier's host) */
   classFor: (name: string) => any = (name) => ({ $classFor: name });
-
-  // ───────────────────────────── helpers called from compiled code (`R.…`)
-
-  /** Compile a lazily-emitted method body on first call, install it, and hand it back. */
-  lz(C: CompiledCtor, i: number): ReturnType<typeof compileLazyMethod> {
-    const t0 = performance.now();
-    const fn = compileLazyMethod(this, C, i);
-    perf.compileMs += performance.now() - t0;
-    return fn;
-  }
 
   /** normalize a thrown JS value to a Java throwable */
   jx(e: unknown): any {
     if (e instanceof JObj) return e;
-    // a suspension is never an exception: something between a Java-ABI call and its compiled
-    // caller handled it as one
-    if (e === SUSPENDED) { console.error("[webdroid] a suspension reached an exception handler"); return this.mkThrowable("java/lang/InternalError", "suspension escaped"); }
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
@@ -957,10 +218,7 @@ export class Runtime {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
       if (/is not a function/.test(m)) {
-        // a host function installed under its mangled name alone: compiled code calls the Java-ABI name
-        if (/\.x(m|i)\$\S* is not a function/.test(m)) console.error("[webdroid] no Java-ABI method:", m);
-        const nd = demangle(/\.x?(\S+) is not a function/.exec(m)?.[1] ?? "");
-        this.noteMissing(nd ? `${nd[0]}${nd[1]} is not a function` : m);
+        this.noteMissing(m);
         return this.mkThrowable("java/lang/NoSuchMethodError", m);
       }
     }
@@ -981,102 +239,7 @@ export class Runtime {
     return this.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${bytes} byte allocation with ${HEAP_LIMIT} free bytes`);
   }
 
-  /** instance-of: 1/0 */
-  iof(v: unknown, name: string): number {
-    if (v === null || v === undefined) return 0;
-    if (typeof v === "string") return STRING_TYPES.has(name) ? 1 : 0;
-    if (typeof v === "number" || typeof v === "bigint") return BOX_UNIVERSE.has(name) ? 1 : 0;
-    if (Array.isArray(v) || ArrayBuffer.isView(v)) return this.arrayIof(v as ArrLike, name);
-    const info: ClassInfo | undefined = (v as any).constructor?.$i;
-    if (!info?.types.has(name)) return 0;
-    return info.owner?.parent || this.parent ? +info.assignableTo(this.link(name)) : 1;
-  }
-
-  arrayIof(v: ArrLike, name: string): number {
-    if (name === "java/lang/Object" || name === "java/lang/Cloneable" || name === "java/io/Serializable") return 1;
-    if (name[0] !== "[") return 0;
-    const vDesc: string = arrayDesc(v);
-    if (vDesc === name) return 1;
-    // covariance for object arrays: [Lsub; → [Lsup;  and [[X → [Ljava/lang/Object;
-    let d1 = 0, d2 = 0, a = vDesc, b = name;
-    while (a[d1] === "[") d1++;
-    while (b[d2] === "[") d2++;
-    if (d2 < d1 && b.slice(d2) === "Ljava/lang/Object;") return 1;
-    if (d1 !== d2) return 0;
-    const ea = a.slice(d1), eb = b.slice(d2);
-    if (ea[0] === "L" && eb[0] === "L") {
-      if (eb === "Ljava/lang/Object;") return 1;
-      const ei = this.link(descToName(ea));
-      return ei?.types.has(descToName(eb)) ? 1 : 0;
-    }
-    return 0;
-  }
-
-  /** instance-of at a compiled site: caches the receiver's class with its answer in the first free
-   *  of two entries, else the second (object arrays carry their element type per instance, so
-   *  they are never cached) */
-  iofc(v: unknown, name: string, ic: unknown[], k: number): number {
-    const r = this.iof(v, name);
-    if (v != null && !Array.isArray(v)) { const at = ic[k] === undefined ? k : k + 2; ic[at] = (v as object).constructor; ic[at + 1] = r; }
-    return r;
-  }
-  /** check-cast at a compiled site: caches a receiver class that passed, as iofc does */
-  ccc(v: unknown, name: string, ic: unknown[], k: number): void {
-    this.cc(v, name);
-    if (!Array.isArray(v)) ic[ic[k] === undefined ? k : k + 2] = (v as object).constructor;
-  }
-  /** check-cast */
-  cc<T>(v: T, name: string): T {
-    if (v === null || v === undefined || (v as unknown) === 0) return v;
-    if (!this.iof(v, name)) {
-      throw this.mkThrowable("java/lang/ClassCastException",
-        `${describeVal(v)} cannot be cast to ${name}`);
-    }
-    return v;
-  }
-
   npe(): never { throw this.mkThrowable("java/lang/NullPointerException", null); }
-  /** a compiled body dispatched to a pc that is not a block leader */
-  badPc(pc: number): never { throw new Error("bad pc " + pc); }
-  dz(): never { throw this.mkThrowable("java/lang/ArithmeticException", "divide by zero"); }
-  aio(i: number, len: number): never {
-    throw this.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `length=${len}; index=${i}`);
-  }
-  f2i(v: number): number {
-    return v !== v ? 0 : v >= 2147483647 ? 2147483647 : v <= -2147483648 ? -2147483648 : v | 0;
-  }
-  f2l(v: number): bigint {
-    if (v !== v) return 0n;
-    if (v >= 9223372036854775807) return 9223372036854775807n;
-    if (v <= -9223372036854775808) return -9223372036854775808n;
-    return BigInt(Math.trunc(v));
-  }
-  /** object array with element-type tag; like ART's, one past the heap limit is an OutOfMemoryError */
-  oa(len: number, t: string): unknown[] {
-    if (len < 0) throw this.mkThrowable("java/lang/NegativeArraySizeException", String(len));
-    if (len * 4 > HEAP_LIMIT) throw this.oom(len * 4);
-    const a = new Array(len).fill(null);
-    (a as any).$t = t;
-    return a;
-  }
-  /** long shift counts, so a shift does not allocate its BigInt amount */
-  readonly shifts: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt(i));
-  /** `1L << n` for every n: the bit-mask idiom then allocates nothing */
-  readonly bits: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt.asIntN(64, 1n << BigInt(i)));
-  /** the process's main thread, whose back-edge yields resume ahead of other threads' */
-  main: unknown = null;
-  /** Back-edge fuel check target: refill, and yield to the event loop once the current turn has
-   *  held the thread for 8 ms. The main thread resumes ahead of the threads that only yielded, as
-   *  its core would keep running; behind them, a tap waited out every runnable thread's slice. */
-  refuel(): Promise<void> | null {
-    this.fuel = 4096;   // a loop of native calls costs tens of µs an iteration: check the clock often enough to yield within ~10 ms
-    if (turnElapsed() < 8) return null;
-    return this.cur.thread === this.main ? wakeSoon() : yieldToLoop();
-  }
-  /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
-  classForIdx(D: DexLink, typeIdx: number): unknown {
-    return this.classFor(descToName(D.dex.type(typeIdx)));
-  }
   /** new String(char[], int, int), the constructor readers and parsers call per token */
   strChars(chars: Uint16Array | null, off: number, len: number): string {
     if (!chars) this.npe();
@@ -1127,61 +290,20 @@ export class Runtime {
       throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
     return off;
   }
-  /** virtual call on an array receiver: Object's methods, with an array's own clone */
-  arrCall(a: any, name: string, other?: unknown): unknown {
-    switch (name) {
-      case "clone": {
-        if (Array.isArray(a)) { const c: unknown[] = a.slice(); (c as any).$t = (a as any).$t; return c; }
-        return a.slice();
-      }
-      case "getClass": return this.classFor(arrayDesc(a));
-      case "hashCode": return idHash(a);
-      case "toString": return dotName(arrayDesc(a)) + "@" + idHash(a).toString(16);
-      case "equals": return a === other ? 1 : 0;
-      default: throw this.unimplemented("array." + name);
-    }
-  }
-
-  /** fill-array-data: raw per-element little-endian ints (BigInt for width 8) */
-  fad(arr: unknown, vals: (number | bigint)[]) {
-    if (arr instanceof Float32Array) arr.set(new Float32Array(Int32Array.from(vals as number[]).buffer));
-    else if (arr instanceof Float64Array) arr.set(new Float64Array(BigInt64Array.from(vals as bigint[]).buffer));
-    else {
-      const a = arr as { [i: number]: number | bigint };
-      for (let i = 0; i < vals.length; i++) a[i] = vals[i];
-    }
-  }
 }
-
-type ArrLike = unknown[] | { length: number };
-function arrayDesc(v: unknown): string {
-  if (Array.isArray(v)) return (v as any).$t ? "[" + (v as any).$t : "[Ljava/lang/Object;";
-  const e = primElem(v);
-  return e ? "[" + e : "[Ljava/lang/Object;";
-}
-function describeVal(v: unknown): string {
-  if (typeof v === "string") return "java.lang.String";
-  if (typeof v === "number" || typeof v === "bigint") return "raw:" + v;
-  const i: ClassInfo | undefined = (v as any)?.constructor?.$i;
-  return i?.name ?? arrayDesc(v);
-}
-
-const STRING_TYPES = new Set(["java/lang/String", "java/lang/Object", "java/lang/CharSequence", "java/lang/Comparable", "java/io/Serializable"]);
-// unboxed JS numbers/bigints occasionally reach reflective isInstance checks (e.g.
-// Compose SaveableStateRegistry probing Serializable); grant the types every box shares
-const BOX_UNIVERSE = new Set(["java/lang/Object", "java/io/Serializable", "java/lang/Comparable", "java/lang/Number"]);
 
 export const rt = new Runtime();
+
 const declaredFields = new Map<string, string>();
 /** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;
  *  "" when the class has none */
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
-  if (prop === undefined) declaredFields.set(key, prop = (fieldNames.find ? fieldNames.find(cls, name) : instanceFieldOf(rt.link(cls), name)) ?? "");
+  if (prop === undefined) declaredFields.set(key, prop = fieldNames.find?.(cls, name) ?? "");
   return prop;
 }
-/** how the Wasm tier names an instance field, which a facade of the object answers under that name */
+/** how the World names an instance field, which a facade of the object answers under that name */
 export const fieldNames = { find: null as ((cls: string, name: string) => string | undefined) | null };
 function fieldOf(cls: string, name: string): string {
   const prop = declaredField(cls, name);

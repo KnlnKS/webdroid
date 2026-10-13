@@ -4,6 +4,8 @@
 import { decodeModifiedUtf8, descToName } from "./abi";
 
 export const NO_INDEX = 0xffffffff;
+/** access flags of classes, fields and methods */
+export const ACC = { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 0x10, SYNCHRONIZED: 0x20, DECLARED_SYNCHRONIZED: 0x20000, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400, ENUM: 0x4000, CONSTRUCTOR: 0x10000 };
 
 export const isDexEntry = (name: string): boolean => /^classes\d*\.dex$/.test(name);
 export const dexEntryNames = (names: Iterable<string>): string[] => [...names].filter(isDexEntry)

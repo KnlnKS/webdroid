@@ -1,8 +1,7 @@
 // libcore.io.Memory's natives (libcore_io_Memory.cpp), and the i18n module's copy of the class
 // that reads tzdata: raw access to guest memory, which is little-endian as the host is, so a
 // `swap` reverses each element's bytes. Addresses from EXTERNAL up are outside guest memory:
-// immutable file pages (Region), early non-movable arrays (HostBytes), or live owner leases
-// which Java accesses through RPC (LiveRegion).
+// immutable file pages (Region), or live owner leases which Java accesses through RPC (LiveRegion).
 import { mem } from "../../native/mem";
 import { rt } from "../runtime";
 import { after } from "./jentry";
@@ -78,24 +77,6 @@ class Region {
     return after(this.load(at, width), () => get(new DataView(this.bytes(at, width).slice().buffer), 0));
   }
 }
-/** A non-movable byte[] made before an unshared guest memory is committed for native code, which
- *  grows it and detaches every view of it (jnio's nonMovableBytes), so the bytes stay in the JS
- *  heap: host code reaches them by address like a mapping's, and native code, which reads guest
- *  memory, cannot (JNI's GetDirectBufferAddress answers 0, its "region undefined"). */
-class HostBytes {
-  // over the array's buffer, not the array, which the finalization registry watches
-  readonly u8: Uint8Array;
-  readonly view: DataView;
-  constructor(array: Int8Array) { this.u8 = new Uint8Array(array.buffer); this.view = new DataView(array.buffer); }
-  get size(): number { return this.u8.length; }
-  resident(): boolean { return true; }
-  load(at: number, n: number): null {
-    if (at < 0 || n < 0 || at + n > this.u8.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `array range ${at}+${n} of ${this.u8.length}`);
-    return null;
-  }
-  bytes(at: number, n: number): Uint8Array { this.load(at, n); return this.u8.subarray(at, at + n); }
-  read<T>(at: number, width: number, get: Get<T>): T { this.load(at, width); return get(this.view, at); }
-}
 /** Java accesses await the canonical owner. Raw guest loads cannot use an RPC address. */
 class LiveRegion {
   private ranges: [number,number][];
@@ -128,9 +109,9 @@ class LiveRegion {
 }
 type Get<T> = (view: DataView, at: number) => T;
 /** by region number: address EXTERNAL + (number << 32) + offset */
-const regions: (Region | HostBytes | LiveRegion | undefined)[] = [];
+const regions: (Region | LiveRegion | undefined)[] = [];
 /** a new region's number and base address */
-function addRegion(region: Region | HostBytes | LiveRegion): [number, bigint] {
+function addRegion(region: Region | LiveRegion): [number, bigint] {
   const n = regions.length;
   regions.push(region);
   return [n, EXTERNAL + (BigInt(n) << REGION_SHIFT)];
@@ -159,19 +140,8 @@ export function unmapExternal(address: bigint, size?: number): void | Promise<vo
   regions[n] = undefined;
   if (region instanceof Region) return region.release?.();
 }
-const hostAddresses = new WeakMap<Int8Array, bigint>();
-const hostFreed = new FinalizationRegistry<number>((n) => { regions[n] = undefined; });
-/** a non-movable byte[] of n bytes in the JS heap, addressed outside guest memory (HostBytes) */
-export function hostBytes(size: number): Int8Array {
-  const array = new Int8Array(size), [n, base] = addRegion(new HostBytes(array));
-  hostAddresses.set(array, base);
-  hostFreed.register(array, n);
-  return array;
-}
-/** the address of a hostBytes array */
-export const hostAddress = (array: object): bigint | undefined => hostAddresses.get(array as Int8Array);
 /** the external mapping `address` falls in */
-function regionAt(address: bigint): Region | HostBytes | LiveRegion {
+function regionAt(address: bigint): Region | LiveRegion {
   const region = regions[regionNumber(address)];
   if (!region) throw rt.mkThrowable("java/lang/InternalError", `unmapped address 0x${address.toString(16)}`);
   return region;
@@ -187,7 +157,7 @@ export const externalBytes = (address: bigint, n: number): Uint8Array => regionA
 /** where native code reads an external mapping: the whole mapping, loaded into guest memory once */
 export function guestAddress(address: bigint): number | bigint | Promise<number | bigint> {
   const region = regionAt(address), offset = offsetIn(address);
-  if (region instanceof HostBytes || region instanceof LiveRegion) return 0;
+  if (region instanceof LiveRegion) return 0;
   return after(region.load(0, region.size), () => {
     if (!region.guest) {
       const va = mem.mapVa(region.size, false);
@@ -233,21 +203,16 @@ function swapped(bytes: Uint8Array, size: number): Uint8Array {
   for (let i = 0; i < bytes.length; i += size) for (let j = 0; j < size; j++) out[i + j] = bytes[i + size - 1 - j];
   return out;
 }
-/** the host array a store of n at an external address lands in (at offsetIn), as mappings are read only */
-function stored(address: bigint, n: number): HostBytes {
+/** the live lease a store at an external address goes to: file mappings are read only */
+function stored(address: bigint): LiveRegion {
   const region = regionAt(address);
-  if (!(region instanceof HostBytes)) throw rt.mkThrowable("java/lang/InternalError", `store to a read-only mapping at 0x${address.toString(16)}`);
-  region.load(offsetIn(address), n);
+  if (!(region instanceof LiveRegion)) throw rt.mkThrowable("java/lang/InternalError", `store to a read-only mapping at 0x${address.toString(16)}`);
   return region;
 }
 /** a store of `bytes` at a native address (code pages see the write) */
 export function writeAt(address: bigint, bytes: Uint8Array): void | Promise<void> {
-  if (isExternal(address)) {
-    const region = regionAt(address);
-    if (region instanceof LiveRegion) return region.write(offsetIn(address),bytes);
-    stored(address,bytes.length).u8.set(bytes,offsetIn(address));
-  }
-  else mem.write(physical(address), bytes);
+  if (isExternal(address)) return stored(address).write(offsetIn(address), bytes);
+  mem.write(physical(address), bytes);
 }
 const peekArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   const target = region(array, offset, count);
@@ -273,12 +238,8 @@ const objectBytes = (o: Elements | object | null, at: number, n: number): Uint8A
   o === null || ArrayBuffer.isView(o) ? arrayBytes(o, at, n) : memoryAt(bufferAddress!(o) + BigInt(at), n);
 export const externalRead = <T>(address: bigint, width: number, get: Get<T>): T | Promise<T> => regionAt(address).read(offsetIn(address), width, get);
 export function externalWrite<T>(address: bigint, width: number, value: T, put: (view: DataView, at: number, value: T) => void): void | Promise<void> {
-  const mapped = regionAt(address), at = offsetIn(address);
-  if (mapped instanceof LiveRegion) {
-    const bytes = new Uint8Array(width); put(new DataView(bytes.buffer),0,value);
-    return mapped.write(at,bytes);
-  }
-  put(stored(address,width).view,at,value);
+  const bytes = new Uint8Array(width); put(new DataView(bytes.buffer), 0, value);
+  return stored(address).write(offsetIn(address), bytes);
 }
 const I8: Get<number> = (v, i) => v.getInt8(i), I16: Get<number> = (v, i) => v.getInt16(i, true);
 const I32: Get<number> = (v, i) => v.getInt32(i, true), I64: Get<bigint> = (v, i) => v.getBigInt64(i, true);

@@ -23,15 +23,13 @@ export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppH
   ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
 /** framework.jar on the platform class path and the main looper running, as a booted page has them */
+let framework: Promise<void> | null = null;
 export async function loadFrameworkJar(): Promise<void> {
-  const { loadPlatformJar } = await import("../src/android/framework");
-  const { PLATFORM_JARS } = await import("../src/jvm/provenance");
-  if (!rt.dexIndex.has("android/app/Activity")) {
+  await (framework ??= (async () => {
     await loadLibcore();
-    const jar = new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer());
-    loadPlatformJar(jar, PLATFORM_JARS.indexOf("framework.jar"));
-    rt.linkNatives();
-  }
+    const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework"), import("../src/jvm/provenance")]);
+    loadPlatformJar(new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer()), PLATFORM_JARS.indexOf("framework.jar"));
+  })());
   await (await import("../src/android/mainloop")).startMainLooper();
 }
 
@@ -62,14 +60,13 @@ export async function preloadTextPaint(): Promise<void> {
 }
 
 /** libcore's own jars (core-oj, core-libart, core-icu4j), for platform classes that forward to natives */
-export async function loadLibcore(): Promise<void> {
-  const { loadPlatformJar } = await import("../src/android/framework");
-  const { PLATFORM_JARS } = await import("../src/jvm/provenance");
-  if (rt.dexIndex.has("libcore/io/Linux")) return;
-  for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"]) {
-    const i = PLATFORM_JARS.indexOf(jar);
-    loadPlatformJar(new Uint8Array(await Bun.file(new URL(`../vendor/aosp/${jar}`, import.meta.url)).arrayBuffer()), i);
-  }
+let libcore: Promise<void> | null = null;
+export function loadLibcore(): Promise<void> {
+  return libcore ??= (async () => {
+    const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework"), import("../src/jvm/provenance")]);
+    for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"])
+      loadPlatformJar(new Uint8Array(await Bun.file(new URL(`../vendor/aosp/${jar}`, import.meta.url)).arrayBuffer()), PLATFORM_JARS.indexOf(jar));
+  })();
 }
 
 /** Styles in a Resources with no table behind it: each entry is (attribute, type, data), a

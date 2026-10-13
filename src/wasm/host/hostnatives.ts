@@ -1,5 +1,4 @@
-// Natives the Wasm tier answers itself: those of classes the production runtime replaces whole (libcore's class loaders are JS there), which run
-// here as the AOSP bytecode over the native underneath.
+// Natives the Wasm tier answers itself, under the AOSP bytecode of the classes that declare them (libcore's class loaders).
 import { jarray } from "../../jvm/abi";
 import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath";
 import { readBytes, FD, type IoBuffer } from "../../android/os";

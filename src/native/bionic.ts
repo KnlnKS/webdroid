@@ -75,7 +75,7 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   const mods: Module[] = [];
   try {
     for (const path of BIONIC_LIBS) {
-      mods.push(await loadModule(path.slice(path.lastIndexOf("/") + 1), undefined, true, undefined, cpu));
+      mods.push(await loadModule(path.slice(path.lastIndexOf("/") + 1), undefined, true, cpu));
     }
   } finally { linkerHooks.placeTls = null; }
   // the executable's libraries are its global group, which dlclose never unloads
