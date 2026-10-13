@@ -1,8 +1,7 @@
-// java.math runs from libcore. TS arithmetic (crypto, formatting) crosses to a Java BigInteger through
-// bigOf/mkBigInteger, which read and write its own sign and big-endian int[] magnitude; NativeBN,
-// the BIGNUM boundary its modPow, multiply and divide take for large operands, is JS bigint.
+// java.math runs from libcore. NativeBN, the BIGNUM boundary its modPow, multiply and divide take for
+// large operands, is JS bigint.
 
-import { rt, JObj, type Intrinsic } from "../runtime";
+import { rt, type Intrinsic } from "../runtime";
 import { handle, deref, release } from "../../android/handles";
 import { jarray, mangleField } from "../abi";
 
@@ -27,22 +26,6 @@ function bigToWords(v: bigint): Int32Array {
   return out;
 }
 
-/** a java.math.BigInteger's value */
-export function bigOf(b: JObj): bigint {
-  const f = b as unknown as BI, v = wordsToBig(f[MAG]);
-  return f[SIG] < 0 ? -v : v;
-}
-/** a java.math.BigInteger holding `v` */
-export function mkBigInteger(v: bigint): JObj | Promise<JObj> {
-  const info = rt.link(BIG_INTEGER), init = rt.initClass(info);
-  const make = () => {
-    const b = new info.ctor() as JObj, f = b as unknown as BI; // js-tier
-    f[SIG] = v < 0n ? -1 : v > 0n ? 1 : 0;
-    f[MAG] = bigToWords(v < 0n ? -v : v);
-    return b;
-  };
-  return init ? init.then(make) : make();
-}
 /** a⁻¹ mod m, null when a is not invertible */
 function inverse(a: bigint, m: bigint): bigint | null {
   let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];
