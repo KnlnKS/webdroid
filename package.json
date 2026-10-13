@@ -33,7 +33,7 @@
     "textcmp": "bun scripts/textcmp.ts",
     "lat": "bun scripts/lat/run.ts",
     "jbench": "bun scripts/jbench/run.ts",
-    "conform": "bun scripts/conform/run.ts",
+    "conform": "bun scripts/wasm/run.ts conform",
     "wasm": "bun scripts/wasm/run.ts",
     "aot": "bun scripts/wasm/run.ts aot",
     "build:core": "bun scripts/build-core.ts"
