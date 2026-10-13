@@ -38,7 +38,9 @@ const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
 export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
-  return declaredMethod(c, name + desc) ?? declaredMethod(c, name + javaName(desc), true);
+  const m = declaredMethod(c, name + desc);
+  // the file's own spelling differs only where a loader qualifies a type, in the query or the class's dex
+  return m || c.dex && !c.dex.resolveType && !desc.includes("@") ? m : declaredMethod(c, name + javaName(desc), true);
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
