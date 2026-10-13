@@ -7148,3 +7148,57 @@ Bun 1.4 has JSPI (`WebAssembly.Suspending`/`promising`), so the unit tests can r
 `WEBDROID_TIER=wasm`, 943 pass and 158 fail, and one file fails to load. Most failures reach Java through JS-tier
 class objects instead of jentry (about 65 call sites, most in `java-lang.test.ts`); four natives return host values
 of no Java class.
+
+### The unit tests run on the Wasm tier under node (2026-10-12)
+
+`bun run test` is now `scripts/test.ts`. Each `*.test.ts` file is bundled behind `tests/platform.ts` and runs in a
+node process of its own with `WEBDROID_TIER=wasm`: V8 names Wasm frames, so caller-class lookups work, which
+JavaScriptCore cannot do. `bun:test` resolves to `tests/bun-test.ts`, a shim over `node:test` that covers the
+matchers, mocks and fake timers the tests use. The `*.browser.test.ts` files still run under `bun test`, since
+they drive Chrome over pages that Bun builds and serves. A file whose process outlives its tests is killed after
+300 s, and a spawned fixture prints its Java thread states and exits after 90 s, so neither can hang the run. The
+suite passes 1,148 tests in about 17 s.
+
+Porting moved the tests onto jentry (`scall`, `newObj`, `staticField`, `iof`, `classNameOf`, `lambda`). Tests of
+JS-tier mechanisms were deleted rather than ported: intrinsics against their AOSP bodies, DEX tiers, the tier flag,
+throwable capture, `JField`, `mkAnnotation`, JS `clinit`, `rt.monitors` and prototype marks. The conformance suites
+cover the same behaviour on the Wasm tier. The port found these Wasm-tier defects:
+- **Late registrations.** A native spec registered after the World was made, such as a lazily registered
+  `lambda` class or a module that a split bundle loads later, was never added as a host class. `rt.register`
+  now forwards it through `rt.registered`.
+- **`rt.classFor`** gave no Class object on the Wasm tier (`MediaSession.getBinderForSetQueue`). It now answers
+  `classRef`, which is the same generated constant that JNI's class mirror uses.
+- **Arrays at the bridge.** Within a native's scope, a host copy of a Java array that the host wrote to and then
+  passed back reached Java stale. A reference array passed into Java did not get the method's writes back. Both
+  now sync at the call boundary, and the sync respects ranged views. A copy whose scope has ended is a snapshot.
+  Syncing such copies too would cost about 2,600 copies per Calculator tap, since natives hand back arrays that
+  their peers keep, and it would overwrite Java's newer contents. Those copies therefore cross unchanged, as
+  before.
+- **Stack traces** named no source file. `stString` now reads the class def's `sourceFileIdx`.
+- **`vcall` on an array** found no method. An array's methods are Object's.
+- **A lock across a native's wait.** `MediaCodecList.initCodecList` holds `sInitLock` while
+  `getCodecCapabilities` waits for the codec probe and then builds `CodecCapabilities`, whose constructor takes
+  the same lock through `getGlobalSettings`. `chain` resumed the native as its thread's root strand rather than
+  the host strand of the Java strand that called it. A `driven` generator restores the strand it started on
+  after each wait, so its later calls entered Java on a strand that the lock holder did not own, and the thread
+  deadlocked on itself. This happened only when a call inside the generator suspended, which needs `admitLink`
+  to yield after the turn's 8 ms; that is why it appeared under parallel load (6 of 10 runs) and not alone.
+  `asThread` now resumes as the parent strand's host strand.
+- **`box`** returned `scall`'s result, which is a Promise whenever `valueOf`'s first link yields after the turn's
+  8 ms. Its callers use the box at once. In the remote-provider fixture, a cursor row then carried a Promise into the
+  bridge, and the stub's `InternalError` aborted the owner process (SIGABRT, as JavaBBinder's `report_exception`
+  does). The dead realm then never resumed the client's suspended frames, and the fixture hung in about 1 of 6
+  full-suite runs. `valueOf` now runs through a host function, which links synchronously. After the fix, 15 of
+  15 consecutive runs passed.
+- **`directReady`** initialized `ByteBuffer`'s classes but left `allocateDirect`'s code uncompiled. It now makes a
+  first allocation.
+- **Objects made without a constructor.** On the Wasm tier, `rt.make` of a bytecode class gives a carrier of
+  fields, which cannot receive a virtual call. WebView's default client is now a constructed `WebViewClient`, and
+  `canvasOver` constructs its `Canvas`, or for an accelerated canvas obtains a `RecordingCanvas` and swaps in its
+  native canvas. `canvasOver` is therefore async.
+
+Some test expectations were the JS tier's rather than Android's, and were corrected:
+- **`Reference.enqueue()`** does not clear the referent: core-oj's body only queues it.
+- **Racy assumptions.** A thread with an empty `run()` can end before `activeCount` is read, and a oneway
+  `ISessionCallback` command can land after the next `setCallback`. Both tests now wait for the state they assert.
+- **Dead code.** `bigOf` and `mkBigInteger` had no production callers and were removed.
