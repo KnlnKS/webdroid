@@ -51,13 +51,12 @@ export function wasmEntry(w: World): Entry {
   };
   // what the host had as its current thread when it last entered Java from the top level, which it has again when no strand runs
   let hostCurrent = curThread;
-  sched.onThread = (rec, idle) => {
-    if (idle) { setCurThread(hostCurrent); return; }
-    const s = sched.current();
+  const hostStrandOf = (s: Strand): HostStrand => {
     let host = hostStrands.get(s);
-    if (!host) { host = new HostStrand(jthreadOf(rec)); hostStrands.set(s, host); javaStrands.set(host, s); }
-    resumeAs(host);
+    if (!host) { host = new HostStrand(jthreadOf(s.thread)); hostStrands.set(s, host); javaStrands.set(host, s); }
+    return host;
   };
+  sched.onThread = (_, idle) => { if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(sched.current())); };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
     const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s;
@@ -73,10 +72,11 @@ export function wasmEntry(w: World): Entry {
     const parent = entering ? enteringParent : nativeOf();
     return parent?.thread === rec ? parent : null;
   };
+  // A generator native resumes as the host strand it started on: the parent's, so what it enters Java with after a wait still holds the parent's locks.
   const asThread = <T>(rec: ThreadRec, f: () => T, parent = parentOf(rec)): T => {
-    const was = entering, wasParent = enteringParent, prev = curThread;
-    entering = rec; enteringParent = parent; setCurThread(jthreadOf(rec));
-    try { return f(); } finally { entering = was; enteringParent = wasParent; setCurThread(prev); }
+    const was = entering, wasParent = enteringParent, prev = rt.cur;
+    entering = rec; enteringParent = parent; resumeAs(parent ? hostStrandOf(parent) : jthreadOf(rec).root);
+    try { return f(); } finally { entering = was; enteringParent = wasParent; resumeAs(prev); }
   };
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
