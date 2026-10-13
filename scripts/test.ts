@@ -2,10 +2,10 @@
 // file runs in a node process of its own, bundled behind tests/platform.ts with bun:test resolved to tests/bun-test.ts. The
 // *.browser.test.ts files drive Chrome over pages Bun.build bundles and Bun.serve serves, so `bun test` runs them.
 //   bun run test [file ...]
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { bundleForNode } from "./wasm/undernode";
+import { bundleForNode, removeBundle } from "./wasm/undernode";
 import "./preload";
 
 const root = resolve(import.meta.dir, "..");
@@ -33,6 +33,7 @@ async function run(file: string, i: number): Promise<{ pass: number; fail: numbe
   const [node, ...flags] = command, bundle = flags.pop()!, nodeshim = flags.pop()!;
   const p = Bun.spawn([node, ...flags, "--test-reporter=spec", "--import", nodeshim, bundle], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, WEBDROID_TIER: "wasm" }, timeout: FILE_TIMEOUT_MS });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  removeBundle(command);
   const count = (k: string) => Number(new RegExp(`^ℹ ${k} (\\d+)`, "m").exec(out)?.[1] ?? 0);
   const pass = count("pass"), fail = count("fail") || (p.exitCode || p.signalCode ? 1 : 0);
   return { pass, fail, out: out + err + (p.signalCode ? `\nkilled (${p.signalCode}) after ${FILE_TIMEOUT_MS / 1000}s` : "") };
@@ -55,5 +56,6 @@ if (browserRun) {
   pass += count("pass"); fail += count("fail") || (await browserRun.exited ? 1 : 0);
   console.log(`${count("fail") || browserRun.exitCode ? `FAIL bun test (browser)\n${out}` : `ok   bun test (browser): ${count("pass")} pass`}`);
 }
+rmSync(entries, { recursive: true, force: true });
 console.log(`\n${pass} pass, ${fail} fail across ${all.length} files [${((performance.now() - t0) / 1000).toFixed(1)}s]`);
 process.exit(fail ? 1 : 0);
