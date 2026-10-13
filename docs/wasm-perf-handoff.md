@@ -1,12 +1,17 @@
 # Wasm-tier performance: handoff (2026-10-13)
 
-Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`. The branch is
-about 2,070 commits ahead of `main`, because it carries the whole `knlnks/bytecode-wasm` backend. Nothing is
-pushed or open as a PR.
+Worktree `/Users/kunalan/Projects/webdroid-wasm-dev`, branch `knlnks/wasm-perf`; M7's series ends at `c6b28ec3`.
+The branch is about 2,070 commits ahead of `main`, because it carries the whole `knlnks/bytecode-wasm` backend.
+Nothing is pushed or open as a PR.
 
-**Goal.** Make the Wasm tier fast enough to become the only tier, with in-app latency and FPS first: launch to
-first frame, gated taps under 150 ms, and scroll present intervals. M7 (2026-10-13) deleted the JS tier, so Wasm is
-now the only tier and the work left is speed.
+**Goal.** Make the Wasm tier fast, with in-app latency and FPS first: launch to first frame, gated taps under
+150 ms, and scroll present intervals. Since M7 (2026-10-13) Wasm is the only tier; there is no JS tier to compare
+against or fall back to.
+
+**Last session (M7).** The JS tier and its tools are deleted. The series also fixed several defects that predate it
+(history, "The JS tier removed"). The one that matters for measurement: from `66978ee6` until `06f9ceb4`, the dev
+server answered 500 for the platform build, so any page or gate run in that window compiled the whole platform on
+demand. Numbers measured in that window are not comparable.
 
 **Read first.**
 - [AGENTS.md](../AGENTS.md): the working and verification rules.
@@ -72,8 +77,10 @@ few to justify the rewrite (history, "What an on-demand launch still compiles").
 
 ## Current numbers
 
-"Now" runs are `--gpu`, Worker processes, one job, Apple M4 Pro. The baseline was SwiftShader with iframe processes,
-except its scroll row, which is `--gpu` at `f18fc7dc`. Re-measure both sides before claiming a delta.
+"Now" runs are `--gpu`, Worker processes, one job, Apple M4 Pro, taken before M7 with the platform build served. The
+baseline was SwiftShader with iframe processes, except its scroll row, which is `--gpu` at `f18fc7dc`. M7 rebuilt
+the platform build (`875b5beb730c3154`) and its bundled app builds, so re-measure both sides before claiming a
+delta. The JS columns are historical.
 
 | | 2026-10-10 baseline | Now |
 |---|---|---|
@@ -96,29 +103,34 @@ except its scroll row, which is `--gpu` at `f18fc7dc`. Re-measure both sides bef
 
 ## Gate state
 
-The quick gate is `WEBDROID_URL=… bun run e2e --jobs 1`. It reaches 7 of 7 flows after M7, with the platform build
-served (history, "The JS tier removed"). The serial `--live` matrix last reached 13 of 14 flows; TikTok misses its
-launch budget (history, "Live matrix parity").
+At `c6b28ec3`:
+- **Quick gate** (`e2e --jobs 1`): 7 of 7 flows, with no new missing APIs, errors, required natives, draw errors,
+  settle timeouts or wedges.
+- **Unit tests:** 1,147, clean in 5 consecutive full runs.
+- **`wasm all`:** all 18 suites pass, and so do `smoke` (FitNotes) and `fwtest` (31 of 31).
+- **Not run since M7:** `--live`, `--full --jobs 1`, `corpus` and `textcmp`. Before M7 the serial `--live` matrix
+  reached 13 of 14 flows; TikTok misses its launch budget (history, "Live matrix parity").
 
 ## Open work, in priority order
 
-### 1–2. Done: the Calculator hang and a reproducible gate
-The probe now lets guest time pass while an app asks for frames, and non-live flows run offline (history, "A
-reproducible quick gate").
+### 1. The full matrix after M7
+Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`, serially, with a platform build that matches the
+sources. Compare any failure with `33373567` (the last commit before M7) under the same settings. That commit
+cannot key a platform build either. Check it out in its own worktree with its own `vendor/wasm-aot` (not the
+symlink), cherry-pick `06f9ceb4`, and run `bun run aot` there. Lichess's launch diff was the same on both tiers:
+the reference shows a notification-permission request and live content that neither tier shows. Do not raise the
+limit.
 
-### 3. The live matrix
-- **Lichess.** Its launch diff was the same on both tiers: the reference shows a notification-permission request
-  and live content that neither tier shows. Do not raise the limit.
-- **TikTok.** Its launch times out on the Wasm tier.
-  - It no longer crashes the renderer; the crash was a second process's refine (history, 2026-10-12).
-  - The 4 GB shared cage still runs at 3.7–4.2 GB after 100 s.
-  - Native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time.
-  - Lowering memory is the structural fix. The largest item is the pool stubs: 358,000 of them, 72% for slots never
-    looked up. The proposed design passes the slot at the call site, so one stub per signature serves every
-    unlinked method.
-- **Then the full matrix:** `--live`, then `--full --jobs 1`, `corpus` and `textcmp`, run serially.
+### 2. TikTok's launch
+It times out on the Wasm tier.
+- It no longer crashes the renderer; the crash was a second process's refine (history, 2026-10-12).
+- The 4 GB shared cage still runs at 3.7–4.2 GB after 100 s.
+- Native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time.
+- Lowering memory is the structural fix. The largest item is the pool stubs: 358,000 of them, 72% for slots never
+  looked up. The proposed design passes the slot at the call site, so one stub per signature serves every
+  unlinked method.
 
-### 4. First-launch compile cost (Komikku, Feeder, TikTok)
+### 3. First-launch compile cost (Komikku, Feeder, TikTok)
 The remaining levers:
 - **Compiler front-end allocation.** About 200 MB/s while compiling; `Flow` construction is the largest share, at 12%.
 - **Instantiation.** C modules carry about 172 global imports each. Move cross-module class access to id-indexed
@@ -127,14 +139,19 @@ The remaining levers:
   selectors, gaps and links are all numbered by the page's World today.
 
 Measure each lever on Komikku's first launch, 3 matched runs or more. The history says what has already been tried.
+Without a platform build FitNotes' quick flow takes 144 s against 46 s and times out on four steps, so the on-demand
+path is itself a cost worth profiling.
 
-### 5. M7: done
-The JS compiler, its tiering, code cache, AOT and Worker, the tier switch and the tools that only served it
-(`jsrc`, `link-table`, `build-id`, the JS smoke and `fwtest`) are deleted; `smoke`, `fwtest` and `jbench` run the
-Wasm sweeps. The conformance baselines are rebuilt from Wasm alone. The history entry "The JS tier removed
-(2026-10-13)" lists the defects the switch exposed.
+### 4. Post-M7 cleanup candidates
+Confirm each with a search for references before deleting:
+- `src/jvm/runtime.ts` is still shaped around the JS tier in places (`rt.make` gives a carrier of fields that cannot
+  take a virtual call). Narrow it to what natives and the Wasm host use.
+- `docs/bytecode-first-plan.md` and `docs/performance-plan.md` describe the JS tier's design and measurements.
+- `research/wasm/` measured JS against Wasm; only `scripts/wasm/watdump.ts` uses it (for `wasm-dis`).
+- Browser tests once failed 9 at a time with "End Of Central Directory signature not found" while reading a jar. This
+  happened once in 13 full runs at the end of M7. The history records earlier occurrences, still unexplained.
 
-### 6. Lower value; do these only with a new measurement that justifies them
+### 5. Lower value; do these only with a new measurement that justifies them
 - **M2b:** `system_server` and the broker stores in a system Worker.
   - The e2e probe showed why it matters: the broker answers app IPC on the page thread, and slow page work (the probe's
     readbacks) starved Komikku's chapter-list queries.
@@ -156,7 +173,15 @@ Wasm sweeps. The conformance baselines are rebuilt from Wasm alone. The history 
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Record every finding, including rejected experiments, in
   [implementation-history.md](implementation-history.md).
 - **The dev server serves source fresh**, so do not edit served code while an e2e or `lat` run is in progress. An e2e
-  run that reports "0 steps" just after an edit is the bundle rebuilding; run it again.
+  run that reports "0 steps" just after an edit is the bundle rebuilding; run it again. Server-side code
+  (`server.ts`, `scripts/wasm/aot-*.ts`) loads once, so restart the server after editing it.
+- **The platform build is keyed by every file under `src/`** and the AOT scripts. After a source edit the server
+  answers 404 for it unless `WEBDROID_AOT_STALE=1`. That flag is right for edits outside the compiler and linker;
+  after one inside them, run `bun run aot`. Check `browserErrors` in `run.json` for a failed `/aot/current.json`,
+  and `wasmAotLoaded` above 0 in the step counters.
+- **`vendor/wasm-aot` is shared.** It is ignored by Git, and a worktree usually symlinks it to this checkout's.
+  `bun run aot` prunes the builds it replaces, including the bundled app builds. Regenerate those with
+  `bun run wasm aot-profile` against a running server.
 - **Before you finish:** stop every server you started, and remove temporary scenarios, worktrees and debug hooks.
 
 ## Commands
@@ -168,8 +193,12 @@ WEBDROID_URL=http://localhost:4191 bun run e2e calculatorm --jobs 1
 WEBDROID_URL=http://localhost:4191 bun run e2e --live --jobs 1
 WEBDROID_URL=http://localhost:4191 bun run lat fitnotes calculatorm --gpu --warm
 WEBDROID_URL=http://localhost:4191 bun run lat fitnotes --gpu --cpuprofile
+bun run aot
+WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile
+PATH=/opt/homebrew/opt/openjdk/bin:$PATH bun run wasm all
 PATH=/opt/homebrew/opt/openjdk/bin:$PATH bun run wasm loaders
 bun run smoke apks/FitNotes.apk
+bun run fwtest
 bun run typecheck
 bun run test
 ```
@@ -180,6 +209,8 @@ bun run test
   scenario there and delete it afterwards. `--timeline` shows the app Worker's startup marks, and `--trace` writes a
   browser-wide trace.
 - The `wasm` suites relevant to recent work are `loaders`, `persist`, `lazytest`, `linkdiff` and `hostclass`.
+- `wasm` suites that compile Java test sources need `javac`, which is not on the default PATH; Homebrew's
+  `openjdk` (26) works.
 - `bun run test` passes 1,147 tests after M7 (the JS tier's mechanism tests went with it).
 
 ## Profiling Workers during an e2e flow
