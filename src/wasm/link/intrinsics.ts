@@ -38,7 +38,7 @@ function emitFrames(cx: Compiler, c: Code, state: number): void {
   cx.emitNewArray(c, "[L" + STE + ";", () => c.lget(n)); c.lset(arr);
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
   cx.emitEnsure(c, STE); cx.emitNew(c, STE); c.lset(e);
-  c.lget(e).lget(i).i32(0).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(1).call(cx.imp.stString); cx.str.fromHost(c); c.anyNull().lget(i).call(cx.imp.stLine);
+  c.lget(e).lget(i).i32(0).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(1).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(2).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).call(cx.imp.stLine);
   cx.callMethod(c, ctor);
   c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i).lget(e).arraySet(cx.tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(arr);

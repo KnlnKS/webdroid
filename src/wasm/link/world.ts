@@ -39,7 +39,7 @@ import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
-import type { DexFile } from "../../jvm/dex";
+import { NO_INDEX, type DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
@@ -278,7 +278,11 @@ export class World {
         this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) || this.captureScopes.get(this.sched.current())?.length ? this.javaStack(stack.stack ?? "") : stack);
       },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
-      stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),
+      // a frame's class, method and the source file its class def names (null without one)
+      stString: (i: number, which: number) => {
+        const f = this.frames[i], c = which === 2 ? this.prog.get(f.cls.replace(/\./g, "/")) : undefined;
+        return which === 0 ? javaName(f.cls) : which === 1 ? f.method : c?.def && c.def.sourceFileIdx !== NO_INDEX ? c.dex!.string(c.def.sourceFileIdx) : null;
+      },
       stLine: (i: number) => this.frames[i].line,
     };
     this.slots.length = FIRST_FREE_SLOT;
