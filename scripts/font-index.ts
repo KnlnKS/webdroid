@@ -1,15 +1,16 @@
 // The platform font index a page loads in place of reading every system font and parsing the font
 // configuration (src/android/fonts.ts): each face's FaceInfo, and the system font map AOSP builds
 // from font_fallback.xml and the font updates, serialized as the system server serializes it for apps.
+// Java runs on the Wasm tier, which reads V8's frames: under Bun the script runs itself under node.
 //   bun scripts/font-index.ts > font-index.json
-import { mountLocalPlatformData } from "./lib";
-import { loadFrameworkJar } from "../tests/java";
+import { runUnderNode } from "./wasm/undernode";
 
+if (process.versions.bun) process.exit(await runUnderNode(import.meta.path, [], { ...process.env, WEBDROID_TIER: "wasm" }));
 console.log = console.error; // stdout is the index
-await mountLocalPlatformData();
+await import("../tests/platform");
 const { rt, awaited } = await import("../src/jvm/runtime");
 await import("../src/natives");
-await loadFrameworkJar();
+await (await import("../src/android/mainloop")).startMainLooper();
 const { platformFontIndex, preloadFonts, systemFontMap } = await import("../src/android/fonts");
 const { vcall, callOn, mainThread } = await import("../src/jvm/natives/jentry");
 const { fdInt } = await import("../src/jvm/natives/jio");
