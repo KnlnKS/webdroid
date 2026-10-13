@@ -403,7 +403,8 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
       const { targetInfo } = await send("Target.getTargetInfo", { targetId });
       if (targetInfo.title !== "DONE") continue;
       for (const [session, label] of profiled) {
-        const stopped = await send("Profiler.stop", {}, session).catch(() => undefined);
+        // a Worker that has ended may never answer
+        const stopped = await Promise.race([send("Profiler.stop", {}, session).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]);
         if (stopped) await Bun.write(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
       }
       if (trace) await writeTrace(browser, trace);
