@@ -4,7 +4,7 @@ export function installLatencyObserver(counters: string[]) {
   const host = window as any;
   const snapshot = () => {
     const wd = host.wd, cold = window.__wdCold;
-    const rows = [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, tier: wd?.tier ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
+    const rows = [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
       perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
       compilerWorker: cold?.worker ? { ...cold.worker } : null, appBuilds: cold?.appBuilds?.map(build => ({ ...build })) ?? [] }];
     if (new URLSearchParams(location.search).get("perfProbe") !== "1") return rows;
@@ -14,7 +14,7 @@ export function installLatencyObserver(counters: string[]) {
       const row = found.get(record.owner.url); found.delete(record.owner.url);
       const receipt = record.receipt;
       return { ...row, url: record.owner.url, pid: String(record.owner.pid), pkg: record.owner.pkg, runtimePkg: row?.pkg ?? null,
-        tier: row?.tier ?? new URL(record.owner.url).searchParams.get("tier") ?? "wasm", available: !!receipt,
+        available: !!receipt,
         perf: receipt ? { ...row?.perf, ...receipt.counters } : row?.perf ?? null, receiptProbe: true,
         proof: { schema: registry.schema, source: registry.source, sequence: registry.sequence, dropped: registry.dropped, events: registry.events,
           owner: record.owner, dead: record.dead, processDead: record.processDead, error: record.error, receipt } };
@@ -32,7 +32,7 @@ export function installLatencyObserver(counters: string[]) {
     const observer = host.__wdLatObserver, app = appOf(canvas);
     // receipts only while a capture listens: visibility checks read computed styles
     if (!app || !(observer.onFrame || observer.times || !observer.firstApp)) { copy?.close(); return; }
-    const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: host.wd?.tier, visible: shown(canvas) };
+    const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, visible: shown(canvas) };
     if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
     if (observer.onFrame && copy) observer.onFrame(receipt, copy); else copy?.close();
   };

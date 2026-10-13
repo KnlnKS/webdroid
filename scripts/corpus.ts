@@ -44,7 +44,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
     await page.evaluate(file => { void globalThis.wd!.boot(file); }, apk);
     const readRender = () => page.evaluate(async () => {
       const w = globalThis.wd!, foreground = (await w.foregroundWorkerSnapshot?.())?.snapshot, perf = foreground?.perf ?? w.perf;
-      return { ticks: foreground?.ticks ?? w.ticks, draws: perf.draws, bootMs: w.perf.bootMs, classes: perf.wasmClasses || perf.classesCompiled,
+      return { ticks: foreground?.ticks ?? w.ticks, draws: perf.draws, bootMs: w.perf.bootMs, classes: perf.wasmClasses,
         missing: [...w.rt.missing], logs: (w.logs || []).filter((line: string) => /error/i.test(line)).slice(-6) };
     });
     const deadline = Date.now() + waitMs;

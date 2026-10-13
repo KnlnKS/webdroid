@@ -43,7 +43,6 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       const url = new URL(BASE);
       url.pathname = "/";
       url.searchParams.set("apk", apk);
-      url.searchParams.set("tier", "wasm");
       if (!url.searchParams.has("screen")) url.searchParams.set("screen", "1080x2160@480");
       const deadline = Date.now() + 90_000;
       await page.goto(url.href);

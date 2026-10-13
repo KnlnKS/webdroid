@@ -25,7 +25,7 @@ function proofError(row: any, pending = false): string | null {
   try {
     const url = new URL(row.url);
     if (url.pathname !== "/" || new URL(p.source).origin !== url.origin || new URL(r.source).origin !== url.origin ||
-      r.url !== row.url || r.pid !== null || row.tier !== (url.searchParams.get("tier") ?? "wasm")) return "counter source/realm association mismatch";
+      r.url !== row.url || r.pid !== null) return "counter source/realm association mismatch";
   } catch { return "invalid counter source URL"; }
   if (r.schema !== 1 || !Number.isSafeInteger(r.resets) || r.resets < 0 || !Number.isSafeInteger(r.sequence) || r.sequence < 1 || !Number.isFinite(r.bornAt) || !Number.isFinite(r.at) || r.at < r.bornAt ||
     COMPILE_COUNTERS.some(k => r.initial?.[k] !== 0 || !Number.isFinite(r.counters?.[k]) || r.counters[k] < 0 || r.counters[k] !== row.perf?.[k])) return "invalid counter initialization, sequence or snapshot";
@@ -73,7 +73,7 @@ export function compileDeltas(allBefore: any[], allAfter: any[], window?: { orig
         previous = { ...row, perf: row.proof.receipt.initial, available: true, compilerWorker: null, certifiedBirthBaseline: row.proof.receipt.bornAt };
       }
     }
-    if (!row.available || !previous?.available || row.pkg !== previous.pkg || row.tier !== previous.tier) {
+    if (!row.available || !previous?.available || row.pkg !== previous.pkg) {
       failures.push(`${row.url}: process missing, new or identity changed`); return { before: previous ?? null, after: row, delta: null };
     }
     const delta = Object.fromEntries(counters.map(k => {
@@ -82,7 +82,7 @@ export function compileDeltas(allBefore: any[], allAfter: any[], window?: { orig
       else totals[k] += value;
       return [k, value];
     }));
-    return { url: row.url, pkg: row.pkg, pid: row.pid, tier: row.tier, delta,
+    return { url: row.url, pkg: row.pkg, pid: row.pid, delta,
       compilerWorkerCompletedMs: row.compilerWorker && previous.compilerWorker ? row.compilerWorker.workerMs - previous.compilerWorker.workerMs : null };
   });
   for (const url of byUrl.keys()) failures.push(`${url}: process retired during window`);

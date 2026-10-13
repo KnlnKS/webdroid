@@ -10,22 +10,10 @@ export const perf = {
   rnRecord: 0, rnReplay: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.
   drawErrors: 0,
-  // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
-  inputMs: 0, compileMs: 0, classesCompiled: 0,
-  // outermost static initializers' synchronous work, and resource tables and XML parsed
-  clinitMs: 0, resParseMs: 0,
+  // wall time inside input dispatch, which lands ON the tap, and resource tables and XML parsed
+  inputMs: 0, resParseMs: 0,
   // main-looper jobs run (Handler messages, frames, input, lifecycle)
   mainJobs: 0,
-  // leaf method bodies that cannot suspend (no call, static access, monitor or allocation)
-  // against those that can, which carry a save point and a lazily built resumable body.
-  syncMethods: 0, asyncMethods: 0,
-  // methods first called, and those that began cold (no persisted or offered body)
-  methodsReached: 0, methodsCold: 0,
-  coldCalls: 0, coldHandlers: 0, hotMethods: 0, osrMethods: 0,
-  // Detailed JVM attribution is populated only under ?jvmProfile=1.
-  jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
-  jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0,
-  jvmProfileDroppedMethods: 0,
   // Surface frames (GL, native windows and decoded video)
   glFrames: 0,
   // the native tier: guest instructions, wall time in the core, slices, host calls, GLES draws,

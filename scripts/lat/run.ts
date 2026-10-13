@@ -1,7 +1,7 @@
 // Intended response joins scenario UI state with the current app-owned bitmap's response
 // region. The later receipt clock is a conservative latency upper bound.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>] (one file per Worker too) [--trace <file>]
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--trace <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -35,17 +35,13 @@ const { flag, option } = consume(args);
 const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 const launchQuery = new URLSearchParams(query);
-if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "wasm");
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
-if (!["js", "wasm"].includes(launchQuery.get("tier")!)) throw new Error("lat tier must be js or wasm");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
-const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "methodsReached", "methodsCold", "coldCalls", "drawMs", "frameMs", "presentations", "presentLagMs",
-  // populated under ?jvmProfile=1 only
-  // the Wasm tier
+const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
   "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
-  "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
+  "wasmColdCalls"];
 
 type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
@@ -64,12 +60,11 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const readRealm = (win: Window) => {
     const wd = (win as any).wd, cold = win.__wdCold;
     if (!wd) return { url: win.location.href, status: "unavailable" };
-    return { url: win.location.href, status: "ok", tier: wd.tier, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks,
+    return { url: win.location.href, status: "ok", pkg: wd.app()?.pkg ?? null, ticks: wd.ticks,
       pid: new URLSearchParams(win.location.search).get("pid"), process: new URLSearchParams(win.location.search).get("process"),
       missing: [...wd.rt.missing], missingAt: Object.fromEntries([...wd.rt.missingAt ?? []].map(([name, frames]) => [name, frames.slice()])), placeholders: [...wd.rt.placeholders],
       placeholderAt: Object.fromEntries([...wd.rt.placeholderAt].map(([name, frames]) => [name, frames.slice()])), native: wd.nativeRequirements(), logs: wd.logs?.slice() ?? null,
-      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, coverage: wd.jvmCoverage?.snapshot?.() ?? null,
-      code: wd.code?.() ?? null, wasm: cold ? { enabled: cold.enabled, appSaved: cold.appSaved ?? null, appAttached: cold.appAttached ?? null,
+      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, wasm: cold ? { enabled: cold.enabled, appSaved: cold.appSaved ?? null, appAttached: cold.appAttached ?? null,
         appSource: cold.appSource ?? null,
         aotKey: cold.aotKey ?? null, appBuilds: cold.appBuilds?.map(b => ({ ...b })) ?? [], worker: cold.worker ? { ...cold.worker } : null } : null };
   };
@@ -119,7 +114,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     observer.onFrame = (receipt: any, bitmap: ImageBitmap) => {
       let image: ImageBitmap | undefined = bitmap;
       try {
-        if (epoch !== generation || !receipt.visible || receipt.tier !== w.wd?.tier) return;
+        if (epoch !== generation || !receipt.visible) return;
         frameCount++;
         if (latest && latest.t > receipt.at) return;
         latest?.image.close();
@@ -455,12 +450,12 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; tier: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, engine, tier: launchQuery.get("tier")!, warm, query: launchQuery.toString(), taps: [],
+  const row: Report = { scenario: name, engine, warm, query: launchQuery.toString(), taps: [],
     accepted: false, intendedObservation: "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
     instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; latest immutable bitmap retained, response pixels read after matching UI state; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };

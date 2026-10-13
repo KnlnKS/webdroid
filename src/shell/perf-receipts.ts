@@ -2,7 +2,7 @@ import { compilerReceipt } from "../jvm/compiler-observer";
 import { compilerWorkerReceipts } from "./compiler-workers";
 export type CounterReceipt = { schema: 1; source: string; url: string; pid: number | null; bornAt: number; at: number; sequence: number; resets: number; clockUrl: string; realmBornAt: number; realmAt: number;
   initial: Readonly<Record<string, number>>; counters: Readonly<Record<string, number>>; compiler: ReturnType<typeof compilerReceipt>; compilerWorkers: ReturnType<typeof compilerWorkerReceipts> };
-export const COMPILE_COUNTERS = ["compileMs", "classesCompiled", "wasmCompileMs", "wasmModuleMs", "wasmMethods", "wasmClassBuildMs"] as const;
+export const COMPILE_COUNTERS = ["wasmCompileMs", "wasmModuleMs", "wasmMethods", "wasmClassBuildMs"] as const;
 declare global { interface Window { readonly __wdCounterReceipt?: () => Readonly<CounterReceipt> } }
 
 /** Installed when perf is initialized, before any compiler can increment its counters. */
