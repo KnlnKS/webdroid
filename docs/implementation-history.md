@@ -7134,3 +7134,17 @@ The quick gate reached 5 of 7 flows. Both causes were in the harness.
   browser failures while offline (Flappy Bird's AdMob script).
 - **Result.** Two consecutive quick gates reached 7 of 7, in 159 and 166 s. The emulator recorder still runs
   online, so re-recording Mihon's references would capture the dialog.
+
+### Live matrix parity, and the unit tests on the Wasm tier (2026-10-12)
+
+With the offline quick gate, the serial `--live` matrix reached 13 of 14 flows on both tiers (Wasm 383.8 s, JS
+317.6 s). TikTok misses its 20 s launch budget on both (Wasm 33 s with 65,900 methods compiled in 14.6 s, JS 22 s).
+Lichess's launch diff is the same on both tiers (71.6% on JS): its reference shows the app's notification-permission
+request over a first-run card, which neither tier shows, and live blog content. The Wasm tier's remaining cost is
+first launches of large apps: YouTube 42.9 against 27.8 s, ChatGPT 38.2 against 27.3 s, Reddit 20.1 against 12.6 s.
+
+Bun 1.4 has JSPI (`WebAssembly.Suspending`/`promising`), so the unit tests can run on the Wasm tier under
+`bun test`; JavaScriptCore still names no Wasm frames, so a caller-class lookup is a gap there. With
+`WEBDROID_TIER=wasm`, 943 pass and 158 fail, and one file fails to load. Most failures reach Java through JS-tier
+class objects instead of jentry (about 65 call sites, most in `java-lang.test.ts`); four natives return host values
+of no Java class.
