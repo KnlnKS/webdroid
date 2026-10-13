@@ -25,7 +25,7 @@ function proofError(row: any, pending = false): string | null {
   try {
     const url = new URL(row.url);
     if (url.pathname !== "/" || new URL(p.source).origin !== url.origin || new URL(r.source).origin !== url.origin ||
-      r.url !== row.url || r.pid !== null || row.tier !== (url.searchParams.get("tier") ?? "js")) return "counter source/realm association mismatch";
+      r.url !== row.url || r.pid !== null || row.tier !== (url.searchParams.get("tier") ?? "wasm")) return "counter source/realm association mismatch";
   } catch { return "invalid counter source URL"; }
   if (r.schema !== 1 || !Number.isSafeInteger(r.resets) || r.resets < 0 || !Number.isSafeInteger(r.sequence) || r.sequence < 1 || !Number.isFinite(r.bornAt) || !Number.isFinite(r.at) || r.at < r.bornAt ||
     COMPILE_COUNTERS.some(k => r.initial?.[k] !== 0 || !Number.isFinite(r.counters?.[k]) || r.counters[k] < 0 || r.counters[k] !== row.perf?.[k])) return "invalid counter initialization, sequence or snapshot";

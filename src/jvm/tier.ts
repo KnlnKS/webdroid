@@ -1,5 +1,5 @@
-// Which engine runs Java: the JS tier (`?tier=js`, the default) or the Wasm tier (`?tier=wasm`; headless tools: WEBDROID_TIER). The Wasm tier's
-// code is loaded by a dynamic import only when selected, so the default bundle carries none of it. `JavaClass` is what host code holds of a loaded
+// Which engine runs Java: the Wasm tier (`?tier=wasm`, a page's default) or the JS tier (`?tier=js`). Headless tools choose with WEBDROID_TIER
+// and default to the JS tier, which the scripts that run Java under Bun still need. The Wasm tier's code is loaded by a dynamic import. `JavaClass` is what host code holds of a loaded
 // class instead of the JS tier's `ClassInfo.ctor`, with an implementation for each tier.
 import type { ClassInfo, Runtime } from "./runtime";
 import type { DexFile } from "./dex";
@@ -7,14 +7,14 @@ import { lateMethod, mangleMethod, mangleStaticField } from "./abi";
 
 export type Tier = "js" | "wasm";
 
-export function parseTier(value: string | null | undefined): Tier {
-  if (value == null || value === "js") return "js";
-  if (value === "wasm") return "wasm";
+function parseTier(value: string | null | undefined, fallback: Tier): Tier {
+  if (value == null) return fallback;
+  if (value === "js" || value === "wasm") return value;
   throw new Error(`invalid tier ${value}: js or wasm`);
 }
 
-export const tier: Tier = parseTier(typeof location !== "undefined" ? new URLSearchParams(location.search).get("tier")
-  : typeof process !== "undefined" ? process.env.WEBDROID_TIER : undefined);
+export const tier: Tier = typeof location !== "undefined" ? parseTier(new URLSearchParams(location.search).get("tier"), "wasm")
+  : parseTier(typeof process !== "undefined" ? process.env.WEBDROID_TIER : undefined, "js");
 
 export interface ThreadState { name: string; state: string; blocker?: string; owner?: string; strands?: number[] }
 /** what the Wasm tier's host provides the places that load code */

@@ -105,7 +105,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   install compiled regions only against their source page epoch. Host calls exit `run_slice`;
   preserve guest-frame, signal and callback ordering. See the history for core implementation
   details and rejected performance experiments.
-- The Wasm tier (`?tier=wasm`, headless `WEBDROID_TIER`; default `js`) is `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
+- The Wasm tier (`?tier=wasm`, a page's default; headless tools `WEBDROID_TIER=wasm`, which default to `js`) is `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
   Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `bun run wasm <suite>` (`scripts/wasm/run.ts`);
   a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Plan: `docs/wasm-backend-plan.md`.
 

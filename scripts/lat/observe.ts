@@ -14,7 +14,7 @@ export function installLatencyObserver(counters: string[]) {
       const row = found.get(record.owner.url); found.delete(record.owner.url);
       const receipt = record.receipt;
       return { ...row, url: record.owner.url, pid: String(record.owner.pid), pkg: record.owner.pkg, runtimePkg: row?.pkg ?? null,
-        tier: row?.tier ?? new URL(record.owner.url).searchParams.get("tier") ?? "js", available: !!receipt,
+        tier: row?.tier ?? new URL(record.owner.url).searchParams.get("tier") ?? "wasm", available: !!receipt,
         perf: receipt ? { ...row?.perf, ...receipt.counters } : row?.perf ?? null, receiptProbe: true,
         proof: { schema: registry.schema, source: registry.source, sequence: registry.sequence, dropped: registry.dropped, events: registry.events,
           owner: record.owner, dead: record.dead, processDead: record.processDead, error: record.error, receipt } };
