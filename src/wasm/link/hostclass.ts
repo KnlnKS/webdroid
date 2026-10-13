@@ -101,7 +101,7 @@ export class HostClasses {
   private synthesize(spec: HostSpec, loader?: Loader): void {
     const sup = spec.sup ?? OBJECT, jc = classOf(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
     for (const key of spec.methods) { const m = native(spec.name, key, jc.methods.length); jc.methods.push(m); jc.byKey.set(m.key, m); }
-    // the constructor Java finds when the spec declares none is the superclass's, as it is for the object the JS tier makes
+    // the constructor Java finds when the spec declares none is the superclass's
     if (!jc.byKey.has("<init>()V")) {
       const m = native(spec.name, "<init>()V", jc.methods.length);
       m.flags = ACC.PUBLIC;
@@ -119,7 +119,7 @@ export class HostClasses {
     const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
     for (const m of over.methods) over.byKey.set(m.key, m);
     const taken: MethodInfo[] = [], virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
-    // the JS tier initializes a class a spec implements without its `<clinit>`: with the values the spec names, if any
+    // a class a spec implements is initialized without its `<clinit>`: with the values the spec names, if any
     const clinit = over.byKey.get("<clinit>()V");
     if (clinit && !spec.platformClinit) {
       // the platform build's class module runs the `<clinit>` slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values
@@ -137,9 +137,8 @@ export class HostClasses {
       hosted.methods.push(m); over.byKey.set(m.key, m);
       if (!m.isStatic) virtual.push(m.key);
     }
-    // a class the JS tier never loads from the platform (the host implements it whole) does not run its initializer either
-    const init = over.byKey.get("<clinit>()V");
-    if (init && this.w.opts.hostWhole?.(jc.name)) { bodies.set(init, () => {}); taken.push(init); }
+    // a class the host implements whole does not run its platform initializer: one taken above already stores the spec's values
+    if (clinit && !taken.includes(clinit) && this.w.opts.hostWhole?.(jc.name)) { bodies.set(clinit, () => {}); taken.push(clinit); }
     this.w.addClass(over, bodies);
     if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);
