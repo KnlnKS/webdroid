@@ -3,7 +3,7 @@
 import { mangleField, mangleStaticField, doubleToLongBits, floatToIntBits, intBitsToFloat, longBitsToDouble } from "../abi";
 import { rt, type Intrinsic } from "../runtime";
 import { tier } from "../tier";
-import { classNameOf, scall } from "./jentry";
+import { classNameOf } from "./jentry";
 
 type Obj = Record<string, any>;
 export type BoxDesc = "I" | "J" | "F" | "D" | "Z" | "C" | "B" | "S";
@@ -58,10 +58,11 @@ function booleanValues(): [Obj, Obj] {
   return booleans = [info.ctor[mangleStaticField("FALSE")], info.ctor[mangleStaticField("TRUE")]];
 }
 
+/** the Wasm tier's boxes are Java's own, which valueOf makes without suspending (boot.ts) */
+export const wasmBox = { make: null as ((desc: BoxDesc, v: number | bigint) => unknown) | null };
 /** the box `valueOf(v)` of the `desc` class gives */
 export function box(desc: BoxDesc, v: number | bigint | boolean): Obj {
-  // the Wasm tier's boxes are Java's own, which valueOf makes (its classes initialized long before any native boxes)
-  if (tier === "wasm") return scall(CLASS[desc], "valueOf", `(${desc})L${CLASS[desc]};`, typeof v === "boolean" ? +v : v);
+  if (tier === "wasm") return wasmBox.make!(desc, typeof v === "boolean" ? +v : v) as Obj;
   if (desc === "Z") return booleanValues()[v ? 1 : 0];
   const range = CACHE[desc];
   if (range && Number(v) >= range[1] && Number(v) <= range[2]) {

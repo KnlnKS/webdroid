@@ -23,7 +23,8 @@ import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
 import { wasmJni } from "./jni";
 import { useJniVm } from "../../native/jnivm";
-import { classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
+import { wasmBox } from "../../jvm/natives/jbox";
+import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { hostSpec, natives, nativeSource } from "./nativesource";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
@@ -99,6 +100,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     rt.classFor = (cls) => made.bridge.toHost(classRef(made, cls));
+    wasmBox.make = (desc, v) => made.bridge.toHost(boxRef(made, desc, v));
     return made;
   };
   if (typeof location === "undefined") {
@@ -133,6 +135,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   rt.mkThrowable = hostThrowable;
   rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(current(), cls); };
   rt.classFor = (cls) => current().bridge.toHost(classRef(current(), cls));
+  wasmBox.make = (desc, v) => current().bridge.toHost(boxRef(current(), desc, v));
   const [aot, jars] = await opening;
   store = aot;
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));

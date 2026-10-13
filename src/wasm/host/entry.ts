@@ -11,7 +11,7 @@ import { mangleField } from "../../jvm/abi";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import type { Entry } from "../../jvm/natives/jentry";
 import type { JavaClass } from "../../jvm/tier";
-import type { FieldInfo, MethodInfo } from "../compiler/program";
+import { kindOf, type FieldInfo, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
 import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
@@ -21,6 +21,7 @@ import { fromBits, refOf, toBits } from "./bridge";
 import { failed } from "../compiler/linkage";
 import { UInfo } from "../link/unsafe";
 import { constClass } from "../link/classes";
+import { box } from "../link/mhandles";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
@@ -245,6 +246,8 @@ export function hostThrowable(cls: string, msg: string | null): JThrowable {
 }
 /** the Class object of `cls`, a Java reference */
 export const classRef = (w: World, cls: string): object => w.hostFn("j:class:" + cls, [], "L", (cx, c) => { constClass(cx, c, cls); })() as object;
+/** the box `valueOf` of primitive type `desc` makes of the host value `v`, a Java reference: a host function, so a first call's link cannot suspend it */
+export const boxRef = (w: World, desc: string, v: number | bigint): object => w.hostFn("j:box:" + desc, [kindOf(desc)], "L", (cx, c) => { c.lget(0); box(cx, c, desc); })(toBits(v, desc)) as object;
 /** an instance of the Java class `cls` made by the host, as `rt.make` makes one for a native that fills in a result (a Struct*) or an exception (UnixException)
  *  by field name; the Bridge copies it into Java */
 export const hostObject = (w: World, cls: string): JObj => new (hostClass(cls, w.prog.isSubclass(cls, "java/lang/Throwable") ? JThrowable : JObj))();
