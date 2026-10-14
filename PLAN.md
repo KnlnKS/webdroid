@@ -19,8 +19,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   first launch and persisted; bundled builds cover the gate apps; a launch without a saved build compiles likely
   callees in idle time.
 - **Latency:** `lat` gates on the first response frame. Every Calculator M, FitNotes and Komikku tap passes the
-  150 ms gate cold and warm by median (2026-10-13). Komikku's cold taps are 87–163 ms per run (medians 134–148),
-  dominated by on-demand compiling; single runs still exceed 150 ms by up to 13 ms. The 80–170 ms stalls that failed
+  150 ms gate cold and warm by median (2026-10-13). Komikku's cold taps are 36–177 ms per run (2026-10-14, medians
+  48–150), mostly first-tier Java and on-demand compiling; single runs still exceed 150 ms by up to 27 ms. Compile
+  Worker answers wait out the input window. `lat --ecores` measures an about 6× slower device. The 80–170 ms stalls that failed
   earlier runs were the engine freeing merged-away units in one pause, now released in batches (`World.retire`).
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
   bursts of up to 30 ms. Heavy apps are reports (`"gate": false`). See [performance.md](docs/performance.md).

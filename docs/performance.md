@@ -33,7 +33,7 @@ WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile  # regenerate the bu
   probes the app between `pointerdown` and the end of the window. Tap times before 2026-10-13 used an earlier
   semantic-plus-pixels clock and are not comparable. Each tap and `fps` step also carries the app Worker's
   frame timeline (`src/timeline.ts`: vsyncs, input, doFrame, draw, composite, present, looper idle/wake), read
-  after the window. `--throttle N` applies CDP CPU throttling to the page only: Chrome cannot throttle Workers, so app processes run at full speed; `bundles=0` (on by
+  after the window. `--ecores` (macOS) runs Chrome on the efficiency cores at background priority, about 6× slower in the page and every Worker alike, for a slower-device pass; CDP CPU throttling is not used because it reaches only the page. `bundles=0` (on by
   default in `lat`) keeps the bundled app builds out, so a run without `--warm` compiles the app on demand.
 - **Claims need matched runs:** the same inputs, serial (`--jobs 1`), nothing else running on the host, at least
   three runs per side, alternating revisions. Compare a failure with the starting commit before calling it a
@@ -103,6 +103,11 @@ First response frame (the gate since 2026-10-13; not comparable with the rows ab
 | ChatGPT launch (report) | 6.0 s | page crashed once |
 | TikTok launch (report) | 12.3 s | 8.2 s (its build attached from 2026-10-13) |
 
+On a profiled platform build with worker answers held through input (2026-10-14, three cold runs), Komikku launched
+in 5.8–6.4 s and its taps took 36–177 ms (per-tap medians of two three-run series: `next` 48–53, `start` 92–123,
+`more` 133–135, `settings` 104–107, `appearance` 129–150). An `--ecores` pass (about 6× slower) is in the history under
+"A slower device on the efficiency cores".
+
 Heavy-app launches wait for live content, so they vary with the network. Komikku's cold taps sit at the gate; they compile
 on demand. Warm YouTube taps compile almost nothing (21 methods in `you`) but run ~90 ms of first-tier Java in input dispatch.
 
@@ -122,6 +127,8 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
   methods: 57–78 ms compiling and 18–21 ms creating modules. Across a cold launch `linkSlot` is 52% compiler,
   then `WebAssembly.Module` and `Instance`, encoding and import objects. The main process makes about 6,400
   modules (3,953 from `linkSlot`, 911 `buildClasses`, 603 `linkEnsure`, 318 stub pools).
+  Main-thread Java is the larger share on a profiled build (Komikku 80–115 ms a tap); V8 compiling merged
+  modules' functions on their first call adds 9–57 ms.
 - **Chrome charges a module about four times what Node does:** 18.5 µs against 4.2 µs per unit module, the same
   with every V8 flag tried, so the lever is fewer modules. Instantiation costs about the same in both and grows
   with exports.

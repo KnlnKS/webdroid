@@ -12,7 +12,7 @@ The approved plan is appended below, unchanged. Read [AGENTS.md](../AGENTS.md) a
 - **Leave the user's uncommitted docs reorganization alone.** That covers deleted docs, `AGENTS.md`, `PLAN.md` restructuring, the new `docs/architecture.md` and `docs/performance.md`, and README rewrites. Don't revert anything in it.
 - **Other sessions' edits.** `tests/android-graphics.test.ts`, the EGL natives in `src/android/glsurface.ts` and `src/wasm/host/persist.ts` were also changed from outside this work: the user's separate "Implement the remaining EGL14 natives" task and the user. Treat them as current.
 - **Measurement.**
-  - Gate on the M4 Pro with `--gpu`. `--throttle` slows only the page thread, never the app Workers (see "Throttling reaches only the page" in the history).
+  - Gate on the M4 Pro with `--gpu`. `--ecores` (macOS) is the slower-device pass; CDP throttling reaches only the page (see the history).
   - Gate apps: Calculator M, FitNotes, Komikku, plus the Komikku `scroll-appearance` list.
   - YouTube, Reddit, TikTok and ChatGPT are `"gate": false` reports.
   - Use 3+ matched runs per side, alternating.
@@ -29,9 +29,11 @@ The work below is committed on top of `ef6d85ca` (`git log ef6d85ca..`):
 - `lat:` the first-response gate, the FitNotes Legs scroll, and the legacy tap clock removed;
 - `input:` `?input=batched`;
 - `wasm code:` dead `returnCallRef` removed;
-- `lat:` `--throttle` applies to the page only (Chrome cannot throttle Workers);
+- `lat:` `--ecores` runs Chrome on the efficiency cores for a slower-device pass;
 - `wasm compiler:` CHA is asked only about targets the module holds;
 - `native:` statfs/statvfs answer the storage estimate in bionic's layouts, and C longs are stored as values, not translated pointers.
+- `wasm compile client:` planning and unit adoption wait out the input window;
+- `wasm aot-profile`, `lat profsum`, `lat`: retries over a changing OPFS file, Worker profiles windowed by the page's tap marks, and user-timing marks per gated tap.
 
 Still uncommitted: the other sessions' edits listed in the ground rules.
 
@@ -40,7 +42,7 @@ Plan 3.2 (final targets as direct calls) was tried and rejected; see "Rejected: 
 ### Harness and measurement (plan Stage 0)
 
 - **`lat` v2 first-response metric** (`scripts/lat/run.ts`, `observe.ts`, `expect.ts`, `src/shell/frame-port.ts`).
-  - `--throttle N`, `--timeline`, `--json`, `--trace`, `--cpuprofile` and `--demand`.
+  - `--ecores`, `--timeline`, `--json`, `--trace`, `--cpuprofile` and `--demand`.
   - `"gate": false` report scenarios: `scripts/lat/scenarios/{youtube,reddit,chatgpt,tiktok}.json`.
 - **Environment knobs:**
   - `WEBDROID_TRACE_CATEGORIES` (comma-separated) replaces the trace categories. `disabled-by-default-v8.gc,v8` gives a ~60 MB GC-only trace instead of 450 MB.
@@ -160,12 +162,13 @@ These analyses were done with scratch scripts that are not in the repo; each is 
 ## Suggested next steps, in order
 
 1. **Lower the cold Komikku floor.** In a cold `more` tap, UP is handled in 2 ms, then one 85 ms `doFrame` recomposes, with 699 methods compiled on demand (62 ms of compiling). Levers, in the plan's order:
-   - **2.1 deterministic app numbering: measured and rejected for mid-session adoption** (history, "Rejected: seeded app numbering"). Seeding is cheap and covers 99.9% of Komikku, but a late build attaches 4–7 s after the first frame without its data modules, and linking the classes its code names cost the next tap more than compiling saved. Under the profiler, first-tier compiling is about a fifth of a cold tap; the rest is Java and idle waits. Profile those before more compile work.
+   - **2.1 deterministic app numbering: measured and rejected for mid-session adoption** (history, "Rejected: seeded app numbering").
+   - **Profiled (2026-10-14):** main-thread Java is 80–115 ms of a cold tap, on-demand compiling 10–55 ms, V8 compiling merged modules' functions 9–57 ms. Compile Worker answers now wait out the input window (history, "Worker answers wait out input"); turning merges off moved adoptions into taps and did not help. Next idea: merge only units whose counters stayed unchanged for ~10 s, so running methods keep their engine code.
    - **5.1 flat statics.** Fewer modules and imports per unit.
    - **3.1 and 3.3 codegen.** Plan 3.2 is rejected: direct calls must not bypass host vtable repairs.
-2. **ChatGPT and TikTok.** Since paced unit release neither has crashed: ChatGPT warm launches in 2.95 s, and five matched warm TikTok runs (main and `6369377e`) launched in 8.1–8.4 s. Two warm preparations on main stopped at a server-driven "Manage your storage" dialog (its text is not in the APK). Cold runs and the matched series never showed it. Statfs was not the trigger; which check TikTok makes is still unknown.
-3. **A slower-device pass.** Chrome cannot CPU-throttle Workers, so `--throttle` covers only the page. Find another way to measure app Workers on a slower CPU.
-4. **Commit the docs** once the user's reorganization lands.
+2. **ChatGPT and TikTok.** Since paced unit release neither has crashed: ChatGPT warm launches in 2.95 s, and five matched warm TikTok runs (main and `6369377e`) launched in 8.1–8.4 s. Two warm preparations on main stopped at a server-driven "Manage your storage" dialog (its text is not in the APK). Cold runs and the matched series never showed it. Neither statfs nor free space is the trigger (Chrome always reports ~10 GB free); a cold-then-warm run on 2026-10-14 reached the login screen without it. Which check TikTok makes is still unknown.
+3. **Done: a slower-device pass.** `lat --ecores` runs Chrome under `taskpolicy -c background` (about 6× slower in every thread); results are in the history ("A slower device on the efficiency cores").
+4. **Done: docs committed** (the reorganization landed in `959469a3`).
 
 Plan 1.6 (pointer pipelining) has nothing to recover: UP reaches the Worker 0–6 ms after the page event. Plan 1.3 (the vsync `fill()` undo) is unverified. Looper callbacks run inside `nativePollOnce`'s Bridge scope, so measure before changing it.
 
