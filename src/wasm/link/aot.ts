@@ -17,6 +17,7 @@ import type { DexFile } from "../../jvm/dex";
 import { methodCount, type Loader, type MethodInfo } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 import { methodOf } from "../compiler/ids";
+import { uleb } from "../compiler/wasmbin";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -150,7 +151,6 @@ const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCou
 
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
-const uleb = (n: number, o: number[]) => { for (; n >= 0x80; n = Math.floor(n / 128)) o.push((n % 128) | 0x80); o.push(n); };
 /** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions */
 export function packModule(header: object, wasm: Uint8Array, traces?: { slot: number; offsets: Int32Array; pcs: Int32Array }[]): Uint8Array {
   const section = (name: string, body: Uint8Array) => {
