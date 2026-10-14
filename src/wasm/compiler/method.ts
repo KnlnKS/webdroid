@@ -749,6 +749,16 @@ export class MC {
   }
 
   protected emitOperation(ins: Ins): void {
+    const op = ins.op;
+    if (op >= 0x44 && op <= 0x6d) {
+      if (op <= 0x4a) return this.emitAget(ins);
+      if (op <= 0x51) return this.emitAput(ins);
+      if (op <= 0x58) return this.emitIget(ins);
+      if (op <= 0x5f) return this.emitIput(ins);
+      return this.emitStatic(ins);
+    }
+    if (isInvoke(op)) return this.emitInvoke(ins);
+    if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
     const n = ins.name, c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
     switch (n) {
       case "nop": return;
@@ -824,12 +834,6 @@ export class MC {
       case "if-eq": case "if-ne": case "if-eqz": case "if-nez": case "if-lt": case "if-ge": case "if-gt": case "if-le":
       case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(ins); return;
     }
-    if (n.startsWith("aget")) return this.emitAget(ins);
-    if (n.startsWith("aput")) return this.emitAput(ins);
-    if (n.startsWith("iget")) return this.emitIget(ins);
-    if (n.startsWith("iput")) return this.emitIput(ins);
-    if (n.startsWith("sget") || n.startsWith("sput")) return this.emitStatic(ins);
-    if (n.startsWith("invoke")) return this.emitInvoke(ins);
     this.emitArith(ins);
   }
   private monObj = -1; private monHdr = -1;
