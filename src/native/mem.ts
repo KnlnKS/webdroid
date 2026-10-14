@@ -192,9 +192,8 @@ export const mem = {
   },
   strlen(a: number): number {
     checkAddr(a, 1);
-    let e = a >>> 0;
-    while (e < u8.length && u8[e] !== 0) e++;
-    return e - (a >>> 0);
+    const e = u8.indexOf(0, a >>> 0);
+    return (e < 0 ? u8.length : e) - (a >>> 0);
   },
   bytes: localBytes,
   write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
