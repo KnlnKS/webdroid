@@ -452,49 +452,38 @@ test("RegisterNatives binds a native after its class has run", async () => {
 });
 
 // A class initializer or a callback that waits parks the strand that called it.
-test("JNI callbacks retain their caller after suspended class initialization", async () => {
-  setA64(true); jniInit();
-  const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
-  try {
-    await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
-    const env = new Env(cpu, ldp(out));
-    const klass = await env.cls("JniSlowInit"), method = await env.staticMethod(klass, "value", "()I");
-    // the initializer sleeps: the call waits for it, and the answer is the one the initialized class gives
-    expect(await env.call(call("Static", "Int"), klass, method)).toBe(1);
-    expect(cpu.exc).toBeNull();
-  } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
-});
+test("JNI callbacks retain their caller after suspended class initialization", () => withEnv(true, async (env) => {
+  const klass = await env.cls("JniSlowInit"), method = await env.staticMethod(klass, "value", "()I");
+  // the initializer sleeps: the call waits for it, and the answer is the one the initialized class gives
+  expect(await env.call(call("Static", "Int"), klass, method)).toBe(1);
+  expect(env.cpu.exc).toBeNull();
+}));
 
-for (const a64 of abis) test(`${abi(a64)} JNI callbacks park only when Java suspends`, async () => {
-  setA64(a64); jniInit();
-  const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
-  try {
-    await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
-    const env = new Env(cpu, ldp(out));
-    const klass = await env.cls("JniCallback"), method = await env.staticMethod(klass, "value", "()I");
-    const run = () => env.call(call("Static", "Int"), klass, method);
-    const mode = async (m: number) => { await env.call(field("Set", "Int", true), klass, await env.staticField(klass, "mode", "I"), m); };
-    await mode(0);
-    // the first call links the method, which may yield a turn
-    await run();
-    const immediate = run();
-    expect(cpu.parked).toBe(false);
-    expect(await immediate).toBe(42);
+for (const a64 of abis) test(`${abi(a64)} JNI callbacks park only when Java suspends`, () => withEnv(a64, async (env) => {
+  const cpu = env.cpu;
+  const klass = await env.cls("JniCallback"), method = await env.staticMethod(klass, "value", "()I");
+  const run = () => env.call(call("Static", "Int"), klass, method);
+  const mode = async (m: number) => { await env.call(field("Set", "Int", true), klass, await env.staticField(klass, "mode", "I"), m); };
+  await mode(0);
+  // the first call links the method, which may yield a turn
+  await run();
+  const immediate = run();
+  expect(cpu.parked).toBe(false);
+  expect(await immediate).toBe(42);
 
-    await mode(1);
-    const suspended = run();
-    expect(cpu.parked).toBe(true);
-    expect(await suspended).toBe(73);
+  await mode(1);
+  const suspended = run();
+  expect(cpu.parked).toBe(true);
+  expect(await suspended).toBe(73);
 
-    // a callback that throws, at once or after waiting, leaves the throwable pending and answers 0
-    for (const m of [2, 3]) {
-      await mode(m);
-      expect(await run()).toBe(0);
-      expect(await env.pending()).toBe("java.lang.IllegalStateException");
-      await env.clear();
-    }
-  } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
-});
+  // a callback that throws, at once or after waiting, leaves the throwable pending and answers 0
+  for (const m of [2, 3]) {
+    await mode(m);
+    expect(await run()).toBe(0);
+    expect(await env.pending()).toBe("java.lang.IllegalStateException");
+    await env.clear();
+  }
+}));
 
 test("an address that stands for a Java array gives a native the array, and what it writes is the array's", async () => {
   rt.registerJni("JniProbe", "handleOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true }) as never);
