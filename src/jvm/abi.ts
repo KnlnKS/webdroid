@@ -46,9 +46,6 @@ export function mangleMethod(name: string, desc: string): string {
   demangled.set(m, [name, desc]);
   return m;
 }
-/** the prototype property naming exactly `cls`'s method `mangled`, which a subclass cannot shadow:
- *  a direct call through it is a method call, whose call feedback lets V8 inline the target */
-export const directName = (cls: string, mangled: string): string => "d" + hash36(cls) + "$" + mangled;
 const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 /** a reflect.Proxy materialises a method on first use from the name and descriptor the caller
@@ -104,11 +101,6 @@ export function isWide(desc: string): boolean { return desc === "J" || desc === 
 export function defaultValue(desc: string): 0 | 0n | null {
   return desc[0] === "J" ? 0n : desc[0] === "L" || desc[0] === "[" ? null : 0;
 }
-/** the same, as a JS source literal */
-export function defaultVal(desc: string): string {
-  const v = defaultValue(desc);
-  return typeof v === "bigint" ? "0n" : String(v);
-}
 
 /** "Ljava/lang/String;" → "java/lang/String"; passthrough for already-plain names */
 export function descToName(desc: string): string {
@@ -122,12 +114,6 @@ export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entri
 /** the one mapping of Java's element types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64) */
 export const PRIM_ARRAYS = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 export type PrimElem = keyof typeof PRIM_ARRAYS;
-const PRIM_BY_CTOR = new Map<unknown, PrimElem>(Object.entries(PRIM_ARRAYS).map(([d, c]) => [c, d as PrimElem]));
-export function primElem(v: unknown): PrimElem | undefined {
-  const e = PRIM_BY_CTOR.get((v as object | null)?.constructor);
-  if (e !== undefined || !ArrayBuffer.isView(v)) return e;
-  for (const d in PRIM_ARRAYS) if (v instanceof PRIM_ARRAYS[d as PrimElem]) return d as PrimElem;
-}
 
 /** tag a JS array as a Java `elem[]` for compiled code (in place, returns the same array) */
 export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
@@ -233,7 +219,6 @@ export function jmethod(o: unknown, mangled: string): JMethod | undefined {
 
 const bits = new DataView(new ArrayBuffer(8));
 export function intBitsToFloat(i: number): number { bits.setInt32(0, i | 0); return bits.getFloat32(0); }
-export function floatToIntBits(f: number): number { bits.setFloat32(0, f); return bits.getInt32(0); }
 export function longBitsToDouble(l: bigint): number { bits.setBigInt64(0, l); return bits.getFloat64(0); }
 export function doubleToLongBits(d: number): bigint { bits.setFloat64(0, d); return bits.getBigInt64(0); }
 
@@ -247,34 +232,9 @@ for (const [n, modes] of [
   [2, "compareAndSet compareAndExchange compareAndExchangeAcquire compareAndExchangeRelease weakCompareAndSet " +
     "weakCompareAndSetPlain weakCompareAndSetAcquire weakCompareAndSetRelease"],
 ] as const) for (const m of modes.split(" ")) VARHANDLE_VALUES.set(m, n);
-export const VARHANDLE_MODES: readonly string[] = [...VARHANDLE_VALUES.keys()];
 /** how many value operands a VarHandle access mode takes; undefined for any other name */
 export const varHandleValues = (mode: string): number | undefined => VARHANDLE_VALUES.get(mode);
 
-/** A compiled body's function name, naming its class and method in identifier characters: stack
- *  frames carry it whatever script the body came from, as persisted code does not carry its
- *  per-method sourceURL. Every other character is `_` and four hex digits, so `__` separates. */
-const frameEscape = (s: string) => s.replace(/[^A-Za-z0-9]/g, (c) => "_" + c.charCodeAt(0).toString(16).padStart(4, "0"));
-export const frameName = (cls: string, method: string, methodIdx = -1) =>
-  `wd_${frameEscape(cls)}__${frameEscape(method)}${methodIdx >= 0 ? "__" + methodIdx : ""}`;
-/** [class, method, method index or -1] from a frameName in a stack line, if it holds one */
-export function frameOf(line: string): [string, string, number] | null {
-  const m = /\bwd_([A-Za-z0-9_]*?)__([A-Za-z0-9_]+?)(?:__(\d+))?\b/.exec(line);
-  if (!m) return null;
-  const unescape = (s: string) => s.replace(/_([0-9a-f]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
-  return [unescape(m[1]), unescape(m[2]), m[3] === undefined ? -1 : Number(m[3])];
-}
-
-let hashCounter = 1;
-/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life in a hidden own slot, like its `$mon` */
-export function idHash(o: unknown): number {
-  if (o === null || o === undefined) return 0;
-  if (typeof o === "string") return stringHash(o);
-  if (typeof o !== "object" && typeof o !== "function") return stringHash(String(o));
-  let h = (o as { $ih?: number }).$ih;
-  if (h === undefined) Object.defineProperty(o, "$ih", { value: h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff) });
-  return h;
-}
 /** String.hashCode */
 export function stringHash(s: string): number {
   let h = 0;

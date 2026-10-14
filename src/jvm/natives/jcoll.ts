@@ -2,7 +2,7 @@
 // through their Java API, an ArrayMap by its own fields.
 import { mangleField } from "../abi";
 import { driven, type Gen } from "../runtime";
-import { vcall, scall, newObj, after } from "./jentry";
+import { vcall, newObj } from "./jentry";
 
 type Obj = Record<string, any>;
 
@@ -27,10 +27,6 @@ const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {
   while (yield vcall(it, "hasNext", "()Z")) out.push(yield vcall(it, "next", "()Ljava/lang/Object;"));
   return out;
 });
-
-/** a java.util.Enumeration over `items` */
-export const mkEnumeration = (items: unknown[]): unknown =>
-  after(newArrayList(items), list => scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", list));
 
 const AM = "android/util/ArrayMap", AM_ARRAY = mangleField(AM, "mArray"), AM_SIZE = mangleField(AM, "mSize");
 /** an android.util.ArrayMap's entries, by its own fields */

@@ -27,14 +27,6 @@ export function waitsFor(holder: Strand, waiter: Strand): boolean {
   for (let c: Strand | null = holder, n = 0; c && !c.root; c = c.waitsOn) if (c === waiter || ++n > 64) return true;
   return false;
 }
-/** `waiter` waits for `holder` until `until` settles */
-export function waitFor<T>(waiter: Strand, holder: Strand, until: Promise<T>): Promise<T> {
-  if (waiter.root || holder.root || waiter === holder) return until;
-  waiter.waitsOn = holder;
-  const done = () => { if (waiter.waitsOn === holder) waiter.waitsOn = null; };
-  until.then(done, done);
-  return until;
-}
 
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */
 export function suspendWith(pending: Promise<unknown>, k: Continuation): Promise<unknown> {

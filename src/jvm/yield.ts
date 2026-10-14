@@ -42,10 +42,6 @@ export function noteInput(): void { lastInput = performance.now(); responsiveUnt
 /** how long ago the latest input arrived */
 export const sinceInput = (now = performance.now()): number => now - lastInput;
 export const answeringInput = (now = performance.now()): boolean => now < responsiveUntil;
-/** resolves once no input has arrived for the responsive window */
-export async function inputSettled(): Promise<void> {
-  for (let wait; (wait = responsiveUntil - performance.now()) > 0;) await new Promise((r) => setTimeout(r, wait));
-}
 /** a later turn, after what `queue` already holds */
 function turn(queue: (() => void)[]): Promise<void> {
   if (processExited()) return never();

@@ -139,9 +139,6 @@ export function allocateDirectNow(n: number): JBuffer {
   if (b instanceof Promise) throw new Error("allocateDirectNow before directReady");
   return b;
 }
-/** JNI's NewDirectByteBuffer: a buffer over memory it does not own */
-export const newDirectBuffer = (address: number | bigint, cap: number): JBuffer | Promise<JBuffer> =>
-  newObj("java/nio/DirectByteBuffer", "(JI)V", BigInt(address), cap);
 const unmappers = new FinalizationRegistry<() => void | Promise<void>>((unmap) => { const pending = unmap(); if (pending) void pending.catch(console.error); });
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
 function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void | Promise<void>): JBuffer | Promise<JBuffer> {
