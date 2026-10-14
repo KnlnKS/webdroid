@@ -687,10 +687,12 @@ export class MC {
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   definesNonNull(ins: Ins, f: Facts): boolean {
-    const n = ins.name;
-    if (n === "new-instance") return !this.cx.str.isString(this.dex.typeName(ins.b));
-    if (n === "const-string" || n === "const-string/jumbo" || n === "const-class" || n === "new-array" || n === "move-exception") return true;
-    if (n.startsWith("move-object") || n === "check-cast") { const w = this.typing.use(ins.pc, n === "check-cast" ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
+    const op = ins.op;
+    if (op === 0x22) return !this.cx.str.isString(this.dex.typeName(ins.b)); // new-instance
+    // const-string, const-string/jumbo, const-class, new-array, move-exception
+    if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
+    // move-object, move-object/from16, move-object/16, check-cast
+    if ((op >= 0x07 && op <= 0x09) || op === 0x1f) { const w = this.typing.use(ins.pc, op === 0x1f ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
     return false;
   }
   /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
@@ -1015,8 +1017,8 @@ export class MC {
   finishResult(ins: Ins, kind: Kind | "V") {
     // fold a following move-result into the producer
     if (kind === "V") return;
-    const c = this.code, insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
-    if (nx && nx.name.startsWith("move-result")) { this.consumed.add(nx.pc); this.set(kind, nx); }
+    const c = this.code, nx = this.moveResult(ins);
+    if (nx) { this.consumed.add(nx.pc); this.set(kind, nx); }
     else c.drop();
   }
   /** an invoke the compiler cannot translate: the code after it is dead, so a move-result stays unwritten */
@@ -1025,8 +1027,16 @@ export class MC {
     this.cx.gap(this.code, `${mid(this.m)}: ${why}`);
   }
   consumeResult(ins: Ins) {
-    const insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
-    if (nx?.name.startsWith("move-result")) this.consumed.add(nx.pc);
+    const nx = this.moveResult(ins);
+    if (nx) this.consumed.add(nx.pc);
+  }
+  /** the move-result that follows `ins`, if one does */
+  private moveResult(ins: Ins): Ins | undefined {
+    const insts = this.prepared.instructions, pc = ins.pc + ins.len;
+    let lo = 0, hi = insts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (insts[mid].pc < pc) lo = mid + 1; else hi = mid; }
+    const nx = insts[lo];
+    return nx?.pc === pc && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
