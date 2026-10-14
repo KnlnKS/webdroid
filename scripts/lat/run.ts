@@ -22,7 +22,7 @@
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap. --trace writes the gated launch's browser-wide trace (every
 // thread: page, Workers, GPU, V8 collections), for chrome://tracing or Perfetto; WEBDROID_TRACE_CATEGORIES (comma-separated) replaces
-// its categories, e.g. disabled-by-default-v8.gc,v8 for a small GC-only trace. WEBDROID_JS_FLAGS and WEBDROID_CHROME_ARGS (space-separated)
+// its categories, e.g. disabled-by-default-v8.gc,v8 for a small GC-only trace; each gated pointerup is a `lat:<name>` user-timing mark in it. WEBDROID_JS_FLAGS and WEBDROID_CHROME_ARGS (space-separated)
 // pass V8 flags and Chrome arguments for A/B runs. With --timeline, --json taps carry the Worker's and the page's timelines and the page's long tasks.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -445,6 +445,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       await sleep(s.hold ?? 60);
       if (w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
       const compileBefore = observer.snapshot(), tu = performance.now();
+      // a trace (blink.user_timing) places the tap by this mark
+      performance.mark("lat:" + s.m);
       ev("pointerup", x, y);
       // the window closes once the app has presented nothing for 800 ms
       for (let last = tu; performance.now() - last < 800 && performance.now() - t0 < 8000;) {
@@ -560,7 +562,7 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
       .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
   };
   if (profile) { browser.events!.add(attached); await instrument(sessionId, ""); }
-  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "blink.user_timing", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"] } });
+  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: [...new Set([...process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"], "blink.user_timing"])] } });
   // a crashed page answers nothing, so the wait ends with what the page reported last
   let crashed = false;
   const crash = (m: any) => { if (m.method === "Inspector.targetCrashed" && m.sessionId === sessionId) crashed = true; };
@@ -594,6 +596,8 @@ async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
     if (m.method === "Tracing.tracingComplete") { browser.events!.delete(on); resolve(m.params.stream); }
   }));
   await browser.send!("Tracing.end");
+  // Bun's file writer does not truncate: an earlier, longer trace would leave its tail behind
+  rmSync(file, { force: true });
   const handle = await done, out = Bun.file(file).writer();
   for (let eof = false; !eof;) {
     const chunk = await browser.send!("IO.read", { handle, size: 1 << 22 });
