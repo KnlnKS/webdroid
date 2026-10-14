@@ -18,6 +18,7 @@ import { resetDrawn } from "./webfunctor";
 import type { NativeBitmap } from "./bitmap";
 import { hostStub } from "./binder";
 import { detached } from "../jvm/natives/jthrowable";
+import { note, Ev } from "../timeline";
 
 const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 
@@ -33,6 +34,7 @@ const drawFrame = driven(function* (p: Proxy): Gen<number> {
   const buffer = p.surface && surfaceBuffer(p.surface);
   if (!buffer) return SYNC_LOST_SURFACE_REWARD_IF_FOUND;
   const t0 = performance.now(), frame = ++p.frame;
+  note(Ev.DrawBegin);
   animate(p);
   const ctx = buffer.getContext("2d")!;
   ctx.reset();
@@ -40,6 +42,7 @@ const drawFrame = driven(function* (p: Proxy): Gen<number> {
   resetDrawn(buffer);
   drawNodeInto(ctx, p.root);
   perf.draws++; perf.drawMs += performance.now() - t0;
+  note(Ev.DrawEnd);
   frameDrawn();
   // prepareTree's position updates reach their listeners before the frame queues, so a SurfaceView
   // merges its move into this frame's transaction

@@ -15,6 +15,7 @@ import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock
 import { perf } from "../perf";
 import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield";
 import { compileAhead } from "../jvm/tier";
+import { note, Ev } from "../timeline";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
  *  inline */
@@ -51,9 +52,9 @@ export class NativeLooper {
     const main = this === mainLooper;
     if (!this.callbacks.length && !this.woken) {
       this.polling = true;
-      if (main) mainDbg.depth--;
+      if (main) { mainDbg.depth--; note(Ev.LoopIdle, timeout); }
       try { await (timeout === 0 ? main ? wakeSoon() : yieldToLoop() : this.idle(timeout)); }
-      finally { this.polling = false; if (main) mainDbg.depth++; }
+      finally { this.polling = false; if (main) { mainDbg.depth++; note(Ev.LoopWake); } }
     }
     this.woken = false;
     for (const fn of this.callbacks.splice(0)) {

@@ -1,3 +1,4 @@
+import { note, Ev } from "../timeline";
 import type { ProcessEndpoint } from "./processes";
 
 type Contract = Record<string, (...args: never[]) => unknown>;
@@ -33,7 +34,7 @@ const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectExcepti
  *  this endpoint while the request that caused it is suspended. */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
   onUndelivered?: (method: string, value: unknown) => void | Promise<void>): () => void {
-  const allowed = new Set(Object.keys(endpoint));
+  const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
   let closed = false;
   const close = (error?: ProcessFailure) => {
     if (closed) return;
@@ -47,8 +48,10 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
     if (data.kind !== "call" && data.kind !== "notify") return;
     try {
       if (!allowed.has(data.method) || !Array.isArray(data.args)) throw new Error("Unknown process endpoint method");
-      const invoke = endpoint[data.method] as (...args: unknown[]) => unknown;
+      const invoke = endpoint[data.method] as (...args: unknown[]) => unknown, at = index.get(data.method)!;
+      note(Ev.Serve, at);
       const value = await invoke.apply(endpoint, data.args);
+      note(Ev.Served, at);
       if (data.kind === "call") {
         if (closed) await onUndelivered?.(data.method,value);
         else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
@@ -67,7 +70,8 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
   notifications: readonly (keyof C & string)[] = [], makeError: (error: ProcessFailure) => unknown = processError,
   onClose: (error: ProcessFailure) => void = () => {}): { endpoint: C; close(): void } {
   let closed = false, nextId = 1;
-  const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void }>();
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void; method: number }>();
+  const index = new Map(names.map((name, i) => [name as string, i]));
   const finish = (error = closedFailure) => {
     if (closed) return;
     closed = true;
@@ -82,6 +86,7 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     const request = pending.get(data.id);
     if (!request) return;
     pending.delete(data.id);
+    note(Ev.Answer, request.method);
     if (data.kind === "result") request.resolve(data.value);
     else request.reject(makeError(data.error));
   };
@@ -89,7 +94,9 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     if (closed) return Promise.reject(makeError(closedFailure));
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const at = index.get(method) ?? -1;
+      pending.set(id, { resolve, reject, method: at });
+      note(Ev.Call, at);
       try { port.postMessage({ kind: "call", id, method, args }); }
       catch (error) { pending.delete(id); reject(error); }
     });

@@ -35,6 +35,7 @@ import { provisionPackages, provisionServices } from "./shell/provision";
 import { processBroker } from "./shell/processes";
 import { displayRate } from "./shell/display-rate";
 import { processPresentation } from "./shell/process-endpoint";
+import { timelineSince } from "./timeline";
 import { swipe } from "./shell/gesture";
 import { device } from "./shell/config";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
@@ -179,6 +180,10 @@ const wd = {
   displayCanvases: () => processBroker().displayCanvases(canvas),
   mirrorFrames: (on: boolean) => processBroker().mirrorFrames(on),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  /** the foreground process's frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
+  foregroundTimeline: async (from: number) => (await processBroker().foregroundWorker()?.control.timeline(from)) ?? [],
+  /** the page's own events since `from` (ms since the epoch), as foregroundTimeline */
+  pageTimeline: (from: number) => timelineSince(from - performance.timeOrigin),
   foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundWorker()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   background: (ms = 1000) => processBroker().activities.background(ms),

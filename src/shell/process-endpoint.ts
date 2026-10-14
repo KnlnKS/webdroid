@@ -37,6 +37,7 @@ import { storageChanged } from "./device-storage";
 import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
 
 import { callProxy, processError, processFailure } from "./process-port";
+import { note, Ev } from "../timeline";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
@@ -164,7 +165,7 @@ const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<Broadca
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 /** whether this process's windows are on screen, which its display loop follows */
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
-function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
+function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; processPresentation.changed(visible); }
 function remoteError(error: unknown): never {
   const failure = processFailure(error);
   if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);

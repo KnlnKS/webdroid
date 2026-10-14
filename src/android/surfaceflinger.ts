@@ -14,6 +14,7 @@ import { cssColor } from "./graphics";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { frameDrawn } from "./vsync";
+import { note, Ev } from "../timeline";
 import type { GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor";
 import { detached } from "../jvm/natives/jthrowable";
@@ -80,6 +81,7 @@ function composite(): void {
   composing = false;
   if (!target) return;
   const { ctx } = target, t0 = performance.now();
+  note(Ev.CompositeBegin);
   if (queuedAt !== null) { perf.presentLagMs += t0 - queuedAt; queuedAt = null; }
   ctx.save();
   // the system windows stack over the processes' canvases (processes.ts), which show through
@@ -91,6 +93,7 @@ function composite(): void {
   ctx.restore();
   placeFunctors(placed);
   perf.drawMs += performance.now() - t0;
+  note(Ev.CompositeEnd);
   target.present();
 }
 const byZ = (a: Layer, b: Layer) => a.z - b.z;
@@ -317,6 +320,7 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   const q = s.queue, layer = q?.control?.layer;
   if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
+  note(Ev.Queue);
   queuedAt ??= performance.now();
   const latch: Transaction = { ops: q.pending.flatMap((t) => t.ops.splice(0)) };
   q.pending.length = 0;

@@ -512,6 +512,8 @@ export class AotRuntime {
       clearTimeout(timer); this.preparation.delete(c);
     });
     this.preparation.set(c, result);
+    const note = this.w.opts.note;
+    if (note) { note(18, c); void result.then(() => note(19, this.preparationFiles(c).length ? -c : c)); }
     return result;
   }
   /** the first call of a method the build compiled: loads its code module. Whether the method is installed afterwards is in its slot. */

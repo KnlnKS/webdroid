@@ -8,6 +8,7 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
 import { mangleField } from "../jvm/abi";
 import type { NativeLooper } from "./mainloop";
+import { note, Ev } from "../timeline";
 
 interface Receiver { looper: NativeLooper; receiver: JObj }
 export class Channel {
@@ -25,9 +26,10 @@ export function publish(server: Channel, event: JObj): Promise<boolean> {
   const client = server.peer, r = client?.receiver;
   if (!client || !r) return Promise.resolve(false);
   const seq = nextSeq++;
+  note(Ev.InputPublish, seq);
   return new Promise((resolve) => {
-    client.pending.set(seq, resolve);
-    r.looper.post(() => vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", seq, event));
+    client.pending.set(seq, (handled) => { note(Ev.InputDone, seq); resolve(handled); });
+    r.looper.post(() => { note(Ev.InputDispatch, seq); return vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", seq, event); });
   });
 }
 /** tell the client end's window it gained or lost input focus (InputDispatcher's focus event) */

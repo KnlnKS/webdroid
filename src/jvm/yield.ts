@@ -1,5 +1,6 @@
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 import { never, processExited } from "../process-exit";
+import { note, Ev } from "../timeline";
 
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),
@@ -12,7 +13,7 @@ let posted = false;
 const post = (): void => { if (!posted) { posted = true; chan!.port2.postMessage(0); } };
 if (chan) {
   chan.port1.onmessage = () => {
-    posted = false; yieldStats.fires++; turnArmed = false;
+    posted = false; yieldStats.fires++; turnArmed = false; note(Ev.Turn);
     for (const f of woken.splice(0)) f();
     waiters.shift()?.();
     if (waiters.length) post();

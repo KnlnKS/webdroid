@@ -1,6 +1,7 @@
 // The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (World.upgradeJob) goes to the worker, one job at a time, and
 // its unit is installed when it arrives, if the World can still take it (World.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
+import { note, Ev } from "../../timeline";
 import type { CompileService } from "../link/hostapi";
 import type { AppIndex, Marks } from "../link/aot";
 import type { UpgradeJob } from "../link/unit";
@@ -45,7 +46,7 @@ export class CompileClient implements CompileService {
   }
   private attach(port: WorkerPort): void {
     this.port = port;
-    port.onmessage = ({ data }: MessageEvent<CompileResponse>) => this.receive(data);
+    port.onmessage = ({ data }: MessageEvent<CompileResponse>) => { note(Ev.Upgrade, this.busy?.slot ?? 0); try { this.receive(data); } finally { note(Ev.Upgraded); } };
     port.onerror = (e) => this.retire(`the compile worker failed: ${e.message}`);
   }
   get ready(): boolean { return this.state === "ready"; }

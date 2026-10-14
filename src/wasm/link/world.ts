@@ -69,6 +69,8 @@ export interface WorldOptions {
   build?: AotBuild;
   /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
   loop?: HostLoop;
+  /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
+  note?: (ev: number, arg?: number) => void;
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
   dexes?: (path: string) => DexFile[] | undefined | Promise<DexFile[] | undefined>;

@@ -39,6 +39,7 @@ import { startActivityThread } from "../android/server/am";
 import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
 import { toThread } from "../jvm/natives/jthrowable";
+import { note, Ev } from "../timeline";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 let displayChanged = () => {};
@@ -252,7 +253,7 @@ let touchDown = 0n;
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
 export function dispatchPointer(action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> {
   const t0 = performance.now();
-  noteInput();
+  noteInput(); note(Ev.InputIn, action);
   const now = BigInt(Math.floor(eventTime));
   if (action === 0) touchDown = now;
   return dispatchTouch(action, x, y, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });

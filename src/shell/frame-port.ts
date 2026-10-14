@@ -1,6 +1,7 @@
 // A process Worker presents straight into its page canvas, transferred as an OffscreenCanvas, so the
 // page thread and its GPU work are not in the frame path. The page hears of each frame shown, with a
 // copy while it mirrors frames for an observer that reads their pixels.
+import { note, Ev } from "../timeline";
 type DisplayMessage = {kind:"shown";at:number;copy:ImageBitmap|null} | {kind:"mirror";on:boolean} | {kind:"close"};
 export type FrameSender = {present(bitmap:ImageBitmap):void;close():void};
 
@@ -22,6 +23,7 @@ export function sendFrames(port:MessagePort,screen:OffscreenCanvas):FrameSender 
       if(screen.width!==bitmap.width)screen.width=bitmap.width;
       if(screen.height!==bitmap.height)screen.height=bitmap.height;
       context.transferFromImageBitmap(bitmap);
+      note(Ev.Present);
       const at=performance.timeOrigin+performance.now();
       if(!mirror){port.postMessage({kind:"shown",at,copy:null} satisfies DisplayMessage);return;}
       void createImageBitmap(screen).then(copy=>{

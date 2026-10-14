@@ -15,6 +15,7 @@ import { perf } from "../perf";
 import { processPresentation } from "./process-endpoint";
 import { nativeRequirements } from "./diagnostics";
 import { existingAotProfile } from "./aot-profile";
+import { timelineSince } from "../timeline";
 
 /** Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => string) {
@@ -52,6 +53,8 @@ export function workerControl(logs: string[], phase: () => string) {
     pointer: async (action: number, x: number, y: number) => { await dispatchPointer(action, x, y); },
     back: async () => { await pressBack(); },
     testFrame: local.testFrame,
+    /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
+    timeline: async (from: number) => timelineSince(from - performance.timeOrigin),
   };
 }
 export type WorkerControl = ReturnType<typeof workerControl>;

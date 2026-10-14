@@ -10,6 +10,7 @@ import { type NativeLooper, mainLooper, postMain } from "./mainloop";
 import { perf } from "../perf";
 import { device } from "../shell/config";
 import { uptimeMillis } from "../guest-clock";
+import { note, Ev } from "../timeline";
 
 let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
 const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
@@ -61,7 +62,8 @@ export function recordVsync(time: number): boolean {
   if (!nextVsync) nextVsync = time;
   // Re-anchor missed periods so host jitter cannot straddle a stale phase boundary.
   const elapsed = time + interval / 2 - nextVsync;
-  if (elapsed < 0) return false;
+  if (elapsed < 0) { note(Ev.Raf, 0); return false; }
+  note(Ev.Raf, 1);
   nextVsync = elapsed < interval ? nextVsync + interval : time + interval;
   deliverVsync();
   return true;
@@ -102,7 +104,9 @@ export function deliverVsync(): void {
     r.looper.post(() => {
       perf.frames++;
       const opened = frameStart = performance.now();
+      note(Ev.FrameBegin, count);
       return after(dispatch(r), () => postMain(() => {
+        note(Ev.FrameEnd, count);
         if (frameStart === opened) frameStart = null;
         for (const fn of hooks.splice(0)) fn();
       }));

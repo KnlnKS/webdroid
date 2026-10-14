@@ -23,6 +23,7 @@ import { UInfo } from "../link/unsafe";
 import { constClass } from "../link/classes";
 import { box } from "../link/mhandles";
 import { count } from "./stats";
+import { note, Ev } from "../../timeline";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
 
@@ -65,7 +66,12 @@ function makeEntry(w: World): Entry {
     return host;
   };
   sched.onThreadEnd = (rec) => threadExit.hook?.(jthreadOf(rec));
-  sched.onThread = (_, idle) => { if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(sched.current())); };
+  let noted = -1;
+  sched.onThread = (rec, idle) => {
+    const s = sched.current(), now = idle ? 0 : rec === sched.mainRec ? 1 : 2 + s.id;
+    if (now !== noted) { noted = now; note(Ev.Thread, now); }
+    if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(s));
+  };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
     const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s;

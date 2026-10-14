@@ -3,6 +3,7 @@ import { measureCompile } from "../../jvm/compiler-observer";
 // The Wasm tier's entry (src/jvm/tier.ts loads it). Each realm (the page, every process Worker) has a World over the platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark } from "../../perf";
+import { note } from "../../timeline";
 import { FetchStore } from "../link/aotstore";
 import { rt, fieldNames } from "../../jvm/runtime";
 import { useEntry, type Entry } from "../../jvm/natives/jentry";
@@ -63,7 +64,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = measureCompile("residual.wasmSetup", () => new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
+  const w = measureCompile("residual.wasmSetup", () => new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
   bindWorld(w);
   globalThis.__wdWasm = { stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
