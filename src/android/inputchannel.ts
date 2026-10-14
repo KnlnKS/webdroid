@@ -2,18 +2,13 @@
 // window. The server end publishes an event; the client end's receiver gets it as a callback on its
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
-import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
+import { rt, type JObj } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jentry";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
 import { mangleField } from "../jvm/abi";
 import type { NativeLooper } from "./mainloop";
 import { note, Ev } from "../timeline";
-import { switchValue } from "../switches";
-
-/** `?input=batched`: MOVEs wait for the next frame as one MotionEvent with history, as InputConsumer batches them
- *  for Choreographer's input callback, instead of each being dispatched as it arrives */
-export const batchedInput = switchValue("input", "immediate") === "batched";
 
 interface Receiver { looper: NativeLooper; receiver: JObj }
 export class Channel {
@@ -22,8 +17,6 @@ export class Channel {
   /** a focus change the client end's receiver has not heard yet */
   focus: boolean | null = null;
   readonly pending = new Map<number, (handled: boolean) => void>();
-  /** the MOVEs gathered for the next frame (batchedInput): the event their samples were added to */
-  batch: { seq: number; event: JObj } | null = null;
   constructor(readonly name: string, readonly token: JObj) {}
 }
 let nextSeq = 1;
@@ -32,33 +25,12 @@ let nextSeq = 1;
 export function publish(server: Channel, event: JObj): Promise<boolean> {
   const client = server.peer, r = client?.receiver;
   if (!client || !r) return Promise.resolve(false);
-  // a batch goes ahead of the event that ends it, as InputConsumer sends it before a sample it cannot add
-  flushBatch(client);
   const seq = nextSeq++;
   note(Ev.InputPublish, seq);
   return new Promise((resolve) => {
     client.pending.set(seq, (handled) => { note(Ev.InputDone, seq); resolve(handled); });
     r.looper.post(() => { note(Ev.InputDispatch, seq); return vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", seq, event); });
   });
-}
-/** The batch the client end's window has pending, if any; a MOVE that starts one is the event later
- *  samples are added to (MotionEvent.addBatch), and the window hears once that a batch is pending. */
-export function pendingBatch(server: Channel): JObj | null { return server.peer?.batch?.event ?? null; }
-export function startBatch(server: Channel, event: JObj, source: number): boolean {
-  const client = server.peer, r = client?.receiver;
-  if (!client || !r) return false;
-  const seq = nextSeq++;
-  client.batch = { seq, event };
-  client.pending.set(seq, () => note(Ev.InputDone, seq));
-  note(Ev.InputPublish, seq);
-  r.looper.post(() => vcall(r.receiver, "onBatchedInputEventPending", "(I)V", source));
-  return true;
-}
-function flushBatch(client: Channel): void {
-  const b = client.batch, r = client.receiver;
-  if (!b || !r) return;
-  client.batch = null;
-  r.looper.post(() => { note(Ev.InputDispatch, b.seq); return vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", b.seq, b.event); });
 }
 /** tell the client end's window it gained or lost input focus (InputDispatcher's focus event) */
 export function sendFocus(server: Channel, hasFocus: boolean): void {
@@ -125,7 +97,7 @@ rt.registerJnis("android/view/InputEventReceiver", {
     },
   "nativeDispose(J)V": (h: bigint) => {
     const { channel: c } = receiverOf(h);
-    c.receiver = null; c.batch = null;
+    c.receiver = null;
     for (const resolve of c.pending.values()) resolve(false);
     c.pending.clear();
     release(h);
@@ -135,16 +107,9 @@ rt.registerJnis("android/view/InputEventReceiver", {
     pending.delete(seq);
     resolve?.(!!handled);
   },
-  // Choreographer's input callback takes the MOVEs gathered since the last frame (without batchedInput every event is dispatched as it arrives)
-  "nativeConsumeBatchedInputEvents(JJ)Z": driven(function* (h: bigint): Gen<number> {
-    const c = receiverOf(h).channel, b = c.batch, r = c.receiver;
-    if (!b || !r) return 0;
-    c.batch = null;
-    note(Ev.InputDispatch, b.seq);
-    yield vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", b.seq, b.event);
-    return 1;
-  }),
-  "nativeProbablyHasInput(J)Z": (h: bigint) => { const c = receiverOf(h).channel; return +(c.pending.size > 0 || !!c.batch); },
+  // events are published one at a time as they arrive, never batched
+  "nativeConsumeBatchedInputEvents(JJ)Z": () => 0,
+  "nativeProbablyHasInput(J)Z": (h: bigint) => +(receiverOf(h).channel.pending.size > 0),
   "nativeReportTimeline(JIJJ)V": () => {},
   "nativeDump(JLjava/lang/String;)Ljava/lang/String;": (h: bigint, prefix: string) => `${prefix}${receiverOf(h).channel.name}\n`,
 });

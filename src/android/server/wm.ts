@@ -7,7 +7,7 @@ import { hostStub } from "../binder";
 import { device } from "../../shell/config";
 import { uptimeMillis } from "../../guest-clock";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
-import { type Channel, channelOf, sendFocus, publish, batchedInput, pendingBatch, startBatch } from "../inputchannel";
+import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
 import { javaConfiguration } from "../resources";
 import { deviceConfiguration } from "../resnative";
 import { edges } from "../graphics";
@@ -271,7 +271,7 @@ function touchedWindow(x: number, y: number): WindowState | null {
   }
   return null;
 }
-const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
+const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
 /** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not shown */
 export function windowZOf(client: JObj): number {
   const ws = windows.get(client);
@@ -300,13 +300,9 @@ export const dispatchTouch = (action: number, x: number, y: number, downTime: bi
   const ws = touchTarget;
   if (action === ACTION_UP || action === ACTION_CANCEL) touchTarget = null;
   if (!ws?.channel) return false;
-  // a MOVE joins the batch the window has pending: its sample is history of that event
-  const batch = action === ACTION_MOVE && batchedInput ? pendingBatch(ws.channel) : null;
-  if (batch) { yield vcall(batch, "addBatch", "(JFFFFI)V", eventTime, x - ws.frame.left, y - ws.frame.top, 1, 1, 0); return true; }
   const event = yield scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
   yield vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
-  if (action === ACTION_MOVE && batchedInput) return startBatch(ws.channel, event, SOURCE_TOUCHSCREEN);
   return yield* awaited(publish(ws.channel, event));
 }());
 
