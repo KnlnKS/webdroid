@@ -3,10 +3,9 @@
 // response also changed, outside the pressed view's feedback. Nothing runs Java on the app between
 // pointerdown and the settled frame: the app's Worker sends downscaled crops of the response
 // regions with each frame it presents, read only once the window closes, and the scenario's UI state
-// is checked once afterwards. `--metric legacy` instead gates the earlier joined clock: the first frame
-// matching the response pixels once a UI probe after every frame matched the expected state.
+// is checked once afterwards.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--metric first|legacy] [--throttle <rate>] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--throttle <rate>] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -42,9 +41,8 @@ const args = process.argv.slice(2);
 const { flag, option } = consume(args);
 const heapSample = flag("--heapsample");
 const gpu = flag("--gpu"), warm = flag("--warm"), demand = flag("--demand"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
-const metric = option("--metric") ?? "first", throttle = +(option("--throttle") ?? 1);
+const throttle = +(option("--throttle") ?? 1);
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
-if (!["first", "legacy"].includes(metric)) throw new Error("lat metric must be first or legacy");
 if (!(throttle >= 1) || throttle > 1 && engine !== "chrome") throw new Error("lat throttle must be a rate of at least 1, and only Chrome throttles");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
@@ -71,7 +69,7 @@ type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: un
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, metric: string) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, metric: string) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
@@ -155,7 +153,6 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return !!pixel && (!p.changed || baseline[i]?.hash !== pixel.hash) && (!p.nonUniform || pixel.nonUniform) &&
       (!p.rgb || p.rgb.some(rgb => rgb.every((v, k) => Math.abs(pixel.rgb[k] - v) <= 1)));
   });
-  const regionsOf = async (source: ImageBitmapSource, expectation: Expectation) => (await Promise.all(expectation.pixels.map(p => crop(source, p.region)))).map(regionInfo);
   /** the `p` quantile of ascending `sorted`, to 0.1 ms */
   const quantile = (sorted: number[], p: number) => sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] * 10) / 10 : null;
   // The first-response clock. Each frame an app Worker presents arrives as crops of the response regions,
@@ -436,7 +433,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       ({ x, y } = at); pressed = at.bounds;
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
-    if (s.m && metric === "first") {
+    if (s.m) {
       // nothing reaches the app between pointerdown and the window's close but the pointer itself
       const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? await w.wd.foregroundDemandMark() : null;
       watch(s.expect);
@@ -472,39 +469,15 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
         perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter });
       continue;
     }
-    const baseline = s.m ? await regionsOf(appCanvas(), s.expect) : [];
-    if (s.m) collect();
-    const t0 = performance.now();
     ev("pointerdown", x, y);
     await sleep(s.hold ?? 60);
-    if (s.m && w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
-    const before = await snapshot(), compileBefore = observer.snapshot(), tu = performance.now();
     ev("pointerup", x, y);
-    if (!s.m) { await sleep(300); await idle(); continue; }
-    const semantic = intended(s.expect, tu, baseline);
-    for (let last = performance.now(); performance.now() - last < 800 && performance.now() - t0 < 8000;) {
-      await sleep(20);
-      const f = latest as Frame | null;
-      if (f) last = Math.max(last, f.t);
-    }
-    const response = await semantic;
-    stop();
-    const after = await snapshot();
-    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, frames: frameCount,
-      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
-    out.push(tap);
-    await idle();
-    tap.processesAfter = await diagnostics();
-    const completionNodes = await state(), completionPixels = await regionsOf(appCanvas(), s.expect);
-    tap.semantic = { ...response, completion: { at: performance.now(), nodes: completionNodes, pixels: completionPixels } };
-    if (frameError || !completionNodes || !w.__wdLatMatches(completionNodes, s.expect) || !pixelsMatch(s.expect, completionPixels, baseline)) {
-      tap.intended = null; tap.semantic = { ...tap.semantic as object, error: frameError ?? "intended rendered state did not persist through tap completion" };
-    }
+    await sleep(300); await idle();
   }
   result.processesAfter = await diagnostics();
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}, ${JSON.stringify(metric)}).catch(async e => {
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
   try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";
@@ -550,7 +523,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
 }
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
-  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch, metric)} });`;
+  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
   const url = new URL("/", BASE);
   url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
   if (browser.context) {
@@ -655,16 +628,14 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; metric: string; throttle: number; query: string; expectedTaps?: string[]; preparation?: Capture;
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; throttle: number; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, engine, warm, metric, throttle, query: launchQuery.toString(), taps: [],
-    accepted: false, intendedObservation: metric === "first"
-      ? "first response: pointerup to the first presented app frame whose response regions depart from the pre-pointerup frame in tiles the settled frame also changed, outside the pressed view's bounds + 72 px; no guest probes between pointerdown and the settled frame; settled UI state and pixels confirmed afterwards"
-      : "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
-    instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; latest immutable bitmap retained, response pixels read after matching UI state; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
+  const row: Report = { scenario: name, engine, warm, throttle, query: launchQuery.toString(), taps: [],
+    accepted: false, intendedObservation: "first response: pointerup to the first presented app frame whose response regions depart from the pre-pointerup frame in tiles the settled frame also changed, outside the pressed view's bounds + 72 px; no guest probes between pointerdown and the settled frame; settled UI state and pixels confirmed afterwards",
+    instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; response-region crops of every presented frame read after the window; compile counters end when the window closes",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
   report.push(row);
   let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
