@@ -1,40 +1,12 @@
 // Guest address map and the few constants every native module shares. One place, so a layout
 // change is one edit; the values are the ones the rest of src/native assumes.
 
-export const PAGE_SHIFT = 12;
-export const PAGE_SIZE = 1 << PAGE_SHIFT;
-/** the first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros */
-export const LOW = 0x1_0000;
-
-// Every fixed region sits at the bottom, each starting where the last ended. Above them the
-// malloc arena, mappings, ELF images and (ARM64) the planes' pool units share the pages, each
-// taking the lowest free run, so the memory grows from 256 MiB only as far as pages are in use,
-// within the process address space its first native image sets: 2 GiB for ARM32, or the whole
-// 32-bit space a wasm memory can back for ARM64 (mem.init from setA64). The range test mem.ts
-// inlines into every load and store is derived from the committed size, never spelled.
-const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them, then arena pages
-const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
-const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
-const KERN_SPAN = 0x00c0_0000;                 // the core's page tables and JIT buffer (mem.zig, cpu.zig, jit.zig)
-
-export const STACK_BASE = 0x0010_0000;
-const STACK_END = STACK_BASE + STACK_SPAN;
-const HOST_DATA = STACK_END;
-const HOST_DATA_END = HOST_DATA + HOST_SPAN;
-export const TRAMP_BASE = HOST_DATA_END;
-export const TRAMP_END = TRAMP_BASE + TRAMP_SPAN;
-/** lr planted by Cpu.call; reaching it as pc ends the call. The last trampoline slot, never defined. */
-export const RET_SENTINEL = TRAMP_END - 8;
-const KERN_BASE = TRAMP_END;
-const KERN_END = KERN_BASE + KERN_SPAN;
-export const JIT_BUF = KERN_END - 0x0010_0000;
-export const MEM_SIZE_INITIAL = 0x1000_0000;
-export const MEM_SIZE_A32 = 0x8000_0000;
-export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
+// The address map is the core's (src/native/core/abi.zig), which build-core.ts generates core-abi.gen.ts from.
+export { PAGE_SHIFT, PAGE_SIZE, LOW, STACK_BASE, TRAMP_BASE, TRAMP_END, RET_SENTINEL, JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A32, MEM_SIZE_A64, STACK_SIZE } from "./core-abi.gen";
+import { MEM_SIZE_INITIAL, TRAMP_BASE } from "./core-abi.gen";
 /** the live size, set by mem.init */
 export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
-export const STACK_SIZE = 0x10_0000;
 /** the main thread's, Android's 8 MiB RLIMIT_STACK; other threads get pthread's 1 MiB */
 export const MAIN_STACK_SIZE = 0x80_0000;
 

@@ -3,6 +3,7 @@
 // come into use (mem.zig's back), within the native ABI's address space (mem.init).
 
 import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi";
+import { JIT_SLOTS, LIBC_FNS, TLS_KEYS } from "./core-abi.gen";
 import { perf } from "../perf";
 import { guestNow, wallMillis } from "../guest-clock";
 
@@ -86,9 +87,9 @@ interface Core {
   jit_fma64(a: number, b: number, c: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
-export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memmove memset memcmp memchr strlen strnlen strcmp strncmp malloc free calloc realloc memalign posix_memalign malloc_usable_size pthread_self pthread_getspecific pthread_setspecific pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock sinf cosf tanf expf logf sqrtf sin cos tan exp log sqrt powf atan2f fmodf pow atan2 fmod sincosf sincos crc32 adler32 __memcpy_chk pthread_rwlock_rdlock pthread_rwlock_tryrdlock pthread_rwlock_wrlock pthread_rwlock_trywrlock pthread_rwlock_unlock clock_gettime".split(" ").map((n, i) => [n, i + 1]));
-/** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
-export const TLS_KEYS = 256;
+export const CORE_LIBC: Record<string, number> = Object.fromEntries(LIBC_FNS.map((n, i) => [n, i + 1]));
+/** pthread keys per thread, the size of the table each Cpu carries */
+export { TLS_KEYS };
 
 /** The page's realms share one V8 isolate, which counts each committed wasm memory toward its
  *  global heap limit and past it marks without pause, so the memory is committed as the guest
@@ -116,8 +117,8 @@ function imported(bytes: Uint8Array): Uint8Array {
   return bytes;
 }
 /** the core's function table, which JIT regions are linked into above the core's own entries */
-const TABLE_SIZE = 1 << 18, JIT_SLOT0 = 8192; // cpu.zig's dead map is sized to match
-const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });
+const JIT_SLOT0 = 8192;
+const table = new WebAssembly.Table({ initial: JIT_SLOTS, element: "anyfunc" });
 /** the core grew the memory */
 let grown = (): void => {};
 export function onMemoryGrown(f: () => void): void { grown = f; }
@@ -174,7 +175,7 @@ export function jitEvict(): void {
 }
 /** debug: only regions whose entry lies in one of the [lo, hi) ranges are installed (set __wdJit before load: bisects a miscompile) */
 function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
-  if (nextSlot + n > TABLE_SIZE && freeSlots.length < n) jitEvict();
+  if (nextSlot + n > JIT_SLOTS && freeSlots.length < n) jitEvict();
   const jitRanges = (globalThis as { __wdJit?: [number, number][] }).__wdJit;
   const slots: number[] = [];
   for (let i = 0; i < n; i++) {
