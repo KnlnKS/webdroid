@@ -6,7 +6,7 @@ import { parseIpv4 } from "../../shell/relay";
 import { E } from "../abi";
 import { utf8 } from "../../jvm/abi";
 import type { Cpu } from "../cpu";
-import { stp, ptr, type HostFn } from "../host";
+import { stp, ptr, cstr, type HostFn } from "../host";
 import { mem, anchor } from "../mem";
 import { fail } from "../libc";
 import {
@@ -109,19 +109,13 @@ function getnameinfo(sockaddr: number, length: number, host: number, hostLength:
   if (!resolved && flags & NI_NAMEREQD) return EAI_NONAME;
   return copyText(resolved ?? addressText(ep.address), host, hostLength) && copyText(String(ep.port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
-const gaiStrings = new Map<number, number>();
-function gaiStrerror(code: number): number {
-  let address = gaiStrings.get(code);
-  if (address === undefined) { address = mem.hostStr(gaiText(code)); gaiStrings.set(code, address); }
-  return address;
-}
 
 export const RESOLVER: Record<string, HostFn> = {
   getaddrinfo: (cpu, args) => getaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
   freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
   getifaddrs: (cpu, args) => getifaddrs(cpu, args.p()),
   freeifaddrs: (_cpu, args) => { const entry = args.p(); if (entry) mem.free(entry); },
-  gai_strerror: (_cpu, args) => ptr(gaiStrerror(args.i())),
+  gai_strerror: (_cpu, args) => ptr(cstr(gaiText(args.i()))),
   getnameinfo: (_cpu, args) => getnameinfo(args.p(), args.u(), args.p(), args.u(), args.p(), args.u(), args.i()),
   inet_pton: (cpu, args) => {
     const family = args.i(), text = args.str(), out = args.p();

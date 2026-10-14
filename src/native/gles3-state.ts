@@ -3,7 +3,7 @@
 // and vertex array bindings, and the default vertex array's client arrays.
 
 import { gl as current } from "../android/gl";
-import { visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
+import { uniformBase, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
 import type { BufRec } from "./gles3-buffers";
 
 export type GL = WebGL2RenderingContext;
@@ -111,7 +111,7 @@ export function externalSamplersAs2D(shader: WebGLShader, source: string): strin
  *  reports SAMPLER_EXTERNAL_OES */
 export function activeUniformInfo(gl: WebGL2RenderingContext | WebGLRenderingContext, program: WebGLProgram, info: WebGLActiveInfo | null): WebGLActiveInfo | null {
   if (info?.type !== 0x8b5e) return info;
-  const name = info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name;
+  const name = uniformBase(info);
   for (const shader of gl.getAttachedShaders(program) ?? []) {
     if (externalSamplers.get(shader)?.has(name)) return { name: info.name, size: info.size, type: 0x8d66 };
   }
@@ -151,14 +151,14 @@ export function linkProgram(program: WebGLProgram): void {
   const hidden = new Set(rewrites.flatMap((rewrite) => [...rewrite.hidden]));
   if (!hidden.size) { programRecs.delete(program); return; }
   const uniforms = visibleUniforms(gl, program, hidden);
-  const infoByName = new Map(uniforms.infos.map((info) => [info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name, info]));
+  const infoByName = new Map(uniforms.infos.map((info) => [uniformBase(info), info]));
   const bindingsByName = new Map<string, SamplerBinding>();
   const maps: ProgramMap[] = [];
   const rawCount = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
   const rawInfo = new Map<string, WebGLActiveInfo>();
   for (let i = 0; i < rawCount; i++) {
     const info = gl.getActiveUniform(program, i);
-    if (info) rawInfo.set(info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name, info);
+    if (info) rawInfo.set(uniformBase(info), info);
   }
   for (const map of rewrites.flatMap((rewrite) => rewrite.maps)) {
     const info = infoByName.get(map.sampler), hiddenInfo = rawInfo.get(map.mapUniform);

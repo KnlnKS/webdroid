@@ -259,13 +259,15 @@ export interface VisibleUniforms {
   webToGuest: Int32Array;
 }
 
+/** a uniform's name without the "[0]" WebGL reports for an array */
+export const uniformBase = (info: WebGLActiveInfo): string => info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name;
 export function visibleUniforms(gl: WebGL2RenderingContext, program: WebGLProgram, hidden: ReadonlySet<string>): VisibleUniforms {
   const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
   const infos: WebGLActiveInfo[] = [], guestToWeb: number[] = [], webToGuest = new Int32Array(count).fill(-1);
   for (let web = 0; web < count; web++) {
     const info = gl.getActiveUniform(program, web);
     if (!info) continue;
-    const base = info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name;
+    const base = uniformBase(info);
     if (hidden.has(base)) continue;
     webToGuest[web] = infos.length;
     guestToWeb.push(web);
