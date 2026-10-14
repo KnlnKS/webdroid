@@ -25,10 +25,7 @@ export const native = {
   jni: jniTrace,
   regs: () => [...cpus].map((c) => ({
     name: c.name, tid: c.tid, pc: symbolizePc(c.pc), t: c.t, ic: c.ic,
-    r: [...Array(32)].map((_, i) => (c.w[2 * i] >>> 0).toString(16)),
-    // the high halves only exist in a 64-bit process, and printing 32 zeros in a 32-bit one
-    // is noise rather than information
-    ...(c.a64 ? { h: [...Array(32)].map((_, i) => (c.w[2 * i + 1] >>> 0).toString(16)) } : {}),
+    r: [...Array(c.a64 ? 32 : 16)].map((_, i) => c.regHex(i)),
     finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: c.frames.map((f) => f.label), loops: c.loops, sigLog: [...c.sigLog], signals: [...c.signals], handling: [...c.handling], sigWait: !!c.sigWait,
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: processExited, sigHandlers: () => [...dispositions].flatMap(([s, d]) => d.kind === "handler" ? [[s, symbolizePc(d.fn)]] : []), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),

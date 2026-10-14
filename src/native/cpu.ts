@@ -752,7 +752,7 @@ export class Cpu {
     if (at >= TRAMP_BASE && at < TRAMP_END) return;
     let d = "";
     for (let i = 0; i < nregs; i++) {
-      if (w[2 * i] !== stepPrev[2 * i] || (a64 && w[2 * i + 1] !== stepPrev[2 * i + 1])) d += ` ${names[i]}=${a64 && w[2 * i + 1] ? (w[2 * i + 1] >>> 0).toString(16) + (w[2 * i] >>> 0).toString(16).padStart(8, "0") : (w[2 * i] >>> 0).toString(16)}`;
+      if (w[2 * i] !== stepPrev[2 * i] || (a64 && w[2 * i + 1] !== stepPrev[2 * i + 1])) d += ` ${names[i]}=${this.regHex(i)}`;
     }
     stepMode.ring.push(`${this.name} ${symbolizeHook(at)}${d} [${this.n}${this.z}${this.c}${this.v}]`);
     if (stepMode.ring.length > stepMode.max) stepMode.ring.splice(0, 5000);
@@ -764,9 +764,13 @@ export class Cpu {
     this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
     if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
   }
+  /** register `i` in hex, a 64-bit one with a set high half as hi_lo */
+  regHex(i: number): string {
+    const lo = (this.w[2 * i] >>> 0).toString(16), hi = this.a64 ? this.w[2 * i + 1] >>> 0 : 0;
+    return hi ? hi.toString(16) + "_" + lo.padStart(8, "0") : lo;
+  }
   watchHit(): void {
-    const x = (i: number) => (this.w[2 * i + 1] ? (this.w[2 * i + 1] >>> 0).toString(16) + "_" : "") + (this.w[2 * i] >>> 0).toString(16).padStart(this.w[2 * i + 1] ? 8 : 1, "0");
-    console.log(`[watch-native] ${this.name} ${symbolizeHook(this.pc)} x0..x7=${[0, 1, 2, 3, 4, 5, 6, 7].map(x).join(" ")} lr=${symbolizeHook(this.lr >>> 0)}`);
+    console.log(`[watch-native] ${this.name} ${symbolizeHook(this.pc)} x0..x7=${[0, 1, 2, 3, 4, 5, 6, 7].map((i) => this.regHex(i)).join(" ")} lr=${symbolizeHook(this.lr >>> 0)}`);
   }
   /** the register file at the first fault, for wd.native.lastFault */
   private snapshot(): void {
