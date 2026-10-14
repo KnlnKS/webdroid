@@ -73,7 +73,7 @@ export const overridesMethod = (prog: Program, cls: string, m: MethodInfo): bool
 /** Select an override of this declaration, rather than a same-named inaccessible member. */
 export function symbolicOverride(prog: Program, cls: string, declared: MethodInfo, includeAbstract = false): MethodInfo | undefined {
   let method = declared, reached = false;
-  for (const owner of prog.chain(cls).reverse()) {
+  for (const owner of [...prog.chain(cls)].reverse()) {
     if (owner === declared.cls) { reached = true; continue; }
     if (!reached) continue;
     const candidate = symbolicMethod(prog.require(owner), declared.name, javaName(declared.desc));
@@ -96,7 +96,7 @@ export function symbolicDispatchFor(prog: Program, cls: string, slot: string, in
     return declared ? symbolicOverride(prog, cls, declared, includeAbstract) : undefined;
   }
   if (prog.loaderOf(cls) === prog.boot && !includeAbstract) return prog.dispatchFor(cls, name, desc);
-  for (const owner of prog.chain(cls).reverse()) {
+  for (const owner of [...prog.chain(cls)].reverse()) {
     const m = symbolicMethod(prog.require(owner), name, desc);
     if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.flags & (ACC.PUBLIC | ACC.PROTECTED)) return symbolicOverride(prog, cls, m, includeAbstract);
   }

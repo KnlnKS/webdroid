@@ -444,10 +444,11 @@ export class Program {
   private ancestorMemo = new Map<string, Set<string>>();
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
   private layouts = new Map<string, readonly FieldInfo[]>();
+  private chains = new Map<string, readonly string[]>();
   /** what the compiler resolved per reference of a dex (MethodCompiler.resolved), by reference index and use */
   readonly refMemo = new Map<DexFile, Map<number, unknown>>();
   /** drops what a change to the classes or their types can falsify */
-  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.refMemo.clear(); }
+  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refMemo.clear(); }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);
@@ -549,5 +550,14 @@ export class Program {
     this.layouts.set(cls, l);
     return l;
   }
-  chain(cls: string): string[] { const out: string[] = []; for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) out.push(c.name); return out; }
+  /** the class and its superclasses, the class first */
+  chain(cls: string): readonly string[] {
+    let out = this.chains.get(cls);
+    if (!out) {
+      const names: string[] = [];
+      for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) names.push(c.name);
+      this.chains.set(cls, out = names);
+    }
+    return out;
+  }
 }

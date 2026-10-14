@@ -14,7 +14,7 @@ const virtual = (key: string, flags: number) => !(flags & (ACC.STATIC | ACC.PRIV
 
 function virtualMethods(w: World, cls: string, caller: string): Map<string, Declaration> {
   const methods = new Map<string, Declaration>();
-  for (const name of w.prog.chain(cls).reverse()) {
+  for (const name of [...w.prog.chain(cls)].reverse()) {
     const c = w.prog.require(name);
     for (const [key, flags] of declaredMethods(c)) {
       if (virtual(key, flags) && canAccess(caller, c, flags, w)) methods.set(javaName(key), { cls: name, key, flags });

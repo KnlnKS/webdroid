@@ -495,7 +495,7 @@ export class World {
   }
   private vtWords(name: string, id: number): Int32Array {
     const prog = this.prog, arr = name[0] === "[", c = prog.get(name);
-    const chain = arr ? ["java/lang/Object", name] : prog.chain(name).reverse();   // Object first
+    const chain = arr ? ["java/lang/Object", name] : [...prog.chain(name)].reverse();   // Object first
     const depth = chain.length - 1;
     const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => symbolicDispatchFor(prog, arr ? "java/lang/Object" : name, key);
     const body: number[] = new Array(H.VTAB + keys.length).fill(0);
