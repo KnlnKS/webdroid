@@ -21,16 +21,22 @@ export type ExitRecord = {
   /** Copied fatal report retained after the process realm is destroyed. */
   crash?: CrashInfo;
 };
+const isCrash = (r: ExitRecord | null | undefined): boolean => r?.reason === REASON_CRASH || r?.reason === REASON_CRASH_NATIVE;
 /** how a process ended, as the broker and the shell tell it: whether it crashed, and whether
  *  AppErrors found it crashed within MIN_CRASH_INTERVAL of its last crash */
 export type Death = { crashed: boolean; repeated: boolean };
 export const deathOf = (record: ExitRecord | null): Death =>
-  ({ crashed: record?.reason === REASON_CRASH || record?.reason === REASON_CRASH_NATIVE, repeated: !!record?.dialog });
+  ({ crashed: isCrash(record), repeated: !!record?.dialog });
 export const NOT_CRASHED = deathOf(null);
 /** AppExitInfoTracker's history per package */
 const HISTORY = 16;
 /** ActivityManagerConstants.MIN_CRASH_INTERVAL */
 const MIN_CRASH_INTERVAL_MS = 2 * 60_000;
+/** AppErrors' repeat test: the process crashed less than MIN_CRASH_INTERVAL_MS before `now` */
+const crashedRecently = (pkg: string, process: string, now: number): boolean => {
+  const last = exitRecords(pkg).find((r) => r.process === process && isCrash(r));
+  return !!last && now - last.timestamp < MIN_CRASH_INTERVAL_MS;
+};
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
 
@@ -55,10 +61,7 @@ export const queryExitRecords = (pkg: string): ExitRecord[] | Promise<ExitRecord
   exitRecordTransport.records ? exitRecordTransport.records(pkg) : exitRecords(pkg);
 /** The owner computes crash repetition against its current history, then persists before death. */
 export function recordRemoteExit(record: ExitRecord): ExitRecord {
-  const crashed = record.reason === REASON_CRASH || record.reason === REASON_CRASH_NATIVE;
-  const last = crashed ? exitRecords(record.pkg).find(r => r.process === record.process &&
-    (r.reason === REASON_CRASH || r.reason === REASON_CRASH_NATIVE)) : undefined;
-  const canonical = {...copyExitRecord(record), dialog: crashed && !!last && record.timestamp - last.timestamp < MIN_CRASH_INTERVAL_MS};
+  const canonical = {...copyExitRecord(record), dialog: isCrash(record) && crashedRecently(record.pkg, record.process, record.timestamp)};
   save(canonical);
   return canonical;
 }
@@ -98,10 +101,9 @@ export function appCrashed(info: CrashInfo, native: boolean): void {
   if (noted) return;
   const process = processName(), now = wallMillis();
   logLine(4, "am_crash", `[${PROCESS_PID},0,${process},${appFlags},${info.exceptionClassName ?? ""},${info.exceptionMessage ?? ""},${info.throwFileName ?? ""},${info.throwLineNumber},0]`);
-  const last = exitRecords(appHost?.pkg ?? process).find((r) => r.process === process && (r.reason === REASON_CRASH || r.reason === REASON_CRASH_NATIVE));
   // Settings' show_first_crash_dialog (and its developer option) would show one for a first crash
   // too; only the shell or adb could set them
-  const dialog = !!last && now - last.timestamp < MIN_CRASH_INTERVAL_MS;
+  const dialog = crashedRecently(appHost?.pkg ?? process, process, now);
   noted = { reason: native ? REASON_CRASH_NATIVE : REASON_CRASH, description: "crash", dialog };
 }
 /** strsignal(3), which NativeCrashListener reports as the exception message */
