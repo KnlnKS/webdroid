@@ -30,7 +30,6 @@ export class ActivityStack {
 
   get foreground(): number { return this.top; }
   shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
-  shown(pid: number): boolean { return this.shownPids.has(pid); }
   /** `pid` alone in front */
   setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
   presentation(pid: number, translucent: boolean): void {

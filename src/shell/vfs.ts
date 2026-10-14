@@ -56,7 +56,6 @@ export const vfs = {
     if (path !== null && this.exists(path)) this.metadata.set(path,attributes);
     return attributes;
   },
-  owner(p: string | null): number { return this.attributes(p).uid; },
   setAttributes(p: string, change: Partial<FileAttributes>, notify = true): void {
     const path = this.norm(p);
     if (this.isDir(path)) this.dirs.add(path);

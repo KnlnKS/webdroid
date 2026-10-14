@@ -30,7 +30,6 @@ export function workerControl(logs: string[], phase: () => string) {
       identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
       placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
-      compositor: Reflect.get(local,"compositorStatus") ?? null,
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
       yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
       main: { ...mainDbg }, perf: { ...perf },
@@ -61,4 +60,3 @@ export function workerControl(logs: string[], phase: () => string) {
   };
 }
 export type WorkerControl = ReturnType<typeof workerControl>;
-export { workerControlMethods } from "./worker-control-methods";

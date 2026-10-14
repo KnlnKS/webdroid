@@ -1,6 +1,5 @@
 import { zipTree } from "../jvm/natives/jzip";
 import type { FileSource } from "./lazyfile";
-import { u8 } from "../jvm/abi";
 import { isDexEntry } from "../jvm/dex";
 
 type PackedFile = { file: string; size: number; sha256: string };
@@ -40,7 +39,7 @@ export class PackedArchive implements FileSource {
   private rawPending = new Map<string, Promise<Uint8Array>>();
   private resident = 0;
 
-  constructor(readonly index: PackedArchiveIndex, readonly base: string, private readonly owner: PackedArchive | null = null) { this.size = index.size; }
+  constructor(readonly index: PackedArchiveIndex, readonly base: string) { this.size = index.size; }
   async prepare(code = false): Promise<void> {
     const bootstrap = await this.file(this.index.bootstrap);
     zipTree(bootstrap, this.zip);
@@ -55,7 +54,6 @@ export class PackedArchive implements FileSource {
     return this.zip[name] = await this.file(file);
   }
   private file(file: PackedFile): Promise<Uint8Array> {
-    if (this.owner) return this.owner.file(file).then((b) => u8(b));
     let pending = this.pending.get(file.file);
     if (!pending) {
       pending = fetch(this.base + file.file).then(async (response) => {
@@ -89,7 +87,6 @@ export class PackedArchive implements FileSource {
     return pending;
   }
   async read(offset: number, length: number): Promise<Uint8Array> {
-    if (this.owner) return this.owner.read(offset, length).then((b) => u8(b));
     const start = Math.max(0, Math.min(this.size, offset)), end = Math.min(this.size, start + Math.max(0, length));
     const out = new Uint8Array(end - start), spans = this.index.spans;
     let lo = 0, hi = spans.length;

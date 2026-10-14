@@ -16,7 +16,6 @@ export type ProcessDiagnostics = {
   errors: string[] | null;
   perf: Record<string, number> | null;
   queue: { queued: number; depth: number } | null;
-  compositor: unknown;
 } | { status: "exited"; pid: number; pkg: string; process: string; terminal: WorkerTerminal }
   | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
 
@@ -57,7 +56,7 @@ function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
   return { status: "ok", pkg: worker.pkg, ticks: snapshot.ticks, missing: snapshot.missing, missingAt: snapshot.missingAt,
     placeholders: snapshot.placeholders, placeholderAt: snapshot.placeholderAt, native: snapshot.nativeRequired,
     errors: snapshot.logs.filter(line => /^(error:|window.error:|unhandledrejection:)/.test(line)), perf: snapshot.perf,
-    queue: { queued: snapshot.main.queued, depth: snapshot.main.depth }, compositor: snapshot.compositor };
+    queue: { queued: snapshot.main.queued, depth: snapshot.main.depth } };
 }
 
 /** Diagnostics from the page's realm and every process Worker. */
@@ -73,8 +72,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
         native: wd.nativeRequirements(),
         errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
         perf: wd.perf ? { ...wd.perf } : null,
-        queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth } : null,
-        compositor: Reflect.get(wd, "compositorStatus") ?? null } : { status: "unavailable" as const };
+        queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth } : null } : { status: "unavailable" as const };
     });
     const diagnostics = await bounded((async () => {
       let result = await read();
