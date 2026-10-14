@@ -1,4 +1,4 @@
-// Structured control flow for a hot entry body. Blocks are split into single-entry regions: the
+// Structured control flow for a method body. Blocks are split into single-entry regions: the
 // method entry, each exception handler, and any block reached from more than one of them. Each
 // region is ordered so every loop is contiguous and every other edge goes forward, so a branch is
 // a `continue` of the loop it closes or a `break` out of a labelled block ending at its target.
@@ -8,9 +8,6 @@ import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "./prepa
 
 /** How a branch reaches its target block. */
 export const enum Go { Next, Break, Continue, Dispatch }
-
-/** labelled scopes nest this deep at most in JavaScript, bounding the parser's recursion; a Wasm body has no such bound (see `maxDepth`) */
-const MAX_DEPTH = 256;
 
 /** The flow has a cycle with more than one entry; `heads` are the start pcs of the targets of its retreating edges. */
 export class Irreducible extends Error {
@@ -33,7 +30,7 @@ export class Flow {
   private readonly loopCloses: Set<number>[] = [];
 
   /** `extraEntries` are blocks (by start pc) that also begin a region: an irreducible cycle is cut by making its extra heads (`Irreducible.heads`) entries, so every edge into them takes the dispatch. */
-  constructor(prepared: PreparedMethod, code: CodeItem, maxDepth = MAX_DEPTH, extraEntries: readonly number[] = []) {
+  constructor(prepared: PreparedMethod, code: CodeItem, extraEntries: readonly number[] = []) {
     const { instructions, leaders } = prepared, last: PreparedMethod["instructions"][number][] = [];
     this.blockAt = new Int32Array(code.insns.length + 1).fill(-1);
     for (const ins of instructions) {
@@ -191,7 +188,7 @@ export class Flow {
       for (const s of r.scopes) {
         while (nest.length && nest[nest.length - 1].close <= s.open) nest.pop();
         if (nest.length && nest[nest.length - 1].close < s.close) throw new Error("crossing scopes");
-        if (nest.push(s) > maxDepth) throw new Error("too deep");
+        nest.push(s);
       }
     }
   }
@@ -204,41 +201,15 @@ export class Flow {
     return final && this.pos[v] === this.pos[u] + 1 && !this.loopCloses[this.region[u]].has(this.pos[v]) ? Go.Next : Go.Break;
   }
 
-  /** the edge retreats in the method's depth-first order: every cycle takes one */
-  back(u: number, v: number): boolean { return this.rpo[v] <= this.rpo[u]; }
-
   /** the block a block that can fall through ends by reaching */
   fallTarget(u: number, taken: number): number { return this.inverted.has(u) ? taken : this.fall[u]; }
-
-  /** Each region's blocks, in order, inside their labelled scopes. */
-  assemble(code: (block: number) => string): string[] {
-    return this.regions.map((r) => {
-      const out: string[] = [], nest: Scope[] = [];
-      let next = 0;
-      for (let p = 0; p <= r.order.length; p++) {
-        while (nest.length && nest[nest.length - 1].close === p) { nest.pop(); out.push("}"); }
-        for (; next < r.scopes.length && r.scopes[next].open === p; next++) {
-          const s = r.scopes[next];
-          nest.push(s);
-          out.push(s.loop ? `${s.label}:for(;;){` : `${s.label}:{`);
-        }
-        if (p < r.order.length) out.push(code(r.order[p]));
-      }
-      return out.join("\n");
-    });
-  }
-}
-
-/** The structure of a hot entry body, or null when its flow must keep the dispatch loop. */
-export function structure(prepared: PreparedMethod, code: CodeItem): Flow | null {
-  try { return new Flow(prepared, code); } catch { return null; }
 }
 
 /** The structure of any body: an irreducible cycle gets its heads as extra region entries until the flow reduces, so only the edges that close it take the dispatch. */
-export function structureAny(prepared: PreparedMethod, code: CodeItem, maxDepth: number): Flow {
+export function structureAny(prepared: PreparedMethod, code: CodeItem): Flow {
   const extra = new Set<number>();
   for (;;) {
-    try { return new Flow(prepared, code, maxDepth, [...extra]); } catch (e) {
+    try { return new Flow(prepared, code, [...extra]); } catch (e) {
       if (!(e instanceof Irreducible)) throw e;
       const before = extra.size;
       for (const h of e.heads) extra.add(h);

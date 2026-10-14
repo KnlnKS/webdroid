@@ -167,7 +167,7 @@ export class MC {
     const prepared = this.prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
     lap("prepare", "wasm.flow");
     let flow: Flow;
-    try { flow = structureAny(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
+    try { flow = structureAny(prepared, item); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow", "wasm.infer");
     this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
