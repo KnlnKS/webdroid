@@ -62,7 +62,8 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
-   page's World, which blocks any parallel or ahead-of-time compile). Measure each on Komikku's first launch, three
+   page's World, which blocks any parallel or ahead-of-time compile; seeding app numbers at dex arrival
+   covers 99.9% of Komikku, but attaching a first build mid-session did not pay, see the history). Measure each on Komikku's first launch, three
    matched runs or more. Without a platform build FitNotes' quick flow takes 144 s against 46 s, so the on-demand
    path itself is worth profiling.
 5. **Application compatibility.**

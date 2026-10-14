@@ -160,7 +160,7 @@ These analyses were done with scratch scripts that are not in the repo; each is 
 ## Suggested next steps, in order
 
 1. **Lower the cold Komikku floor.** In a cold `more` tap, UP is handled in 2 ms, then one 85 ms `doFrame` recomposes, with 699 methods compiled on demand (62 ms of compiling). Levers, in the plan's order:
-   - **2.1 deterministic app numbering.** Worker-compiled code can then be adopted mid-session, which takes on-demand compilation off taps.
+   - **2.1 deterministic app numbering: measured and rejected for mid-session adoption** (history, "Rejected: seeded app numbering"). Seeding is cheap and covers 99.9% of Komikku, but a late build attaches 4–7 s after the first frame without its data modules, and linking the classes its code names cost the next tap more than compiling saved. Under the profiler, first-tier compiling is about a fifth of a cold tap; the rest is Java and idle waits. Profile those before more compile work.
    - **5.1 flat statics.** Fewer modules and imports per unit.
    - **3.1 and 3.3 codegen.** Plan 3.2 is rejected: direct calls must not bypass host vtable repairs.
 2. **ChatGPT and TikTok.** Since paced unit release neither has crashed: ChatGPT warm launches in 2.95 s, and five matched warm TikTok runs (main and `6369377e`) launched in 8.1–8.4 s. Two warm preparations on main stopped at a server-driven "Manage your storage" dialog (its text is not in the APK). Cold runs and the matched series never showed it. Statfs was not the trigger; which check TikTok makes is still unknown.
