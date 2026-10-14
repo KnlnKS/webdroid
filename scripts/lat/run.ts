@@ -542,13 +542,13 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
-  // the page and every Worker it starts, each paused until it is throttled and its profiler runs
+  // Chrome throttles only pages ("Operation is only supported for pages, not workers"): app processes, which run in Workers, run at full speed
+  if (throttle > 1) await send("Emulation.setCPUThrottlingRate", { rate: throttle }, sessionId);
+  // the page and every Worker it starts, each paused until its profiler runs
   const profiled = new Map<string, string>(), instrumented = new Set<string>();
   const instrument = async (session: string, label: string) => {
     instrumented.add(session);
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session);
-    if (throttle > 1) await send("Emulation.setCPUThrottlingRate", { rate: throttle }, session);
-    if (!profile) return;
     profiled.set(session, label);
     await send("Profiler.enable", {}, session); await send("Profiler.setSamplingInterval", { interval: 200 }, session); await send("Profiler.start", {}, session);
     if (heapSample) { await send("HeapProfiler.enable", {}, session); await send("HeapProfiler.startSampling", { samplingInterval: 16384 }, session); }
@@ -559,7 +559,7 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
     void instrument(worker, pid ?? `${targetInfo.type}-${worker.slice(0, 6)}`).catch(() => {})
       .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
   };
-  if (profile || throttle > 1) { browser.events!.add(attached); await instrument(sessionId, ""); }
+  if (profile) { browser.events!.add(attached); await instrument(sessionId, ""); }
   if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "blink.user_timing", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"] } });
   // a crashed page answers nothing, so the wait ends with what the page reported last
   let crashed = false;
