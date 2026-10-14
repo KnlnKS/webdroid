@@ -89,6 +89,8 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?
   | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure"; done?: boolean };
 /** what ensure()'s body uses of the module it is compiled into (World.emitEnsure) */
 interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
+/** the vtable words of a class module above which its start function makes the vtables (World.classModule) */
+const VT_DATA_WORDS = 4096;
 /** the most methods a first-tier unit holds (World.batch) */
 const BATCH = 32;
 /** the methods a unit compiled ahead of their first call holds (World.ahead), how many methods its calls are taken from, and the most it compiles in a World */
@@ -829,17 +831,19 @@ export class World {
       };
       const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
       const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
-      const vts: number[][] = [];
-      for (const rt of rts) {
-        const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
-        let vtG = -1;
-        if (name[0] === "[" || !jc?.isInterface) {
-          // a vtable the engine's limit on array.new_fixed admits is the global's constant initializer, else the start function fills it in
-          const words = this.vtWords(name, id), fixed = words.length <= 10_000, init: number[] = fixed ? [] : nullInit(b.tVT);
-          if (fixed) { for (const w of words) { init.push(0x41); sleb(w, init); } init.push(0xfb, 0x08); uleb(b.tVT, init); uleb(words.length, init); }
-          vtG = mb.addGlobal(refNull(b.tVT), true, init);
-          if (!fixed) vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, mb.addDataPassive(new Uint8Array(words.buffer))).gset(vtG).b);
-          mb.export(id + ":vt", "global", vtG);
+      const words = rts.map(({ name, id }) => name[0] === "[" || !this.prog.get(name)?.isInterface ? this.vtWords(name, id) : undefined);
+      // The engine evaluates a constant initializer's operands one by one at instantiation, and admits at most 10,000 in array.new_fixed. A module with
+      // many vtables makes them in its start function from one data segment instead, which costs a function to compile.
+      const total = words.reduce((n, w) => n + (w?.length ?? 0), 0), fromData = total > VT_DATA_WORDS || words.some((w) => w && w.length > 10_000);
+      const vts: { g: number; words: Int32Array }[] = [];
+      for (const [i, rt] of rts.entries()) {
+        const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [], w = words[i];
+        if (w) {
+          const init = fromData ? nullInit(b.tVT) : [];
+          if (!fromData) { for (const x of w) { init.push(0x41); sleb(x, init); } init.push(0xfb, 0x08); uleb(b.tVT, init); uleb(w.length, init); }
+          const g = mb.addGlobal(refNull(b.tVT), true, init);
+          if (fromData) vts.push({ g, words: w });
+          mb.export(id + ":vt", "global", g);
         }
         // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
         const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
@@ -861,7 +865,15 @@ export class World {
         } else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
         if (stubs.length) mb.addElemActive(0, slotBase, stubs);
       }
-      if (vts.length) mb.start = mb.addFunc(mb.addFuncType([], []), [0, ...vts.flat(), 0x0b], "$vt");
+      if (vts.length) {
+        const all = new Int32Array(total), c = new Code(0);
+        let at = 0;
+        for (const v of vts) { all.set(v.words, at); at += v.words.length; }
+        const seg = mb.addDataPassive(new Uint8Array(all.buffer));
+        at = 0;
+        for (const v of vts) { c.i32(4 * at).i32(v.words.length).arrayNewData(b.tVT, seg).gset(v.g); at += v.words.length; }
+        mb.start = mb.addFunc(mb.addFuncType([], []), c.finish(), "$vt");
+      }
       return mb.build();
     } finally { endCompile(span); }
   }
