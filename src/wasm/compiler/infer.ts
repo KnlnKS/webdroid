@@ -70,9 +70,9 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   // ---- liveness (block live-in bitsets of W words), handler edges treated as successors
   const B = cfg.n, W = (R_ + 31) >> 5;
   const liveIn = new Int32Array(B * W);
-  const preds: number[][] = Array.from({ length: B }, () => []);
+  const preds: number[][] = new Array(B), work: number[] = new Array(B), inWork = new Uint8Array(B).fill(1);
+  for (let b = 0; b < B; b++) { preds[b] = []; work[b] = B - 1 - b; }
   for (let b = 0; b < B; b++) { for (const s of cfg.succ[b]) preds[s].push(b); for (const s of cfg.hsucc[b]) preds[s].push(b); }
-  const work: number[] = Array.from({ length: B }, (_, k) => B - 1 - k), inWork = new Uint8Array(B).fill(1);
   const tmp = new Int32Array(W);
   const orLive = (b: number) => { for (let w = 0, o = b * W; w < W; w++) tmp[w] |= liveIn[o + w]; };
   const set = (r: number, on: boolean) => { if (on) tmp[r >> 5] |= 1 << r; else tmp[r >> 5] &= ~(1 << r); };
@@ -93,11 +93,11 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     for (let w = 0, o = b * W; w < W; w++) { changed |= tmp[w] & ~liveIn[o + w]; liveIn[o + w] |= tmp[w]; }
     if (changed) for (const p of preds[b]) if (!inWork[p]) { inWork[p] = 1; work.push(p); }
   }
-  const liveList: Int32Array[] = new Array(B);
+  const liveList: Int32Array[] = new Array(B), regs = new Int32Array(R_);
   for (let b = 0; b < B; b++) {
-    const o: number[] = [];
-    for (let r = 0; r < R_; r++) if (liveIn[b * W + (r >> 5)] & (1 << r)) o.push(r);
-    liveList[b] = Int32Array.from(o);
+    let k = 0;
+    for (let r = 0; r < R_; r++) if (liveIn[b * W + (r >> 5)] & (1 << r)) regs[k++] = r;
+    liveList[b] = regs.slice(0, k);
   }
 
   // ---- webs
@@ -151,9 +151,11 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
 
   const cst = (reg: number, m: number, st: Int32Array) => { const w = st[reg]; if (w >= 0) { const r = find(w); mask[r] &= m; used[r] = 1; } };
   let guard = 0;
+  // the state through a block, which joinInto copies from
+  const st = new Int32Array(R_);
   while (queue.length) {
     const b = queue.pop()!; queued[b] = 0;
-    const st = inState[b]!.slice();
+    st.set(inState[b]!);
     if (++guard > B * 50 + 1000) return "no-fixpoint";
     for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
       const e = effs[i], x = ins[i];
@@ -182,12 +184,13 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     for (const node of paramNode) touch(node, 0);
     for (let b = 0; b < B; b++) {
       if (!inState[b]) continue;
-      const st = inState[b]!.slice();
+      st.set(inState[b]!);
       for (const r of liveList[b]) touch(st[r], cfg.firstIdx[b]);
       for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
         if (!reached[i]) continue;
         // EH observes the pre-state even when the normal result overwrites a register.
-        if (!NO_THROW[ins[i].op]) for (const h of handlerOfIdx[i] ?? []) for (const r of liveList[h]) touch(st[r], i);
+        const hs = handlerOfIdx[i];
+        if (hs && !NO_THROW[ins[i].op]) for (const h of hs) for (const r of liveList[h]) touch(st[r], i);
         for (const node of useNode[i]) touch(node, i);
         const e = effs[i];
         if (e.d >= 0 && e.d < R_) {
