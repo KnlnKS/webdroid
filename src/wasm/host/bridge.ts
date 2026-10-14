@@ -52,7 +52,7 @@ export class Bridge implements HostBridge {
   /** where each scope's scratch ends: a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
   private tops: number[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
-  private accessors = new Map<string, Fn>();
+  private accessors = { get: new WeakMap<FieldInfo, Fn>(), set: new WeakMap<FieldInfo, Fn>(), gets: new WeakMap<FieldInfo, Fn>(), sets: new WeakMap<FieldInfo, Fn>() };
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
   constructor(private w: World, private src?: NativeSource) { handleViews.of = (o) => this.toHost(o); }
@@ -158,8 +158,7 @@ export class Bridge implements HostBridge {
   }
   /** one function per class, operation and kind serves the instance fields of that kind the class declares, picked by their index: a module per field is dear */
   private accessor(op: "get" | "set", f: FieldInfo): Fn {
-    const key = `${op}:${f.owner}.${f.name}:${f.desc}`;
-    let fn = this.accessors.get(key);
+    let fn = this.accessors[op].get(f);
     if (fn) return fn;
     const same = this.w.prog.require(f.owner).fields.filter((x) => !x.isStatic && x.kind === f.kind), i = same.indexOf(f);
     const any = this.w.hostFn(`b:${op}:${f.owner}:${f.kind}`, op === "get" ? ["L", "I"] : ["L", "I", f.kind], op === "get" ? f.kind : "V", (cx, c) => {
@@ -173,7 +172,7 @@ export class Bridge implements HostBridge {
       }
       c.end().unreachable();
     });
-    this.accessors.set(key, fn = op === "get" ? (o: object) => any(o, i) : (o: object, v: unknown) => any(o, i, v));
+    this.accessors[op].set(f, fn = op === "get" ? (o: object) => any(o, i) : (o: object, v: unknown) => any(o, i, v));
     return fn;
   }
   /** a throwable's facade stands where a native's JThrowable does (`instanceof`, `msg`, `cause`) */
@@ -334,10 +333,13 @@ export class Bridge implements HostBridge {
     if (f.isStatic) this.staticAccessor("set", f)(given); else this.accessor("set", f)(o, given);
   }
   private staticAccessor(op: "get" | "set", f: FieldInfo): Fn {
-    return this.w.hostFn(`b:${op}s:${f.owner}.${f.name}:${f.desc}`, op === "get" ? [] : [f.kind], op === "get" ? f.kind : "V", (cx, c) => {
+    const cache = this.accessors[op === "get" ? "gets" : "sets"];
+    let fn = cache.get(f);
+    if (!fn) cache.set(f, fn = this.w.hostFn(`b:${op}s:${f.owner}.${f.name}:${f.desc}`, op === "get" ? [] : [f.kind], op === "get" ? f.kind : "V", (cx, c) => {
       const g = cx.staticGlobal(f.owner, f.name, f.desc);
       if (op === "get") c.gget(g); else c.lget(0).gset(g);
-    });
+    }));
+    return fn;
   }
   arrayLength(a: object): number { return this.op.alen(a); }
   element(a: object, i: number): unknown { return this.op.aget(a, i); }
