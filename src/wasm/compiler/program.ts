@@ -130,12 +130,18 @@ class DexClass implements JClass {
     const def = this.dex.classDef(this.idx);
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
+  /** what `method` found in the dex's ids, by key (a raw key after a NUL), null for none: the same questions come back for a class */
+  private looked?: Map<string, ReturnType<DexFile["declaredAt"]> | null>;
   /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
   method(key: string, raw = false): MethodInfo | undefined {
     if (this.members_ && !raw) return this.members_.byKey.get(key);
-    const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at), raw);
-    const m = i < 0 ? undefined : this.dex.declaredAt(this.idx, i);
-    return m && (this.members_?.methods[m.index] ?? this.methodInfo(m, m.index));
+    const memo = raw ? "\0" + key : key;
+    let m = this.looked?.get(memo);
+    if (m === undefined) {
+      const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at), raw);
+      (this.looked ??= new Map()).set(memo, m = (i < 0 ? undefined : this.dex.declaredAt(this.idx, i)) ?? null);
+    }
+    return m ? this.members_?.methods[m.index] ?? this.methodInfo(m, m.index) : undefined;
   }
   /** the method at `index` (direct methods first, then virtual), without building the others */
   methodAt(index: number): MethodInfo | undefined {
