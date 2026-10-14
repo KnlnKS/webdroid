@@ -1340,6 +1340,8 @@ export class World {
     const given = new Set(Object.keys(imports));
     for (const [module, name] of required) {
       if (given.has(module)) continue;
+      // module c<id> names one class linked on demand: its holder's exports serve all of it
+      if (module[0] === "c") { imports[module] = this.link(this.names[+module.slice(1)]).exports; given.add(module); continue; }
       (imports[module] ??= {})[name] = this.link(this.names[+name.slice(0, name.indexOf(":"))]).exports[name];
     }
   }
