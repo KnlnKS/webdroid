@@ -34,7 +34,16 @@ const arm = (timer: Timer): void => armClockTimer(timer, (count) => { timer.over
 export function timerState(timer: ClockTimer, out: number): void {
   writeTs(out, timer.interval); writeTs(out + KLAYOUT.TS_SIZE, timer.next ? Math.max(0, timer.next - clockTime(timer.clock)) : 0);
 }
-export function validTime(p: number): boolean {
+/** timer_settime and timerfd_settime: report the old itimerspec, then take the new one (flags bit 0 is
+ *  TIMER_ABSTIME); false, with nothing changed, when it holds an invalid timespec */
+export function setClockTimer(timer: ClockTimer, flags: number, value: number, old: number): boolean {
+  if (!value || !validTime(value) || !validTime(value + KLAYOUT.TS_SIZE)) return false;
+  const interval = readTs(value), first = readTs(value + KLAYOUT.TS_SIZE);
+  if (old) timerState(timer, old);
+  timer.interval = interval; timer.next = first ? first + (flags & 1 ? 0 : clockTime(timer.clock)) : 0;
+  return true;
+}
+function validTime(p: number): boolean {
   const seconds = PTR === 8 ? mem.ld64(p) : BigInt(mem.ld32(p) | 0);
   const nanos = PTR === 8 ? mem.ld64(p + 8) : BigInt(mem.ld32(p + 4) | 0);
   return seconds >= 0n && nanos >= 0n && nanos < 1000000000n;
@@ -59,10 +68,7 @@ export function timersInit(): void {
     },
     timer_settime: (cpu, a) => {
       const timer = timers.get(a.p()), flags = a.i(), value = a.p(), old = a.p();
-      if (!timer || !value || flags & ~1 || !validTime(value) || !validTime(value + KLAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
-      const interval = readTs(value), first = readTs(value + KLAYOUT.TS_SIZE);
-      if (old) timerState(timer, old);
-      timer.interval = interval; timer.next = first ? first + (flags & 1 ? 0 : clockTime(timer.clock)) : 0;
+      if (!timer || flags & ~1 || !setClockTimer(timer, flags, value, old)) return fail(cpu, E.INVAL);
       timer.overrun = 0; arm(timer); return 0;
     },
     timer_gettime: (cpu, a) => { const timer = timers.get(a.p()), out = a.p(); if (!timer || !out) return fail(cpu, E.INVAL); timerState(timer, out); return 0; },
