@@ -1773,7 +1773,10 @@ export class World {
     const names = change();
     if (!names.length) return;
     this.vslotCache.clear();
+    // A kept app build was made under the new graph: the classes laid out by its data modules already have the new hierarchy and dispatch.
+    const kept = keepApp(), builtUnderNew = (name: string) => kept && this.classes.get(name)?.mod[0] === "e";
     for (const old of dispatch) {
+      if (builtUnderNew(old.name)) continue;
       const methods = this.vslots(old.name).map(key => symbolicDispatchFor(this.prog, old.name, key));
       if (methods.length !== old.methods.length || methods.some((m, i) => {
         const prior = old.methods[i];
@@ -1786,6 +1789,7 @@ export class World {
     // A changed superclass would change the physical GC layout of already linked instances. Constructor-time library binding must precede that resolution.
     for (const old of existing) {
       const cls = this.prog.get(old.name)!;
+      if (builtUnderNew(old.name)) continue;
       if (cls.sup !== old.sup || cls.ifaces.join("\0") !== old.ifaces.join("\0")) {
         undo(); this.vslotCache.clear();
         throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked hierarchy of ${old.name}`));
@@ -1804,7 +1808,7 @@ export class World {
     this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
-    const refreshed = new Set(names), kept = keepApp();
+    const refreshed = new Set(names);
     // a slot without state has never been compiled here
     const builtUnder = (slot: number) => { const s = this.peek(slot); return (!s || s.k === "method" && !s.hot && !this.demand.methods.has(s.m)) && !!this.aot?.fromAppBuild(slot); };
     for (let b = 0; b < this.blockClass.length; b++) if (refreshed.has(this.blockClass[b])) {

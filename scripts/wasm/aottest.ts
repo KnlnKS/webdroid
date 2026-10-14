@@ -1,7 +1,7 @@
 // Precompiled platform code (aot.ts) stays sound when classes arrive after the build: it relies on no class-hierarchy decision, so a dex that
 // overrides a method it calls takes effect through dispatch, whether the dex is added later or present from the start, and the code stays installed.
 // Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `bun run wasm aottest` makes when it is unset.
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
@@ -260,6 +260,36 @@ const modules = /^[cd]\d+\.wasm$/;
   check("late format replacement cannot install rejected original globals", oldData.aot!.hasLoaded(name), false);
   const foreign = new TextEncoder().encode(JSON.stringify({ ...index, dexes: index.dexes.map(() => "foreign-platform") }));
   check("foreign platform index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? foreign : fileOf(f) } }).aot, false);
+}
+// An app build made under the root's shared libraries keeps the classes its data modules laid out when Java binds those libraries after they were linked: the app's own
+// copy of a class the library defines first is the superclass before the binding, the library's after it, as the build has it.
+{
+  sh(["mkdir", "-p", "lib3", "app3"]);
+  const lib = (v: number) => `public class Aot3Lib { public int v() { return ${v}; } }`;
+  writeFileSync(join(out, "lib3/Aot3Lib.java"), lib(5));
+  writeFileSync(join(out, "app3/Aot3Lib.java"), lib(3));
+  writeFileSync(join(out, "app3/Aot3.java"), "public class Aot3 extends Aot3Lib { public static int run() { return new Aot3().v() + 1; } }");
+  for (const d of ["lib3", "app3"]) {
+    sh(["javac", "--release", "8", "-Xlint:-options", "-d", join(out, d), ...filesIn(join(out, d), /\.java$/)]);
+    sh(["d8", "--release", "--output", join(out, d), ...filesIn(join(out, d), /\.class$/)]);
+  }
+  const platform = program(jars), app = () => loadDexes(join(out, "app3/classes.dex"));
+  const bind = (w: ReturnType<typeof world>) => {
+    const library = w.prog.newLoader(w.prog.boot, null);
+    w.addDexes(loadDexes(join(out, "lib3/classes.dex")), library);
+    w.bindLibraries(w.prog.root, [library], []);
+  };
+  const producer = world(new Program(app(), platform), { natives, compileOnly: true });
+  bind(producer);
+  const methods = ["run()I", "<init>()V"].map((k) => producer.prog.get("Aot3")!.byKey.get(k)!);
+  const built = buildApp(producer, methods, { methods: [], classes: ["Aot3"], infos: [] }), files = new Map(built.files);
+  const page = world(new Program(app(), program(jars)), { natives, app: { index: built.index, store: { get: (f) => files.get(f) } } });
+  check("the library build is attached", page.appAttached, true);
+  check("the build lays out the subclass", page.link("Aot3").mod[0], "e");
+  let error = "";
+  try { bind(page); } catch (e) { error = String(e); }
+  check("binding the build's libraries keeps it", error, "");
+  check("the subclass reaches the library's superclass", page.entry("Aot3", "run", "()I")(), 6);
 }
 const stores: [string, (seen: Set<string>) => AotStore, (w: ReturnType<typeof world>) => boolean][] = [
   ["a build with every other module", () => ({ get: (f) => (modules.test(f) && /[13579]\.wasm$/.test(f) ? undefined : fileOf(f)) }), (w) => w.stats.aot.missed > 0 && w.stats.aot.c + w.stats.aot.d > 0],
