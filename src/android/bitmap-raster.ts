@@ -9,32 +9,26 @@ function eligible(canvas: NativeCanvas, paint: NativePaint): boolean {
     !paint.shadowRadius && !paint.transparentSourceIn() && !isRecording(canvas.ctx);
 }
 
-/** a blended paint's composite op, for the one draw inside the caller's save/restore */
-function applyBlend(ctx: Ctx2D, paint: NativePaint): void {
-  const blend = paint.compositeOp();
-  if (blend) ctx.globalCompositeOperation = blend;
-}
+/** the most device pixels the sampled and inverse paths take on */
+const MAX_SAMPLED_PIXELS = 250_000;
 
-function deviceFill(canvas: NativeCanvas, paint: NativePaint, pixels: Path2D): void {
+/** `draw` in device pixels with the paint's blend (after its stroke setup when `stroke`), the
+ *  context restored afterwards; eligible() has ruled out a shader, so fill styles need no transform */
+function inDevice(canvas: NativeCanvas, paint: NativePaint, draw: (ctx: Ctx2D) => void, stroke = false): void {
   const ctx = canvas.ctx;
   ctx.save();
   try {
+    if (stroke) canvas.prep(paint, true);
     ctx.resetTransform();
-    ctx.fillStyle = paint.fillStyle(ctx);
-    applyBlend(ctx, paint);
-    ctx.fill(pixels);
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
+    draw(ctx);
   } finally { ctx.restore(); }
 }
-
-function composite(canvas: NativeCanvas, paint: NativePaint, image: OffscreenCanvas): void {
-  const ctx = canvas.ctx;
-  ctx.save();
-  try {
-    ctx.resetTransform();
-    applyBlend(ctx, paint);
-    ctx.drawImage(image, 0, 0);
-  } finally { ctx.restore(); }
-}
+const deviceFill = (canvas: NativeCanvas, paint: NativePaint, pixels: Path2D): void =>
+  inDevice(canvas, paint, (ctx) => { ctx.fillStyle = paint.fillStyle(ctx); ctx.fill(pixels); });
+const composite = (canvas: NativeCanvas, paint: NativePaint, image: OffscreenCanvas): void =>
+  inDevice(canvas, paint, (ctx) => ctx.drawImage(image, 0, 0));
 
 function sampled(canvas: NativeCanvas, paint: NativePaint, left: number, top: number, right: number, bottom: number,
   contains: (x: number, y: number) => boolean): boolean {
@@ -69,7 +63,7 @@ export function tryPartialSourceIn(canvas: NativeCanvas, paint: NativePaint,
   const alpha = paint.color >>> 24;
   if (paint.blend !== "source-in" || alpha <= 0 || alpha >= 255 ||
     !eligible(canvas, paint) || paint.colorFilter ||
-    canvas.w * canvas.h > 250_000) return false;
+    canvas.w * canvas.h > MAX_SAMPLED_PIXELS) return false;
   const mask = shapeMask(canvas, paint, fill, stroke);
 
   const source = new OffscreenCanvas(canvas.w, canvas.h);
@@ -94,20 +88,15 @@ export function tryPartialSourceIn(canvas: NativeCanvas, paint: NativePaint,
 }
 
 function deviceHairline(canvas: NativeCanvas, paint: NativePaint, path: Path2D): void {
-  const ctx = canvas.ctx, devicePath = new Path2D();
-  devicePath.addPath(path, ctx.getTransform());
-  ctx.save();
-  try {
-    canvas.prep(paint, true);
-    applyBlend(ctx, paint);
-    ctx.resetTransform(); ctx.stroke(devicePath);
-  } finally { ctx.restore(); }
+  const devicePath = new Path2D();
+  devicePath.addPath(path, canvas.ctx.getTransform());
+  inDevice(canvas, paint, (ctx) => ctx.stroke(devicePath), true);
 }
 
 export function tryBitmapShape(canvas: NativeCanvas, paint: NativePaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   if (paint.style !== 2 || paint.strokeWidth <= 0 || paint.antiAlias || paint.dash ||
-    canvas.w * canvas.h > 250_000 || !eligible(canvas, paint)) return false;
+    canvas.w * canvas.h > MAX_SAMPLED_PIXELS || !eligible(canvas, paint)) return false;
   const image = shapeMask(canvas, paint, fill, stroke);
   const layer = image.getContext("2d")!;
   layer.globalCompositeOperation = "source-in";
@@ -158,16 +147,13 @@ export function tryBitmapOval(canvas: NativeCanvas, paint: NativePaint, left: nu
   if (!(paint.antiAlias && paint.style === 0 && bottom > top && bottom - top <= 1)) return false;
   const coverage = sampledCoverage(canvas.ctx, left, top, right, bottom, contains);
   if (!coverage) return false;
-  const ctx = canvas.ctx;
-  ctx.save();
-  try {
-    ctx.resetTransform(); ctx.fillStyle = paint.fillStyle(ctx);
-    applyBlend(ctx, paint);
+  inDevice(canvas, paint, (ctx) => {
+    ctx.fillStyle = paint.fillStyle(ctx);
     for (let count = 1; count <= 16; count++) {
       ctx.globalAlpha = count / 16;
       ctx.fill(coverage[count]!);
     }
-  } finally { ctx.restore(); }
+  });
   return true;
 }
 
@@ -210,13 +196,7 @@ export function tryBitmapLine(canvas: NativeCanvas, paint: NativePaint,
   }
   const m = ctx.getTransform(), start = devicePoint(m, x0, y0), end = devicePoint(m, x1, y1);
   if (m.a * m.d === m.b * m.c || !start.every(Number.isFinite) || !end.every(Number.isFinite)) return false;
-  ctx.save();
-  try {
-    canvas.prep(paint, true);
-    applyBlend(ctx, paint);
-    ctx.resetTransform();
-    ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke();
-  } finally { ctx.restore(); }
+  inDevice(canvas, paint, (ctx) => { ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke(); }, true);
   return true;
 }
 
@@ -230,7 +210,7 @@ export function tryBitmapPath(canvas: NativeCanvas, paint: NativePaint, path: Na
   }
   const hairline = paint.style === 1 && paint.strokeWidth === 0 && paint.antiAlias && !paint.dash;
   if (!(strokeInverse || fillInverse || hairline) || !eligible(canvas, paint)) return false;
-  if ((strokeInverse || fillInverse) && canvas.w * canvas.h <= 250_000) {
+  if ((strokeInverse || fillInverse) && canvas.w * canvas.h <= MAX_SAMPLED_PIXELS) {
     const ctx = canvas.ctx, m = ctx.getTransform();
     if (strokeInverse) {
       const bounds = path.bounds();
