@@ -45,7 +45,7 @@ export function name(s: string, out: number[]): void {
 
 /** A value type: number for plain types, or {ref: idx, nullable} */
 export type VT = number | { ht: number; nullable: boolean };
-export const vtKey = (t: VT): string => (typeof t === "number" ? String(t) : (t.nullable ? "n" : "r") + t.ht);
+const vtKey = (t: VT): string => (typeof t === "number" ? String(t) : (t.nullable ? "n" : "r") + t.ht);
 export const refNull = (idx: number): VT => ({ ht: idx, nullable: true });
 export const ref = (idx: number): VT => ({ ht: idx, nullable: false });
 export function vt(t: VT, out: number[]): void {
@@ -260,8 +260,10 @@ export class ModuleBuilder {
     }
     const out = new Uint8Array(size);
     let at = 0;
-    // an indexed copy: TypedArray.set from small JS arrays costs several times more
-    for (const p of parts) for (let i = 0; i < p.length; i++) out[at++] = p[i];
+    // TypedArray.set from a JS array costs several times an indexed copy below about 16 elements, and a third of it above
+    for (const p of parts) {
+      if (p.length > 16) { out.set(p, at); at += p.length; } else for (let i = 0; i < p.length; i++) out[at++] = p[i];
+    }
     for (let k = 0; k < fixes.length; k += 2) {
       let i = fixes[k], value = fixes[k + 1];
       // Preserve immediate widths so stack-trace marks within a body stay valid.

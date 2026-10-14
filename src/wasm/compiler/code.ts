@@ -1,5 +1,4 @@
-import { T, sleb, uleb, vt, vtKey, type VT, type FuncBytes, functionIndex } from "./wasmbin";
-const END = [0x0b];
+import { T, sleb, uleb, vt, type VT, type FuncBytes, functionIndex } from "./wasmbin";
 /** instruction emitter for one function body */
 export class Code {
   b: FuncBytes = [];
@@ -150,17 +149,18 @@ export class Code {
   finish(): FuncBytes {
     this.materialize();
     // locals: run-length encode consecutive identical types
-    const prefix: number[] = [];
-    const groups: [number, VT][] = [];
-    let lastKey = "";
-    for (const t of this.localTypes) {
-      const key = vtKey(t);
-      if (groups.length && key === lastKey) groups[groups.length - 1][0]++; else { groups.push([1, t]); lastKey = key; }
+    const prefix: number[] = [], types = this.localTypes, same = (a: VT, b: VT) => a === b || typeof a !== "number" && typeof b !== "number" && a.ht === b.ht && a.nullable === b.nullable;
+    let groups = 0;
+    for (let i = 0; i < types.length; i++) if (!i || !same(types[i], types[i - 1])) groups++;
+    uleb(groups, prefix);
+    for (let i = 0, j; i < types.length; i = j) {
+      for (j = i + 1; j < types.length && same(types[j], types[i]); j++);
+      uleb(j - i, prefix); vt(types[i], prefix);
     }
-    uleb(groups.length, prefix);
-    for (const [n, t] of groups) { uleb(n, prefix); vt(t, prefix); }
     this.prefixLen = prefix.length;
-    const out: FuncBytes = prefix.concat(this.b, END);
+    const out: FuncBytes = prefix, b = this.b;
+    for (let i = 0; i < b.length; i++) out.push(b[i]);
+    out.push(0x0b);
     out.functionRefs = (this.b.functionRefs ?? []).map(at => at + this.prefixLen);
     return out;
   }
