@@ -5,7 +5,7 @@ import { sameBytes } from "../jvm/abi";
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
 export const AI_NUMERICHOST = 4;
 export const NI_NUMERICHOST = 2, NI_NAMEREQD = 4;
-export const EAI_ADDRFAMILY = 1, EAI_NODATA = 7, EAI_NONAME = 8;
+export const EAI_ADDRFAMILY = 1, EAI_FAMILY = 5, EAI_NODATA = 7, EAI_NONAME = 8, EAI_SERVICE = 9, EAI_SOCKTYPE = 10;
 const IFF_UP = 1, IFF_LOOPBACK = 8, IFF_RUNNING = 0x40;
 
 /** An address and port. An IPv4 address (IPv4-mapped IPv6 included) is 4 bytes, IPv6 16. */

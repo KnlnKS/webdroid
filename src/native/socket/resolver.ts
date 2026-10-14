@@ -10,7 +10,7 @@ import { stp, ptr, cstr, type HostFn } from "../host";
 import { mem, anchor } from "../mem";
 import { fail } from "../libc";
 import {
-  AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, V4_LOOPBACK,
+  AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, V4_LOOPBACK,
   parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,
 } from "../net-address";
 import { SOCK_STREAM, SOCK_DGRAM, sockaddrOf, readEndpoint } from "./abi";
@@ -18,7 +18,7 @@ import { record } from "./core";
 import { IPPROTO_TCP, IPPROTO_UDP } from "./inet";
 
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
-const EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
+const EAI_BADFLAGS = 3, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 
 /** the ARM32 struct ifaddrs: its size and the offsets of what getifaddrs fills */
 const IFADDRS = { size: 28, name: 4, flags: 8, addr: 12, netmask: 16 };

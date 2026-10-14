@@ -11,11 +11,12 @@ import { logLine } from "../libc";
 import { openFd, holdFile, dropFile, installSocket, naming, POLLIN, POLLERR, POLLHUP, POLLOUT, type OpenFile } from "../fs";
 import { procIdentity } from "../../shell/procfs";
 import { parseIpv4 } from "../../shell/relay";
-import { AF_INET, AF_INET6, AF_UNIX, resolveHost, hostOf, parseIpv6 } from "../net-address";
+import { AF_INET, AF_INET6, AF_UNIX, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, resolveHost, hostOf, parseIpv6 } from "../net-address";
 import {
-  SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, SCM_RIGHTS, SCM_CREDENTIALS,
+  SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, SCM_RIGHTS, SCM_CREDENTIALS,
   sockaddrOf, unixAddress, scmRights, readUcred, type SocketAddress, type Cmsg, type Ucred,
 } from "./abi";
+import { IPPROTO_TCP, IPPROTO_UDP } from "./inet";
 import { Socket, Loopback, block, received, SO_LINGER, SO_PASSCRED, SO_RCVTIMEO, type Received, type Accepted } from "./core";
 
 const SCM_MAX_FD = 253;
@@ -248,7 +249,6 @@ const logd: Daemon = (bytes) => {
 
 // DnsProxyListener's replies: a NUL-terminated result code, then big-endian fields
 const QUERY_RESULT = "222", OPERATION_FAILED = "401";
-const SOCK_RAW = 3, IPPROTO_TCP = 6, IPPROTO_UDP = 17, EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_FAMILY = 5;
 class Reply {
   private parts: number[] = [];
   code(c: string): this { this.parts.push(...utf8.enc.encode(c), 0); return this; }

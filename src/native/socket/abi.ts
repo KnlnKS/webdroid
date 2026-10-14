@@ -9,7 +9,7 @@ import { concat, utf8 } from "../../jvm/abi";
 import { AF_UNIX, AF_INET, AF_INET6, endpointOf, type Endpoint } from "../net-address";
 
 export const SOL_SOCKET = 1;
-export const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_SEQPACKET = 5, SOCK_NONBLOCK = 0x800;
+export const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_RAW = 3, SOCK_SEQPACKET = 5, SOCK_NONBLOCK = 0x800;
 export const MSG_PEEK = 2, MSG_CTRUNC = 8, MSG_TRUNC = 0x20, MSG_DONTWAIT = 0x40, MSG_NOSIGNAL = 0x4000, MSG_CMSG_CLOEXEC = 0x40000000;
 export const SCM_RIGHTS = 1, SCM_CREDENTIALS = 2;
 export const SHUT_RD = 0, SHUT_WR = 1, SHUT_RDWR = 2;
