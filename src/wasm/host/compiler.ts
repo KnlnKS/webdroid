@@ -2,6 +2,7 @@
 // its unit is installed when it arrives, if the World can still take it (World.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
 import { note, Ev } from "../../timeline";
+import { answeringFor } from "../../jvm/yield";
 import type { CompileService } from "../link/hostapi";
 import type { AppIndex, Marks } from "../link/aot";
 import type { UpgradeJob } from "../link/unit";
@@ -112,7 +113,7 @@ export class CompileClient implements CompileService {
     if (this.state === "ready" || this.state === "starting") this.post({ type: "namespaces", loaders: this.w!.prog.loaderSnapshot() });
   }
   private pump(): void {
-    if (this.state !== "ready") return;
+    if (this.state !== "ready" || this.holding()) return;
     const w = this.w!;
     while (!this.busy && this.queue.length) {
       const slot = this.queue.shift()!, job = w.upgradeJob(slot);
@@ -136,6 +137,7 @@ export class CompileClient implements CompileService {
     if (m.type === "built") return;
     const busy = this.busy;
     if (!busy || m.id !== busy.id) return;
+    if (m.type === "unit" && this.holding(m)) return;
     this.busy = undefined;
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
     if (m.type === "failed") {
@@ -158,10 +160,25 @@ export class CompileClient implements CompileService {
     } else this.stats.stale++;
     this.pump();
   }
+  private held?: { timer: ReturnType<typeof setTimeout>; unit?: CompileResponse };
+  /** Planning a job and taking a unit (`unit`) wait while the app answers input: either would spend main-thread time in the response, and a unit replaces
+   *  code the engine has compiled, which the methods that run next compile again. Answers whether the work was put off until then. */
+  private holding(unit?: CompileResponse): boolean {
+    const wait = answeringFor();
+    if (!wait) return false;
+    this.held ??= { timer: setTimeout(() => {
+      const held = this.held!;
+      this.held = undefined;
+      if (held.unit) this.receive(held.unit); else this.pump();
+    }, wait) };
+    if (unit) this.held.unit = unit;
+    return true;
+  }
   /** stops serving: what was queued is compiled inline when its method asks again */
   private retire(reason: string): void {
     if (this.state === "retired") return;
     this.state = "retired"; this.retired = reason;
+    clearTimeout(this.held?.timer); this.held = undefined;
     for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.release(slot);
     this.queue = []; this.busy = undefined;
     this.waiting = []; this.w = undefined; this.setup = undefined;

@@ -41,6 +41,8 @@ let responsiveUntil = 0, lastInput = -Infinity;
 export function noteInput(): void { lastInput = performance.now(); responsiveUntil = Math.max(responsiveUntil, lastInput + RESPONSIVE_MS); }
 /** how long ago the latest input arrived */
 export const sinceInput = (now = performance.now()): number => now - lastInput;
+/** how much longer input is being answered, 0 once it is not */
+export const answeringFor = (now = performance.now()): number => Math.max(0, responsiveUntil - now);
 export const answeringInput = (now = performance.now()): boolean => now < responsiveUntil;
 /** a later turn, after what `queue` already holds */
 function turn(queue: (() => void)[]): Promise<void> {
