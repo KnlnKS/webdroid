@@ -5,7 +5,6 @@ import { procIdentity, procList, procText } from "./procfs";
 import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
 import { knownUid } from "../android/packages";
-import { SharedFile } from "./shared-file";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -26,11 +25,6 @@ function reserve(file: VfsFile, size: number) {
 }
 const openFiles = new Map<string, VfsFile>();
 const volatileFiles = new Set<string>();
-function sharedSource(file: VfsFile, source: SharedFile): void {
-  let length = file.len;
-  file.data = EMPTY; file.source = source;
-  Object.defineProperty(file,"len",{configurable:true,enumerable:true,get:()=>file.source instanceof SharedFile ? file.source.size : length,set:(value:number)=>{length=value;}});
-}
 /** stores through native shared mappings of an open file reach its bytes before they are read */
 const flushMapped = (path: string) => openFiles.get(path)?.sharedMaps?.flush();
 const procBytes = (path: string): Uint8Array | null => {
@@ -73,7 +67,6 @@ export const vfs = {
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
-  onShared: (_path: string, _source: SharedFile) => {},
   markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
   norm(p: string): string {
     // already normal: absolute, with no empty, "." or ".." segment
@@ -91,8 +84,7 @@ export const vfs = {
   canonical(p: string): string { return this.norm(p).replace(/^\/sdcard(?=\/|$)/,"/storage/emulated/0"); },
   read(p: string): Uint8Array | null {
     const path = this.norm(p); flushMapped(path);
-    const source = this.lazyFiles.get(path);
-    return this.files.get(path) ?? (source instanceof SharedFile ? source.memoryBytes() : null) ?? procBytes(path);
+    return this.files.get(path) ?? procBytes(path);
   },
   readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
     const path = this.norm(p);
@@ -121,20 +113,6 @@ export const vfs = {
   },
   /** before reading an open file's bytes directly */
   sync(file: VfsFile) { file.sharedMaps?.flush(); },
-  sharedFile(file: VfsFile): SharedFile | null {
-    if (file.sharedMaps?.maps.length || typeof SharedArrayBuffer === "undefined" || typeof crossOriginIsolated !== "undefined" && !crossOriginIsolated) return null;
-    if (file.source instanceof SharedFile) return file.source;
-    if (file.source && !writable(file.source)) return null;
-    const source = file.source ? new SharedFile(file.source) : SharedFile.memory(file.data.subarray(0, file.len));
-    if (file.path !== null && openFiles.get(file.path) === file) {
-      const mtime = this.mtimes.get(file.path);
-      this.adopt(file.path, source);
-      if (mtime !== undefined) this.mtimes.set(file.path, mtime);
-      this.onShared(file.path, source);
-    }
-    else sharedSource(file, source);
-    return source;
-  },
   opened(p: string): VfsFile | null { return openFiles.get(this.norm(p)) ?? null; },
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
@@ -168,24 +146,16 @@ export const vfs = {
     this.lazyFiles.set(path, source);
     this.attributes(path);
     this.mtimes.set(path, Date.now());
-    if (file) {
-      if (file.source instanceof SharedFile && file.source.backing === source) this.lazyFiles.set(path, file.source);
-      else if (source instanceof SharedFile) sharedSource(file, source);
-      else { file.data = EMPTY; file.len = source.size; file.source = source; }
-    }
+    if (file) { file.data = EMPTY; file.len = source.size; file.source = source; }
   },
   write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
     const existed = this.files.has(path) || this.lazyFiles.has(path);
-    const file = openFiles.get(path), source = file?.source;
-    if (source instanceof SharedFile) { source.truncate(data.length); source.write(0, data); }
-    else { this.lazyFiles.delete(path); this.files.set(path, data); }
+    const file = openFiles.get(path);
+    this.lazyFiles.delete(path); this.files.set(path, data);
     this.attributes(path);
     this.mtimes.set(path, Date.now());
-    if (file) {
-      file.len = data.length;
-      if (!(source instanceof SharedFile)) { file.data = data; file.source = undefined; }
-    }
+    if (file) { file.len = data.length; file.data = data; file.source = undefined; }
     if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
   },
   mount(p: string, source: FileSource) {

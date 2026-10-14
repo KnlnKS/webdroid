@@ -2,7 +2,6 @@ import type { vfs, FileAttributes } from "./vfs";
 import { knownUid } from "../android/packages";
 import { openDb, txDone } from "./idb";
 import { DiskFile, DiskStore } from "./diskstore";
-import { SharedFile } from "./shared-file";
 
 type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number; attributes?: FileAttributes };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
@@ -15,8 +14,6 @@ const SPILL_BYTES = 4 << 20;
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
   private views = new Map<number, typeof vfs>();
-  private shared = new Map<string, SharedFile>();
-  private snapshots = new WeakMap<SharedFile, number>();
   private loaded = new Map<string, Promise<void>>();
   private pending = new Map<string, FileValue | null>();
   private database: Promise<IDBDatabase> | null = null;
@@ -34,19 +31,11 @@ export class PrivateFiles {
     for (const [path, value] of this.values) this.install(view, path, value);
     view.prepare = (pkg) => this.prepare(pkg);
     view.flush = () => this.flush();
-    view.onShared = (path, source) => {
-      if (this.views.get(pid) !== view) return;
-      if (!appPath.test(path) && !sharedPath(path)) return;
-      this.shared.set(path, source);
-      for (const other of this.views.values()) if (other !== view) { other.adopt(path, source); other.mtimes.set(path,view.mtime(path)); }
-    };
     view.onWrite = (path, change) => {
       // a process that has died writes nothing more
       if (this.views.get(pid) !== view) return;
       const relative = appPath.exec(path);
       if (!relative && !sharedPath(path)) return;
-      const source = view.lazyFiles.get(path);
-      if (source instanceof SharedFile) this.shared.set(path, source); else this.shared.delete(path);
       const cache = !!relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "");
       const value = this.valueOf(view, path, change === "modify" && !cache);
       this.update(path, value);
@@ -58,17 +47,13 @@ export class PrivateFiles {
   detach(pid: number): void { this.views.delete(pid); }
   /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
   private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
-    const source = view.lazyFiles.get(path), backing = source instanceof SharedFile ? source.backing : source;
-    if (source instanceof SharedFile && backing instanceof DiskFile) source.flush();
-    const bytes = view.files.get(path) ?? (source instanceof SharedFile ? source.memoryBytes() : null), mtime = view.mtimes.get(path);
+    const backing = view.lazyFiles.get(path), bytes = view.files.get(path), mtime = view.mtimes.get(path);
     const attributes = {...view.attributes(path,view.dirs.has(path))};
     if (bytes && streamed && bytes.length >= SPILL_BYTES) {
       const disk = this.disk.create();
       disk.write(0, bytes.slice());
-      if (source instanceof SharedFile) { source.replaceBacking(disk); this.snapshots.set(source,source.epoch); }
       return { kind: "disk", id: disk.id, size: disk.size, mtime,attributes };
     }
-    if (source instanceof SharedFile) this.snapshots.set(source,source.epoch);
     if (bytes) return { kind: "file", bytes, mtime,attributes };
     if (backing instanceof DiskFile) return { kind: "disk", id: backing.id, size: backing.size, mtime,attributes };
     return view.dirs.has(path) ? { kind: "directory", mtime,attributes } : null;
@@ -90,13 +75,6 @@ export class PrivateFiles {
     }, delay);
   }
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
-    const shared = this.shared.get(path);
-    if (value && shared) {
-      if (view.lazyFiles.get(path) !== shared) view.adopt(path, shared);
-      if (value.attributes) view.setAttributes(path,value.attributes,false);
-      if (value.mtime !== undefined) view.mtimes.set(path,value.mtime);
-      return;
-    }
     // the writing view already holds these bytes; reinstalling would trim its open file's
     // spare capacity, so every append would copy the whole file
     if (value?.kind === "file" && view.files.get(path) === value.bytes) {
@@ -113,7 +91,7 @@ export class PrivateFiles {
   private update(path: string, value: FileValue | null): void {
     const previous = this.values.get(path);
     if (previous?.kind === "disk" && (value?.kind !== "disk" || value.id !== previous.id)) this.orphans.add(previous.id);
-    if (value) this.values.set(path, value); else { this.values.delete(path); this.shared.delete(path); }
+    if (value) this.values.set(path, value); else this.values.delete(path);
     for (const view of this.views.values()) this.install(view, path, value);
   }
   private db(): Promise<IDBDatabase> {
@@ -175,13 +153,6 @@ export class PrivateFiles {
   }
   flush(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
-    for (const [path, source] of this.shared) {
-      if (!source.pinned && this.snapshots.get(source) === source.epoch) continue;
-      const view = [...this.views.values()].find(view=>view.lazyFiles.get(path) === source);
-      if (!view) continue;
-      const value = this.valueOf(view,path,false);
-      this.update(path,value); this.pending.set(path,value);
-    }
     if (!this.pending.size) return this.writes;
     const pending = this.pending; this.pending = new Map();
     const live = new Set([...this.values.values()].flatMap((value) => value.kind === "disk" ? [value.id] : []));
