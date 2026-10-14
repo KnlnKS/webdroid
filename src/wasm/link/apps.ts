@@ -16,7 +16,7 @@ const D_MODULE_BYTES = 128 << 10, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 
 export interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
 
 /** the function V8 rejects in `bytes`, if it rejects the module */
-export function invalidFunction(bytes: Uint8Array): { fn: number; message: string } | undefined {
+function invalidFunction(bytes: Uint8Array): { fn: number; message: string } | undefined {
   try { compileModule(bytes); } catch (e) {
     const message = (e as Error).message, m = /function #(\d+)/.exec(message);
     return { fn: m ? +m[1] : -1, message };
@@ -51,7 +51,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
   return synths;
 }
 /** `methods` as a module that installs them: a method the compiler emits invalid code for (`check` says so) is left out, to the on-demand compiler, which fails the same way if it is ever called */
-export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: Uint8Array) => { fn: number; message: string } | undefined = invalidFunction):
+function compileChecked(w: World, methods: MethodInfo[], check: (bytes: Uint8Array) => { fn: number; message: string } | undefined = invalidFunction):
   { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
   const skipped = new Map<string, string>();
   for (;;) {

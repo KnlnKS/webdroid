@@ -6,7 +6,7 @@ import type { Strand, ThreadRec } from "./sched";
 
 /** what a blocking or synchronizing operation answers; the compiled code turns it into the exception (sched.ts blockStatus) */
 export const enum St { Ok = 0, Interrupted = 1, Imse = 2, Nbs = 3, Neg = 4, Nanos = 5, Proceed = 6, Block = 7 }
-export const INFLATED = 0x80000000 | 0;
+const INFLATED = 0x80000000 | 0;
 const THIN_MAX = 255;
 
 /** the lock half of an object's header word */

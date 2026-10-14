@@ -58,7 +58,7 @@ export interface AppCode {
 export interface Built { kept: boolean; methods: number; modules: number; ms: number }
 
 /** the least new on-demand work that is worth a new build, how often the launch is looked at, and for how long */
-export const MIN_FRESH = 8;
+const MIN_FRESH = 8;
 /** a refine rebuilds all the build holds, so it waits for the new demand to be this share of it */
 const REFINE_SHARE = 1 / 8;
 const TICK_MS = 2000, WATCH_MS = 120_000, MAX_REFINES = 3;

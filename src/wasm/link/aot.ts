@@ -93,7 +93,7 @@ export type Tail = string | [string, number];
 export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selectors: string[]; gaps: string[]; links: string[] }
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 /** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
-export function numberingDiff(a: Numbering, b: Numbering): string {
+function numberingDiff(a: Numbering, b: Numbering): string {
   if (!sameMarks(a.from, b.from)) return `from ${JSON.stringify(a.from)} vs ${JSON.stringify(b.from)}`;
   for (const k of ["names", "tail", "selectors", "gaps", "links"] as const) {
     const x = a[k], y = b[k], i = x.findIndex((v, j) => JSON.stringify(v) !== JSON.stringify(y[j]));

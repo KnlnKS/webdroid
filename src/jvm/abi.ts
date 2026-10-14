@@ -13,7 +13,7 @@
 // Static via ctor: Ctor[`m$...`], Ctor[`s$fieldName`]
 // Instance fields: `f$name$H2` where H2 = hash(declaringClass) — avoids R8 shadowing collisions
 
-export function hash36(s: string): string {
+function hash36(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
   return h.toString(36);
@@ -50,7 +50,7 @@ const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 /** a reflect.Proxy materialises a method on first use from the name and descriptor the caller
  *  holds; set by jreflect, consulted by jmethod and every other by-name dispatch */
-export const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
+const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
 
 /** mangle instance field. declCls = "java/lang/Object" form */
 export function mangleField(declCls: string, name: string): string {
@@ -108,7 +108,7 @@ export function descToName(desc: string): string {
 }
 
 /** primitive descriptor ↔ Java type name */
-export const PRIM_NAME: Record<string, string> = { I: "int", J: "long", F: "float", D: "double", Z: "boolean", B: "byte", C: "char", S: "short", V: "void" };
+const PRIM_NAME: Record<string, string> = { I: "int", J: "long", F: "float", D: "double", Z: "boolean", B: "byte", C: "char", S: "short", V: "void" };
 export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entries(PRIM_NAME).map(([d, n]) => [n, d]));
 
 /** the one mapping of Java's element types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64) */

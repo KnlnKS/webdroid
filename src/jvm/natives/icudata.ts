@@ -4,7 +4,7 @@ import { PLATFORM_DATA } from "../bootclasspath";
 import { vfs } from "../../shell/vfs";
 import { readFully } from "../../shell/lazyfile";
 
-export const ICU_DATA = Object.keys(PLATFORM_DATA).find((path) => path.endsWith(".dat"))!;
+const ICU_DATA = Object.keys(PLATFORM_DATA).find((path) => path.endsWith(".dat"))!;
 export const icuRead = async (at: number, length: number) => {
   const bytes = await readFully(vfs.source(ICU_DATA)!, at, length);
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

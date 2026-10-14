@@ -23,7 +23,7 @@ export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, in
   return JSON.stringify([m.cls, ins.op, operands, output, inputs.map(([reg, kind]) => [roles.get(reg), kind])]);
 }
 
-export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
+function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
   const n = ins.name, dex = m.dex;
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
   if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
@@ -34,7 +34,7 @@ export function needsSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruct
   return !w.prog.linksStatically(w.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
 }
 
-export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
+function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
   const n = ins.name, dex = m.dex, inputs: SiteOperands["inputs"] = [], seen = new Set<number>();
   for (const reg of registersOf(ins)) {
     const web = typing.use(ins.pc, reg);

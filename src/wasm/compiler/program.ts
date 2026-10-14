@@ -63,7 +63,7 @@ export function sameRuntimePackage(prog: Program, a: string, b: string): boolean
   return pkg(a) === pkg(b) && prog.loaderOf(a) === prog.loaderOf(b);
 }
 /** the id of the loader that defines the class (or the element class of the array class) with this key */
-export const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
+const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
 
 /** the descriptors of the `changed` names, or undefined when an array or key name leaves every reference suspect */
 const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>

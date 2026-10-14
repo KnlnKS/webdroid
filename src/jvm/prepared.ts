@@ -117,7 +117,7 @@ export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
 
-export function writesRegister(op: number): boolean {
+function writesRegister(op: number): boolean {
   if (op === 0 || (op >= 0x0e && op <= 0x11) || (op >= 0x1d && op <= 0x1f) ||
       (op >= 0x26 && op <= 0x2c) || (op >= 0x32 && op <= 0x3d) ||
       (op >= 0x4b && op <= 0x51) || (op >= 0x59 && op <= 0x5f) ||
@@ -420,7 +420,7 @@ export function successors(code: CodeItem, ins: PreparedInstruction): readonly n
   return endsBlock(ins.op) ? branchTargets(code, ins) : [...branchTargets(code, ins), ins.pc + ins.len];
 }
 /** the handlers an exception thrown at `pc` can reach */
-export function handlersAt(code: CodeItem, pc: number): number[] {
+function handlersAt(code: CodeItem, pc: number): number[] {
   const out: number[] = [];
   for (const t of code.tries) if (pc >= t.start && pc < t.end) {
     for (const [, handler] of t.handlers) out.push(handler);

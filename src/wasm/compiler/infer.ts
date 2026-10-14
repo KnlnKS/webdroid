@@ -42,7 +42,7 @@ interface WebAnalysis {
 }
 
 /** analysis of the method, or why it was skipped */
-export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs?: readonly PreparedInstruction[]): WebAnalysis | string {
+function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs?: readonly PreparedInstruction[]): WebAnalysis | string {
   const R_ = code.regs;
   const ins = instrs ?? decodeInstructions(code.insns);
   if (!ins.length) return "empty";
