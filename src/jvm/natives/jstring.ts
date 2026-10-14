@@ -1,9 +1,9 @@
 // java.lang.String over JS string primitives: String.prototype carries mangled Java methods.
 
 import { rt } from "../runtime";
-import { mangleMethod, jmethod, charsToString, utf8, splitSig, stringHash, parseMethodDesc } from "../abi";
+import { mangleMethod, jmethod, charsToString, utf8, splitSig, stringHash } from "../abi";
 import { encodeString } from "../charset";
-import { definePublic, once } from "../suspend";
+import { once } from "../suspend";
 import { csText } from "./jchars";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
 import { after, linkInit, scall, vcall } from "./jentry";
@@ -11,7 +11,8 @@ import { after, linkInit, scall, vcall } from "./jentry";
 // ── String (patch JS String.prototype with mangled methods)
 function sm(sig: string, fn: (this: string, ...a: any[]) => unknown) {
   const [name, desc] = splitSig(sig);
-  definePublic(String.prototype, mangleMethod(name, desc), fn, parseMethodDesc(desc).params.length);
+  // no enumeration of a string's properties sees them
+  Object.defineProperty(String.prototype, mangleMethod(name, desc), { value: fn, writable: true, configurable: true, enumerable: false });
 }
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
