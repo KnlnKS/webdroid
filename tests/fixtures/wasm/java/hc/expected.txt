@@ -4,7 +4,7 @@ Hc.tags: ok null:t1
 Hc.sub: ok 20041002
 Hc.fail: ok from the host
 Hc.list: ok [<a>, <b>, <1>]:3:true:2:true:60333161:[<a>, <b>, <1>]:[<b>, <1>]
-Hc.http: ok example.com,GET,GET,true,PUT,PUT,DELETE,7/7/-1,7/7/4096,b,d,null,Invalid HTTP method: BOGUS,Can't reset method: already connected,Already connected,false,true,0
+Hc.http: ok example.com,GET,GET,true,PUT,PUT,DELETE,7/7/-1,7/7/4096,b,d,null,Invalid HTTP method: BOGUS,Can't reset method: already connected,Already connected,false,true,0,201 Made
 Hc.opened: ok false,false;true,false;
 Hc.shapes: ok 407
 Hc.faces: ok 307

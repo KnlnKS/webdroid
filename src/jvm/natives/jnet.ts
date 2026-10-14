@@ -9,9 +9,9 @@
 // than be told a comforting lie.
 import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after, linkClass } from "./jentry";
+import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry";
 import { checkFromIndexSize } from "./jlang";
-import { strArray, u8, mangleMethod } from "../abi";
+import { strArray, u8 } from "../abi";
 import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
@@ -596,13 +596,12 @@ const connectionMethods: NativeSpec["methods"] = {
   "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
 };
 const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
-const GET_INPUT = mangleMethod("getInputStream", "()Ljava/io/InputStream;");
-const HEADER_AT = mangleMethod("getHeaderField", "(I)Ljava/lang/String;");
-/** AOSP's getResponseCode over a subclass's transport: its getInputStream, then the status line as header 0 */
+/** AOSP's getResponseCode for a Java subclass, which may bring its own transport: its getInputStream, then the status line as header 0 */
 const statusFromHeader = driven(function* (this: JHttpURLConnection): Gen {
   if (this.responseCode !== -1) return this.responseCode;
   let failure: unknown = null;
   try { yield vcall(this, "getInputStream", "()Ljava/io/InputStream;"); } catch (e) { failure = e; }
+  if (this.res) { this.responseMessage = this.res.msg || null; return this.responseCode = this.res.status; }
   const line: string | null = yield vcall(this, "getHeaderField", "(I)Ljava/lang/String;", 0);
   if (line === null) { if (failure !== null) throw failure; return -1; }
   if (!line.startsWith("HTTP/1.")) return -1;
@@ -645,7 +644,7 @@ rt.register({
     "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
     "getResponseCode()I": function (this: JHttpURLConnection) {
-      if ((this as any)[GET_INPUT] !== (JHttpURLConnection.prototype as any)[GET_INPUT] || (this as any)[HEADER_AT] !== (JHttpURLConnection.prototype as any)[HEADER_AT]) return statusFromHeader.call(this);
+      if (!rt.natives.has(classNameOf(this)!)) return statusFromHeader.call(this);
       return after(this.connect(), (r) => { this.responseMessage = r.msg || null; return this.responseCode = r.status; });
     },
     "getResponseMessage()Ljava/lang/String;": function (this: JHttpURLConnection) {

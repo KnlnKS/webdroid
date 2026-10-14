@@ -26,6 +26,8 @@ public class Hc {
     @Override public void connect() { connected = true; }
     @Override public void disconnect() {}
     @Override public boolean usingProxy() { return false; }
+    @Override public java.io.InputStream getInputStream() { return new java.io.ByteArrayInputStream(new byte[0]); }
+    @Override public String getHeaderField(int n) { return n == 0 ? "HTTP/1.1 201 Made" : null; }
     String method() { return method; }
     void method(String m) { method = m; }
     String lengths() { return fixedContentLength + "/" + fixedContentLengthLong + "/" + chunkLength; }
@@ -140,6 +142,7 @@ public class Hc {
     try { c.setRequestMethod("GET"); } catch (ProtocolException e) { b.append(',').append(e.getMessage()); }
     try { c.setRequestProperty("x", "y"); } catch (IllegalStateException e) { b.append(',').append(e.getMessage()); }
     b.append(',').append(c.usingProxy()).append(',').append(c.getDoInput()).append(',').append(c.getConnectTimeout());
+    b.append(',').append(c.getResponseCode()).append(' ').append(c.getResponseMessage());
     return b.toString();
   }
 }
