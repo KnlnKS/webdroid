@@ -13,7 +13,7 @@ export const NORET: unique symbol = Symbol("noret");
 export const ARG0: unique symbol = Symbol("arg0");
 /** a name the core serves (CORE_LIBC): the host has no body, the tracer goes through libc_call */
 export const SERVED: HostFn = (cpu) => cpu.fault("a core-served call reached the host");
-/** the result is already in v0 (see retF/retD); only the return itself is left to do */
+/** the result is already in its return registers (see retF/retD); only the return itself is left to do */
 const VRET: unique symbol = Symbol("vret");
 export type HostRet = number | bigint | void | typeof NORET | typeof VRET | typeof ARG0;
 export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
@@ -30,10 +30,16 @@ export function fbits(x: number): number { scratch.setFloat32(0, x, true); retur
 export function bitsf(i: number): number { scratch.setInt32(0, i, true); return scratch.getFloat32(0, true); }
 export function dbits(x: number): bigint { scratch.setFloat64(0, x, true); return scratch.getBigInt64(0, true); }
 export function bitsd(l: bigint): number { scratch.setBigInt64(0, l, true); return scratch.getFloat64(0, true); }
+/** the double whose bits are the words `lo`, `hi` */
+export function wordsd(lo: number, hi: number): number { scratch.setInt32(0, lo, true); scratch.setInt32(4, hi, true); return scratch.getFloat64(0, true); }
 export function retPair(lo: number, hi: number): bigint { return (BigInt(hi | 0) << 32n) | BigInt(lo >>> 0); }
 /** return a float / double from a host function: s0/d0 on AAPCS64, the bits in r0(/r1) on softfp */
 export function retF(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.s[0] = x; return VRET; } return fbits(x); }
-export function retD(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.d[0] = x; return VRET; } return dbits(x); }
+export function retD(cpu: Cpu, x: number): HostRet {
+  if (cpu.a64) cpu.d[0] = x;
+  else { scratch.setFloat64(0, x, true); cpu.w[0] = scratch.getInt32(0, true); cpu.w[2] = scratch.getInt32(4, true); }
+  return VRET;
+}
 
 /** the readers every cursor derives from its own i() and l(): the ILP32 ones as they stand, the
  *  LP64 ones with their pointer and floating-point reads overridden */
@@ -68,6 +74,13 @@ export class Args extends Cursor {
     this.sp = (this.sp + 7) & ~7;
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
+  d(): number {
+    if (this.n & 1) this.n++;
+    if (this.n < 4) { const v = wordsd(this.cpu.w[2 * this.n], this.cpu.w[2 * this.n + 2]); this.n += 2; return v; }
+    this.n = 4;
+    this.sp = (this.sp + 7) & ~7;
+    const v = mem.ldf64(this.sp); this.sp += 8; return v;
+  }
 }
 
 /** the ILP32 va_list: a flat cursor over the caller's stack */
@@ -75,6 +88,7 @@ class VaList extends Cursor {
   constructor(private a: number) { super(); }
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
   l(): bigint { this.a = (this.a + 7) & ~7; const v = mem.ld64(this.a); this.a += 8; return v; }
+  d(): number { this.a = (this.a + 7) & ~7; const v = mem.ldf64(this.a); this.a += 8; return v; }
 }
 
 /** AAPCS64's va_list is a struct: {__stack, __gr_top, __vr_top, __gr_offs, __vr_offs}. A general

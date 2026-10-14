@@ -9,7 +9,7 @@ import type { Strand } from "../jvm/suspend";
 import { mem } from "./mem";
 import { NativeFault, BadAddress } from "./core";
 import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
+import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop } from "../jvm/yield";
@@ -533,7 +533,7 @@ export class Cpu {
 
   /** the float/double a call() just returned, wherever the ABI put it */
   retF(): number { return bitsf(this.retFp0); }
-  retD(): number { return bitsd(retPair(this.retFp0, this.retFp1)); }
+  retD(): number { return wordsd(this.retFp0, this.retFp1); }
 
   /** the guest libc's teardown of this thread, once its Java thread has ended */
   endThread(): Promise<void> { return this.libc === "host" && threadHooks ? threadHooks.end(this) : Promise.resolve(); }
