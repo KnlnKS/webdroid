@@ -4,7 +4,7 @@
 // would on a device at its process limit or under its sandbox.
 
 import { wrote, mem } from "./mem";
-import { hostLib, hostData, type HostFn, PTR, stp, vaList, ARG0, ptr } from "./host";
+import { hostLib, hostData, type HostFn, PTR, stp, vaList, ARG0, ptr, guestSort } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByOsTid } from "./cpu";
 import { setAbortMessage } from "./crash";
@@ -127,20 +127,7 @@ export function procInit(): void {
       const base = a.p(), n = a.u(), size = a.u(), cmp = a.p();
       if (n < 2) return;
       const idx = [...Array(n).keys()];
-      const key = (i: number) => base + i * size;
-      // merge sort: O(n log n) guest calls, stable
-      const merge = async (lo: number, hi: number): Promise<void> => {
-        if (hi - lo < 2) return;
-        const mid = (lo + hi) >> 1;
-        await merge(lo, mid); await merge(mid, hi);
-        const out: number[] = [];
-        let i = lo, j = mid;
-        while (i < mid && j < hi) { if (((await cpu.call(cmp, [key(idx[i]), key(idx[j])])) | 0) <= 0) out.push(idx[i++]); else out.push(idx[j++]); }
-        while (i < mid) out.push(idx[i++]);
-        while (j < hi) out.push(idx[j++]);
-        for (let k = 0; k < out.length; k++) idx[lo + k] = out[k];
-      };
-      await merge(0, n);
+      await guestSort(idx, (i, j) => cpu.call(cmp, [base + i * size, base + j * size]));
       const copy = mem.u8.slice(base, base + n * size);
       for (let i = 0; i < n; i++) mem.u8.set(copy.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
       wrote(base, n * size);

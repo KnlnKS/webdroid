@@ -3,7 +3,7 @@
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
 import { mem, wrote, anchor } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort } from "./host";
 import { E } from "./abi";
 import { utf8 as codec } from "../jvm/abi";
 import type { Cpu } from "./cpu";
@@ -174,17 +174,7 @@ function ftsTree(walk: FtsWalk, path: string, level: number, parent: number): Ft
 }
 
 async function sortFts(cpu: Cpu, node: FtsNode, compar: number, cell: number): Promise<void> {
-  if (compar && node.children.length > 1) {
-    for (let i = 1; i < node.children.length; i++) {
-      const value = node.children[i]; let j = i;
-      while (j > 0) {
-        stp(cell, node.children[j - 1].pre); stp(cell + PTR, value.pre);
-        if ((await cpu.call(compar, [cell, cell + PTR])) <= 0) break;
-        node.children[j] = node.children[j - 1]; j--;
-      }
-      node.children[j] = value;
-    }
-  }
+  if (compar) await guestSort(node.children, (x, y) => { stp(cell, x.pre); stp(cell + PTR, y.pre); return cpu.call(compar, [cell, cell + PTR]); });
   for (const child of node.children) await sortFts(cpu, child, compar, cell);
 }
 
@@ -301,16 +291,8 @@ export function stdioInit(): void {
         kept.push(de);
       }
       if (compar && kept.length > 1) {
-        const cell = mem.malloc(2 * PTR), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + PTR, y); return (await cpu.call(compar, [cell, cell + PTR])) | 0; };
-        try {
-          // insertion sort: stable, and each comparison is a guest call
-          for (let i = 1; i < kept.length; i++) {
-            const v = kept[i];
-            let j = i;
-            while (j > 0 && (await cmp(kept[j - 1], v)) > 0) { kept[j] = kept[j - 1]; j--; }
-            kept[j] = v;
-          }
-        } finally { mem.free(cell); }
+        const cell = mem.malloc(2 * PTR);
+        try { await guestSort(kept, (x, y) => { stp(cell, x); stp(cell + PTR, y); return cpu.call(compar, [cell, cell + PTR]); }); } finally { mem.free(cell); }
       }
       const list = mem.malloc(Math.max(1, kept.length) * PTR);
       for (let i = 0; i < kept.length; i++) stp(list + i * PTR, kept[i]);

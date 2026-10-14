@@ -149,6 +149,21 @@ export function ldp(a: number): number { const lo = mem.ld32(a), hi = PTR === 8 
 /** a C long, pointer-sized: signed on load */
 export const ldLong = (a: number): number => PTR === 8 ? Number(mem.ld64(a)) : mem.ld32(a) | 0;
 export function stLong(a: number, v: number): void { if (PTR === 8) mem.st64(a, BigInt(v)); else mem.st32(a, v); }
+/** sort `xs` in place, stably, with O(n log n) calls to `cmp` (each one a guest call for qsort and its kin) */
+export async function guestSort<T>(xs: T[], cmp: (x: T, y: T) => Promise<number>): Promise<void> {
+  let src = xs.slice(), dst = new Array<T>(xs.length);
+  for (let w = 1; w < xs.length; w *= 2) {
+    for (let lo = 0; lo < xs.length; lo += 2 * w) {
+      const mid = Math.min(lo + w, xs.length), hi = Math.min(lo + 2 * w, xs.length);
+      let i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) dst[k++] = ((await cmp(src[i], src[j])) | 0) <= 0 ? src[i++] : src[j++];
+      while (i < mid) dst[k++] = src[i++];
+      while (j < hi) dst[k++] = src[j++];
+    }
+    [src, dst] = [dst, src];
+  }
+  for (let i = 0; i < xs.length; i++) xs[i] = src[i];
+}
 export function stpVa(a: number, v: number | bigint): void { if (typeof v === "bigint") mem.st64(a, v); else stp(a, v); }
 /** a pointer a host function derived from one it was given: the guest's address for it */
 export const ptr = (p: number): number | bigint => mem.va(p);
