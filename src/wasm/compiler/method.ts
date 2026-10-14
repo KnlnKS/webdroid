@@ -5,7 +5,7 @@ import { T, ref, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
-import { parseMethodDesc, isWide } from "../../jvm/abi";
+import { isWide } from "../../jvm/abi";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
 import { Flow, Go, structureAny } from "../../jvm/structure";
 import { mid } from "./ids";
@@ -1036,7 +1036,7 @@ export class MC {
     const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), key = mr.name + desc;
     // an array's methods are Object's, except clone, which copies the array
     const decl = declared[0] === "[" ? "java/lang/Object" : declared;
-    const p = parseMethodDesc(desc), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+    const p = dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     const isStatic = kind === "invoke-static";
     const pushArgs = () => {
       let ri = isStatic ? 0 : 1;

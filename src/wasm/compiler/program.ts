@@ -152,7 +152,7 @@ class DexClass implements JClass {
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
     if (cached) return cached;
-    const { dex, name } = this, mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = parseMethodDesc(desc);
+    const { dex, name } = this, mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = dex.methodTypes(m.methodIdx);
     const info: MethodInfo = { cls: name, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
       isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret, index };
     (this.methodInfos ??= new Map()).set(index, info);

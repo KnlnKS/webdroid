@@ -221,7 +221,7 @@ export class DexFile {
     if (this.typeResolver === resolve) return;
     this.typeResolver = resolve;
     this.typeCache.fill(undefined); this.typeNames.fill(undefined);
-    this.descCache.length = this.paramTypeCache.length = 0;
+    this.descCache.length = this.paramTypeCache.length = this.typesCache.length = 0;
   }
   /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
   type(i: number): string {
@@ -312,6 +312,12 @@ export class DexFile {
   private paramTypeCache: (string[] | undefined)[] = [];
   /** full descriptor "(params)ret" of method index i */
   methodDesc(i: number): string { return this.protoDesc(this.method(i).proto); }
+  private typesCache: ({ params: string[]; ret: string } | undefined)[] = [];
+  /** the parameter and return types of method index i, as parseMethodDesc gives them for its descriptor */
+  methodTypes(i: number): { params: string[]; ret: string } {
+    const pi = this.method(i).proto;
+    return this.typesCache[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.proto(pi).ret) };
+  }
   private protoDesc(pi: number): string {
     let d = this.descCache[pi];
     if (d === undefined) {
