@@ -547,7 +547,7 @@ export function gles3Init(): void {
       const u = U(a.i()), x = rd(a), y = n > 1 ? rd(a) : 0, z = n > 2 ? rd(a) : 0, w = n > 3 ? rd(a) : 0;
       if (!u) return;
       set().call(g(), u, x, y, z, w);
-      if (sampler) setSamplerUnits(u, [x]);
+      if (sampler && samplerSlots.has(u)) setSamplerUnits(u, [x]);
     };
     G[`glUniform${n}${k}v`] = (_c, a) => {
       const u = U(a.i()), cnt = a.i(), p = a.p();
