@@ -5,7 +5,6 @@
 import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core";
 import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { utf8 } from "../jvm/abi";
-export { NativeFault, BadAddress };
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
 /** the committed bytes past LOW: a host access beyond them is to no page in use */
@@ -95,8 +94,6 @@ export const mem = {
   ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return dv.getBigInt64(a >>> 0, true); },
   st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); wrote(a, 8); },
 
-  /** views over the memory stay attached from now on: it is shared, or committed whole */
-  attached: (): boolean => shared || MEM_SIZE !== MEM_SIZE_INITIAL,
   /** a plane-0 address of a page the memory backs: not below LOW, nor past the pages in use */
   backed: (a: number): boolean => ((a >>> 0) - LOW) >>> 0 < SPAN,
   /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data */
@@ -106,7 +103,6 @@ export const mem = {
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,
   realloc: (p: number, n: number): number => core.realloc(p >>> 0, n >>> 0) >>> 0,
   memalign: (align: number, n: number): number => core.memalign(align >>> 0, n >>> 0) >>> 0,
-  valloc: (n: number): number => core.memalign(PAGE_SIZE, n >>> 0) >>> 0,
   /** n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
    *  other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit. */
   mapPages: (n: number, reserve = false, alignment = PAGE_SIZE): number => core.map_pages(n >>> 0, reserve ? 1 : 0, alignment) >>> 0,
@@ -201,8 +197,6 @@ export const mem = {
     return e - (a >>> 0);
   },
   bytes: localBytes,
-  /** A readable span; unlike a mutable byte view, shared backing may return a snapshot. */
-  readBytes: localBytes,
   write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
   memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
   memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },

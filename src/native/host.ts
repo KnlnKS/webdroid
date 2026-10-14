@@ -2,7 +2,8 @@
 // writers, virtual host libraries, and the logging stubs unresolved imports bind to.
 
 import type { Cpu } from "./cpu";
-import { mem, NativeFault, BadAddress } from "./mem";
+import { mem } from "./mem";
+import { NativeFault, BadAddress } from "./core";
 import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL, E } from "./abi";
 import { perf } from "../perf";
 import { core, CORE_LIBC } from "./core";

@@ -8,7 +8,7 @@
 import { mem } from "./mem";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host";
 import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl";
-import { yieldToLoop } from "./cpu";
+import { yieldToLoop } from "../jvm/yield";
 import { perf } from "../perf";
 import { utf8 } from "../jvm/abi";
 import { rewriteTextureSwizzles } from "./swizzle";

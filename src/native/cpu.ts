@@ -6,19 +6,19 @@ import type { JniClass } from "./jnivm";
 import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry";
 import { rt } from "../jvm/runtime";
 import type { Strand } from "../jvm/suspend";
-import { NativeFault, BadAddress, mem } from "./mem";
+import { mem } from "./mem";
+import { NativeFault, BadAddress } from "./core";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
-import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
+import { answeringInput, yieldToLoop } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
 import { never, processExited } from "../process-exit";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals";
 import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe";
 import { dieOfSignal } from "./crash";
 import { backtrace } from "./dl";
-export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2, Signal = 3 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }

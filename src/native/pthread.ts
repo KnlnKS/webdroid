@@ -1,9 +1,11 @@
 // pthreads over cooperative Cpus: one Cpu per thread, mutex/cond/keys/once, and the sleeping calls.
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
-import { mem, AddrMap, NativeFault, guestAt } from "./mem";
+import { mem, AddrMap, guestAt } from "./mem";
+import { NativeFault } from "./core";
 import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "./host";
-import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, nameThread, yieldToLoop } from "./cpu";
+import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, nameThread } from "./cpu";
+import { yieldToLoop } from "../jvm/yield";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";

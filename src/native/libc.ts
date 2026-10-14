@@ -411,7 +411,7 @@ export function libcInit(): void {
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
     malloc: SERVED, free: SERVED, calloc: SERVED, realloc: SERVED, memalign: SERVED, posix_memalign: SERVED, malloc_usable_size: SERVED,
-    valloc: (_c, a) => mem.valloc(a.u()),
+    valloc: (_c, a) => mem.memalign(PAGE_SIZE, a.u()),
     memcpy: SERVED, memmove: SERVED, memset: SERVED, memcmp: SERVED, memchr: SERVED,
     memmem: (_c, a) => {
       const h = a.p(), length = a.u(), n = a.p(), size = a.u();

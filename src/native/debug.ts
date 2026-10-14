@@ -4,7 +4,8 @@ import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } fr
 import { killLog, dispositions } from "./signals";
 import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { cpus, codeStats, stepMode, setStepMode, profile, slice, yieldStats, watchPcs, lastFault, invalidations } from "./cpu";
+import { cpus, codeStats, stepMode, setStepMode, profile, slice, watchPcs, lastFault, invalidations } from "./cpu";
+import { yieldStats } from "../jvm/yield";
 import { mem } from "./mem";
 import { processExited } from "../process-exit";
 import { core, jitStats } from "./core";

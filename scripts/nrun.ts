@@ -15,7 +15,8 @@ import "../src/jvm/natives/jio";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host";
 import { jniMissing, registered } from "../src/native/jni";
-import { codeStats, NativeFault, lastFault } from "../src/native/cpu";
+import { codeStats, lastFault } from "../src/native/cpu";
+import { NativeFault } from "../src/native/core";
 import { perf } from "../src/perf";
 
 const args = process.argv.slice(2);
