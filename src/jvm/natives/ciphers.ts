@@ -4,7 +4,6 @@
 import { be32, le32 } from "./digest";
 
 export interface BlockCipher {
-  readonly blockSize: number;
   /** transform one block in place at `off` */
   encrypt(b: Uint8Array, off: number): void;
   decrypt(b: Uint8Array, off: number): void;
@@ -43,7 +42,6 @@ function putWords(b: Uint8Array, off: number, w: Int32Array) {
 }
 
 class Aes implements BlockCipher {
-  readonly blockSize = 16;
   private ek: Int32Array; private dk: Int32Array; private rounds: number;
   /** the last block's output, as four big-endian words */
   readonly out = new Int32Array(4);
@@ -151,7 +149,6 @@ const S = [
 const bits = (b: Uint8Array, off: number, n: number) => Uint8Array.from({ length: n }, (_, i) => (b[off + (i >> 3)] >> (7 - (i & 7))) & 1);
 const perm = (src: Uint8Array, table: number[]) => Uint8Array.from(table, (i) => src[i - 1]);
 class Des implements BlockCipher {
-  readonly blockSize = 8;
   private keys: Uint8Array[] = [];
   constructor(key: Uint8Array, off = 0) {
     const k = perm(bits(key, off, 64), PC1);
@@ -188,7 +185,6 @@ export function des(key: Uint8Array): BlockCipher {
   if (key.length === 8) return new Des(key);
   const k1 = new Des(key, 0), k2 = new Des(key, 8), k3 = key.length === 24 ? new Des(key, 16) : k1;
   return {
-    blockSize: 8,
     encrypt(b, off) { k1.encrypt(b, off); k2.decrypt(b, off); k3.encrypt(b, off); },
     decrypt(b, off) { k3.decrypt(b, off); k2.encrypt(b, off); k1.decrypt(b, off); },
   };
@@ -272,29 +268,26 @@ class Ghash {
     return out;
   }
 }
-const inc32 = (ctr: Uint8Array) => { for (let i = 15; i >= 12; i--) if (++ctr[i] !== 256) break; else ctr[i] = 0; };
 /** counter mode over a 16-byte counter block, the whole block incremented big-endian (EVP's CTR) */
-export function ctr(cipher: BlockCipher, counter: Uint8Array, data: Uint8Array, stream: Uint8Array, used: number, whole = true): number {
+export function ctr(cipher: BlockCipher, counter: Uint8Array, data: Uint8Array, stream: Uint8Array, used: number): number {
   let i = 0;
   const n = data.length;
   for (; used < 16 && i < n; i++) data[i] ^= stream[used++];
   for (; i < n; ) {
     stream.set(counter); cipher.encrypt(stream, 0); used = 0;
-    if (whole) { for (let k = 15; k >= 0; k--) if (++counter[k] !== 256) break; else counter[k] = 0; } else inc32(counter);
+    for (let k = 15; k >= 0; k--) if (++counter[k] !== 256) break; else counter[k] = 0;
     if (n - i >= 16) { for (let k = 0; k < 16; k++) data[i + k] ^= stream[k]; i += 16; used = 16; }
     else for (; i < n; i++) data[i] ^= stream[used++];
   }
   return used;
 }
 export interface Aead {
-  readonly overhead: number;
   seal(nonce: Uint8Array, plain: Uint8Array, aad: Uint8Array, tagLen: number): Uint8Array;
   /** the plaintext, or null when the tag does not verify */
   open(nonce: Uint8Array, sealed: Uint8Array, aad: Uint8Array, tagLen: number): Uint8Array | null;
 }
 const equalCt = (a: Uint8Array, b: Uint8Array) => { let d = a.length ^ b.length; for (let i = 0; i < a.length && i < b.length; i++) d |= a[i] ^ b[i]; return d === 0; };
 export class AesGcm implements Aead {
-  readonly overhead = 16;
   private cipher: Aes; private ghash: Ghash;
   constructor(key: Uint8Array) {
     this.cipher = new Aes(key);
@@ -472,7 +465,6 @@ export class Poly1305 {
   }
 }
 export class ChaCha20Poly1305 implements Aead {
-  readonly overhead = 16;
   constructor(private key: Uint8Array) {}
   private tag(nonce: Uint8Array, aad: Uint8Array, ct: Uint8Array, tagLen: number) {
     const otk = new Int32Array(16), otkBytes = new Uint8Array(32);
