@@ -296,20 +296,25 @@ export function gles1Init(): void {
   const m4 = (a: { i(): number }, fixed: boolean): M4 => { const p = a.i(), m = m4Scratch; for (let i = 0; i < 16; i++) m[i] = fixed ? mem.i32[(p >>> 2) + i] / 65536 : mem.f32[(p >>> 2) + i]; return m; };
   const F = (a: ArgReader) => a.f();
   const Xa = (a: { i(): number }) => X(a.i());
-  const translate = (c: Ctx, x: number, y: number, z: number) => { const m = ident(); m[12] = x; m[13] = y; m[14] = z; mulRight(top(c), m); };
-  const scale = (c: Ctx, x: number, y: number, z: number) => { const m = ident(); m[0] = x; m[5] = y; m[10] = z; mulRight(top(c), m); };
+  // the matrix ops multiply a scratch transform in; mul reads it whole before writing the stack's top
+  const xf = new Float32Array(16);
+  const scratch = (diagonal: number) => { xf.fill(0); xf[0] = xf[5] = xf[10] = xf[15] = diagonal; return xf; };
+  const translate = (c: Ctx, x: number, y: number, z: number) => { const m = scratch(1); m[12] = x; m[13] = y; m[14] = z; mulRight(top(c), m); };
+  const scale = (c: Ctx, x: number, y: number, z: number) => { const m = scratch(1); m[0] = x; m[5] = y; m[10] = z; mulRight(top(c), m); };
   const rotate = (c: Ctx, ang: number, x: number, y: number, z: number) => {
     const l = Math.hypot(x, y, z); if (!l) return; x /= l; y /= l; z /= l;
-    const r = ang * Math.PI / 180, s = Math.sin(r), co = Math.cos(r), t = 1 - co;
-    const m = new Float32Array([t * x * x + co, t * x * y + s * z, t * x * z - s * y, 0, t * x * y - s * z, t * y * y + co, t * y * z + s * x, 0, t * x * z + s * y, t * y * z - s * x, t * z * z + co, 0, 0, 0, 0, 1]);
+    const r = ang * Math.PI / 180, s = Math.sin(r), co = Math.cos(r), t = 1 - co, m = scratch(1);
+    m[0] = t * x * x + co; m[1] = t * x * y + s * z; m[2] = t * x * z - s * y;
+    m[4] = t * x * y - s * z; m[5] = t * y * y + co; m[6] = t * y * z + s * x;
+    m[8] = t * x * z + s * y; m[9] = t * y * z - s * x; m[10] = t * z * z + co;
     mulRight(top(c), m);
   };
   const ortho = (c: Ctx, l: number, r: number, b: number, t: number, n: number, f: number) => {
-    const m = ident(); m[0] = 2 / (r - l); m[5] = 2 / (t - b); m[10] = -2 / (f - n); m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = -(f + n) / (f - n);
+    const m = scratch(1); m[0] = 2 / (r - l); m[5] = 2 / (t - b); m[10] = -2 / (f - n); m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = -(f + n) / (f - n);
     mulRight(top(c), m);
   };
   const frustum = (c: Ctx, l: number, r: number, b: number, t: number, n: number, f: number) => {
-    const m = new Float32Array(16); m[0] = 2 * n / (r - l); m[5] = 2 * n / (t - b); m[8] = (r + l) / (r - l); m[9] = (t + b) / (t - b); m[10] = -(f + n) / (f - n); m[11] = -1; m[14] = -2 * f * n / (f - n);
+    const m = scratch(0); m[0] = 2 * n / (r - l); m[5] = 2 * n / (t - b); m[8] = (r + l) / (r - l); m[9] = (t + b) / (t - b); m[10] = -(f + n) / (f - n); m[11] = -1; m[14] = -2 * f * n / (f - n);
     mulRight(top(c), m);
   };
   const setArr = (get: (c: Ctx) => ArrayState) => W("glPointer", (c, a) => { const s = get(c); s.size = a.i(); s.type = a.i(); s.stride = a.i(); s.ptr = a.i() >>> 0; s.vbo = c.arrayBuf; });
