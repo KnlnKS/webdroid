@@ -1,4 +1,4 @@
-import { javaName, type Kind, type Loader } from "../compiler/program";
+import { javaName, type Loader } from "../compiler/program";
 import { idOfClass } from "./classes";
 import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders";
 import { T } from "../compiler/wasmbin";
@@ -7,7 +7,7 @@ import type { World } from "./world";
 import type { MethodInfo } from "../compiler/program";
 import type { PreparedInstruction } from "../../jvm/prepared";
 import { descToName } from "../../jvm/abi";
-import { handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles";
+import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles";
 import { THROWERS } from "./exc";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
@@ -111,19 +111,6 @@ export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable
   return next(0);
 }
 
-function callJava(w: World, owner: Strand, name: string, params: Kind[], ret: Kind | "V", body: Parameters<World["callFn"]>[3], ...args: unknown[]): unknown {
-  if (w.inSynchronousJava() || owner.root) {
-    const call = w.hostFn(name + ":sync", params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }));
-    return w.synchronous(() => call(...args));
-  }
-  const call = w.callFn(name, params, ret, body), strand = w.sched.strand(owner.thread, owner);
-  try {
-    const value = call(strand, ...args);
-    if (value instanceof Promise) return value.finally(() => strand.end());
-    strand.end(); return value;
-  } catch (error) { strand.end(); throw error; }
-}
-
 /** Class.forName wraps lookup errors before its caller performs initialization. */
 export function resolveForName(w: World, name: string, object: object | null, owner: Strand): number | Promise<object> {
   const element = name.replace(/^\[+/, ""), binary = name[0] === "[" && element[0] === "L" && element.endsWith(";") ? element.slice(1, -1) : name;
@@ -135,15 +122,15 @@ export function resolveForName(w: World, name: string, object: object | null, ow
     if (!cause) throw error;
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
     if (!ctor) throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)"));
-    const value = callJava(w, owner, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => {
+    const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => {
       const value = c.newLocal(T.anyref);
       cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(value); arg(0); arg(1); cx.callMethod(c, ctor); c.lget(value);
-    }, w.javaString(name), cause);
+    }, owner)(w.javaString(name), cause);
     const fail = (value: unknown): never => { throw w.exception(value as object); };
     return value instanceof Promise ? value.then(fail) : fail(value);
   };
   const mirror = (key: string): object | Promise<object> => {
-    return callJava(w, owner, "resolve:forName:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, w.idOf(key)) as object | Promise<object>;
+    return handleThunk(w, "resolve:forName:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, owner)(w.idOf(key)) as object | Promise<object>;
   };
   try {
     const key = w.resolveClass(definingLoader(w, object), name.replace(/\./g, "/"), owner);
@@ -194,9 +181,9 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
 }
 
 export function resolvedMirror(w: World, key: string, owner: Strand): object | Promise<object> {
-  return callJava(w, owner, "resolve:definition:mirror", ["I"], "L", (cx, c, arg) => {
+  return handleThunk(w, "resolve:definition:mirror", ["I"], "L", (cx, c, arg) => {
     arg(0); cx.callRt(c, "classOf");
-  }, w.idOf(key)) as object | Promise<object>;
+  }, owner)(w.idOf(key)) as object | Promise<object>;
 }
 
 /** Resolve one executed symbolic request without linking its class module. */
@@ -249,7 +236,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
   let result: unknown;
   try {
     const string = w.javaString(name.replace(/\//g, "."));
-    result = callJava(w, owner, `resolve:load:${method.cls}`, ["L", "L"], "L", body, object, string);
+    result = handleThunk(w, `resolve:load:${method.cls}`, ["L", "L"], "L", body, owner)(object, string);
   } catch (error) { return failed(error); }
   return result instanceof Promise ? result.then(accept, failed) : accept(result);
 }

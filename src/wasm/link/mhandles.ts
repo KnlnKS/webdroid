@@ -234,7 +234,7 @@ const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
 /** Capture the parent before a wait: a Promise continuation may run while the scheduler is idle. Child strands share its thread and monitor ancestry. */
-export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current(), prepare?: (cx: Compiler) => void): (...args: (object | null)[]) => unknown {
+export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current(), prepare?: (cx: Compiler) => void): (...args: unknown[]) => unknown {
   return (...args) => {
     if (parent.root || w.inSynchronousJava()) return w.unwound(() => w.synchronous(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }), prepare)(...args)));
     const s = w.sched.strand(parent.thread, parent);
