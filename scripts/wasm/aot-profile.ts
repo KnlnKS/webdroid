@@ -117,8 +117,10 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
   }, COMPILED_CODE_DIR);
   if (!Object.keys(listing).length) console.log("no app build was kept");
   for (const [entry, names] of Object.entries(listing)) {
-    // the realms of a tab share the store's meta.json without a lock: an entry another realm evicted meanwhile is skipped
-    const files = await page.evaluate(async ([store, entry, names]) => {
+    // the realms of a tab share the store's meta.json without a lock: an entry another realm evicted meanwhile is skipped, and one it is
+    // still writing (NotReadableError: the file changed after getFile) is read again
+    let files: string[] | null | "changed" = "changed";
+    for (let attempt = 0; files === "changed" && attempt < 5; attempt++) files = await page.evaluate(async ([store, entry, names]) => {
       try {
         const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
         return await Promise.all(names.map(async (name) => {
@@ -127,8 +129,13 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
           for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
           return btoa(text);
         }));
-      } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error; }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "NotFoundError") return null;
+        if (error instanceof DOMException && error.name === "NotReadableError") { await new Promise((resolve) => setTimeout(resolve, 1000)); return "changed" as const; }
+        throw error;
+      }
     }, [COMPILED_CODE_DIR, entry, names] as const);
+    if (files === "changed") throw new Error(`app build ${entry}: still changing after 5 reads`);
     if (!files) { console.log(`app build ${entry}: evicted while listed, skipped`); continue; }
     for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
     names.forEach((name, i) => writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(files[i], "base64")));
