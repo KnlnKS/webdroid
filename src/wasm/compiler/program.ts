@@ -516,10 +516,6 @@ export class Program {
     roots.forEach(visit);
     return found.filter(m => !found.some(other => other !== m && this.isSubclass(other.cls, m.cls)));
   }
-  /** the method an invoke-super in class `cur` of a reference to `decl.name+desc` runs: found from the interface when `decl` is one, else from the superclass */
-  superTarget(cur: string, decl: string, name: string, desc: string): MethodInfo | undefined {
-    return this.resolve(this.get(decl)?.isInterface ? decl : this.get(cur)?.sup ?? decl, name, desc);
-  }
   /** the superinterfaces of class `cls` that declare a default method: initialized with it (JLS 12.4.1) */
   defaultIfaces(cls: string): string[] {
     const out = new Set<string>();

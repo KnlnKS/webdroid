@@ -117,7 +117,6 @@ export class DexFile {
 
   /** the header's SHA-1 signature: names this dex's contents across page loads */
   readonly id: string;
-  get cachedStrings(): readonly (string | undefined)[] { return this.stringCache; }
 
   /** `headerOff` is where this logical dex's header sits inside the physical file. It is 0 for
    *  everything before v41; a v41 container holds several headers and their section offsets are

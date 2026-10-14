@@ -1414,7 +1414,7 @@ export class World {
           operation = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock).m as Function;
           const mb = cx.mb;
           if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
-            || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.memories.length || mb.tags.length || mb.elems.length || mb.datas.length) {
+            || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.tags.length || mb.elems.length || mb.datas.length) {
             key = undefined;
           }
         }

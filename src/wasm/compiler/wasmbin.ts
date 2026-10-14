@@ -83,13 +83,11 @@ export class ModuleBuilder {
   /** after build(): module offset of each defined function's first body byte (its local declarations) */
   bodyOffsets: number[] = [];
   nImportedFuncs = 0; nImportedGlobals = 0; nImportedTags = 0; nImportedTables = 0;
-  tables: number[][] = []; memories: number[][] = []; globals: number[][] = []; tags: number[] [] = [];
+  tables: number[][] = []; globals: number[][] = []; tags: number[] [] = [];
   exports: { name: string; kind: number; idx: number }[] = [];
   elems: FuncBytes[] = []; datas: number[][] = [];
-  customs: { name: string; bytes: number[] }[] = [];
   start = -1;
 
-  newGroup(): number { return ++this.groups; }
   /** add a type in the current (or given) rec group; returns its index */
   addType(def: TypeDef, group = ++this.groups): number { this.types.push({ def, group }); return this.types.length - 1; }
   addFuncType(params: readonly VT[], results: readonly VT[]): number {
@@ -130,7 +128,6 @@ export class ModuleBuilder {
   reserveFunc(type: number, nm = ""): number { return this.addFunc(type, [], nm); }
   setBody(idx: number, body: number[]): void { this.bodies[idx - this.nImportedFuncs] = body; }
   addTable(elem: VT, min: number): number { const d: number[] = []; vt(elem, d); d.push(0); uleb(min, d); this.tables.push(d); return this.nImportedTables + this.tables.length - 1; }
-  addMemory(min: number, max?: number): number { const d: number[] = [max === undefined ? 0 : 1]; uleb(min, d); if (max !== undefined) uleb(max, d); this.memories.push(d); return this.memories.length - 1; }
   addGlobal(t: VT, mut: boolean, init: number[]): number { const d: number[] = []; vt(t, d); d.push(mut ? 1 : 0); d.push(...init, 0x0b); this.globals.push(d); return this.nImportedGlobals + this.globals.length - 1; }
   addTag(type: number): number { const d: number[] = [0]; uleb(type, d); this.tags.push(d); return this.nImportedTags + this.tags.length - 1; }
   export(nm: string, kind: "func" | "table" | "memory" | "global" | "tag", idx: number): void { this.exports.push({ name: nm, kind: { func: 0, table: 1, memory: 2, global: 3, tag: 4 }[kind], idx }); }
@@ -140,8 +137,6 @@ export class ModuleBuilder {
   }
   addElemDeclare(funcs: number[]): void { if (!funcs.length) return; const d: number[] = [0x03, 0x00]; uleb(funcs.length, d); for (const f of funcs) functionIndex(f, d); this.elems.push(d); }
   addDataPassive(bytes: Uint8Array | number[]): number { const d: number[] = [0x01]; uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); return this.datas.length - 1; }
-  addDataActive(mem: number, offset: number, bytes: Uint8Array | number[]): void { const d: number[] = [0x02]; uleb(mem, d); d.push(0x41); sleb(offset, d); d.push(0x0b); uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); }
-  addCustom(nm: string, bytes: number[]): void { this.customs.push({ name: nm, bytes }); }
 
   private encodeTypeDef(d: TypeDef, out: number[]): void {
     const subbed = d.sup !== undefined || d.final === false;
@@ -233,7 +228,6 @@ export class ModuleBuilder {
     for (const t of this.funcTypes) uleb(t, functions);
     section(3, [functions]);
     if (this.tables.length) vec(4, this.tables);
-    if (this.memories.length) vec(5, this.memories);
     if (this.tags.length) vec(13, this.tags);
     if (this.globals.length) vec(6, this.globals);
     if (this.exports.length) {
@@ -245,7 +239,6 @@ export class ModuleBuilder {
     if (this.elems.length) vec(9, this.elems.map(relocate));
     // the data count section precedes the code
     if (this.datas.length) section(12, [count(this.datas.length)]);
-    for (const cu of this.customs) { const c: number[] = []; name(cu.name, c); section(0, [c, cu.bytes]); }
     {
       // the code section is built by hand: a body's offset is where its local declarations begin
       const lens = this.bodies.map((b) => { const l: number[] = []; uleb(b.length, l); return l; });

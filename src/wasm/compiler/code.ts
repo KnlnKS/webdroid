@@ -106,16 +106,11 @@ export class Code {
   refIsNull(): this { this.b.push(0xd1); return this; }
   refEq(): this { this.b.push(0xd3); return this; }
   refAsNonNull(): this { this.b.push(0xd4); return this; }
-  brOnNonNull(d: number): this { this.b.push(0xd6); uleb(d, this.b); return this; }
-  brOnNull(d: number): this { this.b.push(0xd5); uleb(d, this.b); return this; }
   refFunc(f: number): this { this.b.push(0xd2); functionIndex(f, this.b); return this; }
   gc(sub: number, ...imm: number[]): this { this.b.push(0xfb); uleb(sub, this.b); for (const i of imm) uleb(i, this.b); return this; }
   structNew(t: number): this { return this.gc(0, t); }
   structGet(t: number, f: number): this { return this.gc(2, t, f); }
-  structGetS(t: number, f: number): this { return this.gc(3, t, f); }
-  structGetU(t: number, f: number): this { return this.gc(4, t, f); }
   structSet(t: number, f: number): this { return this.gc(5, t, f); }
-  arrayNew(t: number): this { return this.gc(6, t); }
   arrayNewDefault(t: number): this { return this.gc(7, t); }
   arrayNewFixed(t: number, n: number): this { return this.gc(8, t, n); }
   arrayNewData(t: number, d: number): this { return this.gc(9, t, d); }
