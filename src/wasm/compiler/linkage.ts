@@ -130,10 +130,10 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
 
 /** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method, `kind` the opcode without /range. */
 export function resolveInvoke(prog: Program, kind: string, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
-  const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = declared(prog, referrer);
+  const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = () => declared(prog, referrer);
   if (!c) return fail("ncdfr", UNRESOLVED + descriptor(declaredCls), declaredCls);
-  if (kind === "invoke-interface" && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at}`);
-  if (kind === "invoke-virtual" && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at}`);
+  if (kind === "invoke-interface" && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
+  if (kind === "invoke-virtual" && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
   const expected = kind.slice(7);
   const owner = kind === "invoke-super" && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
   const m = kind === "invoke-super" && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
@@ -141,7 +141,7 @@ export function resolveInvoke(prog: Program, kind: string, declaredCls: string, 
   if (failed(m)) return m;
   if (m.isStatic !== (kind === "invoke-static")) {
     const found = invokeType(m, prog);
-    return fail("icce", `The method '${prettyMethod(m)}' was expected to be of type ${expected} but instead was found to be of type ${found}${at}`);
+    return fail("icce", `The method '${prettyMethod(m)}' was expected to be of type ${expected} but instead was found to be of type ${found}${at()}`);
   }
   return m;
 }

@@ -444,8 +444,10 @@ export class Program {
   private ancestorMemo = new Map<string, Set<string>>();
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
   private layouts = new Map<string, readonly FieldInfo[]>();
+  /** what the compiler resolved per reference of a dex (MethodCompiler.resolved), by reference index and use */
+  readonly refMemo = new Map<DexFile, Map<number, unknown>>();
   /** drops what a change to the classes or their types can falsify */
-  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); }
+  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.refMemo.clear(); }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);

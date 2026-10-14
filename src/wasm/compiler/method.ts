@@ -24,6 +24,8 @@ const MAX_SITES = 2;
 /** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
 const CHUNK = 1024;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
+/** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
+const INVOKE_USE: Record<string, number> = { "invoke-virtual": 0, "invoke-direct": 1, "invoke-static": 2, "invoke-interface": 3 };
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
@@ -363,7 +365,7 @@ export class MC {
     if (kind === "invoke-custom" || kind === "invoke-polymorphic") return "dynamic";
     const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), decl = declared[0] === "[" ? "java/lang/Object" : declared;
     if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return null;
-    const target = resolveInvoke(cx.prog, kind, declared, mr.name, desc, this.m.cls);
+    const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
     if (failed(target)) return null;
     if (kind === "invoke-static") return target;
     if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
@@ -912,7 +914,21 @@ export class MC {
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);
   }
-  fieldOf(idx: number, isStatic: boolean) { return resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls); }
+  fieldOf(idx: number, isStatic: boolean) { return this.resolved(8 * idx + 4 + +isStatic, () => resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls)); }
+  /** the method invoke `kind` of method reference `idx` names; invoke-super's depends on the caller */
+  private invokeTarget(idx: number, kind: string, declared: string, name: string, desc: string): MethodInfo | LinkFailure {
+    const resolve = () => resolveInvoke(this.cx.prog, kind, declared, name, desc, this.m.cls), use = INVOKE_USE[kind];
+    return use === undefined ? resolve() : this.resolved(8 * idx + use, resolve);
+  }
+  /** a resolution of a reference of this method's dex: what succeeded is the same for every caller while the Program's classes hold (Program.refMemo), a failure names its caller */
+  private resolved<T extends object>(key: number, resolve: () => T): T {
+    const memo = this.cx.prog.refMemo;
+    let refs = memo.get(this.dex);
+    if (!refs) memo.set(this.dex, refs = new Map());
+    let r = refs.get(key) as T | undefined;
+    if (r === undefined) { r = resolve(); if (!failed(r)) refs.set(key, r); }
+    return r;
+  }
   emitIget(ins: Ins) {
     const cx = this.cx, c = this.code, r = this.fieldOf(ins.c, false);
     if (failed(r)) return this.linkFail(r);
@@ -1026,7 +1042,7 @@ export class MC {
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
-    const target = resolveInvoke(prog, kind, declared, mr.name, desc, this.m.cls);
+    const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
     const site = this.sites.has(String(ins.pc));
     if (site) this.enterSite();
