@@ -13,7 +13,7 @@ export interface JniVm {
   /** FindClass: the class `name` of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
   find(name: string, from?: JniClass | null): JniClass | null;
   /** Executed FindClass may enter a Java loader and suspend; export binding uses the known-class lookup above. */
-  resolve?(name: string, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
+  resolve(name: string, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
   /** a class name or descriptor in the binary names JNI's short names spell */
   binaryName(name: string): string;
   /** the java.lang.Class of a class */

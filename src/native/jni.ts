@@ -1,6 +1,6 @@
 // JavaVM + JNIEnv function tables in guest memory, the reference tables, and the marshalling between guest natives (AAPCS words) and the JVM's value
-// model. What a class, an object, a field, a method or an array is belongs to the tier that runs Java (jnivm.ts): a reference here is whatever that tier
-// holds a Java object as.
+// model. What a class, an object, a field, a method or an array is belongs to the Wasm tier (jnivm.ts, wasm/host/jni.ts): a reference here is the
+// Wasm reference itself.
 
 import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
@@ -16,6 +16,8 @@ export const jniTrace = { on: false };
 export const javaVM = { addr: 0 };
 
 // ── references: locals live per Cpu in frames; globals and weak globals in a table each. 0 is null.
+/** a failed call's result: zero of the return type's width */
+const zero = (ret: string) => (ret === "J" || ret === "D" ? 0n : 0);
 const GLOBAL_BIT = 0x40000000, WEAK_BIT = 0x20000000;
 const globals: unknown[] = [null];
 const freeGlobals: number[] = [];
@@ -183,13 +185,13 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
       pending = true;
       return r.then(value => retWord(m.ret, value, cpu)).catch(e => {
         failed(cpu, e);
-        return m.ret === "J" || m.ret === "D" ? 0n : 0;
+        return zero(m.ret);
       }).finally(() => { if (synced) syncPinned(args, false); });
     }
     return retWord(m.ret, r, cpu);
   } catch (e) {
     failed(cpu, e);
-    return m.ret === "J" || m.ret === "D" ? 0n : 0;
+    return zero(m.ret);
   } finally {
     if (synced && !pending) syncPinned(args, false);
   }
@@ -286,7 +288,6 @@ export function jniInit(): void {
   const T: (HostFn | null)[] = new Array(233).fill(null);
   const names: string[] = new Array(233).fill("?");
   const def = (i: number, name: string, fn: HostFn) => { T[i] = fn; names[i] = name; };
-  const zero = (ret: string) => (ret === "J" || ret === "D" ? 0n : 0);
 
   def(4, "GetVersion", () => 0x00010006);
   def(7, "FromReflectedMethod", (cpu, a) => {
@@ -309,7 +310,7 @@ export function jniInit(): void {
     };
     const rejected = (e: unknown): number => { failed(cpu, e); return 0; };
     try {
-      const result = vm.resolve ? vm.resolve(n, cpu.nativeClass) : vm.find(n, cpu.nativeClass);
+      const result = vm.resolve(n, cpu.nativeClass);
       return result instanceof Promise ? result.then(found).catch(rejected) : found(result);
     } catch (e) { return rejected(e); }
   });
@@ -520,7 +521,7 @@ function registerNative(c: JniClass, name: string, sig: string, fn: number): voi
   registered.push(rec);
   vm.bind(c, name, sig, isStatic, native(rec), params.length);
 }
-/** the host function a native method with guest code runs: its arguments and result are Java values as the tier holds them (the Wasm tier hands them over without conversion) */
+/** the host function a native method with guest code runs: its arguments and result are the Wasm tier's Java values, unconverted */
 const native = (rec: Registered): ((...a: never[]) => unknown) =>
   Object.assign(function (this: unknown, ...args: unknown[]) { return rt.drive(callGuestNative(cpuFor(curThread), rec, this, args)); }, { javaValues: true }) as never;
 
