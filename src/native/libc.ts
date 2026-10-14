@@ -54,6 +54,12 @@ export function fail(cpu: Cpu | null, e: number): number {
   setErrno(cpu, e);
   return -1;
 }
+/** a kernel result (-errno on failure) as libc returns it: -1 with errno set */
+export function kernelResult(cpu: Cpu | null, value: number): number;
+export function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number>;
+export function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number> {
+  return value instanceof Promise ? value.then((r) => kernelResult(cpu, r)) : value < 0 ? fail(cpu, -value) : value;
+}
 /** MAP_FAILED, pointer-wide, with errno set */
 const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }

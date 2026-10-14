@@ -6,7 +6,7 @@ import { mem, guestAt, anchor } from "./mem";
 import { type HostFn, PTR, ldp, stLong, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { fail, utf8, logLine, offArg, randomBytes } from "./libc";
+import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
@@ -296,7 +296,7 @@ export const installFile = (f: Fd, cloexec = false): number => put(f, cloexec);
  *  writer, unless the call passed MSG_NOSIGNAL. The result as libc returns it. */
 export function written(cpu: Cpu | null, f: Fd, r: number, flags = 0): number {
   if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && (!f.socket || f.socket.type === SOCK_STREAM)) cpu.kill(SIGPIPE);
-  return r < 0 ? fail(cpu, -r) : r;
+  return kernelResult(cpu, r);
 }
 /** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
 export function readSocket(fd: number, target: Uint8Array, flags = 0): number | Promise<number> {
@@ -393,10 +393,6 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   } finally { mem.free(guestAt(target)); }
 }
 
-function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number> {
-  const done = (result: number) => result < 0 ? fail(cpu,-result) : result;
-  return value instanceof Promise ? value.then(done) : done(value);
-}
 export const fdOpenProcess = (cpu: Cpu | null, path: string, flags: number): number | Promise<number> => kernelResult(cpu,processOpenFd(path,flags));
 export const fdCloseProcess = (cpu: Cpu | null, fd: number): number | Promise<number> => kernelResult(cpu,processCloseFd(fd));
 export const fdSeekProcess = (cpu: Cpu | null, fd: number, offset: number, whence: number): number | Promise<number> => kernelResult(cpu,processSeekFd(fd,offset,whence));

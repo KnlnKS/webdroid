@@ -6,7 +6,7 @@ import { E } from "../abi";
 import type { Cpu } from "../cpu";
 import { hostLib, stLong, type HostFn, type HostRet } from "../host";
 import { mem, anchor } from "../mem";
-import { fail } from "../libc";
+import { fail, kernelResult } from "../libc";
 import { fdRead, fdWrite, installSocket, installFile, dropFile, written, socketOf, type OpenFile } from "../fs";
 import { nativePoll, nativeSelect } from "../poll";
 import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address";
@@ -36,8 +36,6 @@ export function socketPair(type: number): [number, number] | number {
 }
 
 /** a result as libc returns it: -1 and errno */
-const sys = (cpu: Cpu, r: number): number => r < 0 ? fail(cpu, -r) : r;
-const sysAsync = (cpu: Cpu, r: number | Promise<number>): number | Promise<number> => r instanceof Promise ? r.then((x) => sys(cpu, x)) : sys(cpu, r);
 /** the call's socket, or what it fails with */
 const socketFor = (cpu: Cpu, fd: number): Socket | number => { const s = socketOf(fd); return typeof s === "number" ? fail(cpu, -s) : s; };
 
@@ -131,18 +129,18 @@ function getsockopt(cpu: Cpu, fd: number, level: number, name: number, value: nu
   return 0;
 }
 /** an option the model does not keep is accepted as the kernel would, with nothing to observe */
-const accepted = (cpu: Cpu, r: number): number => r === -E.NOPROTOOPT ? 0 : sys(cpu, r);
+const accepted = (cpu: Cpu, r: number): number => r === -E.NOPROTOOPT ? 0 : kernelResult(cpu, r);
 function setsockopt(cpu: Cpu, fd: number, level: number, name: number, value: number, length: number): number {
   const s = socketFor(cpu, fd);
   if (typeof s === "number") return s;
   if (level === IPPROTO_IP && (name === IP_ADD_MEMBERSHIP || name === IP_DROP_MEMBERSHIP) && value && length >= 8)
     return accepted(cpu, s.group(name === IP_ADD_MEMBERSHIP, Array.from(mem.bytes(value, 4)), length >= 12 ? mem.ld32(value + 8) : 0));
-  if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? sys(cpu, s.setOption(level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1)) : fail(cpu, E.INVAL);
+  if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? kernelResult(cpu, s.setOption(level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1)) : fail(cpu, E.INVAL);
   if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
     if (!value || length < TIMEVAL_SIZE()) return fail(cpu, E.INVAL);
     const { sec, usec } = readTimeval(value);
     if (usec < 0 || usec >= 1_000_000) return fail(cpu, E.DOM);
-    return sys(cpu, s.setOption(level, name, sec < 0 ? 0 : sec * 1000 + Math.ceil(usec / 1000)));
+    return kernelResult(cpu, s.setOption(level, name, sec < 0 ? 0 : sec * 1000 + Math.ceil(usec / 1000)));
   }
   if (!value || length < 1) return fail(cpu, E.INVAL);
   return accepted(cpu, s.setOption(level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]));
@@ -162,7 +160,7 @@ function recvfrom(cpu: Cpu, fd: number, destination: number, length: number, fla
 }
 
 export const NET_SYSCALLS: Record<string, HostFn> = {
-  socket: (cpu, a) => { const domain = a.i(), type = a.i(), protocol = a.i(); return sys(cpu, socketCreate(domain, type, protocol)); },
+  socket: (cpu, a) => { const domain = a.i(), type = a.i(), protocol = a.i(); return kernelResult(cpu, socketCreate(domain, type, protocol)); },
   socketpair: (cpu, a) => {
     const domain = a.i(), type = a.i(); a.i(); const sv = a.p();
     if (domain !== AF_UNIX) return fail(cpu, domain === AF_INET || domain === AF_INET6 ? E.NOTSUP : E.AFNOSUPPORT);
@@ -174,17 +172,17 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   connect: (cpu, a) => {
     const fd = a.i(), sockaddr = a.p(), length = a.u(), s = socketFor(cpu, fd);
     if (typeof s === "number") return s;
-    if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sysAsync(cpu, s.connect(null));
+    if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return kernelResult(cpu, s.connect(null));
     const addr = readSockaddr(s.family, sockaddr, length);
-    return typeof addr === "number" ? fail(cpu, -addr) : sysAsync(cpu, s.connect(addr));
+    return typeof addr === "number" ? fail(cpu, -addr) : kernelResult(cpu, s.connect(addr));
   },
   bind: (cpu, a) => {
     const fd = a.i(), sockaddr = a.p(), length = a.u(), s = socketFor(cpu, fd);
     if (typeof s === "number") return s;
     const addr = readSockaddr(s.family, sockaddr, length);
-    return typeof addr === "number" ? fail(cpu, -addr) : sys(cpu, s.bind(addr));
+    return typeof addr === "number" ? fail(cpu, -addr) : kernelResult(cpu, s.bind(addr));
   },
-  listen: (cpu, a) => { const s = socketFor(cpu, a.i()); a.i(); return typeof s === "number" ? s : sys(cpu, s.listen()); },
+  listen: (cpu, a) => { const s = socketFor(cpu, a.i()); a.i(); return typeof s === "number" ? s : kernelResult(cpu, s.listen()); },
   accept: (cpu, a) => accept(cpu, a.i(), a.p(), a.p(), 0),
   accept4: (cpu, a) => accept(cpu, a.i(), a.p(), a.p(), a.i()),
   sendto: (cpu, a) => sendto(cpu, a.i(), a.p(), a.u(), a.i(), a.p(), a.u()),
@@ -206,7 +204,7 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
     const control = { at: anchor(m.control), capacity: m.controlLength, lengthAt: anchor(m.controlLengthAt) };
     return receive(cpu, fd, s, iovecs(m.iov, m.iovCount), flags, { name: m.name, nameLength: m.nameLengthAt, messageFlags: m.flagsAt, control });
   },
-  shutdown: (cpu, a) => { const s = socketFor(cpu, a.i()), how = a.i(); return typeof s === "number" ? s : sys(cpu, s.shutdown(how)); },
+  shutdown: (cpu, a) => { const s = socketFor(cpu, a.i()), how = a.i(); return typeof s === "number" ? s : kernelResult(cpu, s.shutdown(how)); },
   setsockopt: (cpu, a) => setsockopt(cpu, a.i(), a.i(), a.i(), a.p(), a.u()),
   getsockopt: (cpu, a) => getsockopt(cpu, a.i(), a.i(), a.i(), a.p(), a.p()),
   getsockname: (cpu, a) => sockname(cpu, a.i(), a.p(), a.p(), false),
