@@ -87,6 +87,33 @@ Plan 3.2 (final targets as direct calls) was tried and rejected; see "Rejected: 
   - "Freeing merged-away units stalls the thread";
   - "Stalls the timeline cannot see".
 
+## Cleanup audit (2026-10-14)
+
+A maintainability pass followed the performance work: `git log 7ef4de0b5^..02bd7defd` has 49 focused commits, net −744 lines over 104 files. Audits of shell/jvm, the Wasm link/host layers, the native libraries, native core and tests, and `src/android` drove it.
+
+- **Removed.** JS-tier remnants (String's methods on `String.prototype`, `jmethod`/`lateMethod`, `jsStack` reads, stale comments), compiler receipts, the unreached SharedFile mapping path, the IME local-keyboard branch, and members with no reader (`compositorStatus`, PackedArchive `owner`, `vfs.owner`, `ActivityStack.shown`, cipher `blockSize`/`overhead`, res `T_STR`).
+- **Consolidated.**
+  - Native: `kernelResult` (libc), `guestSort` (qsort, scandir, fts_open), `setClockTimer` (timerfd and POSIX timers), `AddrMap.ensure`, `ldWord`/`stWord`, `Cpu.regHex`, socket `watch`, `uniformBase`, `directiveEnd`.
+  - Shell and jvm: `orDer` (conscrypt), `within`/`shared` (processes.ts), and crash tests in appexitinfo.
+  - Native tests: about 300 lines of repeated scaffolding.
+- **Hot paths.** No BigInt per digit in `strtoNum`, per ARM32 double, or per `lrand48` step. `strlen` uses `indexOf`. Field accessors are cached by field. Matrix and pixel buffers are reused. JNI string copies take one store.
+- **Fixes found on the way.**
+  - `wcsstr` matched across code-point boundaries.
+  - `mrand48`/`drand48` were wrong.
+  - `strtoul` clamped negative input instead of wrapping.
+  - A64 `strtol`/`strtoul`/`atol` were 32-bit.
+  - `ctime_r` printed JavaScript's date layout.
+  - `asctime`/`basename`/`dirname` leaked a host string per call.
+  - `scandir`/`fts_open` made O(n²) comparator calls.
+  - `getResponseCode` skipped a Java subclass's status line.
+- **Considered and left.**
+  - Process-fd `viaRemote` would allocate two closures per local read/write.
+  - Relay `ByteQueue` → socket `Loopback` would couple the shell to native socket internals.
+  - Moving `discardDescriptors` into FileDescriptors gains nothing.
+  - Still open from the android audit: a bitmap-raster `inDevice` helper, a motionevent `into` helper and the `intent.ts` driven wrappers.
+- **Flake.** `tests/app.browser.test.ts` fails with `ZipException: End Of Central Directory signature not found` in about 1 full `bun run test` in 6, and passes on rerun. An instrumented failure showed the platform jars arriving at full length with misplaced content. This is the Bun HTTP body corruption already recorded under "Fixture bundle corruption" in the history.
+- **Verified at `02bd7defd`.** `typecheck`; `bun run test` 1148/1148 apart from the flake; `fwtest` 31/31; `smoke apks/FitNotes.apk` clean; `bun run aot` rebuilt. `wasm all` last ran clean before the native commits; none of them touches the shared front end.
+
 ## Verification status (end of 2026-10-13)
 
 - **Passing at `975b232b`:**
