@@ -24,17 +24,11 @@ export function imeState(): ImeState {
   return { generation, text: served?.text ?? "", start: served ? served.start - served.offset : 0,
     end: served ? served.end - served.offset : 0, active: imeActive(), hasAction: imeHasAction() };
 }
-let inputEl: HTMLInputElement | HTMLTextAreaElement | null = null;
-export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement | null) { inputEl = el; }
 let imeVisible = false;
 let editing = false;
 /** the page's text control takes the served editor's text and selection */
 export function mirrorInput() {
-  if (editing) return;
-  imeTransport.changed?.(imeState());
-  if (!inputEl || !served) return;
-  inputEl.value = served.text;
-  inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
+  if (!editing) imeTransport.changed?.(imeState());
 }
 /** the IME serves `session`'s editor, or none */
 export function serveInput(session: ImeSession | null) {
@@ -42,11 +36,10 @@ export function serveInput(session: ImeSession | null) {
   if (session && !reportedText.has(session)) reportedText.set(session,{text:session.text,offset:session.offset});
   served = session; mirrorInput();
 }
-/** the keyboard shows or hides: the page's text control takes or gives up focus */
+/** the keyboard shows or hides */
 export function showInput(visible: boolean) {
   imeVisible = visible;
   mirrorInput();
-  if (visible) inputEl?.focus(); else inputEl?.blur();
 }
 const ET = "android/view/inputmethod/ExtractedText";
 /** an ExtractedText the editor reported: all of its text, or a changed part of it */
