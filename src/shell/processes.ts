@@ -139,11 +139,28 @@ export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?
   launcher: { assetKey: string } | null;
   /** what hears how it ended */
   watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void> };
+/** p, or late()'s result once `ms` pass first */
+function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }).then(late)]).finally(() => clearTimeout(timer));
+}
+/** one in-flight read per process, shared by concurrent callers */
+function shared<T>(reads: Map<number, Promise<T>>, pid: number, start: () => Promise<T>): Promise<T> {
+  let read = reads.get(pid);
+  if (!read) {
+    const pending = read = Promise.resolve().then(start);
+    reads.set(pid, pending);
+    const clear = () => { if (reads.get(pid) === pending) reads.delete(pid); };
+    void pending.then(clear, clear);
+  }
+  return read;
+}
 export class ProcessBroker {
   private counterEvents: { sequence: number; kind: "created" | "retired"; at: number; pid: number; pkg: string; process: string; url: string }[] = [];
   private counterSequence = 0;
   private counterDropped = 0;
-  private counterTerminals = new Map<number, { receipt: Readonly<CounterReceipt> | null; error: string | null; url: string }>();
+  /** a dead Worker process's URL; only the page's own realm has counters to read */
+  private counterTerminals = new Map<number, string>();
   private counterEvent(entry: Entry, kind: "created" | "retired", url?: string): void {
     if (typeof window === "undefined" || !window.__wdCounterReceipt) return;
     const sequence = ++this.counterSequence;
@@ -156,8 +173,8 @@ export class ProcessBroker {
     for (const entry of this.entries.values()) {
       if (rows.length === 128) break;
       const terminal = this.counterTerminals.get(entry.pid), rootRealm = entry.pid === PROCESS_PID, win = rootRealm ? window : null;
-      const url = terminal?.url ?? entry.worker?.url ?? entry.workerDiagnostic?.url ?? location.href;
-      let receipt = terminal?.receipt ?? null, error = terminal?.error ?? null;
+      const url = terminal ?? entry.worker?.url ?? entry.workerDiagnostic?.url ?? location.href;
+      let receipt: Readonly<CounterReceipt> | null = null, error: string | null = null;
       if ((!entry.dead || rootRealm) && win) try { receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
       if (!win && !entry.dead) error ??= "Process Worker counters require a separate protocol";
       rows.push(Object.freeze({ owner: Object.freeze({ pid: entry.pid, pkg: entry.pkg, process: entry.process, url }),
@@ -653,11 +670,9 @@ export class ProcessBroker {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     if (typeof window !== "undefined" && window.__wdCounterReceipt) {
-      const win = entry.pid === PROCESS_PID ? window : null, url = entry.worker?.url ?? location.href;
-      let receipt: Readonly<CounterReceipt> | null = null, error: string | null = null;
-      try { if (win) receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
+      const url = entry.worker?.url ?? location.href;
       if (pid !== PROCESS_PID) {
-        if (this.counterTerminals.size < 128) this.counterTerminals.set(pid, { receipt, error, url }); else this.counterDropped++;
+        if (this.counterTerminals.size < 128) this.counterTerminals.set(pid, url); else this.counterDropped++;
       }
       this.counterEvent(entry, "retired", url);
     }
@@ -696,12 +711,9 @@ export class ProcessBroker {
       if (!url) return [];
       return [(async () => {
         const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
-        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           if (!worker || entry.dead) throw new Error("Worker has exited");
-          const result = await Promise.race([worker.control.aotProfile(),new Promise<never>((_,reject) => {
-            timer = setTimeout(() => reject(new Error("Worker AOT profile timeout")),5000);
-          })]);
+          const result = await within(worker.control.aotProfile(), 5000, () => { throw new Error("Worker AOT profile timeout"); });
           if (entry.dead || result.dead) throw new Error("Worker has exited");
           if (result.phase !== "ready") throw new Error("Worker is not ready: " + result.phase);
           if (result.identity.pid !== entry.pid || result.identity.pkg !== entry.pkg || result.identity.process !== entry.process)
@@ -709,7 +721,7 @@ export class ProcessBroker {
           return {...identity,result};
         } catch (error) {
           return {...identity,error:error instanceof Error ? error.message : String(error)};
-        } finally {clearTimeout(timer);}
+        }
       })()];
     }));
   }
@@ -720,20 +732,10 @@ export class ProcessBroker {
       if (!url) return [];
       const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
       if (!worker) return [Promise.resolve(this.terminalWorker(entry,identity))];
-      let read = this.workerReads.get(entry.pid);
-      if (!read) {
-        read = Promise.resolve().then(() => worker.control.snapshot());
-        this.workerReads.set(entry.pid, read);
-        const pending = read;
-        const clear = () => { if (this.workerReads.get(entry.pid) === pending) this.workerReads.delete(entry.pid); };
-        void read.then(clear, clear);
-      }
+      const read = shared(this.workerReads, entry.pid, () => worker.control.snapshot());
       return [(async () => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          const snapshot = await Promise.race([read, new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("Worker diagnostic timeout")), 5000);
-          })]);
+          const snapshot = await within(read, 5000, () => { throw new Error("Worker diagnostic timeout"); });
           if (entry.dead) return this.terminalWorker(entry,identity);
           if (snapshot.dead || snapshot.phase !== "ready")
             throw new Error(`Worker is ${snapshot.dead || entry.dead ? "dead" : "not ready: " + snapshot.phase}`);
@@ -741,7 +743,7 @@ export class ProcessBroker {
         } catch (error) {
           if (entry.dead) return this.terminalWorker(entry,identity);
           return {...identity,error: error instanceof Error ? error.message : String(error)};
-        } finally { clearTimeout(timer); }
+        }
       })()];
     }));
   }
@@ -755,21 +757,9 @@ export class ProcessBroker {
   private async workerAlive(entry: Entry, ms: number): Promise<boolean> {
     const worker = entry.worker;
     if (!worker || entry.dead) return false;
-    let read = this.workerLiveness.get(entry.pid);
-    if (!read) {
-      read = Promise.resolve().then(() => worker.control.alive());
-      this.workerLiveness.set(entry.pid, read);
-      const pending = read;
-      const clear = () => { if (this.workerLiveness.get(entry.pid) === pending) this.workerLiveness.delete(entry.pid); };
-      void read.then(clear, clear);
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([read, new Promise<boolean>(resolve => {
-        timer = setTimeout(() => resolve(false), ms);
-      })]) && !entry.dead && entry.worker === worker;
+      return await within(shared(this.workerLiveness, entry.pid, () => worker.control.alive()), ms, () => false) && !entry.dead && entry.worker === worker;
     } catch { return false; }
-    finally { clearTimeout(timer); }
   }
   /** A control reply is not evidence that the Java main queue can dispatch a job. */
   async visibleWorkersAlive(ms = 1500): Promise<boolean | null> {
