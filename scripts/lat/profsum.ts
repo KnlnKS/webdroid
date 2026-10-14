@@ -1,21 +1,26 @@
 // Self and inclusive time per function in a V8 CPU profile, optionally for one tap:
-//   bun scripts/lat/profsum.ts <file.cpuprofile> [top=40] [tap=<n> window=<ms> | from=<ms>] [until=<ms>]
-// A tap window starts at the n-th __wdMarkUp sample (bun run lat --cpuprofile) and lasts `window` ms;
+//   bun scripts/lat/profsum.ts <file.cpuprofile> [top=40] [tap=<n> window=<ms> [marks=<page.cpuprofile>] | from=<ms>] [until=<ms>]
+// A tap window starts at the n-th __wdMarkUp sample (bun run lat --cpuprofile) and lasts `window` ms; a Worker's
+// profile takes its marks from the page's (`marks`), as both count time on the renderer's one clock;
 // `from` and `until` keep the profile between those ms, such as a launch up to its first frame.
 import type { Profiler } from "node:inspector";
 const [file, ...rest] = process.argv.slice(2);
 const opt = Object.fromEntries(rest.map((a) => a.split("=")));
-const prof: Profiler.Profile = JSON.parse(await Bun.file(file).text());
+const load = async (path: string) => {
+  const prof: Profiler.Profile = JSON.parse(await Bun.file(path).text());
+  const times: number[] = [];
+  for (let i = 0, t = prof.startTime; i < prof.samples!.length; i++) times.push(t += prof.timeDeltas![i]);
+  return { prof, times, nodes: new Map(prof.nodes.map((n) => [n.id, n])) };
+};
+const { prof, times, nodes } = await load(file);
 const samples = prof.samples!, deltas = prof.timeDeltas!;
-const nodes = new Map(prof.nodes.map((n) => [n.id, n]));
 const parent = new Map<number, number>();
 for (const n of prof.nodes) for (const c of n.children ?? []) parent.set(c, n.id);
 const key = (n: Profiler.ProfileNode) => `${n.callFrame.functionName || "<anon>"} ${(n.callFrame.url || "").split("/").pop()}:${n.callFrame.lineNumber + 1}`;
-const times: number[] = [];
-for (let i = 0, t = prof.startTime; i < samples.length; i++) times.push(t += deltas[i]);
 let from = opt.from === undefined ? -Infinity : prof.startTime + +opt.from * 1000, to = opt.until === undefined ? Infinity : prof.startTime + +opt.until * 1000;
 if (opt.tap !== undefined) {
-  const marks = times.filter((_, i) => nodes.get(samples[i])!.callFrame.functionName === "__wdMarkUp");
+  const m = opt.marks ? await load(opt.marks) : { prof, times, nodes };
+  const marks = m.times.filter((_, i) => m.nodes.get(m.prof.samples![i])!.callFrame.functionName === "__wdMarkUp");
   const starts = marks.filter((t, i) => i === 0 || t - marks[i - 1] > 5000);
   from = starts[+opt.tap];
   if (from === undefined) throw new Error(`only ${starts.length} marked taps`);
