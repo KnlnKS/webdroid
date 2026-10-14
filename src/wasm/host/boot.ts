@@ -41,7 +41,7 @@ import { onProcessExit, processExited } from "../../process-exit";
 const TAB_HEAP = 2048 * 1024 * 1024;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
+type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
 declare global {
   var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -67,7 +67,7 @@ const hostLoop: HostLoop = {
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = measureCompile("residual.wasmSetup", () => new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
   bindWorld(w);
-  globalThis.__wdWasm = { stats: w.stats };
+  globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.demandMark(), demandSince: (mark) => w.demandSince(mark) };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);

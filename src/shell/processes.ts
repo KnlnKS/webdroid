@@ -53,7 +53,7 @@ import { receiveMedia } from "./media-port";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui";
 import { storageAccess, storageEntries, storageWrite } from "./device-storage";
 import { receiveIme } from "./ime-port";
-import { receiveFrames, type FrameReceiver } from "./frame-port";
+import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
 import type { SettingsCalls, SettingsTable } from "./settings";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
@@ -378,7 +378,7 @@ export class ProcessBroker {
       const media = new MessageChannel(), display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel();
       ports.push(receiveMedia(media.port1));
       const frames = receiveFrames(display.port1, canvas, () => entry.presented?.resolve());
-      if (this.mirroring) frames.mirror(true);
+      if (this.mirroring) frames.mirror(this.mirroring);
       ports.push(() => { frames.close(); if (entry.display === frames) entry.display = undefined; });
       const ime = receiveIme(input.port1, canvas);
       ports.push(() => { ime.close(); if (entry.ime === ime) entry.ime = undefined; });
@@ -792,9 +792,9 @@ export class ProcessBroker {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.worker : undefined;
   }
-  private mirroring = false;
-  /** whether process Workers send the page a copy of each frame they show */
-  mirrorFrames(on: boolean): void {
+  private mirroring: Mirror = false;
+  /** whether process Workers send the page a copy of each frame they show, or crops of its regions */
+  mirrorFrames(on: Mirror): void {
     this.mirroring = on;
     for (const entry of this.entries.values()) entry.display?.mirror(on);
   }

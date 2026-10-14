@@ -11,6 +11,7 @@ import type { DexFile } from "../../jvm/dex";
 import type { FetchStore } from "../link/aotstore";
 import { buildFiles, appKey, SavedBuild, type Persist } from "./persist";
 import { fetchBundle } from "./bundle";
+import { switchOn } from "../../switches";
 import { prefetchInWorker } from "./aotload";
 import { CompileClient, containers, type WorkerPort } from "./compiler";
 import type { BuildRoots, CompileResponse, Containers } from "./compile-serve";
@@ -69,7 +70,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const launchFiles: string[] = launch?.has("files.json") ? JSON.parse(new TextDecoder().decode(launch.get("files.json"))) : [];
   const launchReady = launchFiles.length ? prefetchInWorker(req.aot, launchFiles) : Promise.resolve();
   let source: AppCode["source"] = files ? "persist" : "none";
-  if (!files) {
+  // `?bundles=0` measures a first launch as one of an app the platform build ships nothing for
+  if (!files && switchOn("bundles", true)) {
     // the platform build may ship a build for this app; this device keeps it for the launches after
     files = await fetchBundle(req.aot.base, key);
     if (files) source = "bundle";

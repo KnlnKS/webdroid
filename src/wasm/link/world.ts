@@ -1540,6 +1540,36 @@ export class World {
     }
     return out;
   }
+  /** where the demand and the linked classes stand, for demandSince; then the linked classes' methods with code that have no code yet, how many were compiled ahead, and the call frontier's sizes */
+  demandMark(): number[] {
+    let uncompiled = 0;
+    for (const [name, rt] of this.classes) for (const m of this.prog.get(name)?.methods ?? []) {
+      if (!m.codeOff || m.flags & ACC.NATIVE) continue;
+      const s = this.peek(rt.slotBase + m.index);
+      if ((!s || s.k === "method" && !s.done) && !this.aot?.holds(rt.slotBase + m.index)) uncompiled++;
+    }
+    // the methods without code that the methods with code call: every target of a call, and only a call's one target
+    const frontier = this.markFrontier = new Set(), single = this.markSingle = new Set();
+    for (const s of this.slots) {
+      if (s?.k !== "method" || !s.done || !s.m.codeOff) continue;
+      for (const { t, targets } of this.calls(s.m)) {
+        for (const x of targets ?? (t ? [t] : [])) {
+          const at = this.classes.get(x.cls);
+          const xs = at && this.peek(at.slotBase + x.index);
+          if (x.codeOff && !(xs?.k === "method" && xs.done)) { frontier.add(x); if (x === t) single.add(x); }
+        }
+      }
+    }
+    return [this.demand.methods.size, this.classes.size, uncompiled, this.stats.ahead, frontier.size, single.size];
+  }
+  private markFrontier = new Set<MethodInfo>();
+  private markSingle = new Set<MethodInfo>();
+  /** the methods compiled on demand since `mark`, each with whether its class was linked by then and whether a method with code called it then (any target, the one target) */
+  demandSince([methods, classes]: number[]): [string, boolean, boolean, boolean][] {
+    const before = new Set<string>();
+    for (const name of this.classes.keys()) { if (before.size >= classes) break; before.add(name); }
+    return [...this.demand.methods].slice(methods).map((m) => [mid(m), before.has(m.cls), this.markFrontier.has(m), this.markSingle.has(m)]);
+  }
   /** Has the engine compile the build's code of methods `ids` before they first run, as a zygote does with what launches use: each is installed and called
    *  while the warm word makes first-tier code trap on entry, before it does anything. Methods whose code is elsewhere are left to their first call. Goes from `ids[from]` until `until`
    *  and returns where it stopped. */

@@ -43,6 +43,9 @@ export function workerControl(logs: string[], phase: () => string) {
       return { saved: !!wasm.appSaved, source: wasm.appSource ?? null, attached: !!wasm.appAttached, rejected: wasm.appRejected ?? null,
         kept: !!wasm.appBuilds?.some(build => build.kept), persisted: save ? !!await wasm.appPersisted?.() : null };
     },
+    /** where the Wasm tier's on-demand compiling stands, and what it compiled since such a mark (World.demandSince) */
+    demandMark: async () => globalThis.__wdWasm?.demandMark?.() ?? null,
+    demandSince: async (mark: number[]) => globalThis.__wdWasm?.demandSince?.(mark) ?? null,
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,
     tap: local.tap,

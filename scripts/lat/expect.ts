@@ -3,7 +3,8 @@ import { COMPILE_COUNTERS } from "../../src/shell/perf-receipts";
 
 export type Region = [number, number, number, number];
 export type Selector = { text?: string; desc?: string; resId?: string; within?: Region };
-export type Expectation = { nodes: Selector[]; absent?: Selector[]; pixels: { region: Region; changed?: boolean; nonUniform?: boolean; rgb?: [number, number, number][] }[] };
+/** `ms`: how long after the action (a launch: after its first presentation) the state may take to appear, 8 s unless given */
+export type Expectation = { nodes: Selector[]; absent?: Selector[]; pixels: { region: Region; changed?: boolean; nonUniform?: boolean; rgb?: [number, number, number][] }[]; ms?: number };
 
 export function matchesState(nodes: { text: string; desc: string; resId: string; bounds: Region }[], expectation: Expectation) {
   const normal = (s: string) => s.replace(/\s+/g, " ").trim();

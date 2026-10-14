@@ -1,7 +1,12 @@
-// Intended response joins scenario UI state with the current app-owned bitmap's response
-// region. The later receipt clock is a conservative latency upper bound.
+// A gated tap's latency is pointerup to the first presented frame that visibly answers it: the first
+// frame whose response region departs from the frame before pointerup in the tiles that the settled
+// response also changed, outside the pressed view's feedback. Nothing runs Java on the app between
+// pointerdown and the settled frame: the app's Worker sends downscaled crops of the response
+// regions with each frame it presents, read only once the window closes, and the scenario's UI state
+// is checked once afterwards. `--metric legacy` instead gates the earlier joined clock: the first frame
+// matching the response pixels once a UI probe after every frame matched the expected state.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--trace <file>]
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--metric first|legacy] [--throttle <rate>] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -12,11 +17,14 @@
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true}] }   (pick offers a synthetic photo;
 //     fps scrolls back and forth for ms and reports presentation intervals and page long tasks)
+// "gate": false makes a scenario a report, run only when named (heavy apps: YouTube, Reddit, ChatGPT, TikTok).
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap. --trace writes the gated launch's browser-wide trace (every
-// thread: page, Workers, GPU), for chrome://tracing or Perfetto.
+// thread: page, Workers, GPU, V8 collections), for chrome://tracing or Perfetto; WEBDROID_TRACE_CATEGORIES (comma-separated) replaces
+// its categories, e.g. disabled-by-default-v8.gc,v8 for a small GC-only trace. WEBDROID_JS_FLAGS and WEBDROID_CHROME_ARGS (space-separated)
+// pass V8 flags and Chrome arguments for A/B runs. With --timeline, --json taps carry the Worker's and the page's timelines and the page's long tasks.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -32,26 +40,38 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
-const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
+const heapSample = flag("--heapsample");
+const gpu = flag("--gpu"), warm = flag("--warm"), demand = flag("--demand"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
+const metric = option("--metric") ?? "first", throttle = +(option("--throttle") ?? 1);
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
+if (!["first", "legacy"].includes(metric)) throw new Error("lat metric must be first or legacy");
+if (!(throttle >= 1) || throttle > 1 && engine !== "chrome") throw new Error("lat throttle must be a rate of at least 1, and only Chrome throttles");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
-const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
+// a cold launch is a first launch of any app: the platform build's bundled app builds stay out unless asked for
+if (!launchQuery.has("bundles")) launchQuery.set("bundles", "0");
+/** a scenario with "gate": false (a heavy app whose launch waits on live content) is a report: run only when named, and its taps and failures do not fail the gate */
+const gates = (name: string): boolean => JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8")).gate !== false;
+const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json")).filter(gates);
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
-  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead"];
+  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead", "wasmRetired", "wasmCollected"];
 
-type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
+/** the first-response clock: pointerup to the first answering frame and to the frame the response settled in,
+ *  with the presentation intervals between them */
+type First = { first: number | null; settled: number | null; frames: number; changedTiles: number; maskedTiles: number; pid: string | null;
+  intervals: { p50: number | null; p95: number | null; max: number | null; missed: number }; error?: string };
+type Tap = { intended: number | null; response?: First; timeline?: unknown; page?: unknown; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown; demandMark?: number[]; demand?: [string, boolean, boolean, boolean][] | null };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
-type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
+type Launch = { demand?: [string, boolean, boolean, boolean][] | null; firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
   idle: number; perf: Record<string, number>; marks: string[] };
-type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number };
+type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number; frames?: any };
 type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: unknown; processesAfter?: unknown;
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, metric: string) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, metric: string) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
@@ -136,8 +156,89 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       (!p.rgb || p.rgb.some(rgb => rgb.every((v, k) => Math.abs(pixel.rgb[k] - v) <= 1)));
   });
   const regionsOf = async (source: ImageBitmapSource, expectation: Expectation) => (await Promise.all(expectation.pixels.map(p => crop(source, p.region)))).map(regionInfo);
+  /** the `p` quantile of ascending `sorted`, to 0.1 ms */
+  const quantile = (sorted: number[], p: number) => sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] * 10) / 10 : null;
+  // The first-response clock. Each frame an app Worker presents arrives as crops of the response regions,
+  // CROP px on the long side, compared in TILE px tiles; the pixels are read only after the window closes.
+  const CROP = 128, TILE = 8, FEEDBACK_PX = 72;
+  type Shot = { t: number; pid: string | null; still: boolean; crops: ImageBitmap[] };
+  type Tiles = { sums: Uint32Array[]; pixels: Pixels[] };
+  let shots: Shot[] | null = null;
+  const watch = (expectation: Expectation) => {
+    stop(); shots = [];
+    const into = shots;
+    observer.onCrops = (receipt: any, crops: ImageBitmap[]) => {
+      if (shots !== into || !receipt.visible) { crops.forEach(c => c.close()); return; }
+      into.push({ t: receipt.at, pid: receipt.pid, still: receipt.still, crops });
+    };
+    w.wd.mirrorFrames({ regions: expectation.pixels.map(p => p.region), max: CROP });
+  };
+  const unwatch = () => { observer.onCrops = null; w.wd.mirrorFrames(false); const got = shots ?? []; shots = null; return got; };
+  const tileCanvas = new OffscreenCanvas(CROP, CROP), tileContext = tileCanvas.getContext("2d", { willReadFrequently: true })!;
+  /** per region, a checksum of each tile, and the region's summary as regionInfo gives it */
+  const tilesOf = (shot: Shot): Tiles => {
+    const sums: Uint32Array[] = [], pixels: Pixels[] = [];
+    for (const image of shot.crops) {
+      const { width, height } = image, across = Math.ceil(width / TILE), down = Math.ceil(height / TILE);
+      tileContext.clearRect(0, 0, CROP, CROP); tileContext.drawImage(image, 0, 0);
+      const data = tileContext.getImageData(0, 0, width, height).data, tile = new Uint32Array(across * down), rgb = [0, 0, 0];
+      let variation = 0, hash = 0;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4, k = ((y / TILE) | 0) * across + ((x / TILE) | 0);
+        const v = data[i] | data[i + 1] << 8 | data[i + 2] << 16;
+        tile[k] = (Math.imul(tile[k] ^ v, 0x01000193) + x) >>> 0;
+        hash = (Math.imul(hash, 31) + v) | 0;
+        for (let c = 0; c < 3; c++) { rgb[c] += data[i + c]; variation = Math.max(variation, Math.abs(data[i + c] - data[c])); }
+      }
+      sums.push(tile); pixels.push({ hash, nonUniform: variation > 8, rgb: rgb.map(v => v / (width * height)) });
+    }
+    return { sums, pixels };
+  };
+  /** which tiles of each region lie within `box` (screen px) */
+  const tilesIn = (expectation: Expectation, shot: Shot, box: number[]) => expectation.pixels.map((p, r) => {
+    const [l, t, right] = p.region, image = shot.crops[r], scale = image.width / (right - l);
+    const across = Math.ceil(image.width / TILE), down = Math.ceil(image.height / TILE), inside = new Uint8Array(across * down);
+    for (let j = 0; j < down; j++) for (let i = 0; i < across; i++) {
+      const x0 = l + i * TILE / scale, y0 = t + j * TILE / scale, x1 = x0 + TILE / scale, y1 = y0 + TILE / scale;
+      inside[j * across + i] = +(x1 > box[0] && x0 < box[2] && y1 > box[1] && y0 < box[3]);
+    }
+    return inside;
+  });
+  const differs = (a: Tiles, b: Tiles, region: number, k: number) => a.sums[region]?.[k] !== b.sums[region]?.[k];
+  /**
+   * The response clock over one window's shots. The baseline is the last frame before pointerup (else what
+   * was shown when the window opened); the response is the set of tiles the settled frame changed from it,
+   * less the pressed view's bounds widened by FEEDBACK_PX and any tile that already moved while pressed.
+   */
+  const firstResponse = (expectation: Expectation, all: Shot[], up: number, pressed: number[], pid: string | null): First & { last?: Tiles; still?: Tiles } => {
+    const mine = all.filter(s => s.pid === pid).sort((a, b) => a.t - b.t), stills = mine.filter(s => s.still), frames = mine.filter(s => !s.still);
+    const after = frames.filter(s => s.t >= up), before = frames.filter(s => s.t < up);
+    const none = { first: null, settled: null, frames: after.length, changedTiles: 0, maskedTiles: 0, pid, intervals: { p50: null, p95: null, max: null, missed: 0 } };
+    if (!after.length) return { ...none, error: "no app frame after pointerup" };
+    const still = stills[0] ? tilesOf(stills[0]) : null, base = before.length ? tilesOf(before.at(-1)!) : still;
+    const tiles = after.map(tilesOf), last = tiles.at(-1)!;
+    // a process with no frame before pointerup answers with its first frame
+    if (!base) return { ...none, first: after[0].t - up, settled: after.at(-1)!.t - up, last, error: undefined };
+    const mask = tilesIn(expectation, after[0], [pressed[0] - FEEDBACK_PX, pressed[1] - FEEDBACK_PX, pressed[2] + FEEDBACK_PX, pressed[3] + FEEDBACK_PX]);
+    const pressing = before.map(tilesOf);
+    const response: [number, number][] = [];
+    let masked = 0;
+    for (let r = 0; r < mask.length; r++) for (let k = 0; k < mask[r].length; k++) {
+      if (!differs(last, base, r, k)) continue;
+      if (mask[r][k] || still && pressing.some(p => differs(p, still, r, k))) { masked++; continue; }
+      response.push([r, k]);
+    }
+    if (!response.length) return { ...none, maskedTiles: masked, still: still ?? undefined, last, error: "the response regions did not change outside the pressed view" };
+    const firstAt = tiles.findIndex(f => response.some(([r, k]) => differs(f, base, r, k)));
+    let settledAt = tiles.length - 1;
+    while (settledAt > 0 && response.every(([r, k]) => !differs(tiles[settledAt - 1], last, r, k))) settledAt--;
+    const times = after.slice(firstAt, settledAt + 1).map(s => s.t), gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+    const q = (p: number) => quantile(gaps, p);
+    return { first: after[firstAt].t - up, settled: after[settledAt].t - up, frames: after.length, changedTiles: response.length, maskedTiles: masked, pid,
+      intervals: { p50: q(0.5), p95: q(0.95), max: q(1), missed: gaps.reduce((n, g) => n + Math.max(0, Math.round(g / (1000 / 60)) - 1), 0) }, still: still ?? undefined, last };
+  };
   const intended = async (expectation: Expectation, start: number, baseline: Pixels[]) => {
-    const end = performance.now() + 8000, probeStart = probes.length;
+    const end = performance.now() + (expectation.ms ?? 8000), probeStart = probes.length;
     let stateAt: number | null = null, nodes: unknown, error: string | null = null, seen: Frame | null = null;
     // reading a frame back waits for its raster, which under software GL stalls the app: candidates are cropped
     // as they present and read once the app is quiet
@@ -175,6 +276,46 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
     return await settle() ?? { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
   };
+  /**
+   * Where a window's frames went, from the foreground Worker's timeline (src/timeline.ts), read after the window:
+   * per presented frame its vsync-to-present time, doFrame, replay and composite durations, and each vsync that
+   * presented nothing while the app was drawing, by whether the main looper was busy at it.
+   */
+  const frameReport = async (from: number, to: number) => {
+    const events: [number, number, number][] = (await w.wd.foregroundTimeline(performance.timeOrigin + from)).map(([t, e, a]: number[]) => [t - performance.timeOrigin, e, a]);
+    const E = { Raf: 1, InputIn: 2, InputDispatch: 4, InputDone: 5, FrameBegin: 6, FrameEnd: 7, DrawBegin: 8, DrawEnd: 9, CompositeBegin: 11, CompositeEnd: 12, Present: 13, LoopIdle: 14, LoopWake: 15 };
+    const spans = { doFrame: [] as number[], draw: [] as number[], composite: [] as number[], vsyncToPresent: [] as number[], inputToDispatch: [] as number[], busyAtVsync: [] as number[] };
+    let raf = -1, frame = -1, draw = -1, comp = -1, idle = true, wake = from, input = -1, presentedSince = true, drawing = false, missedBusy = 0, missedIdle = 0, vsyncs = 0;
+    for (const [t, e, a] of events) {
+      if (t > to) break;
+      switch (e) {
+        case E.Raf:
+          if (!a) break;
+          vsyncs++;
+          // a vsync passed without a presentation while frames were being made
+          if (!presentedSince && drawing) { if (idle) missedIdle++; else { missedBusy++; spans.busyAtVsync.push(t - wake); } }
+          raf = t; presentedSince = false; break;
+        case E.InputIn: input = t; break;
+        case E.InputDispatch: if (input >= 0) { spans.inputToDispatch.push(t - input); input = -1; } break;
+        case E.FrameBegin: frame = t; drawing = true; break;
+        case E.FrameEnd: if (frame >= 0) spans.doFrame.push(t - frame); frame = -1; break;
+        case E.DrawBegin: draw = t; drawing = true; break;
+        case E.DrawEnd: if (draw >= 0) spans.draw.push(t - draw); draw = -1; break;
+        case E.CompositeBegin: comp = t; break;
+        case E.CompositeEnd: if (comp >= 0) spans.composite.push(t - comp); comp = -1; break;
+        case E.Present: if (raf >= 0) spans.vsyncToPresent.push(t - raf); presentedSince = true; break;
+        case E.LoopIdle: idle = true; drawing = frame >= 0; break;
+        case E.LoopWake: idle = false; wake = t; break;
+      }
+    }
+    const stat = (xs: number[]) => {
+      if (!xs.length) return null;
+      const s = xs.slice().sort((a, b) => a - b), q = (p: number) => quantile(s, p);
+      return { n: s.length, p50: q(0.5), p95: q(0.95), max: q(1) };
+    };
+    return { vsyncs, missedBusy, missedIdle, events: events.length, ...Object.fromEntries(Object.entries(spans).map(([k, v]) => [k, stat(v)])),
+      raw: events.filter(([t]) => t <= to).map(([t, e, a]) => [Math.round(t * 100) / 100, e, a]) };
+  };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   while (!w.wd) await sleep(5);
   collect();
@@ -186,7 +327,18 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return s && { perf: s.perf, queued: s.main.queued };
   };
   const snapshot = async () => { const perf = (await app())?.perf; return Object.fromEntries(counters.map((k) => [k, perf?.[k] ?? 0])); };
-  while (!((await app())?.perf.draws > 0)) await sleep(5);
+  /** the exception of a process of the launched app (the first one started) that crashed: the launch ends with it rather than with the scenario's timeout */
+  const launchCrash = async (): Promise<string | undefined> => {
+    const procs: { pid: number; pkg: string; terminal?: { record?: { crash?: { exceptionClassName: string; exceptionMessage: string } } } }[] = await w.wd.workerProcesses?.() ?? [];
+    const first = procs.reduce<typeof procs[number] | undefined>((a, b) => a && a.pid < b.pid ? a : b, undefined);
+    const crash = procs.find((p) => p.pkg === first?.pkg && p.terminal?.record?.crash)?.terminal!.record!.crash;
+    return crash && `${crash.exceptionClassName}: ${crash.exceptionMessage}`;
+  };
+  for (let n = 1; !((await app())?.perf.draws > 0); n++) {
+    const crash = n % 100 ? undefined : await launchCrash();
+    if (crash) throw new Error("the app process died while launching: " + crash);
+    await sleep(5);
+  }
   const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(await snapshot()).filter(([, v]) => v));
   const idle = async (maxMs = 8000) => {
     const until = performance.now() + maxMs;
@@ -214,7 +366,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`)
     .concat(((await foreground())?.marks ?? []).map(([name, at]: [string, number]) => `app:${name}:${Math.round(at - performance.timeOrigin)}`));
   result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt,
-    idle: Math.round(performance.now()), perf: launchPerf, marks };
+    idle: Math.round(performance.now()), perf: launchPerf, marks, demand: w.__wdDemand ? await w.wd.foregroundDemandSince([0, 0]) : undefined };
   result.processesBefore = await diagnostics();
   if (replay) result.codeReadiness = { phase: "attached", realms: [await workerReadiness(false)] };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
@@ -268,21 +420,58 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       observer.times = null; lt.disconnect();
       const inDrag = (t: number) => drags.findIndex(([a, b]) => t >= a && t <= b);
       const gaps = times.slice(1).flatMap((t, i) => inDrag(t) >= 0 && inDrag(t) === inDrag(times[i]) ? [t - times[i]] : []).sort((a, b) => a - b);
-      const q = (p: number) => gaps.length ? Math.round(gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))] * 10) / 10 : null;
+      const q = (p: number) => quantile(gaps, p);
       const dragMs = drags.reduce((a, [from, to]) => a + to - from, 0), presents = times.filter(t => inDrag(t) >= 0).length;
       (result.fps ??= []).push({ m: s.name ?? "scroll", ms: s.ms ?? 8000, presents, fps: Math.round(presents / (dragMs / 1000) * 10) / 10,
-        p50: q(0.5), p95: q(0.95), p99: q(0.99), over25: gaps.filter(g => g > 25).length, longTasks: long.length, longTaskMs: Math.round(long.reduce((a, b) => a + b, 0)) });
+        p50: q(0.5), p95: q(0.95), p99: q(0.99), over25: gaps.filter(g => g > 25).length, longTasks: long.length, longTaskMs: Math.round(long.reduce((a, b) => a + b, 0)),
+        frames: await frameReport(drags[0][0], drags.at(-1)![1]).catch(e => ({ error: String(e) })) });
       await idle();
       continue;
     }
-    let [x, y] = s.tap ?? [];
+    let [x, y] = s.tap ?? [], pressed: number[] | undefined;
     if (s.text) {
       let at = null;
       for (let tries = 0; !at && tries < 30; tries++) { at = await w.wd.locateText(s.text); if (!at) await sleep(100); }
       if (!at) throw new Error(`no text "${s.text}" on screen`);
-      ({ x, y } = at);
+      ({ x, y } = at); pressed = at.bounds;
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
+    if (s.m && metric === "first") {
+      // nothing reaches the app between pointerdown and the window's close but the pointer itself
+      const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? await w.wd.foregroundDemandMark() : null;
+      watch(s.expect);
+      await sleep(50);
+      const longTasks: [number, number][] = [], lto = new PerformanceObserver((list) => { for (const e of list.getEntries()) longTasks.push([e.startTime, e.duration]); });
+      try { lto.observe({ type: "longtask" }); } catch { /* not every engine reports long tasks */ }
+      const t0 = performance.now();
+      ev("pointerdown", x, y);
+      await sleep(s.hold ?? 60);
+      if (w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
+      const compileBefore = observer.snapshot(), tu = performance.now();
+      ev("pointerup", x, y);
+      // the window closes once the app has presented nothing for 800 ms
+      for (let last = tu; performance.now() - last < 800 && performance.now() - t0 < 8000;) {
+        await sleep(20);
+        last = Math.max(last, (shots as Shot[] | null)?.at(-1)?.t ?? 0);
+      }
+      const compileAfter = observer.snapshot(), compileAt = performance.now(), window = unwatch();
+      const topPid = appCanvas().dataset.pid ?? pid;
+      const response = firstResponse(s.expect, window, tu, pressed ?? [x - 48, y - 48, x + 48, y + 48], topPid);
+      window.forEach(shot => shot.crops.forEach(c => c.close()));
+      const after = await snapshot(), timeline = await frameReport(t0, compileAt).catch(e => ({ error: String(e) }));
+      lto.disconnect();
+      const page = timeline && "raw" in timeline ? { raw: (w.wd.pageTimeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
+      await idle();
+      const processesAfter = await diagnostics(), nodes = await state(), demanded = mark ? await w.wd.foregroundDemandSince(mark) : undefined;
+      const { last, still, ...first } = response;
+      let error = first.error ?? frameError ?? null;
+      if (!error && (!nodes || !w.__wdLatMatches(nodes, s.expect))) error = "the settled UI state does not match the scenario";
+      if (!error && last && !pixelsMatch(s.expect, last.pixels, still?.pixels ?? [])) error = "the settled response pixels do not match the scenario";
+      out.push({ intended: error ? null : first.first, response: { ...first, ...(error ? { error } : {}) }, timeline, page, semantic: { nodes, at: performance.now() },
+        compileBefore, compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: compileAt }, m: s.m, frames: first.frames, demandMark: mark ?? undefined, demand: demanded,
+        perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter });
+      continue;
+    }
     const baseline = s.m ? await regionsOf(appCanvas(), s.expect) : [];
     if (s.m) collect();
     const t0 = performance.now();
@@ -315,7 +504,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   result.processesAfter = await diagnostics();
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}, ${JSON.stringify(metric)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
   try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";
@@ -328,11 +517,14 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     const context = await webkit.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, colorScheme: "light" });
     return { context, version: context.browser()!.version(), close: () => context.close() };
   }
+  const chromeLog = process.env.WEBDROID_CHROME_LOG;
   const proc = Bun.spawn([chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
     ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
-    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), "about:blank"], { stdout: "ignore", stderr: "ignore" });
+    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"],
+    // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
+    { stdout: chromeLog ? Bun.file(chromeLog) : "ignore", stderr: chromeLog ? Bun.file(chromeLog + ".err") : "ignore" });
   let port = "";
   for (let i = 0; i < 100 && !port; i++) {
     await Bun.sleep(100);
@@ -358,7 +550,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
 }
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
-  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
+  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch, metric)} });`;
   const url = new URL("/", BASE);
   url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
   if (browser.context) {
@@ -377,24 +569,33 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
-  // the page and every Worker it starts, each paused until its profiler runs
-  const profiled = new Map<string, string>();
-  const startProfile = async (session: string, label: string) => {
-    profiled.set(session, label);
+  // the page and every Worker it starts, each paused until it is throttled and its profiler runs
+  const profiled = new Map<string, string>(), instrumented = new Set<string>();
+  const instrument = async (session: string, label: string) => {
+    instrumented.add(session);
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session);
+    if (throttle > 1) await send("Emulation.setCPUThrottlingRate", { rate: throttle }, session);
+    if (!profile) return;
+    profiled.set(session, label);
     await send("Profiler.enable", {}, session); await send("Profiler.setSamplingInterval", { interval: 200 }, session); await send("Profiler.start", {}, session);
+    if (heapSample) { await send("HeapProfiler.enable", {}, session); await send("HeapProfiler.startSampling", { samplingInterval: 16384 }, session); }
   };
   const attached = (m: any) => {
-    if (m.method !== "Target.attachedToTarget" || !profiled.has(m.sessionId)) return;
+    if (m.method !== "Target.attachedToTarget" || !instrumented.has(m.sessionId)) return;
     const { sessionId: worker, targetInfo } = m.params, pid = new URL(targetInfo.url).searchParams.get("pid");
-    void startProfile(worker, pid ?? `${targetInfo.type}-${worker.slice(0, 6)}`).catch(() => {})
+    void instrument(worker, pid ?? `${targetInfo.type}-${worker.slice(0, 6)}`).catch(() => {})
       .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
   };
-  if (profile) { browser.events!.add(attached); await startProfile(sessionId, ""); }
-  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "blink.user_timing", "gpu", "viz", "cc"] } });
+  if (profile || throttle > 1) { browser.events!.add(attached); await instrument(sessionId, ""); }
+  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "blink.user_timing", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"] } });
+  // a crashed page answers nothing, so the wait ends with what the page reported last
+  let crashed = false;
+  const crash = (m: any) => { if (m.method === "Inspector.targetCrashed" && m.sessionId === sessionId) crashed = true; };
+  browser.events!.add(crash);
+  await send("Inspector.enable", {}, sessionId);
   await send("Page.navigate", { url: url.href }, sessionId);
   try {
-    for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
+    for (const deadline = Date.now() + 600_000; Date.now() < deadline && !crashed;) {
       await Bun.sleep(500);
       const { targetInfo } = await send("Target.getTargetInfo", { targetId });
       if (targetInfo.title !== "DONE") continue;
@@ -402,14 +603,17 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
         // a Worker that has ended may never answer
         const stopped = await Promise.race([send("Profiler.stop", {}, session).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]);
         if (stopped) await Bun.write(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
+        // the sampled allocations still live at the end, by allocating stack
+        const heap = heapSample && await Promise.race([send("HeapProfiler.getSamplingProfile", {}, session).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]);
+        if (heap) await Bun.write(profile!.replace(/\.cpuprofile$/, `${label ? "-" + label : ""}.heapprofile`), JSON.stringify(heap.profile));
       }
       if (trace) await writeTrace(browser, trace);
       const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
       return JSON.parse(read.result.value);
     }
-    const partial = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId);
-    return { ...JSON.parse(partial.result.value), error: "scenario timed out" };
-  } finally { browser.events?.delete(attached); await send("Target.closeTarget", { targetId }); }
+    const partial = crashed ? undefined : await Promise.race([send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId).catch(() => undefined), Bun.sleep(10_000)]);
+    return { ...JSON.parse(partial?.result.value ?? '{"taps":[]}'), error: crashed ? "the page crashed" : "scenario timed out" };
+  } finally { browser.events?.delete(attached); browser.events?.delete(crash); await Promise.race([send("Target.closeTarget", { targetId }).catch(() => {}), Bun.sleep(10_000)]); }
 }
 
 async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
@@ -451,17 +655,20 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; metric: string; throttle: number; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, engine, warm, query: launchQuery.toString(), taps: [],
-    accepted: false, intendedObservation: "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
+  const row: Report = { scenario: name, engine, warm, metric, throttle, query: launchQuery.toString(), taps: [],
+    accepted: false, intendedObservation: metric === "first"
+      ? "first response: pointerup to the first presented app frame whose response regions depart from the pre-pointerup frame in tiles the settled frame also changed, outside the pressed view's bounds + 72 px; no guest probes between pointerdown and the settled frame; settled UI state and pixels confirmed afterwards"
+      : "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
     instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; latest immutable bitmap retained, response pixels read after matching UI state; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
   report.push(row);
   let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
+  const gated = gates(name);
   try {
     const { apk, steps: scenarioSteps, launch: expectedLaunch, responses } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
     const steps = scenarioSteps.map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
@@ -487,15 +694,21 @@ for (const name of names) {
     for (const t of taps) {
       t.compile = compileDeltas(t.compileBefore, t.compileAfter, t.compileWindow);
       const over = t.intended === null || t.intended > LIMIT_MS || !t.compile.mainRealmCoverage;
-      failed ||= over;
+      failed ||= over && gated;
       const detail = Object.entries(t.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
-      console.log(`${over ? "FAIL" : "ok  "} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms  ${detail}`);
+      const r = t.response, settled = r ? ` settled=${r.settled === null ? "none" : Math.round(r.settled)} frames=${r.frames} p95=${r.intervals.p95} missed=${r.intervals.missed}${r.error ? ` (${r.error})` : ""}` : "";
+      console.log(`${!over ? "ok  " : gated ? "FAIL" : "over"} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms ${settled} ${detail}`);
     }
-    for (const f of row.fps ?? []) console.log(`     ${name.padEnd(12)} ${f.m.padEnd(14)} ${String(f.fps).padStart(5)} fps p50=${f.p50} p95=${f.p95} p99=${f.p99} >25ms=${f.over25} longTasks=${f.longTasks}/${f.longTaskMs}ms`);
+    const span = (x: any) => x ? `${x.p50}/${x.p95}/${x.max}` : "-";
+    for (const f of row.fps ?? []) {
+      console.log(`     ${name.padEnd(12)} ${f.m.padEnd(14)} ${String(f.fps).padStart(5)} fps p50=${f.p50} p95=${f.p95} p99=${f.p99} >25ms=${f.over25} longTasks=${f.longTasks}/${f.longTaskMs}ms`);
+      const fr = f.frames;
+      if (fr && !fr.error) console.log(`       frames: vsyncs=${fr.vsyncs} missed busy=${fr.missedBusy} idle=${fr.missedIdle}; p50/p95/max ms: doFrame ${span(fr.doFrame)} draw ${span(fr.draw)} composite ${span(fr.composite)} vsync→present ${span(fr.vsyncToPresent)} input→dispatch ${span(fr.inputToDispatch)} busy-at-vsync ${span(fr.busyAtVsync)}`);
+    }
   } catch (e) {
-    failed = true;
+    failed ||= gated;
     row.error = e instanceof Error ? e.message : String(e);
-    console.log(`FAIL ${name}: ${row.error}`);
+    console.log(`${gated ? "FAIL" : "fail (report)"} ${name}: ${row.error}`);
   } finally {
     await browser?.close();
     if (profile) rmSync(profile, { recursive: true, force: true });
