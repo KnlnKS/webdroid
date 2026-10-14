@@ -9,7 +9,7 @@ import { E } from "./abi";
 import { type Cpu, cpuByOsTid } from "./cpu";
 import { setAbortMessage } from "./crash";
 import { SIGNAL_LIBC } from "./signals";
-import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
+import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
 import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
@@ -74,8 +74,10 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   capget: (cpu, a) => capget(cpu, a.p(), a.p()),
 };
 
+const PATH_MAX = 4096;
 export function procInit(): void {
   const guard = mem.hostAlloc(8);
+  const baseBuf = mem.hostAlloc(PATH_MAX), dirBuf = mem.hostAlloc(PATH_MAX);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
   hostData("libc.so", "__stack_chk_guard", guard);
   const progname = mem.hostAlloc(PTR); stp(progname, mem.hostStr("app_process"));
@@ -156,16 +158,13 @@ export function procInit(): void {
     },
     strlcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.st8(d + k, 0); } return l; },
     strlcat: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = Math.min(mem.strlen(d), n), l = mem.strlen(s); if (dl < n) { const k = Math.min(l, n - dl - 1); mem.memmove(d + dl, s, k); mem.st8(d + dl + k, 0); } return dl + l; },
-    basename: (_c, a) => { const p = a.p(); const s = mem.cstr(p).replace(/\/+$/, ""); const i = s.lastIndexOf("/"); return mem.hostStr(s === "" ? "/" : s.slice(i + 1)); },
-    dirname: (_c, a) => { const s = mem.cstr(a.p()).replace(/\/+$/, ""); const i = s.lastIndexOf("/"); return mem.hostStr(i < 0 ? "." : i === 0 ? "/" : s.slice(0, i)); },
+    basename: (_c, a) => { const s = mem.cstr(a.p()).replace(/\/+$/, ""); mem.putCstr(baseBuf, s === "" ? "/" : s.slice(s.lastIndexOf("/") + 1), PATH_MAX); return baseBuf; },
+    dirname: (_c, a) => { const s = mem.cstr(a.p()).replace(/\/+$/, ""), i = s.lastIndexOf("/"); mem.putCstr(dirBuf, i < 0 ? "." : i === 0 ? "/" : s.slice(0, i), PATH_MAX); return dirBuf; },
     fnmatch: (_c, a) => {
       const pat = a.str(), str = a.str();
       const re = "^" + pat.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
       return new RegExp(re).test(str) ? 0 : 1;
     },
-    asctime_r: (_c, a) => { const tm = a.p(), buf = a.p(); mem.putCstr(buf, asctime(tm), 26); return ptr(buf); },
-    asctime: (_c, a) => mem.hostStr(asctime(a.p())),
-    ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, new Date(t * 1000).toString().slice(0, 24) + "\n", 26); return ptr(buf); },
     // fortified wrappers: the object size is checked, then the plain function's work is done
     __memcpy_chk: memcpyChk,
     __memmove_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
@@ -191,9 +190,4 @@ export function procInit(): void {
   for (const n of ["waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.CHILD);
   for (const n of ["execl", "execlp", "execv", "execve", "execvp"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
   hostLib("libc.so", M);
-}
-function asctime(tm: number): string {
-  const [sec, min, hour, mday, mon, year, wday] = readTm(tm);
-  const p2 = (n: number) => String(n).padStart(2, "0");
-  return `${DAYS[wday]?.slice(0, 3) ?? "???"} ${MONTHS[mon]?.slice(0, 3) ?? "???"} ${String(mday).padStart(2, " ")} ${p2(hour)}:${p2(min)}:${p2(sec)} ${year + 1900}\n`;
 }

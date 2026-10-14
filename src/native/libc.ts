@@ -29,8 +29,8 @@ import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
 import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings";
 /** the C locale's month and weekday names (strftime, asctime) */
-export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** the ARM32 struct tm past its nine ints */
 export const TM = { gmtoff: 36, zone: 40, size: 44 };
@@ -141,7 +141,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   mem.st32(tm + TM.gmtoff, utc ? 0 : -d.getTimezoneOffset() * 60);
   stp(tm + TM.zone, tznames[utc ? 0 : 1]);
 }
-export function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
+function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
 function strftime(fmt: string, tm: number): string {
   const [sec, min, hour, mday, mon, year, wday, yday] = readTm(tm);
   const p2 = (n: number) => String(n).padStart(2, "0");
@@ -280,12 +280,12 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   // range wherever it lands, and its new pages hold the file's bytes.
   mremap: (cpu, a) => {
     const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & 2 ? a.va() : 0n;
-    const page = pages, mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
+    const mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
     if (old & mask || fixed & mask || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
-    if (flags & 2 && fixed < old + BigInt(page(oldSize)) && old < fixed + BigInt(page(size))) return mapFailed(cpu, E.INVAL);
-    if (!(flags & 2) && page(size) <= page(oldSize)) {
-      const tail = page(oldSize) - page(size);
-      if (tail) { syncShared(old + BigInt(page(size)), tail, true); mem.unmapVa(old + BigInt(page(size)), tail); }
+    if (flags & 2 && fixed < old + BigInt(pages(oldSize)) && old < fixed + BigInt(pages(size))) return mapFailed(cpu, E.INVAL);
+    if (!(flags & 2) && pages(size) <= pages(oldSize)) {
+      const tail = pages(oldSize) - pages(size);
+      if (tail) { syncShared(old + BigInt(pages(size)), tail, true); mem.unmapVa(old + BigInt(pages(size)), tail); }
       return result(old);
     }
     const mapping = fileMapAt(old);
@@ -294,7 +294,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
       if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
       if (flags & 2) {
         syncShared(fixed, size, true);
-        if (!mem.mapFixed(fixed, page(size)) || !mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
+        if (!mem.mapFixed(fixed, pages(size)) || !mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
         invalidateRange(mem.txVa(fixed), size); mem.dropVa(fixed, size);
         to = fixed;
       } else {
@@ -304,7 +304,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
       }
       syncShared(old, oldSize, true);
       mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), Math.min(oldSize, size)));
-      mem.unmapVa(old, page(oldSize));
+      mem.unmapVa(old, pages(oldSize));
     } else syncShared(old, oldSize, true);
     if (!mapping) return result(to);
     const track = () => {
@@ -366,10 +366,7 @@ export function libcInit(): void {
     entries.forEach((entry, i) => stp(p + i * PTR, entry)); stp(p + entries.length * PTR, 0);
     stp(environ, p); if (envArray) mem.free(envArray); envArray = p;
   };
-  const envString = (s: string) => {
-    const bytes = utf8(s), p = mem.malloc(bytes.length + 1);
-    mem.u8.set(bytes, p); mem.st8(p + bytes.length, 0); envStrings.add(p); return p;
-  };
+  const envString = (s: string) => { const p = mem.strdup(s); envStrings.add(p); return p; };
   const envKey = (p: number) => mem.cstr(p).split("=", 1)[0];
   writeEnv(Object.entries(processEnv).map(([k, v]) => envString(k + "=" + v)));
 
@@ -506,8 +503,7 @@ export function libcInit(): void {
     wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemset: (_c, a) => { const d = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) mem.st32(d + i * 4, c); return ARG0; },
-    wcscoll: (_c, a) => { const x = wstr(a.p()), y = wstr(a.p()); return x < y ? -1 : x > y ? 1 : 0; },
-    wcscmp: (_c, a) => { const x = wstr(a.p()), y = wstr(a.p()); return x < y ? -1 : x > y ? 1 : 0; },
+    wcscmp: (_c, a) => { let x = a.p(), y = a.p(); for (;; x += 4, y += 4) { const c = mem.ld32(x) >>> 0, d = mem.ld32(y) >>> 0; if (c !== d) return c < d ? -1 : 1; if (!c) return 0; } },
     wcsxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = wlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k * 4); mem.st32(d + k * 4, 0); } return l; },
     wcsftime: (_c, a) => { const d = a.p(), n = a.u(), f = wstr(a.p()), tm = a.p(); const s = strftime(f, tm); if (s.length >= n) return 0; for (let i = 0; i < s.length; i++) mem.st32(d + i * 4, s.codePointAt(i)!); mem.st32(d + s.length * 4, 0); return s.length; },
     towlower: (_c, a) => { const c = a.i(); return c < 0x10000 ? String.fromCharCode(c).toLowerCase().charCodeAt(0) : c; },
@@ -554,6 +550,10 @@ export function libcInit(): void {
     gmtime_r: (_c, a) => ptr(toTm(mem.ld32(a.p()), a.p(), true)),
     localtime: (_c, a) => toTm(mem.ld32(a.p()), tmBuf, false),
     gmtime: (_c, a) => toTm(mem.ld32(a.p()), tmBuf, true),
+    asctime_r: (_c, a) => { const tm = a.p(), buf = a.p(); mem.putCstr(buf, strftime("%c\n", tm), 26); return ptr(buf); },
+    asctime: (_c, a) => { mem.putCstr(ascBuf, strftime("%c\n", a.p()), 26); return ascBuf; },
+    ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, strftime("%c\n", toTm(t, tmBuf, false)), 26); return ptr(buf); },
+    ctime: (_c, a) => { mem.putCstr(ascBuf, strftime("%c\n", toTm(mem.ld32(a.p()), tmBuf, false)), 26); return ascBuf; },
     mktime: (_c, a) => Math.floor(mktime(a.p()) / 1000),
     timegm: (_c, a) => timegm(a.p()),
     // bionic's <time64.h>, which 32-bit code uses past 2038: time64_t is 64-bit on every ABI
@@ -600,6 +600,7 @@ export function libcInit(): void {
     __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p()))); return 1; },
     __android_log_assert: (cpu, a) => { a.p(); const tag = a.str(); const f = a.p(); cpu.fault(`assert ${tag}: ${f ? format(mem.cstr(f), a) : ""}`); },
   };
+  M.wcscoll = M.wcscmp;
   // the *_l variants: the base function, with the trailing locale_t never read
   for (const n of ["strtol", "strtoul", "strtoll", "strtoull", "strtod", "strtof", "strtold", "strcoll", "strxfrm", "strftime", "wcscoll", "wcsxfrm", "wcsftime",
     "isalpha", "isdigit", "isxdigit", "isspace", "isupper", "islower", "isalnum", "ispunct", "isprint", "iscntrl", "tolower", "toupper",
@@ -615,7 +616,7 @@ export function libcInit(): void {
   };
   hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...M });
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
-  const tmBuf = mem.hostAlloc(TM.size);
+  const tmBuf = mem.hostAlloc(TM.size), ascBuf = mem.hostAlloc(26);
   const inetBuf = mem.hostAlloc(20);
   const cLocale = mem.hostStr("C");
   const localeConv = mem.hostAlloc(16 * PTR);
