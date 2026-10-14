@@ -86,28 +86,38 @@ const isspace = (c: number) => c === 32 || (c >= 9 && c <= 13);
 const isdigit = (c: number) => c >= 48 && c <= 57;
 
 // ── strtol family over guest memory
-function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64, unsigned: boolean): bigint {
+/** strtol and its kin: a 32-bit result as a number, a 64-bit one as a bigint. Digits accumulate exactly in a double until
+ *  they pass 2^53; an unsigned conversion of a negative string wraps, as C's does. */
+function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64, unsigned: boolean): number | bigint {
   let p = s;
   while (isspace(mem.u8[p])) p++;
   let neg = false;
   if (mem.u8[p] === 43 || mem.u8[p] === 45) { neg = mem.u8[p] === 45; p++; }
   if ((base === 0 || base === 16) && mem.u8[p] === 48 && (mem.u8[p + 1] | 32) === 120) { base = 16; p += 2; }
   else if (base === 0) base = mem.u8[p] === 48 ? 8 : 10;
-  let v = 0n, any = false;
+  let n = 0, big: bigint | null = null, any = false;
   for (;;) {
     const c = mem.u8[p];
     let d: number;
     if (c >= 48 && c <= 57) d = c - 48; else if ((c | 32) >= 97 && (c | 32) <= 122) d = (c | 32) - 87; else break;
     if (d >= base) break;
-    v = v * BigInt(base) + BigInt(d); any = true; p++;
+    if (big !== null) big = big * BigInt(base) + BigInt(d);
+    else if (n * base + d <= Number.MAX_SAFE_INTEGER) n = n * base + d;
+    else big = BigInt(n) * BigInt(base) + BigInt(d);
+    any = true; p++;
   }
   if (!any) p = s;
   if (endp) stp(endp, p);
-  if (neg) v = -v;
-  const max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n, min = unsigned ? 0n : -(1n << BigInt(bits - 1));
-  if (v > max) { setErrno(cpu, E.RANGE); return max; }
-  if (v < min) { setErrno(cpu, E.RANGE); return min; }
-  return v;
+  if (bits === 32 && big === null) {
+    const max = unsigned ? 0xffffffff : 0x7fffffff;
+    if (n > (neg && !unsigned ? max + 1 : max)) { setErrno(cpu, E.RANGE); return neg && !unsigned ? -max - 1 : max; }
+    return !neg ? n : unsigned ? (0x100000000 - n) % 0x100000000 : 0 - n;
+  }
+  const v = big ?? BigInt(n), max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n;
+  let r: bigint;
+  if (v > (neg && !unsigned ? max + 1n : max)) { setErrno(cpu, E.RANGE); r = neg && !unsigned ? -max - 1n : max; }
+  else r = !neg ? v : unsigned ? BigInt.asUintN(bits, -v) : -v;
+  return bits === 32 ? Number(r) : r;
 }
 function strtodAt(s: number, endp: number): number {
   const str = mem.cstr(s, 512);
@@ -466,12 +476,12 @@ export function libcInit(): void {
     },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, strerror(a.i()), 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, strerror(e), n); return 0; },
-    strtol: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false)),
-    strtoul: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0,
+    strtol: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), cpu.a64 ? 64 : 32, false),
+    strtoul: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), cpu.a64 ? 64 : 32, true),
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
     strtoull: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, true),
-    atoi: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
-    atol: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
+    atoi: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 32, false),
+    atol: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, cpu.a64 ? 64 : 32, false),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
     strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
     strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
