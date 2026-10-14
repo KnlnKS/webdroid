@@ -40,6 +40,18 @@ function hashKey(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+/** the end of the preprocessor directive at `i`, past its backslash-continued lines and newline */
+function directiveEnd(source: string, i: number): number {
+  do {
+    const nl = source.indexOf("\n", i + 1);
+    if (nl < 0) return source.length;
+    let p = nl - 1;
+    if (source.charCodeAt(p) === 13) p--;
+    i = nl + 1;
+    if (source.charCodeAt(p) !== 92) break;
+  } while (i < source.length);
+  return i;
+}
 function scan(source: string, unsupported: string[]): Token[] {
   const tokens: Token[] = [];
   let i = 0, lineStart = true;
@@ -61,14 +73,7 @@ function scan(source: string, unsupported: string[]): Token[] {
     }
     if (lineStart && c === 35) {
       const start = i;
-      do {
-        const nl = source.indexOf("\n", i + 1);
-        if (nl < 0) { i = source.length; break; }
-        let p = nl - 1;
-        if (source.charCodeAt(p) === 13) p--;
-        i = nl + 1;
-        if (source.charCodeAt(p) !== 92) break;
-      } while (i < source.length);
+      i = directiveEnd(source, i);
       const directive = source.slice(start, i);
       for (const [fn, re] of SAMPLE_RE) if (re.test(directive)) unsupported.push(`preprocessor:${fn}`);
       lineStart = true;
@@ -173,14 +178,7 @@ function preambleEnd(source: string): number {
     }
     if (c !== 35) break;
     const start = i;
-    do {
-      const nl = source.indexOf("\n", i + 1);
-      if (nl < 0) { i = source.length; break; }
-      let p = nl - 1;
-      if (source.charCodeAt(p) === 13) p--;
-      i = nl + 1;
-      if (source.charCodeAt(p) !== 92) break;
-    } while (i < source.length);
+    i = directiveEnd(source, i);
     const directive = /^#\s*(\w+)/.exec(source.slice(start, i))?.[1];
     if (directive === "if" || directive === "ifdef" || directive === "ifndef") depth++;
     else if (directive === "endif") depth--;

@@ -43,6 +43,12 @@ export function writeBuffers(t: number, fn: (target: number) => void): void {
   try { fn(target); } finally { gl.bindBuffer(target, boundStorage(target)); }
 }
 export const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else writeBuffers(t, (tt) => g().bufferSubData(tt, off, data)); };
+/** the whole of the buffer bound to `target`, read back (WebGL copies nothing between index and vertex storage) */
+function readBound(gl: WebGL2RenderingContext, target: number): Uint8Array {
+  const data = new Uint8Array(gl.getBufferParameter(target, gl.BUFFER_SIZE));
+  gl.getBufferSubData(target, 0, data);
+  return data;
+}
 export function realize(t: number, r: BufRec | null, h: number): WebGLBuffer | null {
   if (!r) return null;
   const gl = g();
@@ -57,8 +63,7 @@ export function realize(t: number, r: BufRec | null, h: number): WebGLBuffer | n
     // WebGL forbids sharing index and vertex storage, so copy only on the first mixed bind.
     const target = r.elem ? ELEM : ARRAY;
     gl.bindBuffer(target, r.gl);
-    const data = new Uint8Array(gl.getBufferParameter(target, 0x8764));
-    gl.getBufferSubData(target, 0, data);
+    const data = readBound(gl, target);
     gl.bindBuffer(target, boundStorage(target));
     r.other = gl.createBuffer();
     if (r.other) { recOf.set(r.other, r); T().ids.set(r.other, h); }
@@ -72,8 +77,7 @@ export function syncVertexBuffer(r: BufRec | null | undefined): void {
   if (!r?.other) return;
   const gl = g();
   gl.bindBuffer(ARRAY, storage(r, false));
-  const data = new Uint8Array(gl.getBufferParameter(ARRAY, 0x8764));
-  gl.getBufferSubData(ARRAY, 0, data);
+  const data = readBound(gl, ARRAY);
   gl.bindBuffer(ELEM, storage(r, true));
   gl.bufferSubData(ELEM, 0, data);
   gl.bindBuffer(ARRAY, boundStorage(ARRAY)); gl.bindBuffer(ELEM, boundStorage(ELEM));
