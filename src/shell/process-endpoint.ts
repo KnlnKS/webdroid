@@ -46,29 +46,6 @@ const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().b
 const workerLocation = remoteLocation(brokerCalls);
 const workerLife = remoteProcessLife(brokerCalls, logUncaught);
 function connectCommandTransports(): void {
-  Object.assign(locationTransport,workerLocation.access);
-  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
-  pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
-  pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
-  pendingTransport.operation = id => brokerCalls().pendingOperation(id);
-  pendingTransport.kind = id => brokerCalls().pendingKind(id);
-  pendingTransport.flags = id => brokerCalls().pendingFlags(id);
-  pendingTransport.creator = id => brokerCalls().pendingCreator(id);
-  alarmTransport.schedule = (id, type, at, interval) => brokerCalls().alarmSchedule(id, type, at, interval);
-  alarmTransport.cancel = id => brokerCalls().alarmCancel(id);
-  const remoteStarts = {
-    created: (cls: string, intent: ParcelData) => brokerCalls().serviceCreated(cls, intent),
-    destroyed: (cls: string) => brokerCalls().serviceDestroyed(cls),
-    start: (cls: string, intent: ParcelData) => brokerCalls().serviceStart(cls, intent),
-    deliver: (cls: string) => brokerCalls().serviceDeliver(cls),
-    requested: (cls: string) => brokerCalls().serviceRequested(cls),
-    stop: (cls: string) => brokerCalls().serviceStop(cls),
-    stopSelf: (cls: string, id: number) => brokerCalls().serviceStopSelf(cls, id),
-    done: (cls: string, id: number, result: number) => brokerCalls().serviceDone(cls, id, result),
-    foreground: (cls: string, on: boolean) => brokerCalls().serviceForeground(cls, on),
-  };
-  serviceTransport.starts = () => remoteStarts;
-  serviceTransport.connected = (key, binder, dead) => brokerCalls().serviceConnected(key, exportBinder(binder), dead);
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
     yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
@@ -94,6 +71,29 @@ function connectCommandTransports(): void {
 }
 /** the stores and system services a Worker reaches only through the broker */
 function connectWorkerTransports(): void {
+  Object.assign(locationTransport,workerLocation.access);
+  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
+  pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
+  pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
+  pendingTransport.operation = id => brokerCalls().pendingOperation(id);
+  pendingTransport.kind = id => brokerCalls().pendingKind(id);
+  pendingTransport.flags = id => brokerCalls().pendingFlags(id);
+  pendingTransport.creator = id => brokerCalls().pendingCreator(id);
+  alarmTransport.schedule = (id, type, at, interval) => brokerCalls().alarmSchedule(id, type, at, interval);
+  alarmTransport.cancel = id => brokerCalls().alarmCancel(id);
+  const remoteStarts = {
+    created: (cls: string, intent: ParcelData) => brokerCalls().serviceCreated(cls, intent),
+    destroyed: (cls: string) => brokerCalls().serviceDestroyed(cls),
+    start: (cls: string, intent: ParcelData) => brokerCalls().serviceStart(cls, intent),
+    deliver: (cls: string) => brokerCalls().serviceDeliver(cls),
+    requested: (cls: string) => brokerCalls().serviceRequested(cls),
+    stop: (cls: string) => brokerCalls().serviceStop(cls),
+    stopSelf: (cls: string, id: number) => brokerCalls().serviceStopSelf(cls, id),
+    done: (cls: string, id: number, result: number) => brokerCalls().serviceDone(cls, id, result),
+    foreground: (cls: string, on: boolean) => brokerCalls().serviceForeground(cls, on),
+  };
+  serviceTransport.starts = () => remoteStarts;
+  serviceTransport.connected = (key, binder, dead) => brokerCalls().serviceConnected(key, exportBinder(binder), dead);
   webStorageTransport.calls = brokerCalls;
   useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
   notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
