@@ -308,10 +308,8 @@ export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<st
 export const getDeclared = <T = unknown>(o: unknown, cls: string, name: string): T => (o as Record<string, T>)[fieldOf(cls, name)]!;
 
 /** A native implemented as a generator (see Runtime.drive), callable like any other method.
- *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their
- *  declared (often defaulted) parameters. */
+ *  `$g` is the generator itself, which the Wasm host runs on a suspendable strand. */
 export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>): (this: any, ...a: A) => Driven<T> {
-  // $g: the generator, whose source the override-bypass lint reads
   return Object.assign(function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; }, { $g: g });
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */

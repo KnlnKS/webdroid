@@ -4,7 +4,7 @@ import type { ClockBootstrap } from "./shell/clock-port";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
-// Its URL carries the screen/tier/coverage pins before any JVM import runs.
+// Its URL carries the screen and native pins before any JVM import runs.
 type Start = { bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 const logs: string[] = [];
 const logError = console.error.bind(console);

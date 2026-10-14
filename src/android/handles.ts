@@ -95,7 +95,7 @@ export function take<T>(h: bigint): T {
 // A platform class that frees its native state in finalize() (Region, Picture, PathMeasure, ...)
 // would leak its handle here, where finalizers never run: a JS finalizer cannot see the object it
 // finalizes. What it frees is the handle in a long field, so the handle's native state lives as
-// long as the first Java object to store it (Runtime.link routes those classes' long fields here).
+// long as the first Java object to store it (World.claims marks those classes' long fields).
 const owned = new WeakSet<object>();
 const owners = new FinalizationRegistry<{ h: bigint; o: object }>(({ h, o }) => { if (objs[Number(h)] === o) release(h); });
 /** Native state follows its Java owner; release disposes it, while take transfers it. */

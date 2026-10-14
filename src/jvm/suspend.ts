@@ -1,9 +1,8 @@
 import { never, processExited } from "../process-exit";
 
-// Suspended activations share one Promise per pending operation. Every frame on the stack that
-// is waiting for it (compiled code or a generator native) joins the same continuation list, and
-// when the operation settles the list resumes innermost to outermost in a single microtask:
-// resuming an N-deep stack costs one Promise hop, not N.
+// Suspended activations share one Promise per pending operation. Every driven generator waiting
+// for it joins the same continuation list, and when the operation settles the list resumes
+// innermost to outermost in a single microtask: resuming an N-deep stack costs one Promise hop, not N.
 
 /** Continues a suspended activation with its callee's result or exception. */
 type Continuation = (value: unknown, threw: boolean) => unknown;
