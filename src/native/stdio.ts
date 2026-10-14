@@ -375,7 +375,7 @@ export function stdioInit(): void {
     fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
     ftell: (cpu, a) => fileTell(cpu, a.p()),
     rewind: (cpu, a) => { const fp = a.p(); return complete(fileSeek(cpu,fp,0,0),()=>{mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_ERR);}); },
-    fgetpos: (cpu, a) => { const fp=a.p(),destination=anchor(a.p());return complete(fileTell(cpu,fp),value => {if(value<0)return -1;stp(destination(),value);return 0;}); },
+    fgetpos: (cpu, a) => { const fp=a.p(),destination=anchor(a.p());return complete(fileTell(cpu,fp),value => {if(value<0)return -1;stLong(destination(),value);return 0;}); },
     fsetpos: (cpu, a) => { const fp = a.p(), pos = a.p(); return fileSeek(cpu, fp, mem.ld32(pos), 0); },
     feof: (_c, a) => (mem.ld16u(a.p() + FILE.flags) & F_EOF ? 1 : 0),
     ferror: (_c, a) => (mem.ld16u(a.p() + FILE.flags) & F_ERR ? 1 : 0),

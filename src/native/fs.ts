@@ -3,7 +3,7 @@
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
 import { mem, guestAt, anchor } from "./mem";
-import { type HostFn, PTR, stp, ldp, stLong, ARG0 } from "./host";
+import { type HostFn, PTR, ldp, stLong, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, offArg, readTs, clockTime, randomBytes } from "./libc";
@@ -677,7 +677,7 @@ export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: num
   mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
   mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
   const sec = Math.floor(mtimeMs / 1000);
-  for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stp(buf + o, sec);
+  for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stLong(buf + o, sec);
   mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
 }
 /** statfs: the storage estimate in 4K blocks. f_type and f_bsize are longs; the counts after them are 64-bit on both

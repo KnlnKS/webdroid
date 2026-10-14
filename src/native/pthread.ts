@@ -2,7 +2,7 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap, NativeFault, guestAt } from "./mem";
-import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp } from "./host";
+import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
@@ -350,7 +350,7 @@ export function pthreadInit(): void {
     pthread_attr_destroy: (_c, a) => { attrGuards.delete(a.p()); return 0; },
     pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
     pthread_attr_setguardsize: (_c, a) => { attrGuards.set(a.p(), Number(a.va())); return 0; },
-    pthread_attr_getguardsize: (_c, a) => { const attr = a.p(), out = a.p(); stp(out, attrGuards.get(attr) ?? 4096); return 0; },
+    pthread_attr_getguardsize: (_c, a) => { const attr = a.p(), out = a.p(); stLong(out, attrGuards.get(attr) ?? 4096); return 0; },
     pthread_attr_setscope: (_c, a) => { a.p(); const scope = a.i(); return scope === 0 ? 0 : scope === 1 ? E.NOTSUP : E.INVAL; },
     pthread_attr_getscope: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_attr_setdetachstate: (_c, a) => {
@@ -362,8 +362,8 @@ export function pthreadInit(): void {
     pthread_attr_getdetachstate: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 1); return 0; },
     pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
     pthread_attr_getschedparam: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
-    pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
-    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
+    pthread_attr_getstacksize: (_c, a) => { a.p(); stLong(a.p(), 0x100000); return 0; },
+    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stLong(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
     __pthread_cleanup_push: (cpu, a) => {
       const entry = a.p(), routine = a.p(), arg = a.p();

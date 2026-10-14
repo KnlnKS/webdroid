@@ -315,7 +315,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
     writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0
     return 0;
   },
-  clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + KLAYOUT.TS_SEC, 0); stp(ts + KLAYOUT.TS_NSEC, 1000); } return 0; },
+  clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stLong(ts + KLAYOUT.TS_SEC, 0); stLong(ts + KLAYOUT.TS_NSEC, 1000); } return 0; },
 };
 /** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
  *  calls as well */
