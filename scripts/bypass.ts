@@ -116,7 +116,7 @@ export function selfCallsSkipped(defs = platformDefs()): Map<string, string[]> {
       const code = def.dex.code(m.codeOff), self = code.regs - code.ins;
       const source = withHelpers(spec.name, String((impl as { $g?: unknown }).$g ?? impl));
       const skipped = new Set<string>();
-      for (const ins of prepareMethod(def.dex, code, def.dex.methodDesc(m.methodIdx), false).instructions) {
+      for (const ins of prepareMethod(code).instructions) {
         if (!/^invoke-(virtual|interface)/.test(ins.name) || ins.regs[0] !== self) continue;
         const sig = signature(def, ins.b), name = sig.slice(0, sig.indexOf("("));
         const flags = flagsOf(spec.name, sig);

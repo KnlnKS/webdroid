@@ -1,6 +1,5 @@
 import { beginCompile, endCompile } from "./compiler-observer";
-import { isWide, parseMethodDesc } from "./abi";
-import type { CodeItem, DexFile } from "./dex";
+import type { CodeItem } from "./dex";
 import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes";
 
 export interface PreparedInstruction {
@@ -14,28 +13,17 @@ export interface PreparedInstruction {
   readonly c: number;
   readonly regs: readonly number[];
   readonly wideLit: bigint;
-  readonly constKind?: "F" | "D";
-  readonly nullRecv?: boolean;
-  /** a compareTo whose result only zero tests read */
-  readonly signOnly?: boolean;
 }
 
 export interface PreparedMethod {
   readonly instructions: readonly PreparedInstruction[];
+  /** 1 at each pc that starts a basic block */
   readonly leaders: Readonly<Uint8Array>;
-  readonly params: readonly string[];
-  readonly widths: readonly number[];
-  readonly sync: boolean;
-  /** registers a numeric constant may reach: only these can hold 0 standing for null */
-  readonly nullable: ReadonlySet<number>;
 }
 
 type MutableInstruction = { -readonly [K in keyof PreparedInstruction]: PreparedInstruction[K] };
-type Defs = Map<number, ReadonlySet<MutableInstruction>>;
-type ArrayKinds = Map<number, "F" | "D">;
 
 const NO_REGS: readonly number[] = [];
-const NO_CARRIERS: ReadonlySet<number> = new Set();
 const s4 = (value: number) => (value << 28) >> 28;
 const s8 = (value: number) => (value << 24) >> 24;
 const s16 = (value: number) => (value << 16) >> 16;
@@ -117,29 +105,6 @@ export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
 
-function writesRegister(op: number): boolean {
-  if (op === 0 || (op >= 0x0e && op <= 0x11) || (op >= 0x1d && op <= 0x1f) ||
-      (op >= 0x26 && op <= 0x2c) || (op >= 0x32 && op <= 0x3d) ||
-      (op >= 0x4b && op <= 0x51) || (op >= 0x59 && op <= 0x5f) ||
-      (op >= 0x67 && op <= 0x78) || op === 0xe9 || op === 0xea ||
-      (op >= 0xfa && op <= 0xfd)) return false;
-  return true;
-}
-
-function maySuspend(op: number): boolean {
-  return op === 0x1d || op === 0x22 || op === 0x24 || op === 0x25 ||
-    (op >= 0x60 && op <= 0x6d) || (op >= 0x6e && op <= 0x78) ||
-    op === 0xe9 || op === 0xea || (op >= 0xfa && op <= 0xfd);
-}
-
-function floatingOperands(op: number): { kind: "F" | "D"; unary: boolean } | null {
-  if (op === 0x2d || op === 0x2e || (op >= 0xa6 && op <= 0xaa) || (op >= 0xc6 && op <= 0xca)) return { kind: "F", unary: false };
-  if (op === 0x2f || op === 0x30 || (op >= 0xab && op <= 0xaf) || (op >= 0xcb && op <= 0xcf)) return { kind: "D", unary: false };
-  if (op === 0x7f || (op >= 0x87 && op <= 0x89)) return { kind: "F", unary: true };
-  if (op === 0x80 || (op >= 0x8a && op <= 0x8c)) return { kind: "D", unary: true };
-  return null;
-}
-
 export function ifTarget(instruction: PreparedInstruction): number {
   return instruction.pc + (instruction.fmt === "22t" ? instruction.c : instruction.b);
 }
@@ -170,237 +135,6 @@ export function branchTargets(code: CodeItem, instruction: PreparedInstruction):
 
 const NO_TARGETS: readonly number[] = [];
 
-/** const/4 … const-wide/high16: the writes constant typing follows */
-const isNumericConst = (op: number) => op >= 0x12 && op <= 0x19;
-const isMove = (op: number) => op >= 0x01 && op <= 0x09;
-const isFieldPut = (op: number) => (op >= 0x59 && op <= 0x5f) || (op >= 0x67 && op <= 0x6d);
-const isMethodInvoke = (op: number) => (op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78) || (op >= 0xfa && op <= 0xfd);
-const isInstanceInvoke = (op: number) => isMethodInvoke(op) && op !== 0x71 && op !== 0x77 && op < 0xfc;
-/** the proto an invoke passes arguments by: a polymorphic call site's own, a call site's, or the method's */
-function invokeProto(dex: DexFile, { op, b, c }: MutableInstruction): number {
-  if (op === 0xfa || op === 0xfb) return c;
-  if (op === 0xfc || op === 0xfd) return (dex.callSite(b)[2] as { idx: number }).idx;
-  return dex.method(b).proto;
-}
-type FloatKind = "F" | "D";
-const floatKind = (type: string): FloatKind | undefined => type === "F" || type === "D" ? type : undefined;
-
-/** Visits each register the instruction reads as a float or double. An aput reads its value as
- *  its array's element kind, which only the caller's `arrayKind` knows. */
-function floatReads(dex: DexFile, instruction: MutableInstruction, returnType: string,
-  arrayKind: (reg: number) => FloatKind | undefined, visit: (reg: number, kind: FloatKind) => void): void {
-  const { op, a, b, c, regs } = instruction;
-  const operands = floatingOperands(op);
-  if (operands) {
-    if (op >= 0xc6) { visit(a, operands.kind); visit(b, operands.kind); }
-    else { visit(b, operands.kind); if (!operands.unary) visit(c, operands.kind); }
-  } else if (op === 0x4b || op === 0x4c) {
-    const kind = arrayKind(b);
-    if (kind) visit(a, kind);
-  } else if (isFieldPut(op)) {
-    const kind = floatKind(dex.type(dex.field(op <= 0x5f ? c : b).type));
-    if (kind) visit(a, kind);
-  } else if (isMethodInvoke(op)) {
-    let index = isInstanceInvoke(op) ? 1 : 0;
-    for (const type of dex.protoParamTypes(invokeProto(dex, instruction))) {
-      const kind = floatKind(type);
-      if (kind) visit(regs[index], kind);
-      index += isWide(type) ? 2 : 1;
-    }
-  } else if ((op === 0x0f && returnType === "F") || (op === 0x10 && returnType === "D")) visit(a, returnType);
-}
-
-/** Registers a numeric constant may reach, following moves flow-insensitively; null without one. */
-function constantCarriers(instructions: readonly MutableInstruction[]): Set<number> | null {
-  let regs: Set<number> | null = null;
-  for (const instruction of instructions) if (isNumericConst(instruction.op)) (regs ??= new Set()).add(instruction.a);
-  if (!regs) return null;
-  for (let grown = true; grown;) {
-    grown = false;
-    for (const { op, a, b } of instructions) if (isMove(op) && regs.has(b) && !regs.has(a)) { regs.add(a); grown = true; }
-  }
-  return regs;
-}
-
-/** Marks the constants a float or double reads (constKind) and the invokes whose receiver may
- *  be a null constant (nullRecv). The reaching-definition analysis runs only when some float read
- *  can see a constant; otherwise receivers are marked flow-insensitively, which only over-marks. */
-function annotateConstants(dex: DexFile, code: CodeItem, signature: ReturnType<typeof parseMethodDesc>,
-  isStatic: boolean, instructions: MutableInstruction[], leaders: Uint8Array, carriers: Set<number> | null): void {
-  if (!carriers) return;
-  let floatSeesConstant = false;
-  for (const instruction of instructions) {
-    floatReads(dex, instruction, signature.ret, () => "F", (reg) => { floatSeesConstant ||= carriers.has(reg); });
-    if (floatSeesConstant) return typeConstants(dex, code, signature, isStatic, instructions, leaders);
-  }
-  for (const instruction of instructions) if (isInstanceInvoke(instruction.op) && carriers.has(instruction.regs[0])) instruction.nullRecv = true;
-}
-
-const elementKind = (type: string): FloatKind | undefined => type === "[F" ? "F" : type === "[D" ? "D" : undefined;
-const NO_ARRAYS: ArrayKinds = new Map();
-
-function typeConstants(
-  dex: DexFile,
-  code: CodeItem,
-  signature: ReturnType<typeof parseMethodDesc>,
-  isStatic: boolean,
-  instructions: MutableInstruction[],
-  leadersMap: Uint8Array,
-): void {
-  const leaders = instructions.filter((instruction) => leadersMap[instruction.pc]).map((instruction) => instruction.pc);
-  const body = new Map<number, MutableInstruction[]>();
-  let current: MutableInstruction[] | undefined;
-  for (const instruction of instructions) {
-    if (leadersMap[instruction.pc]) {
-      current = [];
-      body.set(instruction.pc, current);
-    }
-    if (!current) throw new Error(`instruction ${instruction.pc} has no basic block`);
-    current.push(instruction);
-  }
-
-  const retType = signature.ret;
-  // definitions are read only for registers read as a float or double (any aput's array taken as one), receivers, and the moves into them
-  const read = new Set<number>();
-  for (const instruction of instructions) {
-    floatReads(dex, instruction, retType, () => "F", (reg) => read.add(reg));
-    if (isInstanceInvoke(instruction.op)) read.add(instruction.regs[0]);
-  }
-  for (let grown = true; grown;) {
-    grown = false;
-    for (const { op, a, b } of instructions) if (isMove(op) && read.has(a) && !read.has(b)) { read.add(b); grown = true; }
-  }
-  let liveDefs: Defs | null = null;
-  const mark = (reg: number, kind: FloatKind) => {
-    const definitions = liveDefs?.get(reg);
-    if (definitions) for (const write of definitions) if (!write.constKind) write.constKind = kind;
-  };
-  /** runs a block from its entry state, which it copies only on its first change; the states it hands out are never changed */
-  const run = (leader: number, defs: Defs, arrays: ArrayKinds, markConsumers: boolean) => {
-    const block = body.get(leader);
-    if (!block) throw new Error(`missing basic block ${leader}`);
-    let lastReturnType = "", ownDefs = false, ownArrays = false;
-    liveDefs = markConsumers ? defs : null;
-    const setDef = (reg: number, value: ReadonlySet<MutableInstruction> | undefined) => {
-      if (defs.get(reg) === value) return;
-      if (!ownDefs) { defs = new Map(defs); ownDefs = true; if (liveDefs) liveDefs = defs; }
-      if (value) defs.set(reg, value); else defs.delete(reg);
-    };
-    const setArray = (reg: number, kind: FloatKind | undefined) => {
-      if (arrays.get(reg) === kind) return;
-      if (!ownArrays) { arrays = new Map(arrays); ownArrays = true; }
-      if (kind) arrays.set(reg, kind); else arrays.delete(reg);
-    };
-    /** what each handler sees: the state before every instruction that can throw into it, not the state at the block's end */
-    const thrown: [handler: number, defs: Defs, arrays: ArrayKinds][] = [];
-    for (const instruction of block) {
-      const { op, a, b, c } = instruction;
-      if (!markConsumers && code.tries.length && canThrow(op)) {
-        for (const handler of handlersAt(code, instruction.pc)) if (body.has(handler)) { thrown.push([handler, defs, arrays]); ownDefs = ownArrays = false; }
-      }
-      if (liveDefs) {
-        floatReads(dex, instruction, retType, (reg) => arrays.get(reg), mark);
-        if (isInstanceInvoke(op) && liveDefs.get(instruction.regs[0])?.size) instruction.nullRecv = true;
-      }
-
-      if (op === 0x23) setArray(a, elementKind(dex.type(c)));                                   // new-array
-      else if (op === 0x1f) setArray(a, elementKind(dex.type(b)));                              // check-cast
-      else if (op === 0x54) setArray(a, elementKind(dex.type(dex.field(c).type)));              // iget-object
-      else if (op === 0x62) setArray(a, elementKind(dex.type(dex.field(b).type)));              // sget-object
-      else if (op === 0x0c) setArray(a, elementKind(lastReturnType));                           // move-result-object
-      else if (op >= 0x07 && op <= 0x09) setArray(a, arrays.get(b));                            // move-object
-      else if (writesRegister(op)) setArray(a, undefined);
-      if (isMethodInvoke(op)) lastReturnType = dex.type(dex.proto(invokeProto(dex, instruction)).ret);
-      else if (op !== 0x0c) lastReturnType = "";
-
-      if (!read.has(a)) continue;
-      if (isNumericConst(op)) setDef(a, new Set([instruction]));
-      else if (isMove(op)) setDef(a, defs.get(b));
-      else if (writesRegister(op)) setDef(a, undefined);
-    }
-    return { defs, arrays, thrown };
-  };
-
-  const paramArrays: ArrayKinds = new Map();
-  const params = signature.params;
-  let paramRegister = code.regs - code.ins + (isStatic ? 0 : 1);
-  for (const paramType of params) {
-    if (paramType === "[F") paramArrays.set(paramRegister, "F");
-    else if (paramType === "[D") paramArrays.set(paramRegister, "D");
-    paramRegister += isWide(paramType) ? 2 : 1;
-  }
-  if (leaders.length === 1) {
-    run(leaders[0], new Map(), paramArrays, true);
-    return;
-  }
-
-  const successors = new Map<number, number[]>();
-  for (const [leader, block] of body) {
-    const last = block.at(-1);
-    if (!last) throw new Error(`empty basic block ${leader}`);
-    const targets = new Set(branchTargets(code, last).filter((target) => body.has(target)));
-    if (!endsBlock(last.op)) {
-      const next = last.pc + last.len;
-      if (body.has(next)) targets.add(next);
-    }
-    successors.set(leader, [...targets]);
-  }
-  const inDefs = new Map<number, Defs>(leaders.map((leader) => [leader, new Map()] as const));
-  const inArrays = new Map<number, ArrayKinds | null>(leaders.map((leader) => [leader, null] as const));
-  inArrays.set(leaders[0], new Map(paramArrays));
-  const work = [...leaders];
-  const queued = new Set(leaders);
-  /** merges the definitions and array kinds that reach `target` into its entry state and queues it when that grew */
-  const flow = (target: number, defs: Defs, arrays: ArrayKinds) => {
-    let changed = false;
-    const destination = inDefs.get(target);
-    if (!destination) throw new Error(`missing definition state for block ${target}`);
-    for (const [reg, definitions] of defs) {
-      const existing = destination.get(reg);
-      if (!existing) { destination.set(reg, definitions); changed = true; continue; }
-      if (existing === definitions) continue;
-      let merged: Set<MutableInstruction> | undefined;
-      for (const definition of definitions) {
-        if (!existing.has(definition)) (merged ??= new Set(existing)).add(definition);
-      }
-      if (merged) { destination.set(reg, merged); changed = true; }
-    }
-    const destinationArrays = inArrays.get(target);
-    if (destinationArrays === null || destinationArrays === undefined) {
-      inArrays.set(target, new Map(arrays));
-      changed = true;
-    } else {
-      for (const [reg, kind] of [...destinationArrays]) {
-        if (arrays.get(reg) !== kind) { destinationArrays.delete(reg); changed = true; }
-      }
-    }
-    if (changed && !queued.has(target)) { queued.add(target); work.push(target); }
-  };
-  for (let workIndex = 0; workIndex < work.length; workIndex++) {
-    const leader = work[workIndex];
-    queued.delete(leader);
-    const entryDefs = inDefs.get(leader);
-    if (!entryDefs) throw new Error(`missing definition state for block ${leader}`);
-    const state = run(leader, entryDefs, inArrays.get(leader) ?? NO_ARRAYS, false);
-    const targets = successors.get(leader);
-    if (!targets) throw new Error(`missing successors for block ${leader}`);
-    for (const target of targets) flow(target, state.defs, state.arrays);
-    for (const [handler, defs, arrays] of state.thrown) flow(handler, defs, arrays);
-  }
-  for (const leader of leaders) {
-    const entryDefs = inDefs.get(leader);
-    if (!entryDefs) throw new Error(`missing definition state for block ${leader}`);
-    run(leader, entryDefs, inArrays.get(leader) ?? NO_ARRAYS, true);
-  }
-}
-
-/** Can the instruction raise an exception? Moves, constants, jumps, tests, comparisons, conversions and arithmetic cannot (an integer division can). */
-function canThrow(op: number): boolean {
-  if (op <= 0x19 || op >= 0x28 && op <= 0x3d || op >= 0x7b && op <= 0x8f) return false;
-  if (op >= 0x90 && op <= 0xe2) return [0x93, 0x94, 0x9e, 0x9f, 0xb3, 0xb4, 0xbe, 0xbf, 0xd3, 0xd4, 0xdb, 0xdc].includes(op);
-  return true;
-}
-
 /** the registers an instruction names; a written one comes first */
 export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readonly number[] {
   switch (fmt) {
@@ -411,67 +145,7 @@ export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readon
     default: return [a];
   }
 }
-/** the register an instruction writes without reading it, else -1 (invokes and 2addr forms read theirs) */
-export function overwritten(ins: PreparedInstruction): number {
-  return registersOf(ins) !== ins.regs && writesRegister(ins.op) && !(ins.op >= 0xb0 && ins.op <= 0xcf) ? ins.a : -1;
-}
-/** the pcs control reaches when `ins` completes: its branch targets, and the next instruction unless it ends the block */
-export function successors(code: CodeItem, ins: PreparedInstruction): readonly number[] {
-  return endsBlock(ins.op) ? branchTargets(code, ins) : [...branchTargets(code, ins), ins.pc + ins.len];
-}
-/** the handlers an exception thrown at `pc` can reach */
-function handlersAt(code: CodeItem, pc: number): number[] {
-  const out: number[] = [];
-  for (const t of code.tries) if (pc >= t.start && pc < t.end) {
-    for (const [, handler] of t.handlers) out.push(handler);
-    if (t.catchAllAddr >= 0) out.push(t.catchAllAddr);
-  }
-  return out;
-}
-
-/** Does every path read the int written by the move-result at `from` only with zero tests, directly
- *  or through moves? Then only its sign matters. Any other read, a handler's included, needs it exact. */
-function readAsSign(code: CodeItem, at: Map<number, MutableInstruction>, from: MutableInstruction): boolean {
-  const seen = new Set<string>(), work: [number, number[]][] = [[from.pc + from.len, [from.a]]];
-  for (let item = work.pop(); item; item = work.pop()) {
-    let [pc, live] = item;
-    const ins = at.get(pc), key = `${pc} ${live}`;
-    if (!ins || !live.length || seen.has(key)) continue;
-    seen.add(key);
-    for (const handler of handlersAt(code, pc)) work.push([handler, live]);
-    const op = ins.op;
-    if (op >= 0x01 && op <= 0x03) live = !live.includes(ins.b) ? live.filter((r) => r !== ins.a) : live.includes(ins.a) ? live : [...live, ins.a];
-    else if (!(op >= 0x38 && op <= 0x3d) && registersOf(ins).some((r) => live.includes(r))) {
-      const dest = overwritten(ins);
-      if (dest < 0 || registersOf(ins).slice(1).some((r) => live.includes(r))) return false;
-      live = live.filter((r) => r !== dest);
-    }
-    for (const next of successors(code, ins)) work.push([next, live]);
-  }
-  return true;
-}
-
-/** Marks the compareTo calls whose results are only tested against zero: a String receiver then
- *  compares natively, in one step instead of a char loop. */
-function markSignOnly(dex: DexFile, code: CodeItem, instructions: MutableInstruction[]): void {
-  let at: Map<number, MutableInstruction> | undefined;
-  for (let k = 0; k + 1 < instructions.length; k++) {
-    const ins = instructions[k], op = ins.op;
-    if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78 || ins.regs.length !== 2 || instructions[k + 1].op !== 0x0a) continue;
-    if (dex.method(ins.b).name !== "compareTo") continue;
-    const desc = dex.methodDesc(ins.b);
-    if (desc !== "(Ljava/lang/Object;)I" && desc !== "(Ljava/lang/String;)I") continue;
-    at ??= new Map(instructions.map((x) => [x.pc, x]));
-    if (readAsSign(code, at, instructions[k + 1])) ins.signOnly = true;
-  }
-}
-
-export function prepareMethod(
-  dex: DexFile,
-  code: CodeItem,
-  desc: string,
-  isStatic: boolean,
-): PreparedMethod {
+export function prepareMethod(code: CodeItem): PreparedMethod {
   const span = beginCompile("wasm.prepare");
   try {
     const instructions = decodeInstructions(code.insns);
@@ -492,18 +166,6 @@ export function prepareMethod(
       for (const [, address] of region.handlers) leaders[address] = 1;
       if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
     }
-    const signature = parseMethodDesc(desc);
-    const carriers = constantCarriers(instructions);
-    annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
-    markSignOnly(dex, code, instructions);
-
-    return {
-      instructions,
-      leaders,
-      params: signature.params,
-      widths: signature.params.map((param) => isWide(param) ? 2 : 1),
-      sync: instructions.every((instruction) => !maySuspend(instruction.op)),
-      nullable: carriers ?? NO_CARRIERS,
-    };
+    return { instructions, leaders };
   } finally { endCompile(span); }
 }

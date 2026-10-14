@@ -81,7 +81,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   and handles, not Java objects; replies must reach callers waiting on the main queue.
 - Java strings are JS strings; int/float/double are numbers, long is BigInt; primitive arrays
   are typed arrays and object arrays carry `$t`. JVM code owns mangling, defining-loader
-  identity, null/zero normalization and reaching-definition typing of floating constants.
+  identity and null/zero normalization; the compiler types constants by their uses (`infer.ts`).
 - Main-thread entry uses `onMain`; queue ownership is the main loop's dispatch depth, not thread identity.
   Preserve lifecycle/callback ordering. Class initialization waits for concurrent initialization
   while allowing same-class re-entry and handling cycles.

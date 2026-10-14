@@ -144,7 +144,7 @@ w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
 const cyclic = irreducible ? methods.filter((m) => {
   const item = m.dex.code(m.codeOff);
-  try { new Flow(prepareMethod(m.dex, item, m.desc, true), item); return false; } catch (e) { return e instanceof Irreducible; }
+  try { new Flow(prepareMethod(item), item); return false; } catch (e) { return e instanceof Irreducible; }
 }).length : 0;
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);

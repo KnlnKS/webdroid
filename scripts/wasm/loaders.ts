@@ -283,7 +283,7 @@ if (!process.argv.includes("--hierarchy")) {
   console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolicResolutions - resolutions}, stub modules=${w.symbolicStubModules - stubModules}`);
   {
     const method = w.prog.require(key).byKey.get("symbolic()I")!;
-    const ins = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic).instructions.find(ins => ins.name === "invoke-static")!;
+    const ins = prepareMethod(method.dex.code(method.codeOff)).instructions.find(ins => ins.name === "invoke-static")!;
     const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
     if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs) throw new Error("symbolic stub compilation unaccounted");
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
@@ -576,7 +576,7 @@ async function interfaceSuperControl(): Promise<void> {
     if (p.get("InterfaceSuper$Default")!.byKey.has("f()I")) throw new Error("D8 introduced a default forwarder");
     for (const [method, kind, owner] of [["virtualDefault", "invoke-virtual", "Default"], ["interfaceDefault", "invoke-interface", "C"]]) {
       const m = p.get("InterfaceSuper")!.byKey.get(method + "()I")!;
-      const prepared = prepareMethod(m.dex, m.dex.code(m.codeOff), m.desc, m.isStatic);
+      const prepared = prepareMethod(m.dex.code(m.codeOff));
       const call = prepared.instructions.find(i => i.name === kind && m.dex.method(i.b).name === "f");
       if (!call || m.dex.rawType(m.dex.method(call.b).cls) !== `LInterfaceSuper$${owner};`) throw new Error("D8 changed ordinary default dispatch");
     }

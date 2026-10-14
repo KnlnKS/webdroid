@@ -164,7 +164,7 @@ export class MC {
       const n = performance.now(); phase[name] += n - t; t = n; endCompile(span); span = beginCompile(next);
     };
     const analysis = cx.methodAnalyses.get(m);
-    const prepared = this.prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
+    const prepared = this.prepared = analysis?.prepared ?? prepareMethod(item);
     lap("prepare", "wasm.flow");
     let flow: Flow;
     try { flow = structureAny(prepared, item); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
