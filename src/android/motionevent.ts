@@ -208,6 +208,13 @@ export class NativeMotionEvent {
 let ptrField = "";
 const ptrOf = (ev: object) => (ev as Record<string, bigint>)[ptrField ||= declaredField(ME, "mNativePtr")];
 const at = (h: bigint) => deref<NativeMotionEvent>(h);
+/** the event at `h` (a new one when 0) after `fill`, as a handle */
+const into = (h: bigint, fill: (e: NativeMotionEvent) => unknown): bigint => {
+  const e = h ? at(h) : new NativeMotionEvent();
+  fill(e);
+  return h || ownedHandle(e);
+};
+const xformOf = (matrix: object): Float32Array => { const m = matrixOf(matrix); return Float32Array.of(m[0], m[1], m[2], m[3], m[4], m[5]); };
 /** the native event behind a Java MotionEvent */
 export const motionOf = (ev: object): NativeMotionEvent => at(ptrOf(ev));
 
@@ -303,7 +310,7 @@ function coordsFromNative(e: NativeMotionEvent, c: Coords, o: Record<string, any
     if (!values || values.length < count) { let size = 8; while (size < count) size *= 2; o[f.values] = values = new Float32Array(size); }
     let index = 0;
     for (let axis = 0; axis < 64; axis++) if (axis < 32 ? hi >>> (31 - axis) & 1 : lo >>> (63 - axis) & 1) values[index++] = c.v[axis];
-    // the array is stored back: on the Wasm tier a field's array is a copy
+    // the array is stored back: a field's array is a copy
     o[f.values] = values;
   }
   o[f.bits] = BigInt(hi >>> 0) << 32n | BigInt(lo >>> 0);
@@ -411,10 +418,8 @@ rt.registerJnis(ME, {
       if (c.get(AXIS_ORIENTATION) !== 0) flags |= PRIVATE_FLAGS;
       raw.push(c);
     }
-    const e = ptr ? at(ptr) : new NativeMotionEvent();
-    Object.assign(e, { id: nextId(), deviceId, source, displayId, action, actionButton: 0, flags, edgeFlags, metaState, buttonState, classification,
-      xform, rawXform: IDENTITY_XF(), xPrecision, yPrecision, rawXCursor: NaN, rawYCursor: NaN, downTime, ids, tools, times: [eventTime], coords: raw });
-    return ptr || ownedHandle(e);
+    return into(ptr, (e) => Object.assign(e, { id: nextId(), deviceId, source, displayId, action, actionButton: 0, flags, edgeFlags, metaState, buttonState,
+      classification, xform, rawXform: IDENTITY_XF(), xPrecision, yPrecision, rawXCursor: NaN, rawYCursor: NaN, downTime, ids, tools, times: [eventTime], coords: raw }));
   },
   "nativeDispose(J)V": () => {},
   "nativeAddBatch(JJ[Landroid/view/MotionEvent$PointerCoords;I)V": (ptr: bigint, eventTime: bigint, coords: Record<string, unknown>[] | null, metaState: number) => {
@@ -442,9 +447,7 @@ rt.registerJnis(ME, {
     out[id] = e.ids[i]; out[tool] = e.tools[i];
   },
   "nativeReadFromParcel(JLandroid/os/Parcel;)J": (ptr: bigint, p: JObj) => {
-    const e = ptr ? at(ptr) : new NativeMotionEvent();
-    if (!readEvent(e, nativeParcel(p))) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to read MotionEvent parcel.");
-    return ptr || ownedHandle(e);
+    return into(ptr, (e) => { if (!readEvent(e, nativeParcel(p))) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to read MotionEvent parcel."); });
   },
   "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, p: JObj) => writeEvent(at(ptr), nativeParcel(p)),
   "nativeAxisToString(I)Ljava/lang/String;": (axis: number) => AXIS_LABELS[axis] ?? null,
@@ -460,11 +463,11 @@ rt.registerJnis(ME, {
   "nativeGetRawAxisValue(JIII)F": (ptr: bigint, axis: number, i: number, h: number) => { const e = at(ptr); return e.rawAxis(axis, i, sample(e, i, h)); },
   "nativeGetAxisValue(JIII)F": (ptr: bigint, axis: number, i: number, h: number) => { const e = at(ptr); return e.axis(axis, i, sample(e, i, h)); },
   "nativeTransform(JLandroid/graphics/Matrix;)V": (ptr: bigint, matrix: object) => {
-    const e = at(ptr), m = matrixOf(matrix);
-    e.xform = compose(Float32Array.of(m[0], m[1], m[2], m[3], m[4], m[5]), e.xform);
+    const e = at(ptr);
+    e.xform = compose(xformOf(matrix), e.xform);
   },
   "nativeApplyTransform(JLandroid/graphics/Matrix;)V": (ptr: bigint, matrix: object) => {
-    const e = at(ptr), m = matrixOf(matrix), t = Float32Array.of(m[0], m[1], m[2], m[3], m[4], m[5]);
+    const e = at(ptr), t = xformOf(matrix);
     for (const c of e.coords) transformCoords(c, t);
     if (!isNaN(e.rawXCursor) && !isNaN(e.rawYCursor)) {
       const x = e.rawXCursor, y = e.rawYCursor;
@@ -472,14 +475,10 @@ rt.registerJnis(ME, {
     }
   },
   "nativeCopy(JJZ)J": (dst: bigint, src: bigint, keepHistory: number) => {
-    const e = dst ? at(dst) : new NativeMotionEvent();
-    e.copyFrom(at(src), !!keepHistory);
-    return dst || ownedHandle(e);
+    return into(dst, (e) => e.copyFrom(at(src), !!keepHistory));
   },
   "nativeSplit(JJI)J": (dst: bigint, src: bigint, idBits: number) => {
-    const e = dst ? at(dst) : new NativeMotionEvent();
-    split(e, at(src), idBits);
-    return dst || ownedHandle(e);
+    return into(dst, (e) => split(e, at(src), idBits));
   },
   "nativeGetId(J)I": (ptr: bigint) => at(ptr).id,
   "nativeGetDeviceId(J)I": (ptr: bigint) => at(ptr).deviceId,

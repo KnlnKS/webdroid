@@ -64,7 +64,7 @@ export function weakHandle(o: object): bigint {
   return h;
 }
 
-/** how the tier that holds Java arrays apart from the host's gives natives the arrays whose handles it handed out (the Wasm tier: a view the native's writes are stored back from) */
+/** how the Wasm tier, which holds Java arrays apart from the host's, gives natives the arrays whose handles it handed out: a view the native's writes are stored back from */
 export const handleViews = { of: null as ((o: object) => unknown) | null };
 
 /** the object behind a long, or undefined for the null handle */
