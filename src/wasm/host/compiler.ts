@@ -178,7 +178,7 @@ export class CompileClient implements CompileService {
   private retire(reason: string): void {
     if (this.state === "retired") return;
     this.state = "retired"; this.retired = reason;
-    clearTimeout(this.held?.timer); this.held = undefined;
+    if (this.held) { clearTimeout(this.held.timer); this.held = undefined; }
     for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.release(slot);
     this.queue = []; this.busy = undefined;
     this.waiting = []; this.w = undefined; this.setup = undefined;
