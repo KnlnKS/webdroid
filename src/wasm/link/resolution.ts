@@ -129,12 +129,9 @@ export function resolveForName(w: World, name: string, object: object | null, ow
     const fail = (value: unknown): never => { throw w.exception(value as object); };
     return value instanceof Promise ? value.then(fail) : fail(value);
   };
-  const mirror = (key: string): object | Promise<object> => {
-    return handleThunk(w, "resolve:forName:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, owner)(w.idOf(key)) as object | Promise<object>;
-  };
   try {
     const key = w.resolveClass(definingLoader(w, object), name.replace(/\./g, "/"), owner);
-    return key instanceof Promise ? key.catch(wrap).then(mirror) : w.idOf(key);
+    return key instanceof Promise ? key.catch(wrap).then(key => resolvedMirror(w, key, owner)) : w.idOf(key);
   } catch (error) {
     return wrap(error);
   }
@@ -181,9 +178,7 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
 }
 
 export function resolvedMirror(w: World, key: string, owner: Strand): object | Promise<object> {
-  return handleThunk(w, "resolve:definition:mirror", ["I"], "L", (cx, c, arg) => {
-    arg(0); cx.callRt(c, "classOf");
-  }, owner)(w.idOf(key)) as object | Promise<object>;
+  return handleThunk(w, "resolve:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, owner)(w.idOf(key)) as object | Promise<object>;
 }
 
 /** Resolve one executed symbolic request without linking its class module. */
