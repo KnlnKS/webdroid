@@ -1,15 +1,14 @@
 // The registered natives (rt.register specs and rt.registerJni functions) as the Wasm tier's NativeSource.
 import { rt, JObj, type NativeSpec } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
-import { mangleMethod, splitSig } from "../../jvm/abi";
+import { splitSig } from "../../jvm/abi";
+import { stringMethods } from "../../jvm/natives/jstring";
 import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
 import { hostNatives } from "./hostnatives";
 import { mayWait } from "./suspend";
 
-/** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
-const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
 export const lookup = (cls: string, key: string, isStatic: boolean) => {
   const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key], id = cls + "." + key;
   const own = (typeof spec === "function" ? spec : typeof spec === "string" ? owner!.ctor.prototype[spec] : undefined) as HostFn | undefined;
@@ -28,7 +27,7 @@ export const nativeSource: NativeSource = {
   hostSpecs,
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
-    if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
+    if (cls === "java/lang/String") { const f = stringMethods.get(key) as HostFn | undefined; if (f || hasBody) return f; }
     if (settled.has(cls + "." + key)) return () => settled.get(cls + "." + key);
     if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return () => {};
     const own = lookup(cls, key, isStatic);

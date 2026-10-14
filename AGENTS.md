@@ -35,7 +35,7 @@ bun run typecheck
 bun run test
 bun run smoke apks/FitNotes.apk
 bun run fwtest
-bun run wasm all    # src/wasm suites under node: diff libdiff classdiff customdiff linkdiff lazytest fuzz jbench sweep aottest
+bun run wasm all    # src/wasm suites under node: diff classdiff customdiff linkdiff loaders lazytest fuzz threads sweep aottest persist …
 PORT=4090 bun run server.ts
 WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 bun run e2e
@@ -86,8 +86,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   Preserve lifecycle/callback ordering. Class initialization waits for concurrent initialization
   while allowing same-class re-entry and handling cycles.
 - Java overrides, overloads, reflection and boxing must reach the correct Java entry point.
-  A method lives under two names, the public mangled one and compiled code's Java-ABI one
-  (`src/jvm/suspend.ts`); install host methods with `setPublic`/`implement`, never one name alone.
+  Natives reach Java through `jentry` (`vcall`/`scall`/`newObj`), which dispatches by name and descriptor.
   Re-entrant callbacks can suspend; do not infer synchrony from one observed fast path.
   Collection views stay live. Resolve CharSequence with `csText`, not `String(javaObject)`.
 - Resources drive widget defaults, themes and geometry (`src/shell/config.ts`). AOSP bytecode

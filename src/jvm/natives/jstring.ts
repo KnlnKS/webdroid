@@ -1,19 +1,16 @@
-// java.lang.String over JS string primitives: String.prototype carries mangled Java methods.
+// java.lang.String over JS string primitives: the methods implemented here, called with the string as `this`, replace their bytecode.
 
 import { rt } from "../runtime";
-import { mangleMethod, jmethod, charsToString, utf8, splitSig, stringHash } from "../abi";
+import { mangleMethod, charsToString, utf8, stringHash } from "../abi";
 import { encodeString } from "../charset";
 import { once } from "../suspend";
 import { csText } from "./jchars";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
 import { after, linkInit, scall, vcall } from "./jentry";
 
-// ── String (patch JS String.prototype with mangled methods)
-function sm(sig: string, fn: (this: string, ...a: any[]) => unknown) {
-  const [name, desc] = splitSig(sig);
-  // no enumeration of a string's properties sees them
-  Object.defineProperty(String.prototype, mangleMethod(name, desc), { value: fn, writable: true, configurable: true, enumerable: false });
-}
+/** String's methods implemented here, by `name(desc)` */
+export const stringMethods = new Map<string, (this: string, ...a: any[]) => unknown>();
+const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => { stringMethods.set(sig, fn); };
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }
@@ -210,8 +207,7 @@ const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
 function jToString(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v !== "object") return String(v);
-  const f = jmethod(v, M_TO_STRING);
-  const r = f && f.call(v);
+  const r = (v as Record<string, (() => unknown) | undefined>)[M_TO_STRING]?.call(v);
   return typeof r === "string" ? r : String(v);
 }
 function offsetCodePoints(text: string, index: number, offset: number): number {

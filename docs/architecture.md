@@ -92,8 +92,6 @@ is how host code calls Java.
   primitive arrays through linear-memory scratch, other references as opaque values that the bridge
   (`host/bridge.ts`) reaches only through generated accessors.
 - A host class's Java object and its TS object are one object to both sides (`link/hostclass.ts`).
-- A method lives under two names, the public mangled one and compiled code's Java-ABI one (`src/jvm/suspend.ts`);
-  install host methods with `setPublic`/`implement`.
 - JNI for guest ARM code uses the Wasm references themselves as JNI objects (`host/jni.ts` over
   `src/native/jnivm.ts`).
 

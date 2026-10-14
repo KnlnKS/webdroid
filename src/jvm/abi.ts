@@ -1,4 +1,4 @@
-// Name mangling + descriptor utilities. One canonical scheme for compiled & native code.
+// Name mangling and descriptor utilities.
 //
 // Java values in JS:
 //   int/short/byte/char/float/double → number (booleans are 0/1 numbers, NEVER JS true/false)
@@ -6,12 +6,9 @@
 //   prim arrays → TypedArrays (byte=Int8, bool=Uint8, char=Uint16, short=Int16,
 //     int=Int32, long=BigInt64, float=Float32, double=Float64)
 //   object arrays → JS Array with $t = element descriptor tag
-//   objects → JS class instances (unified hierarchy: dex + native classes)
 //
-// Methods:      proto[`m$name$H` ] where H = hash(fullMethodDescriptor)
-// Constructors: proto[`i$H`]
-// Static via ctor: Ctor[`m$...`], Ctor[`s$fieldName`]
-// Instance fields: `f$name$H2` where H2 = hash(declaringClass) — avoids R8 shadowing collisions
+// A host object (wasm/host/bridge.ts) exposes a Java method as `m$name$H`, H = hash(descriptor), and an
+// instance field as `f$name$H2`, H2 = hash(declaring class), so R8's shadowed fields stay distinct.
 
 function hash36(s: string): string {
   let h = 5381;
@@ -29,9 +26,7 @@ function safeName(n: string): string {
   return n;
 }
 
-// Two-level memo (name → desc → mangled). vcall mangles on every dynamic dispatch — per
-// text line per frame, per view per draw — and the uncached path is a char loop over the
-// descriptor plus a regex plus two concats. Nested maps so a lookup allocates nothing.
+// Two-level memo (name → desc → mangled), which also records the demangling a host object's method lookup reads (wasm/host/bridge.ts).
 const mangleMemo = new Map<string, Map<string, string>>();
 /** mangle method: name + full descriptor like "(ILjava/lang/String;)V" */
 export function mangleMethod(name: string, desc: string): string {
@@ -48,9 +43,6 @@ export function mangleMethod(name: string, desc: string): string {
 }
 const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
-/** a reflect.Proxy materialises a method on first use from the name and descriptor the caller
- *  holds; set by jreflect, consulted by jmethod and every other by-name dispatch */
-const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
 
 /** mangle instance field. declCls = "java/lang/Object" form */
 export function mangleField(declCls: string, name: string): string {
@@ -207,14 +199,6 @@ export const hexBytes = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (b)
 export function splitSig(sig: string): [string, string] {
   const p = sig.indexOf("(");
   return [sig.slice(0, p), sig.slice(p)];
-}
-
-export type JMethod = (this: unknown, ...a: unknown[]) => unknown;
-export function jmethod(o: unknown, mangled: string): JMethod | undefined {
-  const f = (o as Record<string, JMethod | undefined> | null)?.[mangled];
-  if (f !== undefined || !lateMethod.find) return f;
-  const nd = demangled.get(mangled);
-  return nd ? lateMethod.find(o, nd[0], nd[1]) : undefined;
 }
 
 const bits = new DataView(new ArrayBuffer(8));
