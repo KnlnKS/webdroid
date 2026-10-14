@@ -41,8 +41,7 @@ function rwAcquire(cpu: Cpu, a: number, write: boolean): number | Promise<number
   return (async () => {
     do {
       mem.st32(a + RW_WAITERS, mem.ld32(a + RW_WAITERS) + 1);
-      let q = rwWaiters.get(a);
-      if (!q) rwWaiters.set(a, (q = []));
+      const q = rwWaiters.ensure(a, () => []);
       await new Promise<void>((r) => q.push(r));
       mem.st32(a + RW_WAITERS, mem.ld32(a + RW_WAITERS) - 1);
     } while (!rwTry(cpu, a, write));
@@ -112,9 +111,7 @@ function lock(cpu: Cpu, a: number, tryOnly = false): number | Promise<number> {
   }
   if (tryOnly) return E.BUSY;
   mem.st32(a, (w & ~STATE) | 2);
-  let q = mutexWaiters.get(a);
-  if (!q) mutexWaiters.set(a, (q = []));
-  const Q = q;
+  const Q = mutexWaiters.ensure(a, () => []);
   return new Promise<number>((res) => Q.push(() => {
     const current = mem.ld32(a), currentKind = current & TYPE;
     mem.st32(a, (current & (TYPE | SHARED)) | (Q.length ? 2 : 1) | (currentKind === 0 ? 0 : cpu.tid << 16));
@@ -144,8 +141,7 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
   if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
     if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return fail(cpu, E.AGAIN); }
     const ms = timed(!ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - clockTime(op & 256 ? 0 : 1));
-    let q = futexes.get(addr);
-    if (!q) futexes.set(addr, (q = []));
+    const q = futexes.ensure(addr, () => []);
     fstat(cpu, ms === null ? "wait" : "timedwait");
     return new Promise<number>((r) => {
       const previous = cpu.signalInterrupt;
@@ -180,9 +176,7 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   const count = mem.ld32(mutex) & COUNT;
   mem.st32(mutex, mem.ld32(mutex) & ~COUNT);
   unlock(cpu, mutex);
-  let list = conds.get(cond);
-  if (!list) conds.set(cond, (list = []));
-  const L = list;
+  const L = conds.ensure(cond, () => []);
   return new Promise<boolean>((res) => {
     let timer: ReturnType<typeof parkTimeout> | undefined;
     const wake = (timedOut: boolean) => { unparkTimeout(timer); res(timedOut); };
@@ -459,7 +453,5 @@ export function pthreadInit(): void {
   hostLib("libc.so", M);
 }
 function semOf(a: number) {
-  let s = sems.get(a);
-  if (!s) sems.set(a, (s = { count: 0, waiters: [] }));
-  return s;
+  return sems.ensure(a, () => ({ count: 0, waiters: [] }));
 }

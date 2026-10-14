@@ -46,6 +46,7 @@ export class AddrMap<V> {
   get(a: number): V | undefined { return this.m.get(mem.va(a)); }
   set(a: number, v: V): this { this.m.set(mem.va(a), v); return this; }
   delete(a: number): boolean { return this.m.delete(mem.va(a)); }
+  ensure(a: number, make: () => V): V { const k = mem.va(a); let v = this.m.get(k); if (v === undefined) this.m.set(k, (v = make())); return v; }
 }
 const split = (va: bigint): [number, number] => [Number(va >> 32n) & 0xffffffff, Number(va & 0xffffffffn) >>> 0];
 const num = (v: bigint): number | bigint => (v <= 0xffffffffn ? Number(v) : v);
