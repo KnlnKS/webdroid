@@ -89,7 +89,7 @@ Plan 3.2 (final targets as direct calls) was tried and rejected; see "Rejected: 
 
 ## Cleanup audit (2026-10-14)
 
-A maintainability pass followed the performance work: `git log 7ef4de0b5^..02bd7defd` has 49 focused commits, net −744 lines over 104 files. Audits of shell/jvm, the Wasm link/host layers, the native libraries, native core and tests, and `src/android` drove it.
+A maintainability pass followed the performance work: `git log 7ef4de0b5^..bdff18475` has 52 focused commits, net −740 lines over 110 files. Audits of shell/jvm, the Wasm link/host layers, the native libraries, native core and tests, and `src/android` drove it.
 
 - **Removed.** JS-tier remnants (String's methods on `String.prototype`, `jmethod`/`lateMethod`, `jsStack` reads, stale comments), compiler receipts, the unreached SharedFile mapping path, the IME local-keyboard branch, and members with no reader (`compositorStatus`, PackedArchive `owner`, `vfs.owner`, `ActivityStack.shown`, cipher `blockSize`/`overhead`, res `T_STR`).
 - **Consolidated.**
@@ -110,9 +110,13 @@ A maintainability pass followed the performance work: `git log 7ef4de0b5^..02bd7
   - Process-fd `viaRemote` would allocate two closures per local read/write.
   - Relay `ByteQueue` → socket `Loopback` would couple the shell to native socket internals.
   - Moving `discardDescriptors` into FileDescriptors gains nothing.
-  - Still open from the android audit: a bitmap-raster `inDevice` helper, a motionevent `into` helper and the `intent.ts` driven wrappers.
 - **Flake.** `tests/app.browser.test.ts` fails with `ZipException: End Of Central Directory signature not found` in about 1 full `bun run test` in 6, and passes on rerun. An instrumented failure showed the platform jars arriving at full length with misplaced content. This is the Bun HTTP body corruption already recorded under "Fixture bundle corruption" in the history.
-- **Verified at `02bd7defd`.** `typecheck`; `bun run test` 1148/1148 apart from the flake; `fwtest` 31/31; `smoke apks/FitNotes.apk` clean; `bun run aot` rebuilt. `wasm all` last ran clean before the native commits; none of them touches the shared front end.
+- **Verified at `bdff18475`.**
+  - `typecheck`, and `bun run test` 1148/1148 apart from the flake.
+  - `fwtest` 31/31, and `smoke apks/FitNotes.apk` with no unexplained failures.
+  - After `bun run aot`, `bun run e2e --jobs 1` passed 7/7 in 170 s with empty telemetry.
+  - `wasm all` last ran clean before the native commits; none of them touches the shared front end.
+  - The parallel quick gate (5 jobs) failed 5/7 at host load ~9. Every failure was a timeout, a wedged main loop, or a Worker stuck at "Reading package…", and each failed flow passed on a serial rerun. That fits the host-capacity failures noted below, but no matched parallel run of the starting commit was made.
 
 ## Verification status (end of 2026-10-13)
 
