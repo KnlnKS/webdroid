@@ -156,7 +156,7 @@ export function crc32(crc: number, b: Uint8Array): number {
   for (; i < b.length; i++) c = t0[(c ^ b[i]) & 255] ^ c >>> 8;
   return ~c;
 }
-function adler32(adler: number, b: Uint8Array): number {
+export function adler32(adler: number, b: Uint8Array): number {
   let a = adler & 0xffff, s = adler >>> 16;
   for (let i = 0; i < b.length;) {
     // 5552 bytes keep the sums below 2^32 between reductions, as zlib's NMAX

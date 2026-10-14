@@ -6,6 +6,7 @@ import { Inflate, Deflate, Zlib, Gzip } from "fflate";
 import { mem, AddrMap } from "./mem";
 import { hostLib, type HostFn, stp, ldp } from "./host";
 import { concat } from "../jvm/abi";
+import { crc32 as javaCrc32, adler32 as javaAdler32 } from "../jvm/natives/jzip";
 
 // z_stream fields used here
 const Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
@@ -35,19 +36,8 @@ const streams = new AddrMap<Stream>();
 let stateSeq = 1;
 const empty = new Uint8Array(0);
 
-// CRC-32 (the zlib polynomial), table driven
-const crcTab = new Int32Array(256);
-for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcTab[n] = c; }
-function crc32(crc: number, buf: Uint8Array): number {
-  let c = ~crc;
-  for (let i = 0; i < buf.length; i++) c = crcTab[(c ^ buf[i]) & 255] ^ (c >>> 8);
-  return (~c) >>> 0;
-}
-function adler32(adler: number, buf: Uint8Array): number {
-  let a = adler & 0xffff, b = (adler >>> 16) & 0xffff;
-  for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
-  return ((b << 16) | a) >>> 0;
-}
+// jzip's checksums answer Java's signed int; zlib's are unsigned
+const crc32 = (sum: number, b: Uint8Array) => javaCrc32(sum, b) >>> 0, adler32 = (sum: number, b: Uint8Array) => javaAdler32(sum, b) >>> 0;
 
 function loadUlong(address: number): number {
   return mem.ld32(address) >>> 0;
