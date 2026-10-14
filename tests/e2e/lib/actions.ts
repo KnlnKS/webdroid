@@ -90,7 +90,6 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
         ? await ready(() => wd.locateText(a.text), `text ${JSON.stringify(a.text)}`)
         : await query(wd.locateText(a.text), "locateText") as { x: number; y: number } | null;
       if (hit) await run(wd.tap(hit.x, hit.y));
-      else if (a.fallback) await run(wd.tap(a.fallback.x * s.width, a.fallback.y * s.height));
       return !!hit;
     }
     case "tap":

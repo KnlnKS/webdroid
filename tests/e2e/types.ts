@@ -205,13 +205,13 @@ export type UiNode = {
 /** The hierarchy dump that sits beside a step's png, on both sides. */
 export const uiFileFor = (png: string): string => png.replace(/\.png$/, ".ui.json");
 
-/** What the emulator pass learned and the webdroid pass replays. */
+/** What the emulator pass learned, for scoring the webdroid pass. */
 export type RecordedStep = {
   id: string;
   label: string;
   index: number;
   file: string;
-  /** Resolved tap point in normalized coords, when the action was a tap. */
+  /** Where the device tapped, in normalized coords; webdroid locates text targets itself. */
   resolved?: { x: number; y: number };
   /** Node bounds the text matched, device px — diagnostics only. */
   bounds?: [number, number, number, number];

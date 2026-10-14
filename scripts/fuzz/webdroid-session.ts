@@ -3,11 +3,14 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { device, formatScreen } from "../../src/shell/config";
+import { probeScript } from "../../tests/e2e/lib/probe";
 
 export type WebdroidSession = {
   origin: string;
   page: Page;
   errors: string[];
+  /** a fresh page with the APK booted again in a new process */
+  reopen(): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -33,6 +36,33 @@ async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): 
   throw new Error(`webdroid server did not start at ${url}`);
 }
 
+/** until the foreground process has drawn: the app runs in a process Worker, so the page realm's
+ *  own counters (system_server's) do not show it */
+async function waitForDraw(page: Page, ms = 60_000): Promise<void> {
+  const end = performance.now() + ms;
+  for (;;) {
+    const shown = await page.evaluate(async () => {
+      const row = await globalThis.wd!.foregroundWorkerSnapshot();
+      return row?.snapshot ? { pkg: row.pkg, draws: row.snapshot.perf.draws ?? 0 }
+        : row && { pkg: row.pkg, error: row.error ?? null, exit: row.terminal?.cause ?? null };
+    });
+    if (shown && "draws" in shown && shown.draws > 0) return;
+    if (shown && "exit" in shown && shown.exit) throw new Error(`${shown.pkg} exited before drawing: ${shown.exit}`);
+    if (performance.now() > end) throw new Error(`no app drew within ${ms}ms: ${JSON.stringify(shown)}`);
+    await Bun.sleep(250);
+  }
+}
+
+/** Load the page and boot the APK as the e2e launch step does, with every process's frames mirrored
+ *  to the page from its start (screenshots composite them), then wait for the app to draw. */
+async function openApp(page: Page, origin: string, apk: string): Promise<void> {
+  await page.goto(`${origin}/?${new URLSearchParams({ screen: formatScreen(device) })}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.waitForFunction(() => Boolean(globalThis.wd), null, { timeout: 60_000 });
+  await page.evaluate(() => globalThis.wd!.mirrorFrames(true));
+  await page.evaluate((file) => globalThis.wd!.boot(file), apk);
+  await waitForDraw(page);
+}
+
 export async function startWebdroid(apkPath: string, options: WebdroidOptions = {}): Promise<WebdroidSession> {
   if (!existsSync(apkPath)) throw new Error(`missing ${apkPath}`);
   const apk = basename(apkPath);
@@ -53,14 +83,15 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     await waitForServer(origin, devServer);
     browser = await chromium.launch({ headless: true, args: ["--use-gl=angle", "--use-angle=swiftshader"] });
     const context = await browser.newContext({ viewport: { width: 1400, height: 1500 }, locale: "en-US", timezoneId: "UTC" });
+    // the e2e probe's page half, on the wall clock: it keeps the mirrored frames a screenshot composites
+    await context.addInitScript({ content: probeScript({ fixedMs: null, storage: [], shots: false }) });
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const query = new URLSearchParams({ apk, screen: formatScreen(device) });
-    await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
+    await openApp(page, origin, apk);
     return {
       origin, page, errors,
+      reopen: () => openApp(page, origin, apk),
       close: async () => {
         await browser?.close();
         devServer.kill();

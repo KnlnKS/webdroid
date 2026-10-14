@@ -2,7 +2,8 @@
 // the welcome screen both end in the sign-up sheet), so the flow covers what a guest can reach:
 // the welcome screen, its sign-up and login sheets, and the One Tap sheet microG shows first.
 // Compose draws through canvas ops with no host-view text, so every tap is positional and the
-// flow pins the screen it was measured at. No goldens: it runs as smoke.
+// flow pins the screen it was measured at. Its reference is launch-only: the quick gate compares
+// the launch step, and the full lane runs it as smoke.
 import { wait, type Flow, Screen, StateCondition } from "../types";
 
 const SCREEN: Screen = { width: 1080, height: 2160, densityDpi: 480 };

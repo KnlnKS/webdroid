@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { PNG } from "pngjs";
 import { diffImages } from "../../tests/e2e/lib/diff";
 import { savePng, type Img } from "../../tests/e2e/lib/png";
-import { readProcesses } from "../../tests/e2e/lib/processes";
+import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes";
 import type { UiNode } from "../../tests/e2e/types";
 import { Random } from "./random";
 import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model";
@@ -91,6 +91,7 @@ function processSignals(processes: Awaited<ReturnType<typeof readProcesses>>): s
   const signals: string[] = [];
   for (const process of processes) {
     const diagnostics = process.diagnostics;
+    if (diagnostics.status === "exited") continue;
     if (diagnostics.status !== "ok") { signals.push(`harness:${process.url}`); continue; }
     const prefix = diagnostics.pkg ?? process.url;
     for (const value of diagnostics.missing) signals.push(`missing:${prefix}:${value}`);
@@ -122,7 +123,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
     for (let index = 0; index < stepCount; index++) {
       const webNodes = await web.tree();
       const androidNodes = android ? nextAndroidNodes ?? await android.tree() : undefined;
-      const source = androidNodes ?? webNodes, sourceSize = screenSize(source), webSize = { width: 1080, height: 2160 };
+      const source = androidNodes ?? webNodes, sourceSize = screenSize(source);
       const path = steps.map((step) => step.action);
       const states = steps.flatMap((step) => step.state ? [step.state] : []);
       const state = plan.kind === "explore" ? plan.explorer.observeState(source, sourceSize.width, sourceSize.height,
@@ -142,7 +143,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       try {
         if (!structuralDivergence) await withDeadline(Promise.all([
           android ? android.act(action, sourceSize) : Promise.resolve(),
-          web.act(action, webNodes, webSize),
+          web.act(action, webNodes),
         ]).then(() => undefined), `UI step ${index}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -159,7 +160,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
         android?.screenshot(), web.screenshot(), readProcesses(web.page), web.alive(), web.tree(), android?.tree(),
       ]);
       nextAndroidNodes = postAndroidNodes;
-      if (!relevant.length || relevant.some((process) => process.diagnostics.status !== "ok"))
+      if (!relevant.length || relevant.some((process) => !diagnosed(process.diagnostics)))
         throw new Error(`missing process telemetry at UI step ${index}: ${relevant.map((process) =>
           `${process.url}: ${process.diagnostics.status === "failure" ? process.diagnostics.message : process.diagnostics.status}`).join("; ")}`);
       const signals = processSignals(relevant);

@@ -21,6 +21,8 @@ export type ProcessDiagnostics = {
   | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
+/** whether a process's diagnostics were read, or it ended as the broker expected (an exit is no failure) */
+export const diagnosed = (diagnostics: ProcessDiagnostics): boolean => diagnostics.status === "ok" || diagnostics.status === "exited";
 type WorkerSnapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
 type WorkerProcess = { pid: number; pkg: string; process: string; url?: string; snapshot?: WorkerSnapshot; error?: string; terminal?: WorkerTerminal };
 

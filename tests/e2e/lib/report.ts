@@ -75,7 +75,7 @@ export function printFlow(r: FlowReport): void {
   console.log("  ##  strict  tolerant  content  step");
   for (const s of r.steps) {
     const flags = [
-      s.semanticHit === false ? "coord-fallback" : "",
+      s.semanticHit === false ? "skipped" : "",
       s.settleTimedOut ? "settle-timeout" : "",
       s.goldenSettleTimedOut ? "golden-settle-timeout" : "",
       s.mainLoopWedged ? `WEDGED, not rendered (measured ${s.rawContentDiffPct.toFixed(1)}%)` : "",
@@ -111,7 +111,7 @@ export function html(reports: FlowReport[], generatedAt: string, geometry: strin
     <tr>
       <td class="n">${String(s.index).padStart(2, "0")}</td>
       <td>${esc(s.label)}
-        ${s.semanticHit === false ? '<em class="tag">coord-fallback</em>' : ""}
+        ${s.semanticHit === false ? '<em class="tag">skipped</em>' : ""}
         ${s.settleTimedOut ? '<em class="tag warn">settle timeout</em>' : ""}
         ${s.mainLoopWedged ? '<em class="tag bad">not rendered &mdash; main loop wedged</em>' : ""}
         ${s.error ? `<em class="tag bad">${esc(s.error)}</em>` : ""}

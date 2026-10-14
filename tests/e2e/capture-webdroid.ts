@@ -5,14 +5,14 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
+import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Hang, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
 
 export type StepRun = {
   id: string; index: number; file: string;
-  /** whether wd.locateText found a tapText target itself rather than replaying the recorded point */
+  /** for a tapText step, whether wd.locateText found its target (false: an optional target was absent and skipped) */
   semanticHit?: boolean;
   /** which tier of the settle contract ended the step, and how long it took */
   settled: Settled["how"];
@@ -104,12 +104,12 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
   });
 }
 
-/** The probe action for a step, with the recorded coordinate as the tapText fallback. */
-export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act {
+/** The probe action for a step. */
+export function actOf(flow: Flow, step: ExecutionStep): Act {
   const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
-    case "tapText": return { type: "tapText", text: a.text, required: !a.optional, fallback: a.optional ? undefined : rec?.resolved };
+    case "tapText": return { type: "tapText", text: a.text, required: !a.optional };
     case "tapAt": return { type: "tap", x: a.x, y: a.y, repeat: a.repeat, everyMs: a.everyMs, whileText: a.whileText, appearMs: a.appearMs, quietMs: a.quietMs, unlessResource: a.unlessResource };
     case "typeInto": return { type: "type", x: a.x, y: a.y, text: a.text };
     case "back": return { type: "back", whileText: a.whileText, appearMs: a.appearMs };
@@ -121,7 +121,7 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
 }
 
 /** Perform one step and settle it on the step's horizon. */
-export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
+export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
   // Controlled gestures need their virtual horizon to finish flings before the next input.
@@ -131,7 +131,7 @@ export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, re
   const quiescence = mode === "fast" && evidence.kind === "semantic"
     ? { stableMs: 50, intervalMs: 50, stableFrames: 2 }
     : undefined;
-  return drv.step(actOf(flow, step, rec), {
+  return drv.step(actOf(flow, step), {
     wait: policy,
     capture,
     timing: mode === "fast" && flow.clock === "controlled" ? "controlled" : "real",
@@ -168,7 +168,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
       const fastEvidence = evidenceOf(step);
       const evidence = mode === "full" ? "visual" : fastEvidence.kind;
-      const r = await runStep(drv, flow, step, rec, mode);
+      const r = await runStep(drv, flow, step, mode);
       const stepMs = Math.round(r.ms);
       const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
       // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
@@ -203,7 +203,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       await persist();
       const p = r.perf;
       const flags = [
-        r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",
+        r.semanticHit === false ? "skipped" : "",
         r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
         r.wedged ? "MAIN LOOP WEDGED" : "",
         r.hang ? `HANG in ${r.hang.phase}` : "",

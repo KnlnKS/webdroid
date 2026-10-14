@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { androidTool } from "../android-sdk";
 import { device, formatScreen } from "../../src/shell/config";
-import { readProcesses } from "../../tests/e2e/lib/processes";
+import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes";
 import { serveCases } from "./case-server";
 import type { ProbeCase, ProbeResult } from "./model";
 import { startWebdroid } from "./webdroid-session";
@@ -66,11 +66,11 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
 async function webdroidRun(session: Awaited<ReturnType<typeof startWebdroid>>, results: ProbeResult[]): Promise<PlatformRun> {
     const { origin, page, errors } = session;
     let processFrames = await readProcesses(page);
-    let missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
+    let missingDiagnostics = processFrames.filter((process) => !diagnosed(process.diagnostics));
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
       processFrames = await readProcesses(page);
-      missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
+      missingDiagnostics = processFrames.filter((process) => !diagnosed(process.diagnostics));
     }
     if (!processFrames.length || missingDiagnostics.length)
       throw new Error(`missing process diagnostics: ${JSON.stringify(missingDiagnostics)}`);
@@ -94,8 +94,7 @@ export class WebdroidProbeRunner {
       if (!this.session) this.session = await startWebdroid(PROBE_APK, { proxyProbeTo: caseServer.url });
       else {
         this.session.errors.length = 0;
-        await this.session.page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
-        await this.session.page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
+        await this.session.reopen();
       }
       return await webdroidRun(this.session, await caseServer.results);
     } finally {

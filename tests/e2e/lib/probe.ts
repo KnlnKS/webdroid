@@ -17,7 +17,7 @@ type ProbeConfig = {
 export type Act =
   | { type: "boot"; apk: string }
   | { type: "tap"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; quietMs?: number; unlessResource?: string }
-  | { type: "tapText"; text: string; required?: boolean; fallback?: { x: number; y: number } }
+  | { type: "tapText"; text: string; required?: boolean }
   | { type: "type"; text: string; x?: number; y?: number }
   | { type: "back"; whileText?: string; appearMs?: number }
   | { type: "enter" }
@@ -113,6 +113,8 @@ declare global {
   var __wd: {
     step(spec: StepSpec): Promise<StepResult>;
     act(a: Act, screen: Screen, deadlineMs: number): Promise<boolean | undefined>;
+    /** the shown display as a base64 PNG: every shown canvas, from its latest mirrored frame */
+    screen(): Promise<string>;
   };
 }
 
@@ -482,7 +484,7 @@ function installProbe(cfg: ProbeConfig): void {
     return { ...result, ms: performance.now() - t0,
       phases: { actionMs, settleMs: settled.ms, livenessMs, captureMs, telemetryMs } };
   };
-  g.__wd = { step, act };
+  g.__wd = { step, act, screen: screenPng };
 }
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */

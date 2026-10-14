@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { androidTool } from "../android-sdk";
 import { openApk } from "../lib";
 import { parseAXML, attrStr } from "../../src/android/axml";
+import { device, type Screen } from "../../src/shell/config";
 import { performAction } from "../../tests/e2e/lib/actions";
 import type { Act } from "../../tests/e2e/lib/probe";
 import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator";
@@ -144,16 +145,17 @@ export class WebdroidUiTarget {
   static async open(app: UiApp): Promise<WebdroidUiTarget> {
     const session = await startWebdroid(app.apk);
     try {
-      await session.page.waitForFunction(() => globalThis.wd!.perf.draws > 0, null, { timeout: 30_000 });
+      // the app has drawn; wait up to 3 s for its process to stop drawing and queueing work
       await session.page.evaluate(async () => {
+        const read = async () => (await globalThis.wd!.foregroundWorkerSnapshot())?.snapshot;
         const until = performance.now() + 3_000;
-        let quietSince = 0, draws = globalThis.wd!.perf.draws;
+        let quietSince = 0, draws = (await read())?.perf.draws;
         while (performance.now() < until) {
-          const now = performance.now(), current = globalThis.wd!.perf.draws;
-          quietSince = globalThis.wd!.mainDbg.queued === 0 && current === draws ? quietSince || now : 0;
+          const shown = await read(), now = performance.now();
+          quietSince = shown?.main.queued === 0 && shown.perf.draws === draws ? quietSince || now : 0;
           if (quietSince && now - quietSince >= 400) break;
-          draws = current;
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          draws = shown?.perf.draws;
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       });
       return new WebdroidUiTarget(session);
@@ -167,23 +169,30 @@ export class WebdroidUiTarget {
     return this.page.evaluate(() => globalThis.wd!.uiTree());
   }
 
-  async act(action: UiAction, nodes: readonly UiNode[], size: UiSize): Promise<void> {
+  async act(action: UiAction, nodes: readonly UiNode[]): Promise<void> {
     if (action.type === "configuration") {
       await this.page.evaluate((orientation) => globalThis.wd!.configuration(orientation), action.orientation);
       return;
     }
-    const act = webAction(action, nodes, size);
+    const screen = await this.screen();
+    const act = webAction(action, nodes, screen);
     if (!act) throw new Error(`semantic target absent for ${action.type}`);
-    await this.page.evaluate(performAction, { a: act, screen: { ...size, densityDpi: 480 }, deadlineMs: STEP_DEADLINE_MS });
+    await this.page.evaluate(performAction, { a: act, screen, deadlineMs: STEP_DEADLINE_MS });
   }
 
-  async screenshot(): Promise<Buffer> {
-    const url = await this.page.evaluate(() => {
-      const screen = document.getElementById("screen");
-      if (!(screen instanceof HTMLCanvasElement)) throw new Error("screen canvas is unavailable");
-      return screen.toDataURL("image/png");
+  /** the display the foreground process draws at, as rotated; the session's profile geometry
+   *  (`WEBDROID_SCREEN` included) while no process is in front */
+  private async screen(): Promise<Screen> {
+    const size = await this.page.evaluate(async () => {
+      const shown = (await globalThis.wd!.foregroundWorkerSnapshot())?.snapshot;
+      return shown ? { width: shown.width as number, height: shown.height as number } : null;
     });
-    return Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
+    return { width: size?.width ?? device.width, height: size?.height ?? device.height, densityDpi: device.densityDpi };
+  }
+
+  /** the shown processes' mirrored frames under the system windows, composited by the e2e probe */
+  async screenshot(): Promise<Buffer> {
+    return Buffer.from(await this.page.evaluate(() => globalThis.__wd.screen()), "base64");
   }
 
   alive(): Promise<boolean> { return this.page.evaluate(() => globalThis.wd!.alive(2_000)); }

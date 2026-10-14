@@ -11,17 +11,16 @@ const source = FLOWS.find((f) => f.app === app);
 if (!source) { console.error(`unknown flow "${app}" — known: ${FLOWS.map((f) => f.app).join(", ")}`); process.exit(2); }
 const flow = executionFlow(source, "full");
 const manifest = await loadManifest(app);
-const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 await mkdir(outDir, { recursive: true });
 
 const drv = await launchFor(flow, manifest);
 await drv.page.evaluate(() => { (globalThis as any).wd.mainDbg.trace = true; });
 for (const [i, step] of flow.steps.entries()) {
   if (i > stopAt) break;
-  const r = await runStep(drv, flow, step, byId.get(step.id));
+  const r = await runStep(drv, flow, step);
   if (r.error) console.log("  ERR", r.error);
   const alive = !r.wedged;
-  console.log(`${String(i).padStart(2, "0")} ${step.label}${r.semanticHit === false ? " [coord-fallback]" : ""} settle=${Math.round(r.settled.ms)}ms ${r.settled.how}${alive ? "" : "  *** WEDGED ***"}`);
+  console.log(`${String(i).padStart(2, "0")} ${step.label}${r.semanticHit === false ? " [skipped]" : ""} settle=${Math.round(r.settled.ms)}ms ${r.settled.how}${alive ? "" : "  *** WEDGED ***"}`);
   if (r.png) await Bun.write(`${outDir}/${String(i).padStart(2, "0")}.png`, Buffer.from(r.png, "base64"));
   if (!alive) {
     const a0 = Date.now();
