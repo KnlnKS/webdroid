@@ -86,6 +86,11 @@ const HOST_IMPORTS = {
   block: { params: [T.i32, T.externref, T.f64, T.i32], results: [T.i32] },
 } satisfies Record<string, FunctionType>;
 const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as (keyof typeof HOST_IMPORTS)[];
+/** each host import's function index: every module imports them first, in this order */
+const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => [name, i])) as Record<keyof typeof HOST_IMPORTS, number>;
+/** the host imports that can run Java code */
+const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", "proxy", "obj", "dexOpen", "dexOpenMemory", "classByName", "net", "sync", "block",
+  "catchBlock", "catchBlockWait"] as const).map((name) => HOST_IMPORT_INDEX[name]));
 
 /** the module-local functions of Compiler.local that are the same in every module */
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
@@ -93,7 +98,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: Record<keyof typeof HOST_IMPORTS, number>;
+  imp = HOST_IMPORT_INDEX;
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -146,19 +151,16 @@ export class Compiler implements Base {
     this.str = new StructStrings(this);
     this.classStruct.set("java/lang/String", this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
-    this.imp = {} as Record<keyof typeof HOST_IMPORTS, number>;
-    for (const name of HOST_IMPORT_NAMES) this.imp[name] = mb.importFunc("host", name, HOST_IMPORTS[name]);
+    for (const name of HOST_IMPORT_NAMES) mb.importFunc("host", name, HOST_IMPORTS[name]);
     this.str.importBuiltins();
-    // the imports that cannot run Java code
-    const { initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait } = this.imp, runsJava = new Set([initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait]);
-    this.hostSafe = new Set();
-    for (let i = 0; i < mb.nImportedFuncs; i++) if (!runsJava.has(i)) this.hostSafe.add(i);
+    this.fixedImports = mb.nImportedFuncs;
   }
-  private hostSafe: Set<number>;
+  /** the imports every module has; of them only RUNS_JAVA can run Java code */
+  private fixedImports: number;
   /** whether the body `c` can run Java code beyond itself: it calls through a table, an import that may, or a method of this unit */
   runsJava(c: Code): boolean {
     const methods = new Set(this.fn.values());
-    return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? !this.hostSafe.has(f) : methods.has(f)));
+    return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? f >= this.fixedImports || RUNS_JAVA.has(f) : methods.has(f)));
   }
   get natives() { return this.w.natives; }
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }
