@@ -22,7 +22,7 @@ import { checkUidPermission } from "../permissions";
 import { mkPfd } from "../os";
 import { clearUserData } from "../appdata";
 
-const GET_SHARED_LIBRARY_FILES = 0x400n;
+export const GET_SHARED_LIBRARY_FILES = 0x400n;
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
  *  MATCH_DIRECT_BOOT_AUTO, without meta-data (a provider asks for its own) */
 const APP_PROVIDER_FLAGS = GET_SHARED_LIBRARY_FILES | 0x800n | 0x10000000n;

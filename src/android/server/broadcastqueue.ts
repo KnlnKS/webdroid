@@ -10,7 +10,7 @@ import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
 import { mkComponentName, type JIntent } from "../intent";
-import { scheduleOnApp, compatInfo, thisApp, pms } from "./am";
+import { scheduleOnApp, compatInfo, thisApp, pms, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
@@ -27,7 +27,7 @@ function* filterMatches(filter: JObj, intent: JIntent): Gen<boolean> {
 
 export type Sender = { uid: number; pkg: string };
 const SYSTEM_UID = 1000, SYSTEM: Sender = { uid: SYSTEM_UID, pkg: "android" };
-const RECEIVER_NOT_EXPORTED = 4, GET_SHARED_LIBRARY_FILES = 0x400n;
+const RECEIVER_NOT_EXPORTED = 4;
 const INTENT = "Landroid/content/Intent;", S = "Ljava/lang/String;", BUNDLE = "Landroid/os/Bundle;";
 const REGISTERED = `(Landroid/content/IIntentReceiver;${INTENT}I${S}${BUNDLE}ZZZIII${S})V`;
 const RECEIVER = `(${INTENT}Landroid/content/pm/ActivityInfo;Landroid/content/res/CompatibilityInfo;I${S}${BUNDLE}ZZIII${S})V`;

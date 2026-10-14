@@ -17,7 +17,7 @@ import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
 import { type JComponentName, type JIntent, componentParts, mkComponentName, newIntent } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
-import { scheduleOnApp, compatInfo, pms, runsHere } from "./am";
+import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
 import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords";
 
@@ -40,7 +40,7 @@ const standalone = new ServiceRecords({ send: () => null, connected: () => {}, p
 
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";
 const CONNECTED = "(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V";
-const BIND_AUTO_CREATE = 1, GET_SHARED_LIBRARY_FILES = 0x400n, STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
+const BIND_AUTO_CREATE = 1, STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
 
 /** a ConnectionRecord: an IServiceConnection of this process, or another process's binding by its key */
 interface Connection { id: JObj | string; autoCreate: boolean; connected: (binder: JObj | null, dead: boolean) => void }

@@ -37,7 +37,7 @@ export const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
 /** what host code probes any object for (promises, serializers, error reporters: one namespace here), which is no read of a Java field */
-const PROBES = new Set(["then", "toJSON", "message", "stack", "jsStack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
+const PROBES = new Set(["then", "toJSON", "message", "stack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
 export class Bridge implements HostBridge {

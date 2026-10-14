@@ -6,8 +6,8 @@ import { utf8Length } from "../jvm/abi";
 
 const PRIORITY = ["", "", "V", "D", "I", "W", "E", "A"];
 const logFn = (lvl: string, tag: string | null, msg: string, tr?: unknown) => {
-  const t = tr as { msg?: string; jsStack?: string; stack?: string } | undefined;
-  console.log(`[${lvl}/${tag}]`, msg, tr ? `(${t?.msg ?? tr})` : "", t?.jsStack ?? t?.stack ?? "");
+  const t = tr as { msg?: string; stack?: string } | undefined;
+  console.log(`[${lvl}/${tag}]`, msg, tr ? `(${t?.msg ?? tr})` : "", t?.stack ?? "");
 };
 /** the bytes liblog's writer reports for a record: priority, then tag and message as C strings */
 const recordSize = (tag: string, msg: string) => 3 + utf8Length(tag) + utf8Length(msg);

@@ -12,10 +12,8 @@ let fwPkg: Arsc | null = null;
 export function setFramework(a: Arsc): void { fwPkg = a; }
 
 
-// resolved value: binary Res_value types + an internal STR (0xfd)
 /** r: the resource whose entry a resolved value came from — what getResourceId still reports */
 export interface RV { t: number; d: number; s?: string; r?: number }
-const T_STR = 0xfd;
 const NULL_RV: RV = { t: TV.NULL, d: 0 };
 /** binary Res_value → RV with FLOAT bits decoded to a JS number */
 export function normRV(v: RV): RV {
@@ -128,11 +126,11 @@ export class Resources {
   /** the archive path a file resource names, the package that owns it, the id the reference
    *  chain ended on and the density of the configuration it came from — everything but the
    *  bytes, which cost an inflate */
-  pathOf(resId: number, depth = 0, selected: { density: number } = { density: 0 }, density?: number): { path: string; id: number; arsc: Arsc; density: number } | null {
+  pathOf(resId: number, depth = 0, selected: { density: number } = { density: 0 }): { path: string; id: number; arsc: Arsc; density: number } | null {
     const a = this.tbl(resId);
-    const e = a?.entry(resId, selected, density);
+    const e = a?.entry(resId, selected);
     if (!e?.value) return null;
-    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected, density);
+    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected);
     if (e.value.type !== TV.STRING) return null;
     return { path: a!.values.get(e.value.data), id: resId, arsc: a!, density: selected.density };
   }
@@ -474,7 +472,7 @@ export function frameworkString(name: string): string | null {
 }
 export function rvString(res: Resources, v: RV | null): string | null {
   if (!v || v.t === TV.NULL) return null;
-  if (v.s !== undefined && (v.t === T_STR || v.t === TV.STRING)) return v.s;
+  if (v.s !== undefined && v.t === TV.STRING) return v.s;
   if (v.t === TV.REFERENCE) {
     const rv = res.resolveRefs(v);
     if (rv !== v) return rvString(res, rv);

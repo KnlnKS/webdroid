@@ -56,7 +56,7 @@ async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnTyp
         const causes: string[] = [], seen = new Set();
         for (let cause: any = error; cause && !seen.has(cause); cause = cause.cause) {
           seen.add(cause);
-          causes.push(`${cause.constructor?.$i?.name ?? cause.name ?? "Error"}: ${cause.msg ?? cause.message ?? String(cause)}\n${cause.jsStack ?? cause.stack ?? ""}`);
+          causes.push(`${cause.constructor?.$i?.name ?? cause.name ?? "Error"}: ${cause.msg ?? cause.message ?? String(cause)}\n${cause.stack ?? ""}`);
         }
         throw new Error(causes.join("\nCaused by: "));
       }

@@ -471,7 +471,7 @@ function insert(r: PostedNotification): PostedNotification | null {
 }
 
 // ── posting
-/** Notification.isStyle(Notification$<style>.class), the class named through Class.forName so either tier supplies it */
+/** Notification.isStyle(Notification$<style>.class), the class named through Class.forName */
 function* isStyle(n: JObj, style: string): Gen<number> {
   const cls = yield scall("java/lang/Class", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", `${N}$${style}`.replace(/\//g, "."), 0, null);
   return yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", cls);
