@@ -8,8 +8,8 @@ import { newObj, scall, linkInit } from "../jvm/natives/jentry";
 import { systemResource } from "./resnative";
 import { newFile } from "../jvm/natives/jio";
 import { hostStub } from "./binder";
-import { vfs } from "../shell/vfs";
-import { storageEstimate, uuidDefault } from "./os";
+import { vfs, storageEstimate } from "../shell/vfs";
+import { uuidDefault } from "./os";
 import { packages } from "./packages";
 import { logLine } from "../native/libc";
 

@@ -4,10 +4,9 @@
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
 import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { vfs } from "../shell/vfs";
+import { vfs, storageEstimate } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "../mime";
-import { storageEstimate } from "./os";
 import { callingIdentity, hostStub, serviceContext } from "./binder";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */

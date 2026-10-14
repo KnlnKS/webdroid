@@ -3,14 +3,14 @@
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
 import { mem, wrote, anchor } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { utf8 as codec } from "../jvm/abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
-import { vfs } from "../shell/vfs";
+import { vfs, storageEstimate } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdReadFully, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
   statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
@@ -43,10 +43,13 @@ function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number | Pr
 }
 /** _PC_LINK_MAX 0 … NAME_MAX 4, PATH_MAX 5, PIPE_BUF 6 */
 const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 4096 : n === 0 ? 127 : -1);
-/** struct statvfs: eleven unsigned longs (bsize, frsize, blocks, bfree, bavail, files, ffree, favail, fsid, flag, namemax), 44 bytes on ARM32 */
-function fillStatvfs(b: number): void {
-  const v = [4096, 4096, 0x100000, 0x80000, 0x80000, 0x10000, 0x8000, 0x8000, 0, 0, 255];
-  for (let i = 0; i < v.length; i++) mem.st32(b + i * 4, v[i]);
+/** struct statvfs: the storage estimate in 4K blocks, as eleven unsigned longs (bsize, frsize, blocks, bfree, bavail,
+ *  files, ffree, favail, fsid, flag, namemax) */
+function fillStatvfs(b: number): Promise<number> {
+  return storageEstimate().then(({ total, free }) => {
+    [4096, 4096, total / 4096, free / 4096, free / 4096, 0x10000, 0x8000, 0x8000, 0, 0, 255].forEach((v, i) => stLong(b + i * PTR, Math.floor(v)));
+    return 0;
+  });
 }
 
 // ── FILE* layer: the struct is real (guest code inspects _flags/_file through macros), the
@@ -268,8 +271,10 @@ export function stdioInit(): void {
     futimens: () => 0,
     pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
     fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
-    statvfs: (_c, a) => { a.str(); fillStatvfs(a.p()); return 0; },
-    fstatvfs: (_c, a) => { a.i(); fillStatvfs(a.p()); return 0; },
+    statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
+    fstatvfs: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
+    statvfs64: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
+    fstatvfs64: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
     isatty: () => 0,
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),

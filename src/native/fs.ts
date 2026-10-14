@@ -3,12 +3,12 @@
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
 import { mem, guestAt, anchor } from "./mem";
-import { type HostFn, PTR, stp, ldp, ARG0 } from "./host";
+import { type HostFn, PTR, stp, ldp, stLong, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, offArg, readTs, clockTime, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
-import { vfs, EMPTY, type VfsFile, type FileAttributes } from "../shell/vfs";
+import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
@@ -680,12 +680,17 @@ export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: num
   for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stp(buf + o, sec);
   mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
 }
-/** statfs: a fixed-size filesystem with room; the LP64 struct is all 64-bit fields at an 8-byte stride */
-function fillStatfs(b: number): void {
-  mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
-  const w = PTR, put = (i: number, v: number) => stp(b + i * w, v);
-  put(1, 4096); put(2, 0x100000); put(3, 0x80000); put(4, 0x80000); put(5, 0x10000); put(6, 0x8000);
-  if (PTR === 8) { put(8, 255); put(9, 4096); } else { mem.st32(b + 56, 255); mem.st32(b + 60, 4096); }
+/** statfs: the storage estimate in 4K blocks. f_type and f_bsize are longs; the counts after them are 64-bit on both
+ *  ABIs (the ILP32 struct is the kernel's statfs64), then fsid, f_namelen and f_frsize */
+function fillStatfs(b: number): Promise<number> {
+  return storageEstimate().then(({ total, free }) => {
+    mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
+    const counts = b + 2 * PTR;
+    stLong(b + PTR, 4096);
+    [total / 4096, free / 4096, free / 4096, 0x10000, 0x8000].forEach((n, i) => mem.st64(counts + i * 8, BigInt(Math.floor(n))));
+    stLong(counts + 48, 255); stLong(counts + 48 + PTR, 4096);
+    return 0;
+  });
 }
 /** pipe2(2): the read end, then the write end */
 export function javaPipeFds(flags: number): [number, number] {
@@ -997,8 +1002,10 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     mem.st32(argument, n);
     return 0;
   },
-  statfs: (_c, a) => { a.str(); fillStatfs(a.p()); return 0; },
-  fstatfs: (_c, a) => { a.i(); fillStatfs(a.p()); return 0; },
+  statfs: (_c, a) => { a.str(); return fillStatfs(a.p()); },
+  fstatfs: (_c, a) => { a.i(); return fillStatfs(a.p()); },
+  statfs64: (_c, a) => { a.str(); return fillStatfs(a.p()); },
+  fstatfs64: (_c, a) => { a.i(); return fillStatfs(a.p()); },
   getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },
   chdir: () => 0,
   readlinkat: (cpu) => fail(cpu, E.INVAL),

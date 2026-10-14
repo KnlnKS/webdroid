@@ -18,7 +18,7 @@ import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
-import { vfs, type FileAttributes } from "../shell/vfs";
+import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath, changeFileAttributes, pathStat, type PathStat } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
@@ -216,17 +216,10 @@ export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Arr
   return yield* awaited(fdContents(fdInt(yield vcall(pfd, "getFileDescriptor", `()${FD}`))));
 });
 
-// statvfs answers the browser's storage estimate for whichever path is asked about (one
-// filesystem backs everything here), in 4K blocks.
+// statvfs answers the storage estimate in 4K blocks
 const BLK = 4096n;
 // the internal storage volume, identified by the platform's default UUID (StorageManager.UUID_DEFAULT)
 export const uuidDefault = once(() => uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69"));
-export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
-  try {
-    const e = yield* awaited(navigator.storage?.estimate?.());
-    return { total: e?.quota ?? 0, free: Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0)) };
-  } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
-});
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
 export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
 /** a path's file stat, null for a directory; ENOENT for neither */

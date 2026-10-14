@@ -37,6 +37,13 @@ const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
   return text === null ? null : utf8.enc.encode(text);
 };
+/** the space every path's filesystem reports (one backs everything here): the browser's storage estimate */
+export async function storageEstimate(): Promise<{ total: number; free: number }> {
+  try {
+    const e = await navigator.storage?.estimate?.();
+    return { total: e?.quota ?? 0, free: Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0)) };
+  } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
+}
 export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
