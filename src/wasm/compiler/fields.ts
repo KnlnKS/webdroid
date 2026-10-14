@@ -24,13 +24,17 @@ const code = (l: string) => l.charCodeAt(0);
 /** the wasm kind a field letter is held as: int-like and float bits as I, long and double bits as J */
 const kindOfLetter = (l: string): "I" | "J" => (l === "J" || l === "D" ? "J" : "I");
 
-/** the local holding the id of the field `f` names, its class id, index and flags */
-function decode(cx: Compiler, c: Code, f: number) {
-  const id = c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32);
-  c.lget(f); fieldId(cx, c); c.lset(id).lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
+/** locals for the field id on the stack (or already in local `given`), its class id, index, flags and, unless `flagsOnly`, type letter */
+function describe(cx: Compiler, c: Code, given?: number, flagsOnly = false) {
+  const id = given ?? c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = flagsOnly ? -1 : c.newLocal(T.i32);
+  if (given === undefined) c.lset(id);
+  c.lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
   cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
-  return { id, cid, idx, flags };
+  if (!flagsOnly) { cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter); }
+  return { id, cid, idx, flags, letter };
 }
+/** the locals of the field `f` names: its id, class id, index and flags */
+function decode(cx: Compiler, c: Code, f: number) { c.lget(f); fieldId(cx, c); return describe(cx, c, undefined, true); }
 /** the accessor slot (get or put) of field `id` held as kind index `k` (0 int-like, 1 long-like, 2 reference) */
 function accessor(cx: Compiler, c: Code, id: number, flags: number, put: boolean, k: number): number {
   const slot = c.newLocal(T.i32);
@@ -67,10 +71,8 @@ rt("fprep", ["L", "L", "I"], "I", (cx, c) => {
 
 // fgetp(field, obj, want) -> bits: the field read as the primitive type letter `want`, widened, as an i64 (float and double as their bits)
 rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
-  const id = c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = c.newLocal(T.i32);
-  c.lget(0).lget(1).i32(0); cx.callRt(c, "fprep"); c.lset(id).lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
-  cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
-  cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter);
+  c.lget(0).lget(1).i32(0); cx.callRt(c, "fprep");
+  const { id, cid, flags, letter } = describe(cx, c);
   for (const l of LETTERS) {
     c.lget(letter).i32(code(l)).raw(OP.i32_eq).if_();
     const k = kindOfLetter(l), slot = accessor(cx, c, id, flags, false, k === "J" ? 1 : 0), raw = c.newLocal(k === "J" ? T.i64 : T.i32);
@@ -103,10 +105,8 @@ rt("fbox", ["I", "J"], "L", (cx, c) => {
 
 // fget(field, obj) -> Object: a reference field as it is, a primitive boxed
 rt("fget", ["L", "L"], "L", (cx, c) => {
-  const id = c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = c.newLocal(T.i32);
-  c.lget(0).lget(1).i32(0); cx.callRt(c, "fprep"); c.lset(id).lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
-  cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
-  cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter);
+  c.lget(0).lget(1).i32(0); cx.callRt(c, "fprep");
+  const { id, flags, letter } = describe(cx, c);
   // a letter that is not a primitive's is a reference
   c.lget(letter).i32(code("L")).raw(OP.i32_eq).lget(letter).i32(code("[")).raw(OP.i32_eq).raw(OP.i32_or).if_();
   const ref = accessor(cx, c, id, flags, false, 2);
@@ -116,10 +116,7 @@ rt("fget", ["L", "L"], "L", (cx, c) => {
 
 // fstore(field id, obj, bits, letter): assigns a primitive of type `letter` (as fgetp's bits) to the field, converted to the field's type
 rt("fstore", ["I", "L", "J", "I"], "V", (cx, c) => {
-  const cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = c.newLocal(T.i32);
-  c.lget(0).i32(12).raw(OP.i32_shr_u).lset(cid).lget(0).i32(0xfff).raw(OP.i32_and).lset(idx);
-  cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
-  cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter);
+  const { cid, flags, letter } = describe(cx, c, 0);
   for (const target of LETTERS) {
     c.lget(letter).i32(code(target)).raw(OP.i32_eq).if_();
     const k = kindOfLetter(target), slot = accessor(cx, c, 0, flags, true, k === "J" ? 1 : 0);
@@ -140,10 +137,8 @@ rt("fstore", ["I", "L", "J", "I"], "V", (cx, c) => {
 
 // fset(field, obj, value): a reference field takes any instance of its type, a primitive field the wrapper of a type that widens to it
 rt("fset", ["L", "L", "L"], "V", (cx, c) => {
-  const id = c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = c.newLocal(T.i32), ty = c.newLocal(T.i32);
-  c.lget(0).lget(1).i32(1); cx.callRt(c, "fprep"); c.lset(id).lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
-  cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
-  cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter);
+  c.lget(0).lget(1).i32(1); cx.callRt(c, "fprep");
+  const { id, cid, idx, flags, letter } = describe(cx, c), ty = c.newLocal(T.i32);
   cx.info(c, Info.FieldType, () => c.lget(cid), () => c.lget(idx)); c.lset(ty);
   c.lget(letter).i32(code("L")).raw(OP.i32_eq).lget(letter).i32(code("[")).raw(OP.i32_eq).raw(OP.i32_or).if_();
   // a reference: null, or an instance of the field's type
