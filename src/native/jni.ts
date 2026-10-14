@@ -6,7 +6,7 @@ import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, type Gen } from "../jvm/runtime";
-import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8 } from "../jvm/abi";
+import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi";
 import { after, curThread } from "../jvm/natives/jentry";
 import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory";
 import { vm, type JniClass, type JniField } from "./jnivm";
@@ -16,6 +16,13 @@ export const jniTrace = { on: false };
 export const javaVM = { addr: 0 };
 
 // ── references: locals live per Cpu in frames; globals and weak globals in a table each. 0 is null.
+/** `n` UTF-16 units of `s` from `from` into guest memory at `p`, in one store */
+function putUnits(p: number, s: string, from: number, n: number): void {
+  if (n <= 0) return;
+  const units = new Uint16Array(n);
+  for (let i = 0; i < n; i++) units[i] = s.charCodeAt(from + i);
+  mem.write(p, new Uint8Array(units.buffer));
+}
 /** a failed call's result: zero of the return type's width */
 const zero = (ret: string) => (ret === "J" || ret === "D" ? 0n : 0);
 const GLOBAL_BIT = 0x40000000, WEAK_BIT = 0x20000000;
@@ -402,9 +409,9 @@ export function jniInit(): void {
     def(154 + k, `SetStatic${P}Field`, (_c, a) => { a.p(); a.p(); const f = fieldOf(a.p()); const v = toJava(a); if (f) vm.set(f, null, v); });
   }
   // strings
-  def(163, "NewString", (_c, a) => { a.p(); const p = a.p(), n = a.i(); let s = ""; for (let i = 0; i < n; i++) s += String.fromCharCode(mem.ld16u(p + i * 2)); return toRef(vm.string(s)); });
+  def(163, "NewString", (_c, a) => { a.p(); const p = a.p(), n = Math.max(0, a.i()), b = mem.bytes(p, 2 * n); return toRef(vm.string(charsToString(p & 1 ? new Uint16Array(b.slice().buffer) : new Uint16Array(b.buffer, b.byteOffset, n), 0, n))); });
   def(164, "GetStringLength", (_c, a) => { a.p(); return text(a.p()).length; });
-  def(165, "GetStringChars", (_c, a) => { a.p(); const s = text(a.p()); const isCopy = a.p(); const p = mem.malloc(s.length * 2 + 2); for (let i = 0; i < s.length; i++) mem.st16(p + i * 2, s.charCodeAt(i)); mem.st16(p + s.length * 2, 0); if (isCopy) mem.st8(isCopy, 1); return p; });
+  def(165, "GetStringChars", (_c, a) => { a.p(); const s = text(a.p()); const isCopy = a.p(); const p = mem.malloc(s.length * 2 + 2); putUnits(p, s, 0, s.length); mem.st16(p + s.length * 2, 0); if (isCopy) mem.st8(isCopy, 1); return p; });
   def(166, "ReleaseStringChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
   def(167, "NewStringUTF", (_c, a) => {
     a.p(); const p = a.p();
@@ -416,7 +423,7 @@ export function jniInit(): void {
   def(168, "GetStringUTFLength", (_c, a) => { a.p(); return encodeModifiedUtf8(text(a.p())).length; });
   def(169, "GetStringUTFChars", (_c, a) => { a.p(); const s = text(a.p()); const isCopy = a.p(); const p = putUtf8(encodeModifiedUtf8(s)); if (isCopy) mem.st8(isCopy, 1); return p; });
   def(170, "ReleaseStringUTFChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
-  def(220, "GetStringRegion", (_c, a) => { a.p(); const s = text(a.p()); const st = a.i(), n = a.i(), buf = a.p(); for (let i = 0; i < n; i++) mem.st16(buf + i * 2, s.charCodeAt(st + i)); });
+  def(220, "GetStringRegion", (_c, a) => { a.p(); const s = text(a.p()); const st = a.i(), n = a.i(); putUnits(a.p(), s, st, n); });
   def(221, "GetStringUTFRegion", (_c, a) => { a.p(); const s = text(a.p()); const st = a.i(), n = a.i(), buf = a.p(); putUtf8(encodeModifiedUtf8(s.slice(st, st + n)), buf); });
   def(224, "GetStringCritical", T[165]!);
   def(225, "ReleaseStringCritical", T[166]!);
