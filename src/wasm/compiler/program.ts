@@ -213,7 +213,7 @@ export class Program {
     if (this.sealed) throw new Error("this Program is the base of another and cannot change");
     if (loader === this.boot) this.bootPath = true;
     const added: string[] = [];
-    this.ancestorMemo.clear(); this.implMemo.clear();
+    this.forget();
     for (const dex of dexes) {
       const owner = this.loaderOfDex(dex);
       if (owner && owner !== loader) throw new Error(`${dex.name} belongs to another loader`);
@@ -369,7 +369,7 @@ export class Program {
       const owner = dexes.get(c.dex);
       if (owner) { c.refreshTypes(d => this.rewrite(owner, d), types); names.push(c.name); }
     }
-    this.ancestorMemo.clear(); this.implMemo.clear();
+    this.forget();
     return names;
   }
   /** a type or method descriptor in binary names (JNI's) as the loader of class `cls` sees it: each class it names by the key that loader sees under that name */
@@ -427,7 +427,7 @@ export class Program {
       const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret, index: c.methods.length };
       c.methods.push(m); c.byKey.set(m.key, m);
     }
-    this.ancestorMemo.clear(); this.implMemo.clear();
+    this.forget();
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass, loader: Loader = this.root): void {
@@ -435,7 +435,7 @@ export class Program {
     jc.methods.forEach((m, i) => { m.index = i; jc.byKey.set(m.key, m); });
     this.classes.set(jc.name, jc);
     if (!jc.dex) { this.syntheticLoaders.set(jc.name, loader); loader.defined.set(javaName(jc.name), jc.name); }
-    this.ancestorMemo.clear(); this.implMemo.clear();
+    this.forget();
   }
   get(name: string): JClass | undefined { return this.classes.get(name) ?? this.base?.get(name); }
   require(name: string): JClass { const c = this.get(name); if (!c) throw new Error("class not found: " + name); return c; }
@@ -443,6 +443,9 @@ export class Program {
   private shadowing = false;
   private ancestorMemo = new Map<string, Set<string>>();
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
+  private layouts = new Map<string, readonly FieldInfo[]>();
+  /** drops what a change to the classes or their types can falsify */
+  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);
@@ -540,9 +543,13 @@ export class Program {
     return visit(cls);
   }
   /** instance fields in layout order: superclass fields first */
-  layout(cls: string): FieldInfo[] {
+  layout(cls: string): readonly FieldInfo[] {
+    let l = this.layouts.get(cls);
+    if (l) return l;
     const c = this.get(cls); if (!c) return [];
-    return [...(c.sup ? this.layout(c.sup) : []), ...c.fields.filter((f) => !f.isStatic)];
+    l = [...(c.sup ? this.layout(c.sup) : []), ...c.fields.filter((f) => !f.isStatic)];
+    this.layouts.set(cls, l);
+    return l;
   }
   chain(cls: string): string[] { const out: string[] = []; for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) out.push(c.name); return out; }
 }

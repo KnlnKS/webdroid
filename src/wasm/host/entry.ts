@@ -240,7 +240,7 @@ function makeEntry(w: World): Entry {
 
 /** how the Wasm tier names the instance field `name` of `cls` (declared or inherited, the most derived first) for getDeclared and setDeclared */
 export const fieldNamesOf = (w: World) => (cls: string, name: string): string | undefined => {
-  const f = w.prog.layout(cls).reverse().find((x) => x.name === name);
+  const f = [...w.prog.layout(cls)].reverse().find((x) => x.name === name);
   return f && mangleField(f.owner, f.name);
 };
 
