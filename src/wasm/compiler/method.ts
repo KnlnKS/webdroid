@@ -16,7 +16,7 @@ import { emitHandleConstant, emitTypeConstant } from "../link/mhandles";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
-import { NO_THROW, isFieldAccess } from "./opinfo";
+import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo";
 import { emitRestored, FUEL } from "../link/sched";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
@@ -316,15 +316,16 @@ export class MC {
    *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
   private planDepth(): boolean {
     if (this.prepared.instructions.some(ins => this.deferredSite(ins))) return true;
-    const calls = this.prepared.instructions.filter((i) => i.name.startsWith("invoke"));
+    const calls = this.prepared.instructions.filter((i) => isInvoke(i.op));
     if (!calls.length) return false;
     if (this.tries) return true;
-    const open: string[] = [], cold: string[] = [], ends = new Map<number, string>(this.blockIns.flatMap((b) => b.map((i) => [i.pc, b[b.length - 1].name] as const))), throws = (ins: Ins) => ends.get(ins.pc) === "throw";
+    const open: string[] = [], cold: string[] = [], thrown = new Set<number>();
+    for (const b of this.blockIns) if (b?.[b.length - 1].op === 0x27) for (const i of b) thrown.add(i.pc);
     const bounded = (m: MethodInfo | "dynamic") => { const w = m === "dynamic" ? undefined : this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
     for (const ins of calls) {
       const t = this.callee(ins), key = String(ins.pc), virtual = this.virtuals.get(ins.pc);
       if (t === null) continue;
-      if (/custom|polymorphic/.test(ins.name)) return true;
+      if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
       // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
       const guards = virtual ? this.callGuards(ins) : [];
       if (guards.length) {
@@ -332,12 +333,14 @@ export class MC {
         cold.push(key + ":f");
       } else if (!bounded(virtual ? "dynamic" : t)) {
         // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
-        (throws(ins) ? cold : open).push(key);
+        (thrown.has(ins.pc) ? cold : open).push(key);
       }
     }
     // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
-    const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
-    if (open.some((k) => loops.some(([from, to]) => +k.split(":")[0] >= from && +k.split(":")[0] <= to))) return true;
+    if (open.length) {
+      const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
+      if (open.some((k) => loops.some(([from, to]) => +k.split(":")[0] >= from && +k.split(":")[0] <= to))) return true;
+    }
     if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
     this.sites = new Set([...open, ...cold]);
     this.boundable = open.length === 0;
