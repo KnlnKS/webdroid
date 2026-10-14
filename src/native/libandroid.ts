@@ -20,6 +20,8 @@ class NativeWindow {
   format = 1;
   bits = 0; size = 0;
   locked = false; lockedWidth = 0; lockedHeight = 0;
+  /** the posted frame's RGBA, reused: createImageBitmap has copied it by the time a post finishes, and a window posts one frame at a time */
+  pixels = new Uint8ClampedArray(0);
   constructor(readonly surface: GlSurface, readonly handle: number) {}
 }
 const windows: (NativeWindow | null)[] = [null];
@@ -75,7 +77,8 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
     } finally { frame?.close(); buffer.locked = false; }
     return 0;
   }
-  const pixels = new Uint8ClampedArray(width * height * 4);
+  if (buffer.pixels.length !== width * height * 4) buffer.pixels = new Uint8ClampedArray(width * height * 4);
+  const pixels = buffer.pixels;
   if (buffer.format === 4) {
     for (let i = 0; i < width * height; i++) {
       const rgb = mem.ld16u(buffer.bits + i * 2), p = i * 4;
