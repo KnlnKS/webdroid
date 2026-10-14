@@ -126,8 +126,7 @@ Unranked; each needs a measurement or a check against the current code before wo
   served; A64 exclusive-monitor semantics are unverified.
 - **Harness:** the emulator recorder runs online, so re-recording Mihon's references would capture its update
   dialog.
-- **Maintainability:** `CORE_LIBC` and `TABLE_SIZE` in `src/native/core.ts` repeat Zig's tables by hand with no
-  parity check; shaping is cached for measurement but not for layout; two deflate libraries (fflate and pako).
+- **Maintainability:** shaping is cached for measurement but not for layout; two deflate libraries (fflate and pako).
 
 ## Verification for changed behavior
 
