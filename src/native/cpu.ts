@@ -280,7 +280,8 @@ export class Cpu {
       if (sig) void this.deliver(sig);
     });
   }
-  sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
+  sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran, the latest 40
+  private logSignal(entry: string): void { if (this.sigLog.push(entry) > 40) this.sigLog.shift(); }
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
    *  entry from Java waits for it, since two unrelated call() frames cannot share one register file */
   baseBusy: Promise<void> | null = null;
@@ -311,7 +312,7 @@ export class Cpu {
     if (act !== "handler") { if (act !== "ignore") void dieOfSignal(this, sig, info); return; }
     const h = dispositions.get(sig) as Handler;
     if (h.flags & SA_RESETHAND) dispositions.delete(sig);
-    this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
+    this.logSignal(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | h.mask | (h.flags & SA_NODEFER ? 0n : sigbit(sig))) & BLOCKABLE;
     this.handling.add(sig);
@@ -357,7 +358,7 @@ export class Cpu {
     try { await p; }
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
     finally {
-      this.sigLog.push(`~${sig}`);
+      this.logSignal(`~${sig}`);
       restore();
       this.pump();
     }
