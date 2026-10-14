@@ -5,7 +5,7 @@
 // behind is crash.ts's.
 
 import { mem } from "./mem";
-import { stp, ldp, PTR, type HostFn, type ArgReader } from "./host";
+import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host";
 import { E } from "./abi";
 import { fail } from "./libc";
 import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu";
@@ -93,18 +93,18 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
   const previous = cpu.alternateStack ?? { sp: 0n, size: 0n, flags: SS_DISABLE };
   const sizeAt = PTR === 8 ? 16 : 8;
   if (old) {
-    if (PTR === 8) mem.st64(old, previous.sp); else mem.st32(old, Number(previous.sp));
+    stWord(old, previous.sp);
     mem.st32(old + PTR, previous.flags | (cpu.alternateActive ? SS_ONSTACK : 0));
-    if (PTR === 8) mem.st64(old + sizeAt, previous.size); else mem.st32(old + sizeAt, Number(previous.size));
+    stWord(old + sizeAt, previous.size);
   }
   if (!next) return 0;
   if (cpu.alternateActive) return fail(cpu, E.PERM);
   const flags = mem.ld32(next + PTR) >>> 0;
   if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return fail(cpu, E.INVAL);
   if (flags === SS_DISABLE) { cpu.alternateStack = { sp: 0n, size: 0n, flags }; return 0; }
-  const size = PTR === 8 ? mem.ld64(next + sizeAt) : BigInt(mem.ld32(next + sizeAt) >>> 0);
+  const size = ldWord(next + sizeAt);
   if (size < 2048n) return fail(cpu, E.NOMEM);
-  const sp = PTR === 8 ? mem.ld64(next) : BigInt(mem.ld32(next) >>> 0);
+  const sp = ldWord(next);
   cpu.alternateStack = { sp, size, flags };
   return 0;
 }

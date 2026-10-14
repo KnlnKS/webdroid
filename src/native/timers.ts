@@ -1,5 +1,5 @@
 import { processExited } from "../process-exit";
-import { hostLib, PTR, ldp, stp } from "./host";
+import { hostLib, PTR, ldp, stp, ldLong } from "./host";
 import { clockTime, fail, readTs, writeTs } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { mem } from "./mem";
@@ -44,9 +44,8 @@ export function setClockTimer(timer: ClockTimer, flags: number, value: number, o
   return true;
 }
 function validTime(p: number): boolean {
-  const seconds = PTR === 8 ? mem.ld64(p) : BigInt(mem.ld32(p) | 0);
-  const nanos = PTR === 8 ? mem.ld64(p + 8) : BigInt(mem.ld32(p + 4) | 0);
-  return seconds >= 0n && nanos >= 0n && nanos < 1000000000n;
+  const nanos = ldLong(p + PTR);
+  return ldLong(p) >= 0 && nanos >= 0 && nanos < 1e9;
 }
 export function timersInit(): void {
   hostLib("libc.so", {

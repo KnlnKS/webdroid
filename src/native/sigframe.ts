@@ -4,7 +4,7 @@
 // which the handler may rewrite before rt_sigreturn loads them back.
 
 import { mem } from "./mem";
-import { PTR } from "./host";
+import { PTR, ldWord } from "./host";
 import type { Cpu } from "./cpu";
 import { BLOCKABLE } from "./signals";
 
@@ -20,7 +20,7 @@ export function writeSiginfo(p: number, sig: number, code: number, addr: bigint 
   mem.st32(p + 8, code);
   if (addr !== null) { if (PTR === 8) mem.st64(p + 16, addr); else mem.st32(p + 12, Number(addr & 0xffffffffn)); }
 }
-export const readSiginfo = (p: number): SigInfo => ({ code: mem.ld32(p + 8), addr: PTR === 8 ? mem.ld64(p + 16) : BigInt(mem.ld32(p + 12) >>> 0) });
+export const readSiginfo = (p: number): SigInfo => ({ code: mem.ld32(p + 8), addr: ldWord(p + (PTR === 8 ? 16 : 12)) });
 
 /** an ABI's frame: its size, and its ucontext's writing and loading */
 interface FrameLayout { size: number; write(cpu: Cpu, context: number, info: SigInfo | null, mask: bigint): void; load(cpu: Cpu, context: number): void }
