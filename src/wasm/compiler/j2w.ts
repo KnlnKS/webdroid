@@ -1,4 +1,5 @@
 import { beginCompile, endCompile } from "../../jvm/compiler-observer";
+import { parseMethodDesc } from "../../jvm/abi";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
@@ -207,10 +208,19 @@ export class Compiler implements Base {
     if (s === undefined) this.sigType.set(key, s = this.mb.addFuncType(params.map((k) => this.vtOf(k)), ret === "V" ? [] : [this.vtOf(ret)]));
     return s;
   }
-  methodSig(m: MethodInfo): number {
-    const ps: Kind[] = m.isStatic ? [] : ["L"]; for (const p of m.params) ps.push(kindOf(p));
-    return this.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
+  private descSigs = [new Map<string, number>(), new Map<string, number>()];
+  /** the function type of a method with descriptor `desc`, with its receiver unless it is static */
+  descSig(desc: string, isStatic: boolean): number {
+    const memo = this.descSigs[+isStatic];
+    let s = memo.get(desc);
+    if (s === undefined) {
+      const p = parseMethodDesc(desc), ps: Kind[] = isStatic ? [] : ["L"];
+      for (const t of p.params) ps.push(kindOf(t));
+      memo.set(desc, s = this.sig(ps, p.ret === "V" ? "V" : kindOf(p.ret)));
+    }
+    return s;
   }
+  methodSig(m: MethodInfo): number { return this.descSig(m.desc, m.isStatic); }
   structFor(cls: string): number {
     let t = this.classStruct.get(cls); if (t !== undefined) return t;
     const c = this.prog.get(cls);

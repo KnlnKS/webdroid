@@ -1042,7 +1042,7 @@ export class MC {
       let ri = isStatic ? 0 : 1;
       for (const pt of p.params) { this.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
     };
-    const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
+    const sigIdx = () => cx.descSig(desc, isStatic);
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
