@@ -163,9 +163,10 @@ These analyses were done with scratch scripts that are not in the repo; each is 
 
 1. **Lower the cold Komikku floor.** In a cold `more` tap, UP is handled in 2 ms, then one 85 ms `doFrame` recomposes, with 699 methods compiled on demand (62 ms of compiling). Levers, in the plan's order:
    - **2.1 deterministic app numbering: measured and rejected for mid-session adoption** (history, "Rejected: seeded app numbering").
-   - **Profiled (2026-10-14):** main-thread Java is 80–115 ms of a cold tap, on-demand compiling 10–55 ms, V8 compiling merged modules' functions 9–57 ms. Compile Worker answers now wait out the input window (history, "Worker answers wait out input"); turning merges off moved adoptions into taps and did not help. Next idea: merge only units whose counters stayed unchanged for ~10 s, so running methods keep their engine code.
-   - **5.1 flat statics.** Fewer modules and imports per unit.
-   - **3.1 and 3.3 codegen.** Plan 3.2 is rejected: direct calls must not bypass host vtable repairs.
+   - **Profiled (2026-10-14):** main-thread Java is 80–115 ms of a cold tap, on-demand compiling 10–55 ms, V8 compiling merged modules' functions 9–57 ms. Compile Worker answers now wait out the input window (history, "Worker answers wait out input"); turning merges off moved adoptions into taps and did not help. Merging only dormant units measured neutral.
+   - **5.1 flat statics: not a tap lever.** Class modules cost a cold tap 0.3–2.4 ms (history, "Flat statics are not a tap lever").
+   - **3.1, 3.2 and 3.3 codegen: rejected or not pursued.** 3.1 was neutral, 3.2 bypassed host vtable repairs, and trivial bodies get 5–7% of calls.
+   - What remains of a cold tap is the app's own first-tier Java (Compose recomposition) running on code the engine has just compiled.
 2. **ChatGPT and TikTok.** Since paced unit release neither has crashed: ChatGPT warm launches in 2.95 s, and five matched warm TikTok runs (main and `6369377e`) launched in 8.1–8.4 s. Two warm preparations on main stopped at a server-driven "Manage your storage" dialog (its text is not in the APK). Cold runs and the matched series never showed it. Neither statfs nor free space is the trigger (Chrome always reports ~10 GB free); a cold-then-warm run on 2026-10-14 reached the login screen without it. Which check TikTok makes is still unknown.
 3. **Done: a slower-device pass.** `lat --ecores` runs Chrome under `taskpolicy -c background` (about 6× slower in every thread); results are in the history ("A slower device on the efficiency cores").
 4. **Done: docs committed** (the reorganization landed in `959469a3`).

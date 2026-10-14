@@ -100,8 +100,8 @@ First response frame (the gate since 2026-10-13; not comparable with the rows ab
 | Komikku launch / taps | 7.4 s / 58–149 ms | 2.9–3.1 s / 32–89 ms |
 | YouTube launch / taps (report) | 14 s / 205–445 ms | 5.3 s / 7–145 ms |
 | Reddit launch (report) | 11.9 s | 6.1 s |
-| ChatGPT launch (report) | 6.0 s | page crashed once |
-| TikTok launch (report) | 12.3 s | 8.2 s (its build attached from 2026-10-13) |
+| ChatGPT launch (report) | 6.0 s | page crashed once; 2.4 s on 2026-10-14 |
+| TikTok launch (report) | 12.3 s | 8.2 s (its build attached from 2026-10-13); 7.9 s on 2026-10-14 |
 
 On a profiled platform build with worker answers held through input (2026-10-14, three cold runs), Komikku launched
 in 5.8–6.4 s and its taps took 36–177 ms (per-tap medians of two three-run series: `next` 48–53, `start` 92–123,
