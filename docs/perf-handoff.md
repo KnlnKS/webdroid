@@ -33,10 +33,7 @@ The work below is committed on top of `ef6d85ca` (`git log ef6d85ca..`):
 - `wasm compiler:` CHA is asked only about targets the module holds;
 - `native:` statfs/statvfs answer the storage estimate in bionic's layouts, and C longs are stored as values, not translated pointers.
 
-Still uncommitted:
-- the docs (mixed with the user's reorganization);
-- the untracked `scripts/wasm/{callcensus,compbench,unitdump}.ts`;
-- the other sessions' edits listed in the ground rules.
+Still uncommitted: the other sessions' edits listed in the ground rules.
 
 Plan 3.2 (final targets as direct calls) was tried and rejected; see "Rejected: final targets called through their slot" in the history.
 
@@ -58,11 +55,7 @@ Plan 3.2 (final targets as direct calls) was tried and rejected; see "Rejected: 
   - **IPC and visibility:** Call/Answer (Worker→page calls, `process-port.ts` `callProxy`), Serve/Served (calls a realm serves, `serveCalls`), Visible (process visibility, `process-endpoint.ts`).
 - **Counters:**
   - `wasmRetired` / `wasmCollected` (see below), in `src/perf.ts`, `src/wasm/host/stats.ts` and the `lat` COUNTERS.
-- **Untracked scripts:**
-  - `scripts/wasm/callcensus.ts`: static census of virtual/interface call sites (final, CHA single target, polymorphic).
-  - `scripts/wasm/compbench.ts`: compiler throughput, about 130 µs per method with a flat profile.
-  - `scripts/wasm/unitdump.ts`: dumps a first-tier unit.
-- **Switches.** `src/switches.ts` (untracked) holds the `?flag=` switches that Workers inherit. Two exist:
+- **Switches.** `src/switches.ts` holds the `?flag=` switches that Workers inherit. Two exist:
   - `?bundles=0`: `lat` sets it for cold runs.
   - `?input=batched`: plan 6.1, implemented in `inputchannel.ts`/`wm.ts`. Measured: no clear win, default stays `immediate` (see the history).
 
