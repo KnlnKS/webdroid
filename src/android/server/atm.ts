@@ -12,7 +12,7 @@ import { configurations, resizeWindows, setClientVisible } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
-import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
+import { intentQuery$, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
 import { grantResultUris } from "../urigrants";
 import { thisApp, userLaunched, pms, runsHere } from "./am";
 
@@ -284,7 +284,7 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     const info = yield* resolveActivity(intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA);
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
-    const q = yield* awaited(intentQuery(intent)), system = systemActivity(q, false) ??
+    const q = yield* intentQuery$(intent), system = systemActivity(q, false) ??
       (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
     if (system) { detached(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode)), logUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;

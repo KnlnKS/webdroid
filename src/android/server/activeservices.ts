@@ -15,7 +15,7 @@ import { PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
-import { type JComponentName, type JIntent, componentParts, mkComponentName, newIntent } from "../intent";
+import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
@@ -240,7 +240,7 @@ function remoteUnbind(key: string): unknown {
 
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
 export const bindAsSystem = driven(function* (component: JComponentName, key: string, action: string | null = null): Gen<{ binder: JObj; unbind: () => unknown }> {
-  const parts = (yield* awaited(componentParts(component)))!;
+  const parts = (yield* componentParts$(component))!;
   const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls);
   if (!owner || !node || !appHost) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");

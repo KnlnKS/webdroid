@@ -19,11 +19,10 @@ export const mkComponentName = (pkg: string, cls: string): JComponentName | Prom
 /** a component by its package and class name */
 export type ComponentRef = { pkg: string; cls: string };
 /** a ComponentName's package and class */
-function* componentParts$(component: JComponentName | null): Gen<ComponentRef | null> {
+export function* componentParts$(component: JComponentName | null): Gen<ComponentRef | null> {
   if (!component) return null;
   return { pkg: yield vcall(component, "getPackageName", `()${S}`), cls: yield vcall(component, "getClassName", `()${S}`) };
 }
-export const componentParts = driven(componentParts$);
 
 /** what the shell routes an Intent by, read through its Java API */
 export interface IntentQuery {
@@ -44,7 +43,6 @@ export function* intentQuery$(intent: JIntent, resolvedType?: string | null): Ge
     component: component?.cls ?? null, componentPkg: component?.pkg ?? null,
   };
 }
-export const intentQuery = driven(intentQuery$);
 /** Intent.putExtra for a value of descriptor `desc` */
 export const putExtra = (intent: JIntent, key: string, value: unknown, desc: string): unknown =>
   vcall(intent, "putExtra", `(${S}${desc})${I}`, key, value);
@@ -73,7 +71,7 @@ export function systemActivity(intent: Pick<IntentQuery, "action" | "dataUri" | 
   return systemActivities.get(intent.action ?? "")?.find((h) => h.schemes ? scoped && h.schemes.includes(scheme) : true)?.run ?? null;
 }
 /** a picker's result: the chosen uri, with the grants it carries */
-export const mkResultIntent = driven(function* (uri: string | null, flags: number = 3 | 0x40): Gen<JIntent> {
+export const mkResultIntent = driven(function* (uri: string | null, flags: number): Gen<JIntent> {
   const intent = yield* awaited(newIntent());
   if (uri !== null) yield vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, yield* awaited(mkUri(uri)));
   yield vcall(intent, "setFlags", `(I)${I}`, flags);

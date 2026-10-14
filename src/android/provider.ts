@@ -6,7 +6,7 @@ import { newObj, vcall, scall } from "../jvm/natives/jentry";
 import { serviceContext } from "./binder";
 import { startActivityFor } from "./server/atm";
 import { thisApp } from "./server/am";
-import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, mkComponentName, type JIntent } from "./intent";
+import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery$, mkComponentName, type JIntent } from "./intent";
 import { csText } from "../jvm/natives/jchars";
 import { frameworkString } from "./res";
 import { mkUri } from "./net";
@@ -64,7 +64,7 @@ for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_
 registerSystemActivity("android.intent.action.CHOOSER", driven(function* (intent: JIntent): Gen<JIntent | null> {
   const target: JIntent | null = yield vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.INTENT");
   if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
-  const q = yield* awaited(intentQuery(target));
+  const q = yield* intentQuery$(target);
   const share = () => import("../shell/share");
   if (q.action === "android.intent.action.SEND" || q.action === "android.intent.action.SEND_MULTIPLE")
     return yield* awaited((yield* awaited(share())).shareIntent(intent));
