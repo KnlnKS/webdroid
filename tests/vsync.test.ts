@@ -28,6 +28,20 @@ test("virtual vsync tolerates host jitter, caps refresh rates and drops missed p
       for (let i = 0; i < host * 10; i++) frames += +recordVsync(start + i * 1000 / host);
       expect(Math.abs(frames - 10 * Math.min(rate, host))).toBeLessThanOrEqual(1);
     }
+    // a 120 Hz host with jitter paces a 60 Hz display evenly: every other host frame, never one between
+    device.refreshRate = 60;
+    let seed = 1;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    for (const jitter of [0, 1.5, 2.5]) {
+      start += 20_000;
+      let skipped = 0, last = -1;
+      for (let i = 0; i < 1200; i++) {
+        if (!recordVsync(start + i * 1000 / 120 + (2 * random() - 1) * jitter)) continue;
+        if (last >= 0 && i - last !== 2) skipped++;
+        last = i;
+      }
+      expect(skipped).toBe(0);
+    }
     device.refreshRate = 60;
     start += 20_000;
     expect(recordVsync(start)).toBe(true);

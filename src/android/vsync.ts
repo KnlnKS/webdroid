@@ -55,16 +55,37 @@ function fill(data: Record<string, unknown>): void {
 }
 const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get", "()Ljava/lang/Object;");
 
+/** The host's frame period: the mean of its recent frame spacings, which cancels jitter (an early frame shortens one
+ *  gap by what it lengthens the next), leaving out the spacings of skipped frames, longer than 1.5 times the median. */
+const hostGaps = new Float64Array(16), sortedGaps = new Float64Array(16);
+let hostGapCount = 0, lastHostFrame = -Infinity, hostPeriodMs = Infinity;
+function noteHostGap(gap: number): void {
+  hostGaps[hostGapCount++ % hostGaps.length] = gap;
+  const n = Math.min(hostGapCount, hostGaps.length);
+  // the period changes only with the display, so a fresh estimate every 8 frames is enough
+  if (n < 4 || hostGapCount % 8 && hostPeriodMs !== Infinity) return;
+  sortedGaps.set(hostGaps);
+  const sorted = sortedGaps.subarray(0, n).sort(), limit = sorted[n >> 1] * 1.5;
+  let sum = 0, count = 0;
+  for (const g of sorted) if (g <= limit) { sum += g; count++; }
+  hostPeriodMs = sum / count;
+}
 /** a host display frame: true when it is a virtual vsync, delivered now to every receiver that asked */
 export function recordVsync(time: number): boolean {
   hostFrameAt = performance.now();
-  const interval = vsyncIntervalMs();
+  const interval = vsyncIntervalMs(), gap = time - lastHostFrame;
+  lastHostFrame = time;
+  if (gap > 1 && gap < STALLED_MS) noteHostGap(gap);
   if (!nextVsync) nextVsync = time;
-  // Re-anchor missed periods so host jitter cannot straddle a stale phase boundary.
-  const elapsed = time + interval / 2 - nextVsync;
+  // A frame up to half a period early is the vsync it is nearest, but no more than half a host frame early: a host frame
+  // that divides the period puts the frame between two vsyncs right on the half-period boundary, where jitter would take
+  // it one time and its successor the next (8 and 25 ms frames from a 120 Hz host at 60 Hz). Re-anchor missed periods so
+  // host jitter cannot straddle a stale phase boundary.
+  const elapsed = time + Math.min(interval, hostPeriodMs) / 2 - nextVsync;
   if (elapsed < 0) { note(Ev.Raf, 0); return false; }
   note(Ev.Raf, 1);
-  nextVsync = elapsed < interval ? nextVsync + interval : time + interval;
+  // An anchor taken from one jittered frame drifts toward the frames' mean phase, so the tolerance stays centred on it.
+  nextVsync = elapsed < interval ? nextVsync + interval + (time - nextVsync) / 8 : time + interval;
   deliverVsync();
   return true;
 }
