@@ -40,7 +40,7 @@ export function workerControl(logs: string[], phase: () => string) {
       const wasm = globalThis.__wdWasm;
       if (!wasm) return null;
       if (save) await wasm.appSettle?.();
-      return { saved: !!wasm.appSaved, source: wasm.appSource ?? null, attached: !!wasm.appAttached,
+      return { saved: !!wasm.appSaved, source: wasm.appSource ?? null, attached: !!wasm.appAttached, rejected: wasm.appRejected ?? null,
         kept: !!wasm.appBuilds?.some(build => build.kept), persisted: save ? !!await wasm.appPersisted?.() : null };
     },
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),

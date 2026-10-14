@@ -92,6 +92,16 @@ export type Tail = string | [string, number];
 /** what was numbered after `from`, in order: replaying it in a World at `from` numbers everything the same way */
 export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selectors: string[]; gaps: string[]; links: string[] }
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
+/** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
+export function numberingDiff(a: Numbering, b: Numbering): string {
+  if (!sameMarks(a.from, b.from)) return `from ${JSON.stringify(a.from)} vs ${JSON.stringify(b.from)}`;
+  for (const k of ["names", "tail", "selectors", "gaps", "links"] as const) {
+    const x = a[k], y = b[k], i = x.findIndex((v, j) => JSON.stringify(v) !== JSON.stringify(y[j]));
+    if (i >= 0 || x.length !== y.length) return x.length + y.length <= 32 ? `${k} ${JSON.stringify(x)} vs ${JSON.stringify(y)}`
+      : `${k} ${x.length} vs ${y.length}, at ${i < 0 ? Math.min(x.length, y.length) : i}: ${JSON.stringify(x[i])} vs ${JSON.stringify(y[i < 0 ? x.length : i])}`;
+  }
+  return "same";
+}
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
 export const APP_VERSION = 18;
@@ -305,6 +315,8 @@ export class AotRuntime {
     return `${(prog.root.before ?? []).map(graph).join(" ")}|${(prog.root.after ?? []).map(graph).join(" ")}`;
   }
   private appLibraries?: string;
+  /** why `extend` refused the app build it was given, which a harness reports */
+  appRejected?: string;
   /** whether the root's libraries are now those the attached app build was compiled under */
   boundAsBuilt(): boolean { return this.appLibraries !== undefined && this.appLibraries === this.rootLibraries(); }
   /** adds the app build in `store` to the platform build: its numbering continues the World's, which must have numbered exactly the build's prefix since the platform build was
@@ -313,9 +325,11 @@ export class AotRuntime {
   extend(app: AppIndex, store: AotStore): boolean {
     const w = this.w, sigs = this.appDexes(app.classes), since = w.since(this.platformMarks);
     const fresh = sameMarks(since.from, w.numbering());
-    if (app.version !== APP_VERSION || this.rest.length < app.classes || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i])
-      || !(fresh || JSON.stringify(since) === JSON.stringify(app.prefix))) return false;
-    if (fresh && !w.adopt(app.prefix) || !sameMarks(w.numbering(), app.base) || !w.adopt(app.numbering)) return false;
+    const rejected = app.version !== APP_VERSION ? "version" : this.rest.length < app.classes ? "classes" : sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) ? "dexes"
+      : !(fresh || JSON.stringify(since) === JSON.stringify(app.prefix)) ? `prefix: ${numberingDiff(since, app.prefix)}` : undefined;
+    if (rejected) { this.appRejected = rejected; return false; }
+    if (fresh && !w.adopt(app.prefix)) { this.appRejected = "prefix not adopted"; return false; }
+    if (!sameMarks(w.numbering(), app.base) || !w.adopt(app.numbering)) { this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);

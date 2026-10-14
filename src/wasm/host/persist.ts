@@ -1,7 +1,7 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";
+import { APP_VERSION, VERSION, type AotStore, type AppIndex, type Numbering, type UnitHeader } from "../link/aot";
 import { compileBytes } from "../link/module";
 import type { DexFile } from "../../jvm/dex";
 import { COMPILED_CODE_DIR } from "../../shell/hostfs";
@@ -56,6 +56,12 @@ export class Persist {
     await this.saveMeta(meta);
     return true;
   }
+  /** what a process numbered before its app's code arrived, under platform build `platform` (boot.ts): a small file outside the bounded entries */
+  async prefix(platform: string): Promise<Numbering | undefined> {
+    const raw = await this.fs.read(`prefix-${platform}.json`).catch(() => undefined);
+    try { return raw && JSON.parse(new TextDecoder().decode(raw)) as Numbering; } catch { return undefined; }
+  }
+  savePrefix(platform: string, n: Numbering): Promise<void> { return this.fs.write(`prefix-${platform}.json`, new TextEncoder().encode(JSON.stringify(n))); }
   private async evict(meta: Meta, key: string): Promise<void> {
     const entry = meta.entries[key];
     delete meta.entries[key];

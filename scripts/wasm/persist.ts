@@ -485,6 +485,12 @@ if (saved) {
   check("a damaged entry is not loaded", await p.load("a"), undefined);
   check("and is removed", [...fs.files.keys()].some((k) => k.startsWith("a/")), false);
   check("replacing an entry leaves one", (await p.save("c", [["z", blob(10)]]), [...fs.files.keys()].filter((k) => k.startsWith("c/")).join()), "c/z");
+  const prefix = { from: { names: 1, tail: 2, selectors: 3, gaps: 0, links: 0 }, names: ["A$$host", "B"], tail: [["B", 4]] as [string, number][], selectors: ["m()V"], gaps: [], links: [] };
+  check("no prefix is kept before one is saved", await p.prefix("platform"), undefined);
+  await p.savePrefix("platform", prefix);
+  check("a saved prefix is read back under its platform build", JSON.stringify(await p.prefix("platform")), JSON.stringify(prefix));
+  check("and not under another", await p.prefix("other"), undefined);
+  check("the prefix leaves the bounded entries alone", [await p.load("c") !== undefined, (await p.save("d", [["x", blob(100)]]), await p.prefix("platform") !== undefined)].join(), "true,true");
 }
 for (const p of ports) p.terminate();
 console.log(failed ? `${failed} failures` : "persist: all pass");

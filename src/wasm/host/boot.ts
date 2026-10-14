@@ -19,6 +19,7 @@ import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput } from "../../jvm/yield";
 import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
+import type { Numbering } from "../link/aot";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
@@ -40,7 +41,7 @@ import { onProcessExit, processExited } from "../../process-exit";
 const TAB_HEAP = 2048 * 1024 * 1024;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
+type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[] };
 declare global {
   var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -117,13 +118,21 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // The hooks come first and the build is fetched after them: Java is not run before the tier is ready (the zygote waits for the app's code), and the page fetches the build while it
   // downloads the package
   const opening = Promise.all([openAot(), fetchPlatformJars()]);
+  // What a process numbers before its app's code arrives depends on timing (whether a build module has arrived, or its methods are compiled on demand), and a saved app build continues
+  // exactly that numbering: a process numbers what earlier ones did first, in their order, and adds what it numbers besides
+  const persisting = openPersist();
+  const remembered = Promise.all([opening, persisting]).then(([[aot], persist]) => aot && persist?.prefix(aot.key)).catch(() => undefined);
+  let seen: Numbering | undefined;
   // a process that never presents a frame, such as a service's, is launched when the start window ends
   const launched = () => { starting = false; if (world) code?.watch(world); };
   setTimeout(launched, START_MS);
   // The World is made when Java is first needed: the zygote's, before the app is known, whose dexes and saved build join it as they arrive
   const current = (): World => {
     if (!platform) throw new Error("the Wasm tier is not ready");
-    return world ?? install(createWorld(new Program(appDexes, platform), { aot: store, dexes }));
+    if (world) return world;
+    const w = createWorld(new Program(appDexes, platform), { aot: store, dexes });
+    if (seen) w.adopt(seen);
+    return install(w);
   };
   let entry: Entry | undefined;
   const lazyEntry = (name: keyof Entry) => (...args: unknown[]) => ((entry ??= wasmEntry(current()))[name] as (...a: unknown[]) => unknown)(...args);
@@ -137,6 +146,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   wasmBox.make = (desc, v) => current().bridge.toHost(boxRef(current(), desc, v));
   const [aot, jars] = await opening;
   store = aot;
+  seen = await remembered;
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   mark("platformReady");
   return {
@@ -177,10 +187,11 @@ export async function bootWasmTier(): Promise<TierBackend> {
       if (!appDexes.length) { await store.ready; return; }
       // a saved build continues what the World numbered before the app's dexes arrived
       const w = current(), prefix = w.since(w.base);
+      if (JSON.stringify(prefix) !== JSON.stringify(seen)) void persisting.then((persist) => persist?.savePrefix(store!.key, prefix)).catch(() => {});
       try {
         const workerUrl = new URL("/wasm-compile-worker.js", location.href);
         workerUrl.searchParams.set("owner", location.href);
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: role => spawnCompilerWorker(workerUrl, `wasm-${role ?? "unknown"}`) as unknown as WorkerPort, roots, prefix, signal: lifetime.signal });
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await persisting, spawn: role => spawnCompilerWorker(workerUrl, `wasm-${role ?? "unknown"}`) as unknown as WorkerPort, roots, prefix, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
@@ -188,7 +199,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       if (made.saved) w.attachApp(made.saved);
       mark(made.hit ? "appCodeSaved" : "appCode");
       made.start(w);
-      if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { worker: made.compiler.stats, appSaved: made.hit, appSource: made.source, appPersisted: () => made.persisted, appAttached: w.appAttached, appBuilds: made.builds, appSettle: () => made.settle(w) });
+      if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { worker: made.compiler.stats, appSaved: made.hit, appSource: made.source, appPersisted: () => made.persisted, appAttached: w.appAttached, appRejected: w.aot?.appRejected, appBuilds: made.builds, appSettle: () => made.settle(w) });
       // no app code runs until the modules of the build and of earlier launches have arrived
       store.ready = Promise.all([store.ready, made.launchReady]).then(() => {});
       await store.ready;
