@@ -19,7 +19,7 @@ import {
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type EcKey, type PKey,
 } from "./pkey";
-import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, oid as oidDer } from "./der";
+import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "./der";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
@@ -355,10 +355,10 @@ const javaBytes = (v: bigint) => i8(concat([Uint8Array.of(0), bigToBytes(v)]));
 const bnArg = (b: Int8Array | null) => b === null ? undefined : fromSigned(u8(b));
 export const parsing = (msg: string) => rt.mkThrowable("com/android/org/conscrypt/OpenSSLX509CertificateFactory$ParsingException", msg);
 nc("EVP_parse_public_key([B)J", (b: Int8Array) => {
-  try { return newKey(parsePublicKey(u8(b ?? rt.npe()))); } catch (e) { if (e instanceof DerError) throw parsing("Error parsing public key"); throw e; }
+  return orDer(() => newKey(parsePublicKey(u8(b ?? rt.npe()))), () => parsing("Error parsing public key"));
 });
 nc("EVP_parse_private_key([B)J", (b: Int8Array) => {
-  try { return newKey(parsePrivateKey(u8(b ?? rt.npe()))); } catch (e) { if (e instanceof DerError) throw parsing("Error parsing private key"); throw e; }
+  return orDer(() => newKey(parsePrivateKey(u8(b ?? rt.npe()))), () => parsing("Error parsing private key"));
 });
 nc("EVP_marshal_public_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[B", (ref: JObj) => {
   const k = keyOf(ref);
@@ -618,8 +618,7 @@ nc("EC_KEY_marshal_curve_name(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;)[B"
   return i8(oidDer(c.oid));
 });
 nc("EC_KEY_parse_curve_name([B)J", (b: Int8Array) => {
-  try { return ownedHandle({ curve: curveOfParams(parseOne(u8(b ?? rt.npe()))) } satisfies Group); }
-  catch (e) { if (e instanceof DerError) throw rt.mkThrowable("java/io/IOException", "Error reading ASN.1 encoding"); throw e; }
+  return orDer(() => ownedHandle({ curve: curveOfParams(parseOne(u8(b ?? rt.npe()))) } satisfies Group), () => rt.mkThrowable("java/io/IOException", "Error reading ASN.1 encoding"));
 });
 // ECDSA_size: the longest DER SEQUENCE of two INTEGERs the order's length allows
 nc("ECDSA_size(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) => {
@@ -661,11 +660,11 @@ nc("X25519([B[B[B)Z", (out: Int8Array, priv: Int8Array, pub: Int8Array) => {
   return 1;
 });
 nc("EVP_raw_X25519_private_key([B)[B", (b: Int8Array) => {
-  try {
+  return orDer(() => {
     const k = parsePrivateKey(u8(b ?? rt.npe()));
     if (k.type !== EVP_PKEY_X25519 || !k.priv) throw new DerError("not X25519");
     return i8(k.priv);
-  } catch (e) { if (e instanceof DerError) throw rt.mkThrowable("java/security/InvalidKeyException", "Invalid X25519 private key"); throw e; }
+  }, () => rt.mkThrowable("java/security/InvalidKeyException", "Invalid X25519 private key"));
 });
 // opaque keys (no encoding, e.g. AndroidKeyStore's): the public half comes along, the private operations go up to Java
 const UPCALLS = "com/android/org/conscrypt/CryptoUpcalls";

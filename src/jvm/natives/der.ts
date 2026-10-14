@@ -3,6 +3,10 @@ import { concat } from "../abi";
 
 export type Tlv = { tag: number; /** the whole encoding */ raw: Uint8Array; body: Uint8Array };
 export class DerError extends Error {}
+/** f(), with a malformed encoding reported as err(e) */
+export function orDer<T>(f: () => T, err: (e: DerError) => unknown): T {
+  try { return f(); } catch (e) { if (e instanceof DerError) throw err(e); throw e; }
+}
 
 /** one TLV at `at`; `end` is the offset after it */
 export function readTlv(b: Uint8Array, at = 0): Tlv & { end: number } {

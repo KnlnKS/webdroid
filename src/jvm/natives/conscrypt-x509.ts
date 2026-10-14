@@ -10,7 +10,7 @@ import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscr
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
   KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509";
 import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, equal, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, SEQUENCE, INTEGER, type Tlv } from "./der";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der";
 import { hashOf, sha1 } from "./digest";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
@@ -21,12 +21,9 @@ const x509Of = (h: bigint): X509 => {
 };
 const ASN1 = 12;
 const decodeError = () => sslError("java/lang/RuntimeException", ASN1, 109, "DECODE_ERROR");
-function parse(der: Uint8Array): X509 {
-  try { return parseX509(der); } catch (e) { if (e instanceof DerError) throw decodeError(); throw e; }
-}
+const parse = (der: Uint8Array): X509 => orDer(() => parseX509(der), decodeError);
 nc("d2i_X509([B)J", (b: Int8Array) => {
-  try { return ownedHandle(parseX509(u8(b ?? rt.npe()))); }
-  catch (e) { if (e instanceof DerError) throw parsing("Error reading X.509 data"); throw e; }
+  return orDer(() => ownedHandle(parseX509(u8(b ?? rt.npe()))), () => parsing("Error reading X.509 data"));
 });
 nc(`X509_free(J${X})V`, (h: bigint) => release(h));
 nc(`i2d_X509(J${X})[B`, (h: bigint) => i8(x509Of(h).der.slice()));
@@ -51,12 +48,8 @@ nc(`get_X509_tbs_cert_without_ext(J${X}Ljava/lang/String;)[B`, (h: bigint, _c: J
 nc(`i2d_X509_PUBKEY(J${X})[B`, (h: bigint) => i8(x509Of(h).spki.slice()));
 nc(`get_X509_pubkey_oid(J${X})Ljava/lang/String;`, (h: bigint) => oidToString(children(children(parseOne(x509Of(h).spki).body)[0].body)[0].body));
 nc(`X509_get_pubkey(J${X})J`, (h: bigint) => {
-  try { return newKey(parsePublicKey(x509Of(h).spki)); }
-  catch (e) {
-    if (!(e instanceof DerError)) throw e;
-    throw /unsupported|unknown curve/.test(e.message) ? rt.mkThrowable("java/security/NoSuchAlgorithmException", "X509_get_pubkey")
-      : sslError("java/security/InvalidKeyException", ASN1, 109, "DECODE_ERROR");
-  }
+  return orDer(() => newKey(parsePublicKey(x509Of(h).spki)), (e) => /unsupported|unknown curve/.test(e.message)
+    ? rt.mkThrowable("java/security/NoSuchAlgorithmException", "X509_get_pubkey") : sslError("java/security/InvalidKeyException", ASN1, 109, "DECODE_ERROR"));
 });
 nc(`get_X509_issuerUID(J${X})[Z`, (h: bigint) => { const u = x509Of(h).issuerUid; return u ? Uint8Array.from(bitBooleans(u), Number) : null; });
 nc(`get_X509_subjectUID(J${X})[Z`, (h: bigint) => { const u = x509Of(h).subjectUid; return u ? Uint8Array.from(bitBooleans(u), Number) : null; });
@@ -66,7 +59,7 @@ nc(`X509_get_ext_oid(J${X}Ljava/lang/String;)[B`, (h: bigint, _c: JObj, o: strin
   const e = x509Of(h).ext(o);
   return e ? i8(tlv(4, e.value)) : null;
 });
-const decoded = <T>(f: () => T): T => { try { return f(); } catch (e) { if (e instanceof DerError) throw decodeError(); throw e; } };
+const decoded = <T>(f: () => T): T => orDer(f, decodeError);
 nc(`get_X509_ex_kusage(J${X})[Z`, (h: bigint) => {
   const e = x509Of(h).ext(KEY_USAGE);
   return e ? decoded(() => Uint8Array.from(bitBooleans(parseOne(e.value, 3).body), Number)) : null;
@@ -212,7 +205,7 @@ nc("d2i_X509_bio(J)J", driven(function* (h: bigint): Gen { return ownedHandle(pa
 nc("PEM_read_bio_X509(J)J", driven(function* (h: bigint): Gen { return ownedHandle(parse(yield* readPem(bioOf(h), CERT_LABELS))); }));
 nc("PEM_read_bio_PUBKEY(J)J", driven(function* (h: bigint): Gen {
   const der = yield* readPem(bioOf(h), ["PUBLIC KEY"]);
-  try { return newKey(parsePublicKey(der)); } catch (e) { if (e instanceof DerError) throw decodeError(); throw e; }
+  return decoded(() => newKey(parsePublicKey(der)));
 }));
 nc("BIO_read(J[B)I", driven(function* (h: bigint, buf: Int8Array): Gen { const r = yield* readExact(bioOf(h), buf.length); region(buf, 0, r.length).set(r); return r.length; }));
 nc("BIO_write(J[BII)V", (h: bigint, buf: Int8Array, off: number, len: number) => vcall(bioOf(h).out, "write", "([BII)V", buf, off, len));
@@ -251,12 +244,10 @@ type Cbs = { b: Uint8Array; at: number };
 const cbsOf = (h: bigint): Cbs => { const c = deref<Cbs>(h); if (!c?.b) throw rt.mkThrowable("java/lang/NullPointerException", "cbs == null"); return c; };
 function next(h: bigint, tag: number): Uint8Array {
   const c = cbsOf(h);
-  try {
-    const t = readTlv(c.b, c.at);
-    if (t.tag !== tag) throw asn1Io();
-    c.at = t.end;
-    return t.body;
-  } catch (e) { if (e instanceof DerError) throw asn1Io(); throw e; }
+  const t = orDer(() => readTlv(c.b, c.at), asn1Io);
+  if (t.tag !== tag) throw asn1Io();
+  c.at = t.end;
+  return t.body;
 }
 nc("asn1_read_init([B)J", (b: Int8Array) => handle({ b: u8(b ?? rt.npe()).slice(), at: 0 } satisfies Cbs));
 nc("asn1_read_free(J)V", (h: bigint) => release(h));
