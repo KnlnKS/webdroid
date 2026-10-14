@@ -31,6 +31,8 @@ function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   return sweep((pc, s) => execute(pc | 1, s), at, setup);
 }
 const BXLR = 0xe12fff1e;
+/** the same program as ARM, then as Thumb: each runs when the loop reaches it */
+function* both(arm: number[], thumb: number[], setup?: (c: Cpu) => void): Generator<Cpu> { yield run(arm, setup); yield runThumb(thumb, setup); }
 
 beforeAll(() => setA64(false));
 
@@ -229,11 +231,7 @@ describe("arm decoder", () => {
     const setup = (cpu: Cpu) => {
       cpu.w[0] = 8; cpu.w[2] = 0x40000001; cpu.w[4] = -16; cpu.w[6] = -2147483648;
     };
-    for (const execute of [
-      () => run([0xe6e28010, 0xe6a79211, 0xe6e4a1d2, 0xe6bfb013, BXLR], setup),
-      () => runThumb([0xf380, 0x0802, 0xf301, 0x1907, 0xf3a2, 0x0ac4, 0xf303, 0x0b1f, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xe6e28010, 0xe6a79211, 0xe6e4a1d2, 0xe6bfb013, BXLR], [0xf380, 0x0802, 0xf301, 0x1907, 0xf3a2, 0x0ac4, 0xf303, 0x0b1f, 0x4770], setup)) {
       expect([c.w[16], c.w[18], c.w[20], c.w[22], c.q]).toEqual([3, 16, 0, -2147483648, 1]);
     }
   });
@@ -251,12 +249,8 @@ describe("arm decoder", () => {
   });
   test("parallel add/subtract sets GE for SEL and saturates or halves per lane", () => {
     const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ff7f01; cpu.w[2] = 0x0102ff7f; cpu.w[14] = 0x7fffffff; };
-    for (const execute of [
-      // uadd8 r2, r0, r1; sel r3, r0, r1; qsub16 r4, r0, r1; shasx r5, r0, r1; qadd r6, r7, r7
-      () => run([0xe6502f91, 0xe6803fb1, 0xe6204f71, 0xe6305f31, 0xe1076057, BXLR], setup),
-      () => runThumb([0xfa80, 0xf241, 0xfaa0, 0xf381, 0xfad0, 0xf411, 0xfaa0, 0xf521, 0xfa87, 0xf687, 0x4770], setup),
-    ]) {
-      const c = execute();
+    // uadd8 r2, r0, r1; sel r3, r0, r1; qsub16 r4, r0, r1; shasx r5, r0, r1; qadd r6, r7, r7
+    for (const c of both([0xe6502f91, 0xe6803fb1, 0xe6204f71, 0xe6305f31, 0xe1076057, BXLR], [0xfa80, 0xf241, 0xfaa0, 0xf381, 0xfad0, 0xf411, 0xfaa0, 0xf521, 0xfa87, 0xf687, 0x4770], setup)) {
       expect([4, 6, 8, 10, 12].map((i) => c.w[i] >>> 0)).toEqual([0x81017e80, 0x01ff7f7f, 0x80007f82, 0xc03f3eff, 0x7fffffff]);
       expect([(c.cpsr >>> 16) & 15, c.q]).toEqual([6, 1]);
     }
@@ -334,11 +328,7 @@ describe("arm decoder", () => {
       mem.st32(cpu.w[0], 0x12345678); mem.st32(cpu.w[2], 0x7f0000);
       cpu.si.set([42, 43], 54);
     };
-    for (const execute of [
-      () => run([0xf4e0b8bf, 0xf4c1b4cd, 0xf4e1cc22, BXLR], setup),
-      () => runThumb([0xf9e0, 0xb8bf, 0xf9c1, 0xb4cd, 0xf9e1, 0xcc22, 0x4770], setup),
-    ]) {
-      const lanes = execute();
+    for (const lanes of both([0xf4e0b8bf, 0xf4c1b4cd, 0xf4e1cc22, BXLR], [0xf9e0, 0xb8bf, 0xf9c1, 0xb4cd, 0xf9e1, 0xcc22, 0x4770], setup)) {
       expect(Array.from(lanes.si.slice(54, 60))).toEqual([42, 0x12345678, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f]);
       expect(mem.ld32(lanes.stackTop - 32)).toBe(0x7f1234);
       expect(lanes.w[2]).toBe(lanes.stackTop - 26);
@@ -355,11 +345,7 @@ describe("arm decoder", () => {
       cpu.si.set([0x0b0a0908, 0x0f0e0d0c], 34);
       cpu.si.set([0x11223344, 0x55667788], 8);
     };
-    for (const execute of [
-      () => run([0xf3bf1c02, 0xf3ba6c61, 0xf3bc8c44, BXLR], setup),
-      () => runThumb([0xffbf, 0x1c02, 0xffba, 0x6c61, 0xffbc, 0x8c44, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3bf1c02, 0xf3ba6c61, 0xf3bc8c44, BXLR], [0xffbf, 0x1c02, 0xffba, 0x6c61, 0xffbc, 0x8c44, 0x4770], setup)) {
       expect(Array.from(c.si.slice(2, 4))).toEqual([0x07070707, 0x07070707]);
       expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x0d0c0d0c));
       expect(Array.from(c.si.slice(16, 20))).toEqual(Array(4).fill(0x55667788));
@@ -374,11 +360,8 @@ describe("arm decoder", () => {
       bytes.set([0, 7, 8, 15, 16, 255, 1, 14], 26 * 8);
       bytes.set([0, 7, 8, 15, 16, 23, 24, 31], 27 * 8);
     };
-    for (const execute of [
-      () => run([0xf3f8e9aa, 0xf3b31a41, 0xf3b00800, 0xf3fcfbab, BXLR], setup),
-      () => runThumb([0xfff8, 0xe9aa, 0xffb3, 0x1a41, 0xffb0, 0x0800, 0xfffc, 0xfbab, 0x4770], setup),
-    ]) {
-      const c = execute(), bytes = new Uint8Array(c.si.buffer, c.si.byteOffset, 256);
+    for (const c of both([0xf3f8e9aa, 0xf3b31a41, 0xf3b00800, 0xf3fcfbab, BXLR], [0xfff8, 0xe9aa, 0xffb3, 0x1a41, 0xffb0, 0x0800, 0xfffc, 0xfbab, 0x4770], setup)) {
+      const bytes = new Uint8Array(c.si.buffer, c.si.byteOffset, 256);
       expect(Array.from(bytes.slice(0, 16))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 24, 31, 32, 47, 24, 255, 39, 40]);
       expect(Array.from(bytes.slice(240))).toEqual([192, 199, 200, 207, 0, 0, 193, 206, 224, 231, 232, 239, 192, 206, 248, 255]);
     }
@@ -388,11 +371,7 @@ describe("arm decoder", () => {
       cpu.si.set([10, 11, 12, 13, 0, 1, 2, 3, 20, 21, 22, 23], 32);
       cpu.si.set([0x03020100, 0x07060504, 0x13121110, 0x17161514], 2);
     };
-    for (const execute of [
-      () => run([0xf3fa21e0, 0xf3fa40e2, 0xf3b21102, 0xf2f064e2, BXLR], setup),
-      () => runThumb([0xfffa, 0x21e0, 0xfffa, 0x40e2, 0xffb2, 0x1102, 0xeff0, 0x64e2, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3fa21e0, 0xf3fa40e2, 0xf3b21102, 0xf2f064e2, BXLR], [0xfffa, 0x21e0, 0xfffa, 0x40e2, 0xffb2, 0x1102, 0xeff0, 0x64e2, 0x4770], setup)) {
       expect(Array.from(c.si.slice(32, 44))).toEqual([2, 12, 3, 13, 21, 10, 23, 11, 20, 0, 22, 1]);
       expect(Array.from(c.si.slice(2, 6))).toEqual([0x06040200, 0x16141210, 0x07050301, 0x17151311]);
       expect(Array.from(c.si.slice(44, 48))).toEqual([12, 3, 13, 21]);
@@ -400,11 +379,7 @@ describe("arm decoder", () => {
   });
   test("NEON VSWP exchanges D and Q registers in ARM and Thumb mode", () => {
     const setup = (cpu: Cpu) => { for (let i = 0; i < cpu.si.length; i++) cpu.si[i] = i; };
-    for (const execute of [
-      () => run([0xf3b22027, 0xf3b2404a, BXLR], setup),
-      () => runThumb([0xffb2, 0x2027, 0xffb2, 0x404a, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3b22027, 0xf3b2404a, BXLR], [0xffb2, 0x2027, 0xffb2, 0x404a, 0x4770], setup)) {
       expect(Array.from(c.si.slice(4, 6))).toEqual([46, 47]);
       expect(Array.from(c.si.slice(46, 48))).toEqual([4, 5]);
       expect(Array.from(c.si.slice(8, 12))).toEqual([20, 21, 22, 23]);
@@ -420,11 +395,7 @@ describe("arm decoder", () => {
     ];
     for (const [word, first, values, expected] of cases) {
       const setup = (cpu: Cpu) => { new BigUint64Array(cpu.si.buffer, cpu.si.byteOffset, 32).set(values, 2); };
-      for (const execute of [
-        () => run([word, BXLR], setup),
-        () => runThumb([first, word & 0xffff, 0x4770], setup),
-      ]) {
-        const c = execute();
+      for (const c of both([word, BXLR], [first, word & 0xffff, 0x4770], setup)) {
         expect(Array.from(c.si.slice(38, 40), x => x >>> 0)).toEqual(expected);
       }
     }
@@ -437,11 +408,7 @@ describe("arm decoder", () => {
       cpu.si.set([0x03020100, 0x07060504], 2);
       cpu.w[2] = 0x12345678;
     };
-    for (const execute of [
-      () => run([0xf2042d46, 0xf31a980b, 0xf30aa15a, 0xf2b11302, 0xee821b30, BXLR], setup),
-      () => runThumb([0xef04, 0x2d46, 0xff1a, 0x980b, 0xff0a, 0xa15a, 0xefb1, 0x1302, 0xee82, 0x1b30, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf2042d46, 0xf31a980b, 0xf30aa15a, 0xf2b11302, 0xee821b30, BXLR], [0xef04, 0x2d46, 0xff1a, 0x980b, 0xff0a, 0xa15a, 0xefb1, 0x1302, 0xee82, 0x1b30, 0x4770], setup)) {
       expect(Array.from(c.si.slice(2, 8))).toEqual([0x06050403, -1073741817, 0x56785678, 0x56785678, 0x41200000, 0x41400000]);
       expect(Array.from(c.si.slice(18, 24))).toEqual([0x00030003, -262149, 0, 0, 0, 0]);
     }
@@ -457,11 +424,7 @@ describe("arm decoder", () => {
       cpu.s[13] = 1; cpu.s[14] = 2;
       cpu.s.set([1 - 2 ** -23, 1 + 2 ** -23, 2, 1, 8], 5);
     };
-    for (const execute of [
-      () => run([0xf3a0c9c7, 0xf3a2c1e6, 0xf2a34562, 0xf2f428e6, BXLR], scalar),
-      () => runThumb([0xffa0, 0xc9c7, 0xffa2, 0xc1e6, 0xefa3, 0x4562, 0xeff4, 0x28e6, 0x4770], scalar),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3a0c9c7, 0xf3a2c1e6, 0xf2a34562, 0xf2f428e6, BXLR], [0xffa0, 0xc9c7, 0xffa2, 0xc1e6, 0xefa3, 0x4562, 0xeff4, 0x28e6, 0x4770], scalar)) {
       expect(Array.from(c.s.slice(24, 28))).toEqual([5, 8, 11, 14]);
       expect(Array.from(c.s.slice(8, 10))).toEqual([0, 6]);
       expect(Array.from(c.s.slice(36, 40))).toEqual([12, 13, 14, 15]);
@@ -471,11 +434,7 @@ describe("arm decoder", () => {
       cpu.si.set([32, 0, 192, 0], 36);
       cpu.si.set([-8, -2147483648, -2, 32], 4);
     };
-    for (const execute of [
-      () => run([0xf37284e4, 0xf2231402, BXLR], shifts),
-      () => runThumb([0xff72, 0x84e4, 0xef23, 0x1402, 0x4770], shifts),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf37284e4, 0xf2231402, BXLR], [0xff72, 0x84e4, 0xef23, 0x1402, 0x4770], shifts)) {
       expect(Array.from(c.si.slice(48, 52))).toEqual([0, 1, 0, 0]);
       expect(Array.from(c.si.slice(2, 4))).toEqual([-2, 0]);
     }
@@ -488,11 +447,7 @@ describe("arm decoder", () => {
       cpu.si.set([0x00020001, 0xffff8000, 0x00030004, 0x7fff0000], 20);
       cpu.si.set([0x000a000a, 0x000a000a], 10);
     };
-    for (const execute of [
-      () => run([0xf3e00860, 0xf3e22062, 0xf296546f, 0xf39a8863, BXLR], setup),
-      () => runThumb([0xffe0, 0x0860, 0xffe2, 0x2062, 0xef96, 0x546f, 0xff9a, 0x8863, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3e00860, 0xf3e22062, 0xf296546f, 0xf39a8863, BXLR], [0xffe0, 0x0860, 0xffe2, 0x2062, 0xef96, 0x546f, 0xff9a, 0x8863, 0x4770], setup)) {
       expect(Array.from(c.si.slice(32, 40))).toEqual([2147483645, 9, -6, -2147483648, 4, 29, 18, 25]);
       expect(Array.from(c.si.slice(10, 12))).toEqual([0x00060008, 0x000e000c]);
       expect(Array.from(c.si.slice(16, 20))).toEqual([0x000a0005, 0xfffb8000 | 0, 0x000f0014, 0x7ffb0000]);
@@ -506,11 +461,7 @@ describe("arm decoder", () => {
       cpu.s.set([3, Infinity, 0, 2], 48);
       cpu.s.set([1 + 2 ** -23, 0, -Infinity, 6], 52);
     };
-    for (const execute of [
-      () => run([0xf2042f56, 0xf26aaff8, 0xf3fbc5e6, 0xf3f9e566, 0xf3f80066, BXLR], setup),
-      () => runThumb([0xef04, 0x2f56, 0xef6a, 0xaff8, 0xfffb, 0xc5e6, 0xfff9, 0xe566, 0xfff8, 0x0066, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf2042f56, 0xf26aaff8, 0xf3fbc5e6, 0xf3f9e566, 0xf3f80066, BXLR], [0xef04, 0x2f56, 0xef6a, 0xaff8, 0xfffb, 0xc5e6, 0xfff9, 0xe566, 0xfff8, 0x0066, 0x4770], setup)) {
       expect(Array.from(c.s.slice(4, 8))).toEqual([0, 2, 2, NaN]);
       expect(Array.from(c.s.slice(52, 56))).toEqual([-(2 ** -22), 1.5, 1.5, -4.5]);
       expect(Math.abs(c.s[56] - 1)).toBeLessThan(2 ** -8);
@@ -526,11 +477,7 @@ describe("arm decoder", () => {
       cpu.s.set([2, 1, NaN, -0], 44);
       cpu.s.set([1, 1, 0, 0], 56);
     };
-    for (const execute of [
-      () => run([0xf2042e46, 0xf3040e46, 0xf3248e56, 0xf3662eec, 0xf3f62222, BXLR], setup),
-      () => runThumb([0xef04, 0x2e46, 0xff04, 0x0e46, 0xff24, 0x8e56, 0xff66, 0x2eec, 0xfff6, 0x2222, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf2042e46, 0xf3040e46, 0xf3248e56, 0xf3662eec, 0xf3f62222, BXLR], [0xef04, 0x2e46, 0xff04, 0x0e46, 0xff24, 0x8e56, 0xff66, 0x2eec, 0xfff6, 0x2222, 0x4770], setup)) {
       expect(Array.from(c.si.slice(4, 8))).toEqual([0, 0, 0, -1]);
       expect(Array.from(c.si.slice(0, 4))).toEqual([-1, 0, 0, -1]);
       expect(Array.from(c.si.slice(16, 20))).toEqual([-1, -1, 0, 0]);
@@ -541,11 +488,7 @@ describe("arm decoder", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([1, 2, 3, -1, -2, 3, 4, 5, 0, 2, -1, 4], 32);
     };
-    for (const execute of [
-      () => run([0xf364a3f0, 0xf260c9f2, 0xf2626ab2, 0xf2603aa0, BXLR], setup),
-      () => runThumb([0xff64, 0xa3f0, 0xef60, 0xc9f2, 0xef62, 0x6ab2, 0xef60, 0x3aa0, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf364a3f0, 0xf260c9f2, 0xf2626ab2, 0xf2603aa0, BXLR], [0xff64, 0xa3f0, 0xef60, 0xc9f2, 0xef62, 0x6ab2, 0xef60, 0x3aa0, 0x4770], setup)) {
       expect(Array.from(c.si.slice(52, 56))).toEqual([0, -1, -1, 0]);
       expect(Array.from(c.si.slice(56, 60))).toEqual([-2, 6, 12, -5]);
       expect(Array.from(c.si.slice(44, 46))).toEqual([-2, -2]);
@@ -560,11 +503,7 @@ describe("arm decoder", () => {
       cpu.si.set([-5, -1, 3, -7], 32);
       cpu.si.set([-1, -1, -1, -1], 20);
     };
-    for (const execute of [
-      () => run([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, 0xf3b005c0, BXLR], setup),
-      () => runThumb([0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0xffb0, 0x05c0, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, 0xf3b005c0, BXLR], [0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0xffb0, 0x05c0, 0x4770], setup)) {
       expect(Array.from(c.si.slice(0, 4))).toEqual([-1, -1, 0, 0]);
       expect(Array.from(c.si.slice(28, 30))).toEqual([-2147483648, -7]);
       expect(Array.from(c.si.slice(4, 8))).toEqual([0x807f0101 | 0, 0x01010101, 0, 0]);
@@ -579,11 +518,7 @@ describe("arm decoder", () => {
       cpu.w[10] = 0xab; cpu.w[12] = 0xbeef; cpu.w[14] = 0x12345678;
     };
     const words = [0xeef20bf0, 0xee521bf0, 0xeeb22bf0, 0xee123bf0, 0xee324b90, 0xee227b90, 0xee625bf0, 0xee226bb0];
-    for (const execute of [
-      () => run([...words, BXLR], setup),
-      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([...words, BXLR], [...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup)) {
       expect([c.w[0], c.w[2], c.w[4], c.w[6], c.w[8]]).toEqual([128, -128, 32768, -32768, -2147483647]);
       expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
     }
@@ -595,11 +530,7 @@ describe("arm decoder", () => {
       cpu.w[8] = 5; cpu.w[10] = 6;
     };
     const words = [0xecd12b04, 0xece02b04, 0xec532b32, 0xec454b34];
-    for (const execute of [
-      () => run([...words, BXLR], setup),
-      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([...words, BXLR], [...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup)) {
       expect([c.w[0], c.w[2]]).toEqual([c.stackTop - 48, c.stackTop - 32]);
       expect(Array.from(mem.u32.slice((c.stackTop - 64) >>> 2, (c.stackTop - 48) >>> 2))).toEqual([1, 2, 3, 4]);
       expect([c.w[4], c.w[6]]).toEqual([1, 2]);
@@ -615,11 +546,7 @@ describe("arm decoder", () => {
       cpu.s[16] = -1; cpu.s[18] = 1 + 2 ** -23; cpu.s[20] = 1 - 2 ** -23;
       cpu.d[16] = 81; cpu.d[17] = 19;
     };
-    for (const execute of [
-      () => run([...words, BXLR], setup),
-      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([...words, BXLR], [...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup)) {
       expect([0, 1, 3, 5, 7, 9, 11, 13, 15, 16].map(i => c.s[i])).toEqual([0.5, 7, -1, 12, 0.75, -12, 12, -12, -12, 0]);
       expect(Array.from(c.d.slice(16, 20))).toEqual([81, 19, 9, 100]);
       expect(c.cpsr >>> 28).toBe(10);
@@ -632,11 +559,7 @@ describe("arm decoder", () => {
       cpu.s.set([-0, -2, NaN, -Infinity], 0); cpu.s.set([0, -3, 4, Infinity], 56);
       cpu.s.set([-0, -2, NaN, -Infinity, 0, -3, 4, Infinity], 16);
     };
-    for (const execute of [
-      () => run([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, 0xf3f96444, 0xf3f98644, 0xf3f9a4c4, 0xf3f9c5c4, BXLR], setup),
-      () => runThumb([0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0xfff9, 0x6444, 0xfff9, 0x8644, 0xfff9, 0xa4c4, 0xfff9, 0xc5c4, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, 0xf3f96444, 0xf3f98644, 0xf3f9a4c4, 0xf3f9c5c4, BXLR], [0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0xfff9, 0x6444, 0xfff9, 0x8644, 0xfff9, 0xa4c4, 0xfff9, 0xc5c4, 0x4770], setup)) {
       expect(Array.from(c.s.slice(40, 44))).toEqual([2, 0, Infinity, NaN]);
       expect(Array.from(c.s.slice(4, 8))).toEqual([-1, 2, NaN, -0]);
       expect(Array.from(c.s.slice(36, 40))).toEqual([0, -2, NaN, Infinity]);
@@ -650,11 +573,7 @@ describe("arm decoder", () => {
       cpu.si.set([0x0002ffff, 0x7fff8000, 0x00030004, 0x00010002], 6);
       cpu.si.set([0x0302ff80, 0, 0x01020202, 0], 10);
     };
-    for (const execute of [
-      () => run([0xf3e428a5, 0xf2932a04, 0xf2854c06, BXLR], setup),
-      () => runThumb([0xffe4, 0x28a5, 0xef93, 0x2a04, 0xef85, 0x4c06, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3e428a5, 0xf2932a04, 0xf2854c06, BXLR], [0xffe4, 0x28a5, 0xef93, 0x2a04, 0xef85, 0x4c06, 0x4770], setup)) {
       expect(Array.from(c.si.slice(36, 40))).toEqual([-3, 1, -2147483638, 1]);
       expect(Array.from(c.si.slice(4, 8))).toEqual([4, -6, 65536 + 0x0002ffff, 0x7fff8000 - 32767]);
       expect(Array.from(c.si.slice(8, 12))).toEqual([0xfffeff00 | 0, 0x00030004, 0, 0]);
@@ -667,11 +586,7 @@ describe("arm decoder", () => {
       cpu.si.set([0, 0x7fffffff, -1, 0x00018000, 1, -1, 0, 0], 8);
       cpu.si.set([-1, -1, 0x7fffffff, 4, 1, 0, 0, 0], 16);
     };
-    for (const execute of [
-      () => run([0xf2c434a2, 0xf3941606, 0xf3a8340a, BXLR], setup),
-      () => runThumb([0xefc4, 0x34a2, 0xff94, 0x1606, 0xffa8, 0x340a, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf2c434a2, 0xf3941606, 0xf3a8340a, BXLR], [0xefc4, 0x34a2, 0xff94, 0x1606, 0xffa8, 0x340a, 0x4770], setup)) {
       expect(Array.from(c.si.slice(38, 40))).toEqual([0x00000180, 0x8000ffff | 0]);
       expect(Array.from(c.si.slice(2, 4))).toEqual([0x80000000 | 0, 0x00020000]);
       expect(Array.from(c.si.slice(6, 8))).toEqual([0, 4]);
@@ -683,11 +598,7 @@ describe("arm decoder", () => {
       cpu.si.set([-1, 0, -2147483648, 16777217], 8);
       cpu.s.set([1.9, -1.9, NaN, Infinity], 16);
     };
-    for (const execute of [
-      () => run([0xf3fbe66e, 0xf3bb26c4, 0xf3bb6748, 0xf3bb5788, BXLR], setup),
-      () => runThumb([0xfffb, 0xe66e, 0xffbb, 0x26c4, 0xffbb, 0x6748, 0xffbb, 0x5788, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3fbe66e, 0xf3bb26c4, 0xf3bb6748, 0xf3bb5788, BXLR], [0xfffb, 0xe66e, 0xffbb, 0x26c4, 0xffbb, 0x6748, 0xffbb, 0x5788, 0x4770], setup)) {
       expect(Array.from(c.s.slice(60, 64))).toEqual([-1, 2147483648, -2147483648, 16777216]);
       expect(Array.from(c.s.slice(4, 8))).toEqual([4294967296, 0, 2147483648, 16777216]);
       expect(Array.from(c.si.slice(12, 16))).toEqual([1, -1, 0, 2147483647]);
@@ -701,11 +612,7 @@ describe("arm decoder", () => {
       cpu.si.fill(0x00010001, 12, 16); cpu.si.fill(0x0010fff8, 16, 20);
       cpu.si.set([-1, 2, 3, 4], 24); cpu.si.set([1, 0, 2, 0], 32);
     };
-    for (const execute of [
-      () => run([0xf2e14072, 0xf3881012, 0xf29d6158, 0xf3bfa25c, 0xf2a8e5f0, BXLR], setup),
-      () => runThumb([0xefe1, 0x4072, 0xff88, 0x1012, 0xef9d, 0x6158, 0xffbf, 0xa25c, 0xefa8, 0xe5f0, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf2e14072, 0xf3881012, 0xf29d6158, 0xf3bfa25c, 0xf2a8e5f0, BXLR], [0xefe1, 0x4072, 0xff88, 0x1012, 0xef9d, 0x6158, 0xffbf, 0xa25c, 0xefa8, 0xe5f0, 0x4770], setup)) {
       expect(Array.from(c.si.slice(40, 44))).toEqual([-1, 0, -1, 0]);
       expect(Array.from(c.si.slice(2, 4))).toEqual([0, 0]);
       expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x00030000));
@@ -717,11 +624,7 @@ describe("arm decoder", () => {
       cpu.si.set([0x7fff0180, 0xfe0200ff], 6);
       cpu.si.set([-2147483648, 2147483647], 10);
     };
-    for (const execute of [
-      () => run([0xf3d00a30, 0xf2a08a15, 0xf28c4a13, BXLR], widen),
-      () => runThumb([0xffd0, 0x0a30, 0xefa0, 0x8a15, 0xef8c, 0x4a13, 0x4770], widen),
-    ]) {
-      const c = execute();
+    for (const c of both([0xf3d00a30, 0xf2a08a15, 0xf28c4a13, BXLR], [0xffd0, 0x0a30, 0xefa0, 0x8a15, 0xef8c, 0x4a13, 0x4770], widen)) {
       expect(Array.from(c.si.slice(32, 36))).toEqual([32767, 32768, 1, 65535]);
       expect(Array.from(new Int16Array(c.si.buffer, c.si.byteOffset + 32, 8))).toEqual([-2048, 16, -16, 2032, -16, 0, 32, -32]);
       expect(Array.from(c.si.slice(16, 20))).toEqual([-2147483648, -1, 2147483647, 0]);
@@ -838,11 +741,7 @@ describe("thumb decoder", () => {
       cpu.w[8] = cpu.stackTop - 32;
       mem.st32(cpu.w[8], 0x7fc12345);
     };
-    for (const execute of [
-      () => run([0xed944a00, 0xed804a00, BXLR], setup),
-      () => runThumb([0xed94, 0x4a00, 0xed80, 0x4a00, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xed944a00, 0xed804a00, BXLR], [0xed94, 0x4a00, 0xed80, 0x4a00, 0x4770], setup)) {
       expect(mem.ld32(c.w[0])).toBe(0x7fc12345);
     }
   });
@@ -992,8 +891,7 @@ describe("thumb decoder", () => {
     expect(() => run([0xf42307df, BXLR], (cpu) => { cpu.w[6] = data + 4; })).toThrow(`signal 7 code 1 addr 0x${(data + 4).toString(16)}`);
     // vld1.32 {d0[1]}, [r2]; vst1.16 {d1[2]}, [r3]!; vld1.8 {d2[]}, [r4]
     const lanes = (cpu: Cpu) => { setup(cpu); cpu.w[8] = data + 5; cpu.vu[3] = 0xabcd1234; };
-    for (const execute of [() => run([0xf4a2088f, 0xf483148d, 0xf4a42c0f, BXLR], lanes), () => runThumb([0xf9a2, 0x088f, 0xf983, 0x148d, 0xf9a4, 0x2c0f, 0x4770], lanes)]) {
-      const c = execute();
+    for (const c of both([0xf4a2088f, 0xf483148d, 0xf4a42c0f, BXLR], [0xf9a2, 0x088f, 0xf983, 0x148d, 0xf9a4, 0x2c0f, 0x4770], lanes)) {
       expect([c.vu[1], c.w[6] - data, mem.u16[(data + 8) >>> 1], c.vu[4], c.vu[5]]).toEqual([0x150e0700, 10, 0x1234, 0x23232323, 0x23232323]);
     }
   });
@@ -1293,11 +1191,7 @@ describe("thumb decoder", () => {
 
   test("signed high multiplication rounds the complete accumulate or subtract result", () => {
     const setup = (cpu: Cpu) => { cpu.w[0] = 10; cpu.w[2] = -5; cpu.w[4] = 0x40000000; };
-    for (const execute of [
-      () => run([0xe758f211, 0xe753f231, 0xe7540211, 0xe7550231, 0xe75602d1, 0xe75702f1, BXLR], setup),
-      () => runThumb([0xfb51, 0xf802, 0xfb51, 0xf312, 0xfb51, 0x0402, 0xfb51, 0x0512, 0xfb61, 0x0602, 0xfb61, 0x0712, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xe758f211, 0xe753f231, 0xe7540211, 0xe7550231, 0xe75602d1, 0xe75702f1, BXLR], [0xfb51, 0xf802, 0xfb51, 0xf312, 0xfb51, 0x0402, 0xfb51, 0x0512, 0xfb61, 0x0602, 0xfb61, 0x0712, 0x4770], setup)) {
       expect([c.w[16], c.w[6], c.w[8], c.w[10], c.w[12], c.w[14]]).toEqual([-2, -1, 8, 9, 11, 11]);
     }
   });
@@ -1307,11 +1201,7 @@ describe("thumb decoder", () => {
       cpu.w[0] = 0x12345678; cpu.w[2] = 0x87654321; cpu.w[4] = 0xfedcba98; cpu.w[12] = 0xaabbccdd;
       cpu.cpsr |= 0xa8000000;
     };
-    for (const execute of [
-      () => run([0xe6806016, 0xe6814692, 0xe6815052, 0xe6817252, BXLR], setup),
-      () => runThumb([0xeac0, 0x0606, 0xeac1, 0x3442, 0xeac1, 0x0522, 0xeac1, 0x1722, 0x4770], setup),
-    ]) {
-      const c = execute();
+    for (const c of both([0xe6806016, 0xe6814692, 0xe6815052, 0xe6817252, BXLR], [0xeac0, 0x0606, 0xeac1, 0x3442, 0xeac1, 0x0522, 0xeac1, 0x1722, 0x4770], setup)) {
       expect([c.w[12] >>> 0, c.w[8] >>> 0, c.w[10] >>> 0, c.w[14] >>> 0]).toEqual([0xaabb5678, 0x97534321, 0x8765ffff, 0x8765cba9]);
       expect(c.cpsr >>> 27).toBe(0x15);
     }
@@ -1348,11 +1238,7 @@ describe("thumb decoder", () => {
     ], (cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 10; });
     expect([c.w[20], c.w[22], c.w[24], c.w[18]]).toEqual([0xaa55, -86, 265, -118]);
     const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 0x0000ffff; cpu.cpsr = 0xa8000000; };
-    for (const execute of [
-      () => run([0xe6cf2070, 0xe68f3470, 0xe6c14070, 0xe6815470, BXLR], setup),
-      () => runThumb([0xfa3f, 0xf280, 0xfa2f, 0xf390, 0xfa31, 0xf480, 0xfa21, 0xf590, 0x4770], setup),
-    ]) {
-      const pair = execute();
+    for (const pair of both([0xe6cf2070, 0xe68f3470, 0xe6c14070, 0xe6815470, BXLR], [0xfa3f, 0xf280, 0xfa2f, 0xf390, 0xfa31, 0xf480, 0xfa21, 0xf590, 0x4770], setup)) {
       expect([pair.w[4], pair.w[6], pair.w[8], pair.w[10]]).toEqual([0x00ff0055, 0xff80ffaa | 0, 0x00ff0054, 0xff80ffa9 | 0]);
       expect(pair.cpsr).toBe(0xa8000000);
     }
