@@ -23,7 +23,7 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend, Rename }
 /** operations that may wait (`host.block`, Suspending) */
 export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
@@ -157,7 +157,7 @@ def(thread("interrupt0()V"), (cx, c) => { emitSync(cx, c, Sync.Interrupt, () => 
 def(thread("holdsLock(Ljava/lang/Object;)Z"), (cx, c) => { emitSync(cx, c, Sync.Holds, () => c.lget(0)); });
 def(thread("yield()V"), (cx, c) => { cx.callRt(c, "yieldNow"); });
 def(thread("setPriority0(I)V"), () => {});
-def(thread("setNativeName(Ljava/lang/String;)V"), () => {});
+def(thread("setNativeName(Ljava/lang/String;)V"), (cx, c) => { emitSync(cx, c, Sync.Rename, () => c.lget(0)); c.drop(); });
 def(thread("nativeCreate(Ljava/lang/Thread;JZ)V"), (cx, c) => {
   const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
   c.lget(0).refCast(st).i64(1n).structSet(st, peer);
@@ -249,6 +249,10 @@ export class Sched {
   onThread: ((t: ThreadRec, idle: boolean) => void) | null = null;
   /** a Java thread's body has run and it has exited */
   onThreadEnd: ((t: ThreadRec) => void) | null = null;
+  /** a Java thread started, or was renamed while it runs (Thread.setNativeName): its native name is its Thread's name again, as ART sets it */
+  onNamed: ((t: ThreadRec) => void) | null = null;
+  /** the threads Thread.start made that have not ended */
+  readonly started = new Set<ThreadRec>();
   /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
    *  each call, and a thousand of them in one entry would end in StackOverflowError): whether the strand running has made enough entries that a native should return by waiting once */
   owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
@@ -413,6 +417,7 @@ export class Sched {
       case Sync.CanSuspend: return +(!s.root && !this.w.inSynchronousJava());
       case Sync.Resume: this.onThread?.(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
+      case Sync.Rename: { const r = this.rec(obj!); if (r) this.onNamed?.(r); return 0; }
     }
   }
   private plain(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }
@@ -456,7 +461,7 @@ export class Sched {
   /** Thread.nativeCreate: the thread's body is a strand of its own, which starts when its creator next waits or ends */
   private create(obj: object): number {
     const th = this.rec(obj, true)!;
-    th.alive = true;
+    th.alive = true; this.started.add(th); this.onNamed?.(th);
     const s = this.strand(th);
     queueMicrotask(() => void this.run(s, obj));
     return 0;
@@ -480,7 +485,7 @@ export class Sched {
       const exit = this.threadFn("exit", () => w.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
       try { await s.call(exit, obj); } catch { /* a failing exit leaves the thread over all the same */ }
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
-      s.thread.alive = false;
+      s.thread.alive = false; this.started.delete(s.thread);
       const done = this.threadFn("finish", () => w.hostFn("thr:finish", ["L"], "V", (cx, c) => {
         const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" }), lock = cx.fieldIndex(THREAD, { owner: THREAD, name: "lock", desc: "Ljava/lang/Object;" }), l = c.newLocal(T.anyref);
         c.lget(0).refCast(st).i64(0n).structSet(st, peer);

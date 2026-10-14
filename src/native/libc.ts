@@ -7,7 +7,7 @@ import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, strerror, PAGE_SIZE } from "./abi";
 import { utf8 as codec } from "../jvm/abi";
-import { invalidateRange, type Cpu } from "./cpu";
+import { invalidateRange, nameThread, type Cpu } from "./cpu";
 import { exitGroup } from "./crash";
 import { abortThread, SIGNAL_SYSCALLS } from "./signals";
 import { format, scan } from "./printf";
@@ -308,7 +308,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
   mlock: () => 0, munlock: () => 0,
   // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
-  prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
+  prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) nameThread(cpu.jthread, s); } return 0; },
   gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, wallMillis(), 1e3); return 0; },
   clock_gettime: (_c, a) => {
     const id = a.i(), ts = a.p();

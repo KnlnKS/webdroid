@@ -3,7 +3,7 @@
 
 import { mem, AddrMap, NativeFault, guestAt } from "./mem";
 import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "./host";
-import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
+import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, nameThread, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
@@ -332,7 +332,7 @@ export function pthreadInit(): void {
       if (utf8(name).length >= 16) return E.RANGE;
       const thread = cpuByTid(tidOf(handle));
       if (!thread) return E.SRCH;
-      thread.name = name; thread.jthread.jname = name;
+      nameThread(thread.jthread, name);
       return 0;
     },
     pthread_getname_np: (_c, a) => {

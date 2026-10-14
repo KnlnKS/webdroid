@@ -9,6 +9,7 @@ import { BridgeCalls } from "../src/shell/bridgecalls";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { UNAME } from "../src/shell/device-properties";
 import { binderTransport, importBinder } from "../src/android/binder";
+import { procList, procText, procWrite } from "../src/shell/procfs";
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
@@ -99,20 +100,27 @@ describe("looper", () => {
     expect(performance.now() - t0).toBeGreaterThanOrEqual(250);
   });
 
-  test("a HandlerThread loops on its own thread, with a tid of its own, until it quits", async () => {
+  test("a HandlerThread loops on its own thread, with a tid and a /proc task of its own, until it quits", async () => {
     await loadLibcore(); await loadFrameworkJar();
     const thread = await newObj("android/os/HandlerThread", "(Ljava/lang/String;)V", "worker");
     expect(await vcall(thread, "getThreadId", "()I")).toBe(-1);
     await vcall(thread, "start", "()V");
-    const tid = await vcall(thread, "getThreadId", "()I");
+    // the thread has its tid once its Looper is prepared, which getLooper waits for
+    const looper = await vcall(thread, "getLooper", "()Landroid/os/Looper;"), tid = await vcall(thread, "getThreadId", "()I");
     expect(tid).not.toBe(await scall("android/os/Process", "myTid", "()I"));
     expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
-    const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await vcall(thread, "getLooper", "()Landroid/os/Looper;"));
+    const comm = `/proc/self/task/${tid}/comm`;
+    expect(procList("/proc/self/task")).toContain(String(tid));
+    expect(procText(comm)).toBe("worker\n");
+    expect(procWrite(comm, "renamed\n")).toBe(true);
+    expect(procText(comm)).toBe("renamed\n");
+    const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
     const ran = new Promise<unknown>((resolve) => postRunnable(fnRunnable(async () => resolve(await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"))), 0, handler));
     expect(await ran).toBe(thread);
     expect(await vcall(thread, "quit", "()Z")).toBe(1);
     await vcall(thread, "join", "()V");
     expect(await vcall(thread, "isAlive", "()Z")).toBe(0);
+    expect(procList("/proc/self/task")).not.toContain(String(tid));
   });
 });
 

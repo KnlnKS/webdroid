@@ -17,13 +17,15 @@ import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import { OP, type Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
-import { fromBits, refOf, toBits } from "./bridge";
+import { fromBits, refOf, toBits, type Bridge } from "./bridge";
 import { failed } from "../compiler/linkage";
 import { UInfo } from "../link/unsafe";
 import { constClass } from "../link/classes";
 import { box } from "../link/mhandles";
 import { count } from "./stats";
 import { note, Ev } from "../../timeline";
+import { procTasks, processTid } from "../../shell/procfs";
+import { cpus, nameThread } from "../../native/cpu";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
 
@@ -66,6 +68,19 @@ function makeEntry(w: World): Entry {
     return host;
   };
   sched.onThreadEnd = (rec) => threadExit.hook?.(jthreadOf(rec));
+  let threadName: FieldInfo | undefined;
+  sched.onNamed = (rec) => {
+    threadName ??= prog.require("java/lang/Thread").fields.find((f) => !f.isStatic && f.name === "name");
+    const name = threadName && bridge.toHost((bridge as Bridge).read(threadName, rec.obj));
+    if (typeof name === "string") nameThread(jthreadOf(rec), name);
+  };
+  // /proc/self/task: the main thread, the Java threads Thread.start made and the native threads, by their native names
+  const tidOf = (t: JThread) => processTid(t, t === mainThread);
+  const tasks = (): JThread[] => [mainThread, ...[...sched.started].map(jthreadOf), ...[...cpus].filter((c) => !c.finished).map((c) => c.jthread)];
+  const taskOf = (tid: number) => tasks().find((t) => tidOf(t) === tid);
+  procTasks.tids = () => [...new Set(tasks().map(tidOf))].sort((a, b) => a - b);
+  procTasks.name = (tid) => taskOf(tid)?.jname ?? null;
+  procTasks.rename = (tid, name) => { const t = taskOf(tid); if (t) nameThread(t, name); return !!t; };
   let noted = -1;
   sched.onThread = (rec, idle) => {
     const s = sched.current(), now = idle ? 0 : rec === sched.mainRec ? 1 : 2 + s.id;

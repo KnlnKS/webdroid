@@ -42,7 +42,7 @@ function statLine(id: number): string {
 }
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
-/** the process's live threads by tid, what /proc/self/task lists, and their names (the JVM keeps both) */
+/** the process's live threads by tid, what /proc/self/task lists, and their native names, which the Wasm tier's entry assigns (src/wasm/host/entry.ts) */
 export const procTasks = { tids: (): number[] => [procIdentity.pid], name: (_tid: number): string | null => null, rename: (_tid: number, _name: string): boolean => false };
 const TASK = /^\/proc\/(?:self|thread-self|(\d+))(?:\/task\/(\d+))?\/(\w+)$/;
 /** a task's comm: the main thread's is the process's, another's its own name, as prctl(PR_SET_NAME) leaves it */
