@@ -13,6 +13,10 @@ import { FS_SYSCALLS, javaCloseFd, readSocket, socketOf } from "./fs";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address";
 import { loopbackFetch } from "../shell/devicefetch";
 
+/** a 64-bit process's socket and file calls, each defined once */
+const KERNEL = { ...NET_SYSCALLS, ...FS_SYSCALLS }, slots = new Map<string, number>();
+const kernel = (name: string): number => { let at = slots.get(name); if (at === undefined) slots.set(name, (at = defineHost(name, KERNEL[name]))); return at; };
+
 const sock = (fd: number) => socketOf(fd) as Socket;
 const inet = (address: number[], port: number): SocketAddress => ({ family: address.length === 4 ? AF_INET : AF_INET6, ep: { address, port } });
 const endpoint = (fd: number) => (sock(fd).name(false) as { ep: Endpoint }).ep;
@@ -96,7 +100,7 @@ test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpac
 test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and recvmsg", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "msghdr-test"), scratch = mem.malloc(512);
-  const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, { ...NET_SYSCALLS, ...FS_SYSCALLS }[name]), args);
+  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
   const sockaddr = scratch, length = scratch + 32, msg = scratch + 64, iov = scratch + 128, data = scratch + 160, from = scratch + 224;
   const message = (name: number, nameLength: number, base: number, size: number) => {
     mem.memset(msg, 0, 56);
@@ -125,7 +129,7 @@ test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and r
 test("AF_UNIX passes descriptors and credentials, times out receives and breaks pipes as Linux does", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "scm-test"), scratch = mem.malloc(512);
-  const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, { ...NET_SYSCALLS, ...FS_SYSCALLS }[name]), args);
+  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
   const pair = scratch, msg = scratch + 16, iov = scratch + 80, data = scratch + 96, control = scratch + 128, option = scratch + 256, pipe = scratch + 288;
   const message = (controlLength: number) => {
     mem.memset(msg, 0, 56);

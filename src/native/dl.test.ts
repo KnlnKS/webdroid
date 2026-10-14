@@ -25,7 +25,8 @@ test("dlclose unloads an image at its last reference, running its destructors an
   vfs.write("/system/lib64/libfini.so", image(defineHost("test.init", () => { calls.push("init"); return 0; }), defineHost("test.fini", () => { calls.push("fini"); return 0; })));
   const deviceLib = linkerHooks.deviceLib;
   linkerHooks.deviceLib = (n) => n === "libfini.so" ? "/system/lib64/libfini.so" : deviceLib(n);
-  const call = (fn: keyof typeof libdl, ...args: number[]) => cpu.call(defineHost("test." + fn, libdl[fn]), args);
+  const slots = new Map<string, number>();
+  const call = (fn: keyof typeof libdl, ...args: number[]) => { let at = slots.get(fn); if (at === undefined) slots.set(fn, (at = defineHost("test." + fn, libdl[fn]))); return cpu.call(at, args); };
   const loaded = () => modules.some((m) => m.name === "libfini.so");
   try {
     const handle = await call("dlopen", name, 2);
