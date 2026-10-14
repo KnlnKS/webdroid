@@ -96,6 +96,10 @@ const AHEAD_UNIT = 16, AHEAD_ROOTS = 4096, AHEAD_MAX = 8192;
 /** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
  *  are loose, a compile worker merges up to MERGE_MAX of their methods into one module */
 const MERGE_AT = 1024, MERGE_MAX = 512;
+/** A unit merged away is freed by the collection after nothing holds it, and freeing a module costs that collection's pause some 40 µs (the engine's
+ *  second-pass weak callbacks free its native code): the thousands a launch's merges leave would stop the thread for 100-170 ms at once. They are dropped
+ *  RETIRE_BATCH at a time instead, the next batch once the last one has been collected, or after RETIRE_WAIT_MS if something else still holds one */
+const RETIRE_BATCH = 32, RETIRE_WAIT_MS = 5000;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
 type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
@@ -126,7 +130,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, ahead: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -1239,14 +1243,32 @@ export class World {
     this.merging = [];
     const r = this.sound(job, result, epoch) ? this.received(result) : undefined;
     if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
-    const live = groups.filter((g) => this.mergeable(g)).flat(), merged = new Set(live);
+    const liveGroups = groups.filter((g) => this.mergeable(g)), live = liveGroups.flat(), merged = new Set(live);
     if (!live.length) return true;
+    // one function of each unit holds its instance, and so its module
+    this.retire(liveGroups.map((g) => this.table.get(g[0]) as Function));
     const kept = job.installed.map((id) => this.slotOf(methodOf(this.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.table.get(at)] as const);
     this.instantiateUnit(r.unit, r.imports, r.built, live[0], clock);
     for (const [at, f] of kept) this.table.set(at, f);
     for (const at of live) this.groupOf.set(at, [at]);
     this.stats.merged += live.length;
     return true;
+  }
+  private retired: Function[] = [];
+  private retiring = 0;
+  private retiredCollected = new FinalizationRegistry<number>((batch) => { this.stats.collected++; if (batch === this.retireBatch && --this.retiring === 0) this.dropRetired(); });
+  private retireBatch = 0;
+  private retire(units: Function[]): void {
+    this.retired.push(...units);
+    if (!this.retiring) this.dropRetired();
+  }
+  private dropRetired(): void {
+    const batch = this.retired.splice(0, RETIRE_BATCH), id = ++this.retireBatch;
+    this.retiring = batch.length;
+    if (!batch.length) return;
+    for (const f of batch) this.retiredCollected.register(f, id);
+    this.stats.retired += batch.length;
+    (this.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
   }
   private hotSince?: number;
   private upgradeMs = 0;
