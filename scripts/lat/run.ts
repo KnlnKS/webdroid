@@ -5,13 +5,14 @@
 // regions with each frame it presents, read only once the window closes, and the scenario's UI state
 // is checked once afterwards.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--throttle <rate>] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--ecores] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
 // runs inside the page, signals through document.title and exports copied diagnostics without enabling Runtime. `--warm` launches each scenario twice
 // in one browser profile and gates the second: it starts from fresh app data (wd.reset) but with
-// the compiled code the first launch persisted.
+// the compiled code the first launch persisted. `--ecores` (macOS) runs Chrome under a background QoS clamp, so every thread, the app Workers included,
+// runs on the efficiency cores: a slower device (a busy loop ran about 6x slower on an M4 Pro). CDP CPU throttling slows only pages, never Workers.
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true}] }   (pick offers a synthetic photo;
@@ -41,9 +42,9 @@ const args = process.argv.slice(2);
 const { flag, option } = consume(args);
 const heapSample = flag("--heapsample");
 const gpu = flag("--gpu"), warm = flag("--warm"), demand = flag("--demand"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
-const throttle = +(option("--throttle") ?? 1);
+const ecores = flag("--ecores");
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
-if (!(throttle >= 1) || throttle > 1 && engine !== "chrome") throw new Error("lat throttle must be a rate of at least 1, and only Chrome throttles");
+if (ecores && (engine !== "chrome" || process.platform !== "darwin")) throw new Error("lat --ecores runs Chrome under macOS's taskpolicy");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
 // a cold launch is a first launch of any app: the platform build's bundled app builds stay out unless asked for
@@ -493,7 +494,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     return { context, version: context.browser()!.version(), close: () => context.close() };
   }
   const chromeLog = process.env.WEBDROID_CHROME_LOG;
-  const proc = Bun.spawn([chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
+  const proc = Bun.spawn([...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
     ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
@@ -544,8 +545,6 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
-  // Chrome throttles only pages ("Operation is only supported for pages, not workers"): app processes, which run in Workers, run at full speed
-  if (throttle > 1) await send("Emulation.setCPUThrottlingRate", { rate: throttle }, sessionId);
   // the page and every Worker it starts, each paused until its profiler runs
   const profiled = new Map<string, string>(), instrumented = new Set<string>();
   const instrument = async (session: string, label: string) => {
@@ -632,12 +631,12 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; throttle: number; query: string; expectedTaps?: string[]; preparation?: Capture;
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, engine, warm, throttle, query: launchQuery.toString(), taps: [],
+  const row: Report = { scenario: name, engine, warm, ecores, query: launchQuery.toString(), taps: [],
     accepted: false, intendedObservation: "first response: pointerup to the first presented app frame whose response regions depart from the pre-pointerup frame in tiles the settled frame also changed, outside the pressed view's bounds + 72 px; no guest probes between pointerdown and the settled frame; settled UI state and pixels confirmed afterwards",
     instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; response-region crops of every presented frame read after the window; compile counters end when the window closes",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
