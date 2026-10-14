@@ -11,7 +11,7 @@ import { prepareApp } from "../../src/wasm/host/appcode";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import type { World } from "../../src/wasm/link/world";
 import { mountPlatform, natives, startProcess } from "./harness";
-import { HEAP_LIMIT } from "../../src/wasm/link/exc";
+import { HEAP_LIMIT } from "../../src/jvm/abi";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 

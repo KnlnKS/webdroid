@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
-import { HEAP_LIMIT } from "../../src/wasm/link/exc";
+import { HEAP_LIMIT } from "../../src/jvm/abi";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
 import { Natives } from "../../src/wasm/host/natives";

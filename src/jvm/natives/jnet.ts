@@ -292,7 +292,7 @@ rt.register({
 // Conscrypt's platform parameters class. OkHttp 3.13+ picks its Android 10 platform by finding
 // it (SDK >= 29) and then speaks TLS only through SSLSockets and SSLParameters ALPN, below and
 // above; without it Platform.<clinit> finds no platform and every OkHttpClient fails.
-rt.markers("com/android/org/conscrypt/SSLParametersImpl");
+rt.register({ name: "com/android/org/conscrypt/SSLParametersImpl", ctor: class extends JObj {} });
 rt.register({
   name: "android/net/ssl/SSLSockets", ctor: class extends JObj {},
   methods: {

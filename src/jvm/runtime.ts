@@ -3,7 +3,7 @@
 
 import { Strand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
-import { charsToString, dotName } from "./abi";
+import { charsToString, dotName, oomMessage } from "./abi";
 import { isBytecode, isStageD } from "./provenance";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
@@ -48,15 +48,6 @@ const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => 
 export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
 export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
 
-/** a shared table less the entries a class does not declare */
-export function without(methods: NativeSpec["methods"], ...keys: string[][]): NonNullable<NativeSpec["methods"]> {
-  const out = { ...methods };
-  for (const key of keys.flat()) delete out[key];
-  return out;
-}
-
-/** the app heap's limit, as Runtime.maxMemory reports it */
-export const HEAP_LIMIT = 512 * 1024 * 1024;
 
 export class Runtime {
   natives = new Map<string, NativeSpec>();
@@ -74,7 +65,6 @@ export class Runtime {
     if (boot) return boot.read();
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
   }
-  classpathLocations = new Map<string, string>();
   /** makes a Java exception by class name (set by the Wasm tier's host); before a World, an Error that carries the class and message as a throwable does */
   mkThrowable: (cls: string, msg: string | null) => any = (cls, msg) => Object.assign(new Error(`${cls}: ${msg}`), { $javaClass: cls, msg });
   /** report listeners: the reports reach the console either way */
@@ -98,7 +88,7 @@ export class Runtime {
    * resumed native runs as the strand that entered it and releases it when it finishes or
    * suspends again.
    */
-  drive<T>(g: Gen<T>, strand = this.cur): T | Promise<T> { return this.driveStep(g, undefined, false, strand, false); }
+  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
   private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
     for (;;) {
       let step: IteratorResult<unknown, T>;
@@ -123,7 +113,6 @@ export class Runtime {
   }
   /** a spec registered after the World was made (a module a split bundle loads later) */
   registered?: (spec: NativeSpec) => void;
-  markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
   /** an instance of `cls`, its constructor not run (set by the Wasm tier's host) */
   make: (cls: string) => any = (cls) => { throw new Error(`no World makes ${cls}`); };
 
@@ -236,7 +225,7 @@ export class Runtime {
   }
 
   oom(bytes: number): unknown {
-    return this.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${bytes} byte allocation with ${HEAP_LIMIT} free bytes`);
+    return this.mkThrowable("java/lang/OutOfMemoryError", oomMessage(bytes));
   }
 
   npe(): never { throw this.mkThrowable("java/lang/NullPointerException", null); }

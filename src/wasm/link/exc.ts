@@ -3,14 +3,13 @@ import { ModuleBuilder, T } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
+import { HEAP_LIMIT, oomMessage } from "../../jvm/abi";
 
-/** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT, which natives throw OutOfMemoryError past too */
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
   try { return new Error(); } finally { Error.stackTraceLimit = prior; }
 }
-export const HEAP_LIMIT = 512 * 1024 * 1024;
 export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 /** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
 export const HOT_BUDGET = 5000;
@@ -95,7 +94,7 @@ export function excMessage(kind: number, a: number, b: number, c: number, d: num
     case SLOT.sioobe: return `offset ${a}, count ${b}, length ${c}`;
     case SLOT.copy: return `src.length=${a} srcPos=${b} dst.length=${c} dstPos=${d} length=${e}`;
     case SLOT.asx: return `${pretty(className(a))} cannot be stored in an array of type ${pretty(className(b))}`;
-    case SLOT.oom: return `Failed to allocate a ${(BigInt(b) << 32n) | BigInt(a >>> 0)} byte allocation with ${HEAP_LIMIT} free bytes`;
+    case SLOT.oom: return oomMessage((BigInt(b) << 32n) | BigInt(a >>> 0));
     default: return null;
   }
 }

@@ -1,7 +1,8 @@
 // java.lang's natives: System's clocks and properties, Runtime's library loading and memory, and the process a fork would make.
 // Java booleans are 0/1 numbers, longs are BigInt.
 
-import { awaited, rt, HEAP_LIMIT, type Gen } from "../runtime";
+import { awaited, rt, type Gen } from "../runtime";
+import { HEAP_LIMIT } from "../abi";
 import { jarray } from "../abi";
 import { uptimeMillis, wallMillis } from "../../guest-clock";
 import { vfs } from "../../shell/vfs";

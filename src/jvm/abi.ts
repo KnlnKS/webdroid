@@ -44,6 +44,10 @@ export function mangleMethod(name: string, desc: string): string {
 const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 
+/** ART's heap limit: Runtime.maxMemory reports it, and an allocation past it throws OutOfMemoryError */
+export const HEAP_LIMIT = 512 * 1024 * 1024;
+export const oomMessage = (bytes: number | bigint) => `Failed to allocate a ${bytes} byte allocation with ${HEAP_LIMIT} free bytes`;
+
 /** mangle instance field. declCls = "java/lang/Object" form */
 export function mangleField(declCls: string, name: string): string {
   return "f$" + safeName(name) + "$" + hash36(declCls);

@@ -138,10 +138,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   useJniVm(lazy(() => wasmJni(current())));
   let names: ReturnType<typeof fieldNamesOf> | undefined;
   fieldNames.find = (cls, name) => (names ??= fieldNamesOf(current()))(cls, name);
-  rt.mkThrowable = hostThrowable;
-  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(current(), cls); };
-  rt.classFor = (cls) => current().bridge.toHost(classRef(current(), cls));
-  wasmBox.make = (desc, v) => current().bridge.toHost(boxRef(current(), desc, v));
+  hook(current);
   const [aot, jars] = await opening;
   store = aot;
   seen = await remembered;
@@ -211,11 +208,15 @@ export function useWorld(w: World): World {
   if (using === w) return w;
   using = w;
   useEntry(wasmEntry(w)); useJniVm(lazy(() => wasmJni(w))); fieldNames.find = fieldNamesOf(w);
-  rt.mkThrowable = hostThrowable;
-  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(w, cls); };
-  rt.classFor = (cls) => w.bridge.toHost(classRef(w, cls));
-  wasmBox.make = (desc, v) => w.bridge.toHost(boxRef(w, desc, v));
+  hook(() => w);
   return w;
+}
+/** the runtime's ways to make Java objects, in the World `world()` answers */
+function hook(world: () => World): void {
+  rt.mkThrowable = hostThrowable;
+  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world(), cls); };
+  rt.classFor = (cls) => world().bridge.toHost(classRef(world(), cls));
+  wasmBox.make = (desc, v) => world().bridge.toHost(boxRef(world(), desc, v));
 }
 const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "linkClass", "initClass", "iof", "classNameOf", "callOn", "after"] as const satisfies readonly (keyof Entry)[];
 
