@@ -184,9 +184,13 @@ function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
 }
 
 // ── random (lrand48 family: 48-bit LCG as in the C library)
-let r48 = 0x1234abcd330en;
-const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
-const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
+// the state in 24-bit halves, so each step is exact in doubles: x = 0x5deece66d * x + 0xb mod 2^48
+let r48hi = 0x1234ab, r48lo = 0xcd330e;
+const next48 = (): void => {
+  const t = 0xece66d * r48lo + 0xb;
+  r48hi = (Math.floor(t / 0x1000000) + 0xece66d * r48hi + 0x5de * r48lo) % 0x1000000;
+  r48lo = t % 0x1000000;
+};
 
 let atRandom = 0;
 /** The auxiliary vector a process starts with: AT_PAGESZ, AT_HWCAP/AT_HWCAP2, AT_SECURE and
@@ -558,10 +562,10 @@ export function libcInit(): void {
     setjmp: (cpu, a) => setjmp(cpu, a.p()),
     longjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
 
-    lrand48: () => next48() & 0x7fffffff,
-    mrand48: () => next48() | 0,
-    drand48: (c) => retD(c, (next48() >>> 0) / 4294967296),
-    srand48: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
+    lrand48: () => { next48(); return r48hi * 128 + (r48lo >>> 17); },
+    mrand48: () => { next48(); return (r48hi << 8 | r48lo >>> 16) | 0; },
+    drand48: (c) => { next48(); return retD(c, (r48hi * 0x1000000 + r48lo) / 2 ** 48); },
+    srand48: (_c, a) => { const seed = a.u(); r48hi = seed >>> 8; r48lo = (seed & 0xff) << 16 | 0x330e; },
     arc4random: () => random32() | 0,
     arc4random_buf: (_c, a) => { const p = a.p(), n = a.u(); if (n) fillRandom(p, n); },
     arc4random_uniform: (_c, a) => {
