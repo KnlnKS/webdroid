@@ -33,12 +33,16 @@ export class Flow {
   constructor(prepared: PreparedMethod, code: CodeItem, extraEntries: readonly number[] = []) {
     const { instructions, leaders } = prepared, last: PreparedMethod["instructions"][number][] = [];
     this.blockAt = new Int32Array(code.insns.length + 1).fill(-1);
-    for (const ins of instructions) {
-      if (leaders[ins.pc]) { this.blockAt[ins.pc] = this.starts.length; this.starts.push(ins.pc); last.push(ins); }
-      else last[last.length - 1] = ins;
+    for (let i = 0; i < instructions.length; i++) {
+      const pc = instructions[i].pc;
+      if (!leaders[pc]) continue;
+      if (i) last.push(instructions[i - 1]);
+      this.blockAt[pc] = this.starts.length; this.starts.push(pc);
     }
+    last.push(instructions[instructions.length - 1]);
     const n = this.starts.length, root = n;
-    const succs: number[][] = [], preds: number[][] = Array.from({ length: n + 1 }, () => []);
+    const succs: number[][] = [], preds: number[][] = new Array(n + 1);
+    for (let b = 0; b <= n; b++) preds[b] = [];
     for (let b = 0; b < n; b++) {
       const ins = last[b], out = branchTargets(code, ins).map((t) => this.blockAt[t]);
       this.fall[b] = endsBlock(ins.op) ? -1 : this.blockAt[ins.pc + ins.len];
@@ -46,8 +50,9 @@ export class Flow {
       succs.push(out);
       for (const s of out) preds[s].push(b);
     }
-    const entries = [0, ...extraEntries.map((pc) => this.blockAt[pc])];
-    for (const t of code.tries) for (const pc of [...t.handlers.map(([, h]) => h), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []]) entries.push(this.blockAt[pc]);
+    const entries = [0];
+    for (const pc of extraEntries) entries.push(this.blockAt[pc]);
+    for (const t of code.tries) { for (const [, h] of t.handlers) entries.push(this.blockAt[h]); if (t.catchAllAddr >= 0) entries.push(this.blockAt[t.catchAllAddr]); }
     succs.push(entries);
     for (const e of entries) preds[e].push(root);
 
@@ -78,8 +83,12 @@ export class Flow {
         if (idom[b] !== d) { idom[b] = d; changed = true; }
       }
     }
-    const region = this.region = new Int32Array(n).fill(-1);
-    for (let i = 1; i < order.length; i++) { const b = order[i]; region[b] = idom[b] === root ? b : region[idom[b]]; }
+    // each region's blocks in reverse postorder, keyed by its entry
+    const region = this.region = new Int32Array(n).fill(-1), members = new Map<number, number[]>();
+    for (let i = 1; i < order.length; i++) {
+      const b = order[i], e = region[b] = idom[b] === root ? b : region[idom[b]];
+      members.get(e)?.push(b) ?? members.set(e, [b]);
+    }
     const dominates = (a: number, b: number) => { for (; b !== root; b = idom[b]) if (b === a) return true; return false; };
 
     // natural loops: a retreating edge must reach a dominator, or the flow is irreducible
@@ -107,17 +116,21 @@ export class Flow {
       while (loops[l].parent !== scope) l = loops[l].parent;
       return loops[l].head;
     };
+    // a call's blocks are those stamped with its number; a block's edges are taken before its loop's own call reuses them
+    const indeg = new Int32Array(n), stamp = new Int32Array(n), edges: number[][] = [];
+    let calls = 0;
     const sort = (members: Iterable<number>, scope: number, head: number, out: number[]) => {
-      const indeg = new Map<number, number>(), edges = new Map<number, number[]>();
+      const call = ++calls;
+      let keys = 0;
+      const key = (b: number) => { if (stamp[b] !== call) { stamp[b] = call; indeg[b] = 0; (edges[b] ??= []).length = 0; keys++; } };
       for (const b of members) {
         const rb = rep(b, scope);
-        if (!indeg.has(rb)) indeg.set(rb, 0);
+        key(rb);
         for (const v of succs[b]) {
           if (region[v] !== region[b] || rpo[v] <= rpo[b] || !inScope(v, scope)) continue;
           const rv = rep(v, scope);
           if (rv === rb) continue;
-          indeg.set(rv, (indeg.get(rv) ?? 0) + 1);
-          edges.get(rb)?.push(rv) ?? edges.set(rb, [rv]);
+          key(rv); indeg[rv]++; edges[rb].push(rv);
         }
       }
       // the lowest pc goes first, keeping the dex layout where the order allows
@@ -129,20 +142,20 @@ export class Flow {
         const b = ready[k];
         ready[k] = ready[ready.length - 1]; ready.pop();
         placed++;
+        for (const v of edges[b]) if (!--indeg[v]) ready.push(v);
         const l = loopOf[b];
         if (l !== scope && loops[l].head === b) sort(loops[l].body, l, b, out);
         else out.push(b);
-        for (const v of edges.get(b) ?? []) { const d = indeg.get(v)! - 1; indeg.set(v, d); if (!d) ready.push(v); }
       }
-      if (placed !== indeg.size) throw new Error("unordered blocks");
+      if (placed !== keys) throw new Error("unordered blocks");
     };
 
     this.pos = new Int32Array(n).fill(-1);
     const regionOf = new Map<number, Region>();
-    for (const e of entries.concat(order.filter((b) => b !== root && idom[b] === root))) {
+    for (const e of [...entries, ...members.keys()]) {
       if (regionOf.has(e)) continue;
       const r: Region = { entry: e, order: [], scopes: [] };
-      sort(order.filter((b) => b !== root && region[b] === e), -1, e, r.order);
+      sort(members.get(e)!, -1, e, r.order);
       r.order.forEach((b, i) => this.pos[b] = i);
       this.loopCloses[e] = new Set();
       regionOf.set(e, r);
@@ -174,12 +187,16 @@ export class Flow {
     }
     for (const [t, open] of opens) regionOf.get(region[t])!.scopes.push({ open, close: this.pos[t], label: `B${this.starts[t]}`, loop: false });
     for (const r of this.regions) {
-      for (let changed = true; changed;) {
+      const scopes = r.scopes;
+      for (let changed = scopes.length > 1; changed;) {
         changed = false;
-        for (const s of r.scopes) for (const o of r.scopes) {
-          if (s.loop || o === s || !(o.open < s.open && s.open < o.close && o.close <= s.close)) continue;
-          if (o.close === s.close && !o.loop) continue;
-          s.open = o.open; changed = true;
+        for (const s of scopes) {
+          if (s.loop) continue;
+          for (let j = 0; j < scopes.length; j++) {
+            const o = scopes[j];
+            if (!(o.open < s.open && s.open < o.close && o.close <= s.close) || o.close === s.close && !o.loop) continue;
+            s.open = o.open; changed = true;
+          }
         }
       }
       // outer scopes first: the later close, and a block before a loop closing with it
