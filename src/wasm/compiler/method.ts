@@ -1,4 +1,3 @@
-import { beginCompile, endCompile, type CompilePhase } from "../../jvm/compiler-observer";
 import { emitSymbolicSite } from "./sites";
 import { Code, OP } from "./code";
 import { T, ref, refNull, type VT } from "./wasmbin";
@@ -156,29 +155,25 @@ export class MC {
   setF64() { this.store(this.cur); }
 
   run(): Code {
-    let span = beginCompile("wasm.prepare");
-    try {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
     let t = performance.now();
-    const lap = (name: keyof typeof phase, next: CompilePhase) => {
-      const n = performance.now(); phase[name] += n - t; t = n; endCompile(span); span = beginCompile(next);
-    };
+    const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
     const analysis = cx.methodAnalyses.get(m);
     const prepared = this.prepared = analysis?.prepared ?? prepareMethod(item);
-    lap("prepare", "wasm.flow");
+    lap("prepare");
     let flow: Flow;
     try { flow = structureAny(prepared, item); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
-    lap("flow", "wasm.infer");
+    lap("flow");
     this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
-    lap("infer", "wasm.facts");
+    lap("infer");
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     this.findShadows();
     this.findWaiting();
     this.entryFacts = analyze(this);
-    lap("facts", "wasm.emit");
+    lap("facts");
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // Floating parameters arrive as bits and are copied into typed locals once.
@@ -244,7 +239,6 @@ export class MC {
     this.pop(); c.end();                            // $disp loop
     c.unreachable();
     return c;
-    } finally { endCompile(span); }
   }
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;

@@ -1,5 +1,3 @@
-import { compilerJob, compilerInput, postCompilerReceipt, invalidateCompilerReceipt } from "../../shell/compiler-workers";
-import { beginCompile, endCompile, measureCompile, compilerReceiptsEnabled } from "../../jvm/compiler-observer";
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
 // per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run.
@@ -53,26 +51,14 @@ const CLOSURE_LIMIT = 20_000;
 
 export function serveCompile(port: Port, env: CompileEnv): void {
   let w: World | undefined, units: UnitCompiler | undefined, appDexes: DexFile[] = [], roots: BuildRoots | undefined;
-  type Job = { type: string; id?: number; ordinal: number; oneShot: boolean; ended: boolean };
-  const send = (m: CompileResponse, transfer: Transferable[] = [], job?: Job) => {
-    const complete = job && (m.type === "ready" || m.type === "unit" || m.type === "failed" || m.type === "built" && (job.oneShot || job.type === "refine"));
-    if (complete && !job.ended) { compilerJob(job.type, job.id, m.type === "failed" ? "failed" : "end", undefined, job.ordinal); job.ended = true; }
-    postCompilerReceipt(undefined, !!complete && !!job?.oneShot);
-    port.postMessage(m, transfer);
-  };
+  const send = (m: CompileResponse, transfer: Transferable[] = []) => port.postMessage(m, transfer);
   const open = (dexes: Containers) => dexes.flatMap(([name, bytes]) => dexesIn(bytes, name));
 
-  async function init(req: Extract<CompileRequest, { type: "init" }>, job: Job): Promise<number> {
+  async function init(req: Extract<CompileRequest, { type: "init" }>): Promise<number> {
     const t0 = performance.now();
-    const dexes = await env.platform();
-    if (compilerReceiptsEnabled) compilerJob("init", undefined, "inputs", await compilerInput(dexes.map(d => [d.name, d.bytes])), job.ordinal);
-    const platform = measureCompile("residual.wasmSetup", () => {
-      const platform = new Program(dexes); platform.addExterns(env.externs); appDexes = open(req.dexes); return platform;
-    });
+    const platform = new Program(await env.platform());
+    platform.addExterns(env.externs); appDexes = open(req.dexes);
     const index = req.aot ? await env.fetchBytes(req.aot.base + "index.json") : undefined;
-    if (compilerReceiptsEnabled && index) compilerJob("init", undefined, "inputs", await compilerInput([["platform-index", index]]), job.ordinal);
-    const setup = beginCompile("residual.wasmSetup");
-    try {
     const program = new Program(appDexes, platform);
     // an app build follows the loaders once its World has started, below
     if (!req.build) {
@@ -89,7 +75,6 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
     for (const definition of req.proxies ?? []) defineProxy(w, definition);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
-    } finally { endCompile(setup); }
     // an app build numbers from where the page's World was when the app's dexes arrived, before the page's numbering is followed; its app's libraries are bound after, as the
     // page's loader bound them
     roots = req.build;
@@ -100,25 +85,19 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       followLoaders(w, req.loaders);
     }
     if (roots) {
-      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot, job);
+      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot);
       if (req.oneShot) return performance.now() - t0;
     }
-    measureCompile("residual.wasmSetup", () => {
-      units = new UnitCompiler(w!);
-      if (req.sync && !units.sync(req.sync, true)) throw new Error("the page's numbering is not the worker's at the start");
-    });
+    units = new UnitCompiler(w);
+    if (req.sync && !units.sync(req.sync, true)) throw new Error("the page's numbering is not the worker's at the start");
     return performance.now() - t0;
   }
 
-  /** Refine-capable builds restore numbering; a one-shot build is retired after its receipt. */
-  function build(demand: Demand, oneShot = false, job?: Job): void {
-    const t0 = performance.now();
-    const result = measureCompile("residual.wasmBuild", () => {
-      const methods = select(roots!, demand), built = buildApp(w!, methods, demand), ms = performance.now() - t0;
-      if (!oneShot) w!.rollback(built.index.base);
-      return { type: "built" as const, build: built, methods: methods.length, ms };
-    });
-    send(result, result.build.files.map(([, bytes]) => bytes.buffer as ArrayBuffer), job);
+  /** a build that may be refined restores the numbering; a one-shot build's worker is retired after it */
+  function build(demand: Demand, oneShot = false): void {
+    const t0 = performance.now(), methods = select(roots!, demand), built = buildApp(w!, methods, demand), ms = performance.now() - t0;
+    if (!oneShot) w!.rollback(built.index.base);
+    send({ type: "built", build: built, methods: methods.length, ms }, built.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
   }
 
   /** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
@@ -160,50 +139,29 @@ export function serveCompile(port: Port, env: CompileEnv): void {
 
   const receive = async (req: CompileRequest) => {
     const id = "id" in req ? req.id : undefined, t0 = performance.now();
-    const job: Job = { type: req.type, id, ordinal: compilerJob(req.type, id, "begin"), oneShot: req.type === "init" && !!req.oneShot, ended: false };
     try {
       if (req.type === "init" && req.oneShot && !req.build) throw new Error("one-shot compilation requires build roots");
-      if (compilerReceiptsEnabled) {
-        try {
-          const inputs: Containers = "dexes" in req ? [...req.dexes] : [];
-          const metadata = req.type === "init" ? { ...req, dexes: undefined, scopes: req.scopes?.map(([id, files]) => [id, files.map(([name]) => name)]), build: req.build && { ...req.build, profile: undefined, manifest: undefined } }
-            : req.type === "add" ? { ...req, dexes: undefined } : req;
-          if (req.type === "init") {
-            for (const [id, files] of req.scopes ?? []) for (const [name, bytes] of files) inputs.push([`${id}:${name}`, bytes]);
-            if (req.build?.profile) inputs.push(["profile", req.build.profile]);
-            if (req.build?.manifest) inputs.push(["manifest", req.build.manifest]);
-          }
-          inputs.push(["request", new TextEncoder().encode(JSON.stringify(metadata))]);
-          compilerJob(req.type, id, "inputs", await compilerInput(inputs), job.ordinal);
-        } catch { invalidateCompilerReceipt(); compilerJob(req.type, id, "inputs", null, job.ordinal); }
-      }
       if (req.type === "init") {
-        const ms = await init(req, job);
-        if (!req.oneShot) send({ type: "ready", ms }, [], job);
+        const ms = await init(req);
+        if (!req.oneShot) send({ type: "ready", ms });
       }
       else if (!w || !units) throw new Error("not initialized");
       else if (req.type === "add") {
-        measureCompile("residual.wasmSetup", () => {
-          if (req.loaders) followLoaders(w!, req.loaders);
-          w!.addDexes(open(req.dexes), w!.prog.loaderAt(req.loader ?? 0));
-        });
-        compilerJob(req.type, id, "end", undefined, job.ordinal); job.ended = true; postCompilerReceipt();
+        if (req.loaders) followLoaders(w, req.loaders);
+        w.addDexes(open(req.dexes), w.prog.loaderAt(req.loader ?? 0));
       }
       else if (req.type === "proxy" || req.type === "namespaces") {
         followLoaders(w, req.loaders);
         if (req.type === "proxy") defineProxy(w, req.definition);
-        compilerJob(req.type, undefined, "end", undefined, job.ordinal); job.ended = true; postCompilerReceipt();
       }
-      else if (req.type === "refine") build(req.demand, false, job);
+      else if (req.type === "refine") build(req.demand);
       else if (req.type === "upgrade") {
-        const result = measureCompile("residual.wasmUpgrade", () => {
-          if (!units!.sync(req.sync, req.keep)) throw new Error("the page's numbering is not the worker's");
-          return units!.upgrade(req.job);
-        });
-        if (typeof result === "string") send({ type: "failed", id, message: result }, [], job);
-        else send({ type: "unit", id: req.id, result, ms: performance.now() - t0 }, [], job);
+        if (!units.sync(req.sync, req.keep)) throw new Error("the page's numbering is not the worker's");
+        const result = units.upgrade(req.job);
+        if (typeof result === "string") send({ type: "failed", id, message: result });
+        else send({ type: "unit", id: req.id, result, ms: performance.now() - t0 });
       }
-    } catch (e) { send({ type: "failed", id, message: String((e as Error)?.stack ?? e) }, [], job); }
+    } catch (e) { send({ type: "failed", id, message: String((e as Error)?.stack ?? e) }); }
   };
   // Initialization awaits platform bytes; later definitions and jobs must follow its snapshot.
   let pending = Promise.resolve();

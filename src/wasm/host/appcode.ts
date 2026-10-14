@@ -23,7 +23,7 @@ export interface AppCodeRequest {
   /** the platform build the code is made against */
   aot: FetchStore;
   persist?: Persist;
-  spawn(role?: "build" | "upgrade"): WorkerPort;
+  spawn(): WorkerPort;
   /** where an app build starts, for a launch without a saved one */
   roots: BuildRoots;
   /** what the World had numbered after the platform build when the app's dexes arrived (nothing by default): where a build's numbering starts */
@@ -82,7 +82,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     : saved && files && req.persist ? req.persist.save(key, [...files]).catch(() => false) : Promise.resolve(false);
   req.signal?.throwIfAborted();
   // merges wait for the launch's first frame, and leave the memory to a build while one is made
-  const compiler = new CompileClient(() => req.spawn("upgrade"), () => !watching || builder.busy), builder = new Builder(req, key);
+  const compiler = new CompileClient(() => req.spawn(), () => !watching || builder.busy), builder = new Builder(req, key);
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (closed) return;
@@ -214,7 +214,7 @@ class Builder {
     const start = () => {
       if (this.waiting !== pending || this.closed) return result.catch(() => {});
       try {
-        const port = this.req.spawn("build");
+        const port = this.req.spawn();
         if (this.closed) { port.terminate(); return result.catch(() => {}); }
         this.port = port;
         const list = containers(this.req.dexes);

@@ -1,4 +1,3 @@
-import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 import { parseMethodDesc } from "../../jvm/abi";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
@@ -625,8 +624,6 @@ export class Compiler implements Base {
   /** `install`: the methods go straight into their table slots and call each other through them, as precompiled code (true) or code merged from first-tier units
    *  ("merge"), which unlike precompiled code relies on the classes loaded now */
   buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install: boolean | "merge" = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
-    const span = beginCompile("wasm.emit");
-    try {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot;
     this.natives.declare(this, all);
@@ -657,32 +654,23 @@ export class Compiler implements Base {
       return { name, f, code };
     });
     return this.finishModule([...all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })), ...inits]);
-    } finally { endCompile(span); }
   }
   buildSyntheticGroup(bodies: { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void }[]) {
-    const span = beginCompile("wasm.emit");
-    try {
     const parts = bodies.map(body => ({ ...body, f: this.mb.reserveFunc(this.sig(body.params, body.ret), "$" + body.name), code: new Code(body.params.length) }));
     for (const part of parts) { part.body(part.code); this.mb.setBody(part.f, part.code.finish()); this.mb.export(part.name, "func", part.f); }
     return this.finishModule(parts.map(part => ({ name: "$" + part.name, f: part.f, code: part.code })));
-    } finally { endCompile(span); }
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m", abiParams?: VT[]): { bytes: Uint8Array; traces: FnTrace[] } {
-    const span = beginCompile("wasm.emit");
-    try {
     const f = this.mb.reserveFunc(abiParams ? this.mb.addFuncType(abiParams, ret === "V" ? [] : [this.vtOf(ret)]) : this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
     this.mb.export(exportName, "func", f);
     return this.finishModule([{ name: "$" + name, f, code: c }]);
-    } finally { endCompile(span); }
   }
   /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy
    *  decision or on a class being absent is left out: nothing here could undo it. */
   buildSynthetics(fns: { name: string; slot: number; d: Synth }[]): { bytes: Uint8Array; traces: FnTrace[]; kept: string[] } {
-    const span = beginCompile("wasm.emit");
-    try {
     const mb = this.mb, parts: { name: string; slot: number; f: number; code: Code }[] = [];
     for (const { name, slot, d } of fns) {
       const f = mb.reserveFunc(this.sig(d.params, d.ret), "$" + name), code = new Code(d.params.length), assumed = this.assumptions.length, absent = this.absent.length;
@@ -697,7 +685,6 @@ export class Compiler implements Base {
       mb.addElemActive(0, parts[i].slot, parts.slice(i, j).map((p) => p.f));
     }
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
-    } finally { endCompile(span); }
   }
   outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
@@ -706,9 +693,7 @@ export class Compiler implements Base {
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), new Code(0).finish(), "$start");
-    const t0 = performance.now(), span = beginCompile("wasm.encode");
-    let bytes: Uint8Array;
-    try { bytes = this.mb.build(true); } finally { endCompile(span); }
+    const t0 = performance.now(), bytes = this.mb.build(true);
     this.w.stats.phase.encode += performance.now() - t0;
     const traces = fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;

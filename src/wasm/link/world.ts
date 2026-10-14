@@ -1,4 +1,3 @@
-import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // The linker: classes and methods become Wasm modules when first needed, all sharing one funcref table.
 //
 //  - A class module (one per class, built the first time any code names the class) defines the class's vtable, init flag and static
@@ -613,21 +612,15 @@ export class World {
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
-    const span = beginCompile("wasm.module");
-    try {
-      const t0 = performance.now(), mod = compileModule(bytes);
-      this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
-      return mod;
-    } finally { endCompile(span); }
+    const t0 = performance.now(), mod = compileModule(bytes);
+    this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
+    return mod;
   }
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
     const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
-    const span = beginCompile("wasm.instantiate");
-    try {
-      const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
-      this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
-      return inst;
-    } finally { endCompile(span); }
+    const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
+    this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
+    return inst;
   }
   /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
   restoreStub(slot: number, m: MethodInfo): Function { return this.poolStubs([{ ...this.methodKinds(m), slot }])[0]; }
@@ -791,78 +784,75 @@ export class World {
    *  in the same order (importing the same table), instead of this linker doing both on demand. A `lean` module (a class linked on demand) holds only
    *  the class's globals, since a module with code costs the engine far more: its slots get shared stubs and its ensure() is compiled on first call. */
   classModule(rts: ClassRt[], lean = false): Uint8Array {
-    const span = beginCompile("wasm.classBuild");
-    try {
-      const mb = new ModuleBuilder(), b = declareBase(mb);
-      let link = -1, sid = -1, iw = -1, tag = -1;
-      if (!lean) {
-        mb.importTable("rt", "table", T.funcref, 0);
-        link = this.importLink(mb);
-        sid = mb.importGlobal("rt", "sid", T.i32, true); iw = mb.importGlobal("rt", "iw", T.i32, true); tag = mb.importTag("rt", "tag", b.tTagFn);
+    const mb = new ModuleBuilder(), b = declareBase(mb);
+    let link = -1, sid = -1, iw = -1, tag = -1;
+    if (!lean) {
+      mb.importTable("rt", "table", T.funcref, 0);
+      link = this.importLink(mb);
+      sid = mb.importGlobal("rt", "sid", T.i32, true); iw = mb.importGlobal("rt", "iw", T.i32, true); tag = mb.importTag("rt", "tag", b.tTagFn);
+    }
+    // the String constants of the static values are imported before the module defines a global of its own
+    const consts = new Map<string, number>();
+    let fromChars = -1;
+    if (!lean) for (const { name } of rts) {
+      const jc = this.prog.get(name);
+      if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
+        if (typeof v !== "string" || consts.has(v)) continue;
+        // a constant with a lone surrogate cannot be an import name: its units come from a data segment
+        if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(HT.extern), false));
+        else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(HT.extern)]));
       }
-      // the String constants of the static values are imported before the module defines a global of its own
-      const consts = new Map<string, number>();
-      let fromChars = -1;
-      if (!lean) for (const { name } of rts) {
-        const jc = this.prog.get(name);
-        if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
-          if (typeof v !== "string" || consts.has(v)) continue;
-          // a constant with a lone surrogate cannot be an import name: its units come from a data segment
-          if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(HT.extern), false));
-          else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(HT.extern)]));
-        }
+    }
+    const literal = (c: Code, v: string) => {
+      if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
+      c.anyConvertExtern().i32(this.synthSlot("strLit", rtfns.get("strLit")!)).callIndirect(mb.addFuncType([T.anyref], [T.anyref]));
+    };
+    const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
+    const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
+    const words = rts.map(({ name, id }) => name[0] === "[" || !this.prog.get(name)?.isInterface ? this.vtWords(name, id) : undefined);
+    // The engine evaluates a constant initializer's operands one by one at instantiation, and admits at most 10,000 in array.new_fixed. A module with
+    // many vtables makes them in its start function from one data segment instead, which costs a function to compile.
+    const total = words.reduce((n, w) => n + (w?.length ?? 0), 0), fromData = total > VT_DATA_WORDS || words.some((w) => w && w.length > 10_000);
+    const vts: { g: number; words: Int32Array }[] = [];
+    for (const [i, rt] of rts.entries()) {
+      const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [], w = words[i];
+      if (w) {
+        const init = fromData ? nullInit(b.tVT) : [];
+        if (!fromData) { for (const x of w) { init.push(0x41); sleb(x, init); } init.push(0xfb, 0x08); uleb(b.tVT, init); uleb(w.length, init); }
+        const g = mb.addGlobal(refNull(b.tVT), true, init);
+        if (fromData) vts.push({ g, words: w });
+        mb.export(id + ":vt", "global", g);
       }
-      const literal = (c: Code, v: string) => {
-        if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
-        c.anyConvertExtern().i32(this.synthSlot("strLit", rtfns.get("strLit")!)).callIndirect(mb.addFuncType([T.anyref], [T.anyref]));
-      };
-      const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
-      const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
-      const words = rts.map(({ name, id }) => name[0] === "[" || !this.prog.get(name)?.isInterface ? this.vtWords(name, id) : undefined);
-      // The engine evaluates a constant initializer's operands one by one at instantiation, and admits at most 10,000 in array.new_fixed. A module with
-      // many vtables makes them in its start function from one data segment instead, which costs a function to compile.
-      const total = words.reduce((n, w) => n + (w?.length ?? 0), 0), fromData = total > VT_DATA_WORDS || words.some((w) => w && w.length > 10_000);
-      const vts: { g: number; words: Int32Array }[] = [];
-      for (const [i, rt] of rts.entries()) {
-        const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [], w = words[i];
-        if (w) {
-          const init = fromData ? nullInit(b.tVT) : [];
-          if (!fromData) { for (const x of w) { init.push(0x41); sleb(x, init); } init.push(0xfb, 0x08); uleb(b.tVT, init); uleb(w.length, init); }
-          const g = mb.addGlobal(refNull(b.tVT), true, init);
-          if (fromData) vts.push({ g, words: w });
-          mb.export(id + ":vt", "global", g);
-        }
-        // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
-        const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
-        mb.export(id + ":init", "global", initG);
-        const statics = new Map<FieldInfo, number>();
-        for (const f of jc?.fields ?? []) if (f.isStatic) {
-          const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
-        }
-        if (lean) continue;
-        const stubs = methods.map((m, i) => {
-          const { params, ret } = this.methodKinds(m);
-          const vt = params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vt, ret === "V" ? [] : [kindVT(b.tObj, ret)]);
-          return mb.addFunc(sig, this.stubBody(slotBase + i, sig, vt, link));
-        });
-        if (initialize) {
-          const c = new Code(0);
-          this.emitEnsure({ mb, b, initG, sid, iw, tag, statics: (f) => statics.get(f)!, literal }, jc!, rt, c);
-          stubs.push(mb.addFunc(mb.addFuncType([], []), c.finish()));
-        } else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
-        if (stubs.length) mb.addElemActive(0, slotBase, stubs);
+      // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
+      const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
+      mb.export(id + ":init", "global", initG);
+      const statics = new Map<FieldInfo, number>();
+      for (const f of jc?.fields ?? []) if (f.isStatic) {
+        const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
       }
-      if (vts.length) {
-        const all = new Int32Array(total), c = new Code(0);
-        let at = 0;
-        for (const v of vts) { all.set(v.words, at); at += v.words.length; }
-        const seg = mb.addDataPassive(new Uint8Array(all.buffer));
-        at = 0;
-        for (const v of vts) { c.i32(4 * at).i32(v.words.length).arrayNewData(b.tVT, seg).gset(v.g); at += v.words.length; }
-        mb.start = mb.addFunc(mb.addFuncType([], []), c.finish(), "$vt");
-      }
-      return mb.build();
-    } finally { endCompile(span); }
+      if (lean) continue;
+      const stubs = methods.map((m, i) => {
+        const { params, ret } = this.methodKinds(m);
+        const vt = params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vt, ret === "V" ? [] : [kindVT(b.tObj, ret)]);
+        return mb.addFunc(sig, this.stubBody(slotBase + i, sig, vt, link));
+      });
+      if (initialize) {
+        const c = new Code(0);
+        this.emitEnsure({ mb, b, initG, sid, iw, tag, statics: (f) => statics.get(f)!, literal }, jc!, rt, c);
+        stubs.push(mb.addFunc(mb.addFuncType([], []), c.finish()));
+      } else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
+      if (stubs.length) mb.addElemActive(0, slotBase, stubs);
+    }
+    if (vts.length) {
+      const all = new Int32Array(total), c = new Code(0);
+      let at = 0;
+      for (const v of vts) { all.set(v.words, at); at += v.words.length; }
+      const seg = mb.addDataPassive(new Uint8Array(all.buffer));
+      at = 0;
+      for (const v of vts) { c.i32(4 * at).i32(v.words.length).arrayNewData(b.tVT, seg).gset(v.g); at += v.words.length; }
+      mb.start = mb.addFunc(mb.addFuncType([], []), c.finish(), "$vt");
+    }
+    return mb.build();
   }
   /** the kinds of the parameters (the receiver first) and result of `m` */
   private methodKinds(m: MethodInfo): { params: Kind[]; ret: Kind | "V" } {

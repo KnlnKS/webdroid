@@ -1,4 +1,3 @@
-import { beginCompile, endCompile } from "./compiler-observer";
 import type { CodeItem } from "./dex";
 import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes";
 
@@ -146,26 +145,23 @@ export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readon
   }
 }
 export function prepareMethod(code: CodeItem): PreparedMethod {
-  const span = beginCompile("wasm.prepare");
-  try {
-    const instructions = decodeInstructions(code.insns);
-    const leaders = new Uint8Array(code.insns.length + 1);
-    leaders[0] = 1;
-    let end = 0;
-    for (const instruction of instructions) {
-      // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
-      if (instruction.pc !== end) leaders[instruction.pc] = 1;
-      end = instruction.pc + instruction.len;
-      const targets = branchTargets(code, instruction);
-      for (const target of targets) leaders[target] = 1;
-      if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
-    }
-    for (const region of code.tries) {
-      leaders[region.start] = 1;
-      leaders[region.end] = 1;
-      for (const [, address] of region.handlers) leaders[address] = 1;
-      if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
-    }
-    return { instructions, leaders };
-  } finally { endCompile(span); }
+  const instructions = decodeInstructions(code.insns);
+  const leaders = new Uint8Array(code.insns.length + 1);
+  leaders[0] = 1;
+  let end = 0;
+  for (const instruction of instructions) {
+    // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
+    if (instruction.pc !== end) leaders[instruction.pc] = 1;
+    end = instruction.pc + instruction.len;
+    const targets = branchTargets(code, instruction);
+    for (const target of targets) leaders[target] = 1;
+    if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
+  }
+  for (const region of code.tries) {
+    leaders[region.start] = 1;
+    leaders[region.end] = 1;
+    for (const [, address] of region.handlers) leaders[address] = 1;
+    if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
+  }
+  return { instructions, leaders };
 }

@@ -1,4 +1,3 @@
-import { compilerElapsedWindow } from "./compiler-receipts";
 import { COMPILE_COUNTERS } from "../../src/shell/perf-receipts";
 
 export type Region = [number, number, number, number];
@@ -92,6 +91,6 @@ export function compileDeltas(allBefore: any[], allAfter: any[], window?: { orig
     limitation: "completed job/build receipts only; queue, in-flight CPU and compiler clock coverage unavailable" }));
   return { rows, totals, failures, mainRealmCoverage: !failures.length && before.length > 0 && after.length > 0,
     compilerWorkerCoverage: partialCompilerWorkers.length === 0 ? "no compiler receipt observed; target absence not proved" : "partial",
-    partialCompilerWorkers, synchronousElapsed: compilerElapsedWindow(before, after, { start, end }), completeCompileWindow: false,
+    partialCompilerWorkers, completeCompileWindow: false,
     limitation: "main-realm counter deltas and completed-worker receipts are separate; no total compiler CPU or 30% reduction claim" };
 }

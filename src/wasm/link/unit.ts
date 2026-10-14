@@ -1,4 +1,3 @@
-import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // The second tier compiled for another World: a compile worker holds a World over the same Program and the same numbering, built from a copy of the dex files, and compiles what
 // the World it works for asks (World.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
@@ -73,8 +72,7 @@ export class UnitCompiler {
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
     const touch = w.endTouch();
     let module: WebAssembly.Module;
-    const span = beginCompile("wasm.module");
-    try { module = compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; } finally { endCompile(span); }
+    try { module = compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; }
     return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), module,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
   }
