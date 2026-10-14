@@ -18,7 +18,6 @@ const kc = (c: string) => (c === "L" || c === "[" ? R : c === "J" ? J : c === "D
 
 interface Eff { u: number[]; d: number; dm: number; link: number }
 const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0 };
-const NO_USES = new Int32Array(0);
 
 /** The webs of one method: nodes are definitions (parameters included), unioned at joins where the register is live. */
 interface WebAnalysis {
@@ -30,7 +29,9 @@ interface WebAnalysis {
   find(node: number): number;
   /** the node defined by instruction i (-1: none); the nodes its operands read, aligned with the register/mask pairs of its effect */
   defNode: Int32Array;
-  useNode: Int32Array[];
+  /** the node each instruction reads each operand through, at `useAt[i] + slot`; -1 for none */
+  useNode: Int32Array;
+  useAt: Int32Array;
   useSlot(i: number, reg: number): number;
   /** the node of each parameter register at entry (-1: not a parameter) */
   paramNode: Int32Array;
@@ -46,7 +47,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   const R_ = code.regs;
   const ins = instrs ?? decodeInstructions(code.insns);
   if (!ins.length) return "empty";
-  if (ins.some((x) => x.op >= 0xe3 && x.op <= 0xf2)) return "quickened";
+  for (const x of ins) if (x.op >= 0xe3 && x.op <= 0xf2) return "quickened";
   const cfg = buildCfg(code, ins);
   const n = ins.length;
   if (cfg.n * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
@@ -112,7 +113,9 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   const defNode = new Int32Array(n).fill(-1);
   const links: number[] = [], linked = new Uint8Array(n);
   const reached = new Uint8Array(n);
-  const useNode: Int32Array[] = new Array(n).fill(NO_USES);
+  const useAt = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) useAt[i + 1] = useAt[i] + (effs[i].u.length >> 1);
+  const useNode = new Int32Array(useAt[n]).fill(-1);
   /** the operand slot through which instruction i reads `reg`, -1 if it does not */
   const useSlot = (i: number, reg: number) => { const u = effs[i].u; for (let k = 0; k < u.length; k += 2) if (u[k] === reg) return k >> 1; return -1; };
 
@@ -163,8 +166,8 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
       const hs = handlerOfIdx[i];
       if (hs && !NO_THROW[x.op]) for (const h of hs) joinInto(h, st);
       if (e.u.length) {
-        const un = useNode[i] === NO_USES ? (useNode[i] = new Int32Array(e.u.length >> 1)) : useNode[i];
-        for (let k = 0; k < e.u.length; k += 2) if (e.u[k] < R_) { cst(e.u[k], e.u[k + 1], st); un[k >> 1] = st[e.u[k]]; } else un[k >> 1] = -1;
+        const at = useAt[i];
+        for (let k = 0; k < e.u.length; k += 2) if (e.u[k] < R_) { cst(e.u[k], e.u[k + 1], st); useNode[at + (k >> 1)] = st[e.u[k]]; }
       }
       if (e.link === 2 && !linked[i]) {
         const a = st[e.u[0]], c = st[e.u[2]];
@@ -191,7 +194,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
         // EH observes the pre-state even when the normal result overwrites a register.
         const hs = handlerOfIdx[i];
         if (hs && !NO_THROW[ins[i].op]) for (const h of hs) for (const r of liveList[h]) touch(st[r], i);
-        for (const node of useNode[i]) touch(node, i);
+        for (let k = useAt[i]; k < useAt[i + 1]; k++) touch(useNode[k], i);
         const e = effs[i];
         if (e.d >= 0 && e.d < R_) {
           touch(defNode[i], i); st[e.d] = defNode[i];
@@ -201,7 +204,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
       for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
     }
   };
-  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useSlot, paramNode, links, reached, ranges };
+  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -258,7 +261,7 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
       return { start, end };
     },
     reached(pc) { return !!a.reached[idxOfPc[pc]]; },
-    use(pc, reg) { const i = idxOfPc[pc], k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
+    use(pc, reg) { const i = idxOfPc[pc], k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[a.useAt[i] + k]); },
     def(pc) { return web(a.defNode[idxOfPc[pc]]); },
     param(reg) { return web(a.paramNode[reg]); },
   };

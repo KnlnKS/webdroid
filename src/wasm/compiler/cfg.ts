@@ -1,4 +1,4 @@
-// Basic blocks, exception edges and a standard reducibility test for one method body.
+// Basic blocks and exception edges for one method body.
 import type { CodeItem } from "../../jvm/dex";
 import { NO_THROW } from "./opinfo";
 import { branchTargets, endsBlock, type PreparedInstruction } from "../../jvm/prepared";
@@ -11,11 +11,11 @@ interface Cfg {
   blockOfIdx: Int32Array;
   succ: number[][];
   /** handler blocks reachable from any throwing instruction in the block */
-  hsucc: number[][];
-  /** every handler entry block */
-  handlers: number[];
+  hsucc: (readonly number[])[];
   pcToIdx: Int32Array;
 }
+
+const NO_HANDLERS: readonly number[] = [];
 
 export function buildCfg(code: CodeItem, ins: readonly PreparedInstruction[]): Cfg {
   const pcToIdx = new Int32Array(code.insns.length + 1).fill(-1);
@@ -41,28 +41,26 @@ export function buildCfg(code: CodeItem, ins: readonly PreparedInstruction[]): C
     blockOfIdx[i] = first.length - 1;
   }
   const n = first.length;
-  const succ: number[][] = [], hsucc: number[][] = Array.from({ length: n }, () => []);
+  const succ: number[][] = new Array(n), hsucc: (readonly number[])[] = new Array(n).fill(NO_HANDLERS);
   for (let b = 0; b < n; b++) {
     const x = ins[last[b]], out: number[] = [];
     for (const pc of branchTargets(code, x)) { const i = pcToIdx[pc]; if (i >= 0) out.push(blockOfIdx[i]); }
     if (!endsBlock(x.op) && last[b] + 1 < ins.length) out.push(b + 1);
-    succ.push([...new Set(out)]);
+    succ[b] = out.length < 2 ? out : out.filter((s, k) => out.indexOf(s) === k);
   }
-  const hset = new Set<number>();
   for (const r of code.tries) {
     const hs: number[] = [];
     for (const [, h] of r.handlers) hs.push(blockOfIdx[pcToIdx[h]]);
     if (r.catchAllAddr >= 0) hs.push(blockOfIdx[pcToIdx[r.catchAllAddr]]);
-    for (const h of hs) hset.add(h);
     // blocks overlapping [start,end)
     for (let i = Math.max(0, pcToIdx[r.start]); i < ins.length; i++) {
       const pc = ins[i].pc;
       if (pc < r.start) continue;
       if (pc >= r.end) break;
       if (NO_THROW[ins[i].op]) continue;
-      const b = blockOfIdx[i];
-      for (const h of hs) if (!hsucc[b].includes(h)) hsucc[b].push(h);
+      const b = blockOfIdx[i], at = hsucc[b] === NO_HANDLERS ? (hsucc[b] = []) : hsucc[b] as number[];
+      for (const h of hs) if (!at.includes(h)) at.push(h);
     }
   }
-  return { n, firstIdx: Int32Array.from(first), lastIdx: Int32Array.from(last), blockOfIdx, succ, hsucc, handlers: [...hset], pcToIdx };
+  return { n, firstIdx: new Int32Array(first), lastIdx: new Int32Array(last), blockOfIdx, succ, hsucc, pcToIdx };
 }
