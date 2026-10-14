@@ -128,21 +128,24 @@ export function decodeAndroidPacked(name: string, bytes: Uint8Array, rela: boole
   }
 }
 
+/** RELR's pointer-aligned offsets, read as 32-bit words: a 64-bit entry's high word holds bitmap bits 32 to 63 */
 export function decodeRelr(name: string, bytes: Uint8Array, ptr: 4 | 8, visit: (off: number) => void): void {
   if (bytes.length % ptr) throw new Error(`${name}: invalid RELR size`);
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let next = -1;
   for (let at = 0; at < bytes.length; at += ptr) {
-    const entry = ptr === 8 ? dv.getBigUint64(at, true) : BigInt(dv.getUint32(at, true));
-    if (!(entry & 1n)) {
-      const off = Number(entry);
-      if (!Number.isSafeInteger(off)) throw new Error(`${name}: RELR offset is out of range`);
+    const lo = dv.getUint32(at, true), hi = ptr === 8 ? dv.getUint32(at + 4, true) : 0;
+    if (!(lo & 1)) {
+      if (hi >= 0x200000) throw new Error(`${name}: RELR offset is out of range`);
+      if (lo & (ptr - 1)) throw new Error(`${name}: RELR offset is misaligned`);
+      const off = hi * 2 ** 32 + lo;
       visit(off);
       next = off + ptr;
       continue;
     }
     if (next < 0) throw new Error(`${name}: RELR bitmap precedes an address`);
-    for (let bit = 1; bit < ptr * 8; bit++) if (entry & 1n << BigInt(bit)) visit(next + (bit - 1) * ptr);
+    for (let word = lo >>> 1, i = 0; word; word >>>= 1, i++) if (word & 1) visit(next + i * ptr);
+    for (let word = hi, i = 31; word; word >>>= 1, i++) if (word & 1) visit(next + i * ptr);
     next += (ptr * 8 - 1) * ptr;
   }
 }
@@ -341,9 +344,9 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     if (relr + relrSz > hi) throw new Error(`${name}: RELR table is out of bounds`);
     decodeRelr(name, mem.u8.subarray(base + relr, base + relr + relrSz), f.ptr, (off) => {
       if (off < lo || off + f.ptr > hi) throw new Error(`${name}: RELR target is out of bounds`);
-      const at = base + off;
-      if (f.ptr === 8) mem.st64(at, mem.ld64(at) + BigInt(base));
-      else mem.u32[at >>> 2] = (mem.u32[at >>> 2] + base) >>> 0;
+      const at = (base + off) >>> 2, sum = mem.u32[at] + base;
+      mem.u32[at] = sum;
+      if (f.ptr === 8 && sum > 0xffffffff) mem.u32[at + 1]++;
     });
   }
   if (rel) apply(rel, relsz);

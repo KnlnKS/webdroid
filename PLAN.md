@@ -112,9 +112,8 @@ Unranked; each needs a measurement or a check against the current code before wo
   rangeless client-array indexed draws read the element buffer back.
 - **ARM JIT:** ARM32 regions load and spill all 15 GPRs, and A64 regions end at 4 KiB pages, so a call or return to
   another page spills and reloads. Precise ARM32 register sets and multi-page regions would help CPU-bound games.
-- **Native:** RELR relocation uses BigInt (21–30 ms for 600k relocations against about 3 ms with u32 pairs);
-  `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a writable
-  `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
+- **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
+  writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
