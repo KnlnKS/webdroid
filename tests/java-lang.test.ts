@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { readFileSync } from "node:fs";
-import { jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
+import { jarray, longBitsToDouble } from "../src/jvm/abi";
 import { DexFile } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
 import { JObj, rt } from "../src/jvm/runtime";
@@ -29,7 +29,7 @@ describe("strict-math", () => {
   ];
   test("StrictMath's natives are fdlibm's, bit for bit", async () => {
     const bits = (hex: string) => longBitsToDouble(BigInt.asIntN(64, BigInt("0x" + hex)));
-    const hex = (v: number) => BigInt.asUintN(64, doubleToLongBits(v)).toString(16);
+    const hex = (v: number) => new BigUint64Array(new Float64Array([v]).buffer)[0].toString(16);
     const one = ["sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "log1p", "expm1", "cbrt", "sinh", "cosh", "tanh"];
     const two = ["atan2", "hypot", "pow", "IEEEremainder"];
     for (const row of VECTORS) {

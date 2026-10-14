@@ -4,7 +4,7 @@ import { TV } from "../src/android/axml";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
-import { NativeLooper, onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
+import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { UNAME } from "../src/shell/device-properties";
@@ -108,7 +108,7 @@ describe("looper", () => {
     expect(tid).not.toBe(await scall("android/os/Process", "myTid", "()I"));
     expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
     const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await vcall(thread, "getLooper", "()Landroid/os/Looper;"));
-    const ran = new Promise<unknown>((resolve) => postTo(handler, async () => resolve(await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"))));
+    const ran = new Promise<unknown>((resolve) => postRunnable(fnRunnable(async () => resolve(await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"))), 0, handler));
     expect(await ran).toBe(thread);
     expect(await vcall(thread, "quit", "()Z")).toBe(1);
     await vcall(thread, "join", "()V");

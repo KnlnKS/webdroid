@@ -7,7 +7,6 @@ import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
-import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
 import { centralDir, zipTree } from "../src/jvm/natives/jzip";
@@ -645,7 +644,7 @@ describe("service-bind", () => {
 describe("window-context", () => {
 
   test("display and window contexts retain display identity and own their window service", async () => {
-    const source = await app(), screen = await defaultDisplay();
+    const source = await app(), screen = await vcall(await scall("android/hardware/display/DisplayManagerGlobal", "getInstance", "()Landroid/hardware/display/DisplayManagerGlobal;"), "getRealDisplay", "(I)Landroid/view/Display;", 0);
     const displayContext = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", screen);
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
     expect(await vcall(displayContext, "isUiContext", "()Z")).toBe(0);

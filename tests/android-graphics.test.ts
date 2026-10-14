@@ -1,7 +1,7 @@
 import { expect, test, afterAll, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { matrixColor, edges } from "../src/android/graphics";
-import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android/paint";
+import { NativePaint, newPaint, paintOf } from "../src/android/paint";
 import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
@@ -120,7 +120,7 @@ describe("font-metrics", () => {
     const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
     const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", "(Landroid/graphics/fonts/Font;)V", font), "build", "()Landroid/graphics/fonts/FontFamily;");
     const paint = await newPaint("android/text/TextPaint");
-    await setPaintTypeface(paint, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
+    await vcall(paint, "setTypeface", `(L${TF};)L${TF};`, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
     paintOf(paint).textSize = 68;
     expect(await vcall(paint, "ascent", "()F")).toBeCloseTo(-63.08594, 4);
     expect(metrics(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt")).toEqual([-73, -63, 17, 19, 0]);

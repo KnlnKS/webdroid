@@ -3,7 +3,7 @@ import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
+import { newPaint, paintOf } from "../src/android/paint";
 import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import type { TextStyle } from "../src/android/minikin";
@@ -134,9 +134,9 @@ describe("text-appearance-span", () => {
     const color = await valueOf(0xff123456), link = await valueOf(0xffabcdef);
     const span = await newObj("android/text/style/TextAppearanceSpan", "(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V", null, 1, 28, color, link);
     const paint = await newPaint("android/text/TextPaint");
-    await setPaintTypeface(paint, await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2));
+    await vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2));
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(await vcall(paintTypeface(paint), "getStyle", "()I")).toBe(3);
+    expect(await vcall(vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;"), "getStyle", "()I")).toBe(3);
     expect(paintOf(paint).textSize).toBe(28);
     expect(await vcall(paint, "getColor", "()I")).not.toBe(0xff123456 | 0);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
@@ -173,7 +173,7 @@ describe("text-platform", () => {
 
     const paint = await newPaint("android/text/TextPaint");
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paintTypeface(paint)).toBe(typeface);
+    expect(vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;")).toBe(typeface);
   });
 });
 

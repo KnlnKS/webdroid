@@ -4,7 +4,7 @@
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
-import { after, newObj, scall, vcall, staticField } from "../jvm/natives/jentry";
+import { newObj, scall, vcall, staticField } from "../jvm/natives/jentry";
 import { hostStub, binderEscape } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
 import { nativeParcel, readInt, writeInt } from "./parcel";
@@ -100,7 +100,3 @@ rt.register({ name: "webdroid/DisplayManagerService", ctor: class extends JObj {
   ...noops("disableConnectedDisplay(I)V"),
 } });
 hostStub("display", "webdroid/DisplayManagerService");
-
-/** the app's view of display 0, as ContextImpl.getDisplay gives it */
-export const defaultDisplay = (): JObj | Promise<JObj> => after(scall("android/hardware/display/DisplayManagerGlobal", "getInstance", "()Landroid/hardware/display/DisplayManagerGlobal;"),
-  (global) => vcall(global, "getRealDisplay", "(I)Landroid/view/Display;", 0));

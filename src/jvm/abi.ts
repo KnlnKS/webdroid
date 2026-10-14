@@ -220,7 +220,6 @@ export function jmethod(o: unknown, mangled: string): JMethod | undefined {
 const bits = new DataView(new ArrayBuffer(8));
 export function intBitsToFloat(i: number): number { bits.setInt32(0, i | 0); return bits.getFloat32(0); }
 export function longBitsToDouble(l: bigint): number { bits.setBigInt64(0, l); return bits.getFloat64(0); }
-export function doubleToLongBits(d: number): bigint { bits.setFloat64(0, d); return bits.getBigInt64(0); }
 
 /** VarHandle access modes by how many value operands follow the coordinates */
 const VARHANDLE_VALUES = new Map<string, number>();

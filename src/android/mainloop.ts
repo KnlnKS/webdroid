@@ -8,7 +8,7 @@
 // vsync a device delivers as native callbacks.
 import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
 import { curThread, mainThread, scall, newObj, vcall, callOn, classNameOf, initClass, linkClass, type JThread } from "../jvm/natives/jentry";
-import { dispatchUncaught, detached, toThread, type Escape } from "../jvm/natives/jthrowable";
+import { dispatchUncaught, toThread, type Escape } from "../jvm/natives/jthrowable";
 import { processExited } from "../process-exit";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
@@ -155,12 +155,6 @@ export function postMain(job: () => unknown, escape: Escape = toThread(mainThrea
 /** Handler.postDelayed(r, delay ms) on the main handler unless another is named */
 export const postRunnable = (r: unknown, delay = 0, handler = mainHandler()): unknown =>
   vcall(handler, "postDelayed", "(Ljava/lang/Runnable;J)Z", r, BigInt(Math.max(0, Math.ceil(delay))));
-/** post `fn` to a Handler as a Runnable */
-export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable {
-  const r = fnRunnable(fn);
-  detached(() => postRunnable(r, delay, handler));
-  return r;
-}
 
 /** debug: the main queue's pending messages and the looper's wait state (wd.looperDump) */
 export const looperDump = (): unknown => callOn(mainThread, () => rt.drive(function* (): Gen<unknown> {

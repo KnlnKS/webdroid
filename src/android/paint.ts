@@ -4,7 +4,7 @@
 
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
+import { after, newObj } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
@@ -154,10 +154,6 @@ const TEXT_PAINT = "android/text/TextPaint";
 export const newPaint = async (cls: typeof PAINT | typeof TEXT_PAINT = PAINT): Promise<JObj> => await newObj(cls, "(I)V", AA) as JObj;
 /** ZygoteInit.preloadClasses' share: Paint, TextPaint and what their constructors reach */
 export const preloadPaint = (): unknown => newObj(TEXT_PAINT, "(I)V", AA);
-const TF = "Landroid/graphics/Typeface;";
-/** Paint.getTypeface and setTypeface: the Java paint keeps the Typeface, its native paint the face */
-export const paintTypeface = (p: object) => vcall(p, "getTypeface", `()${TF}`) as object | null;
-export const setPaintTypeface = (p: object, tf: object | null): unknown => vcall(p, "setTypeface", `(${TF})${TF}`, tf);
 
 // ── text metrics
 /** Paint's metrics are its primary font's (hhea ascent/descent, head bounds), fractional */
