@@ -176,7 +176,13 @@ export function packModule(header: object, wasm: Uint8Array, traces?: { slot: nu
   return out;
 }
 const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new Uint8Array(WebAssembly.Module.customSections(m, name)[0]);
-const header = <H>(m: WebAssembly.Module): H => JSON.parse(new TextDecoder().decode(customSection(m, "aot"))) as H;
+/** a module's header, parsed once: linking asks a code module's on every lazy link until the module loads */
+const headers = new WeakMap<WebAssembly.Module, unknown>();
+const header = <H>(m: WebAssembly.Module): H => {
+  let h = headers.get(m);
+  if (h === undefined) headers.set(m, h = JSON.parse(new TextDecoder().decode(customSection(m, "aot"))));
+  return h as H;
+};
 function unleb(b: Uint8Array, at: number[]): number { let n = 0, s = 1; for (;;) { const x = b[at[0]++]; n += (x & 127) * s; if (x < 128) return n; s *= 128; } }
 
 const LIVE = 1, DEAD = 2, LOADING = 3;
