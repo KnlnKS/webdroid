@@ -8,7 +8,6 @@ import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { decodeInstruction, type PreparedInstruction } from "../../jvm/prepared";
 import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
 import { compileSymbolicSite } from "../compiler/symbolic";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
@@ -31,7 +30,8 @@ import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Loo
 import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
-import { branchTargets, decodeInstructions } from "../../jvm/prepared";
+import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
+import { insnLen } from "../../jvm/opcodes";
 import { parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
@@ -1003,7 +1003,7 @@ export class World {
     for (let i = 0; i < out.length && out.length < BATCH; i++) {
       const c = out[i];
       if (!c.codeOff || this.intrinsic(c)) continue;
-      for (const ins of this.planning(c).entry) {
+      for (const ins of this.entryCalls(c)) {
         if (out.length >= BATCH) break;
         if (needsSymbolicSite(this, c, ins)) continue;
         const mr = c.dex.method(ins.b), t = this.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
@@ -1513,27 +1513,42 @@ export class World {
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
-  /** a method's call sites, its static and direct calls that every run makes (before its first branch), and the classes it allocates and refers to */
-  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; entry: PreparedInstruction[]; allocations: string[]; references: string[] }>();
+  /** a method's call sites, and the classes it allocates and refers to */
+  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
   private planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [], entry: PreparedInstruction[] = [];
-      let branched = false;
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
         if (name) references.add(name);
         if (ins.op === 0x22) allocations.add(m.dex.typeName(ins.b));
-        // return, throw, goto, switch and if
-        branched ||= ins.op >= 0x0e && ins.op <= 0x11 || ins.op >= 0x27 && ins.op <= 0x2c || ins.op >= 0x32 && ins.op <= 0x3d;
         if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
-        if (!branched && (ins.op === 0x70 || ins.op === 0x71 || ins.op === 0x76 || ins.op === 0x77)) entry.push(ins);
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
-      this.planningSites.set(m, sites = { calls, entry, allocations: [...allocations], references: [...references] });
+      this.planningSites.set(m, sites = { calls, allocations: [...allocations], references: [...references] });
     }
     return sites;
+  }
+  /** a method's static and direct calls before its first branch (return, throw, goto, switch or if), which every run makes: only that much is decoded */
+  private entrySites = new Map<MethodInfo, PreparedInstruction[]>();
+  private entryCalls(m: MethodInfo): PreparedInstruction[] {
+    let entry = this.entrySites.get(m);
+    if (!entry) {
+      const insns = m.dex.code(m.codeOff).insns;
+      entry = [];
+      for (let pc = 0; pc < insns.length;) {
+        const op = insns[pc] & 0xff;
+        if (!op && insns[pc] >> 8) { pc += insnLen(insns, pc); continue; }
+        if (op >= 0x0e && op <= 0x11 || op >= 0x27 && op <= 0x2c || op >= 0x32 && op <= 0x3d) break;
+        const ins = decodeInstruction(insns, pc);
+        if (op === 0x70 || op === 0x71 || op === 0x76 || op === 0x77) entry.push(ins);
+        pc += ins.len;
+      }
+      this.entrySites.set(m, entry);
+    }
+    return entry;
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }
