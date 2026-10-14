@@ -5,6 +5,7 @@ import type { BrokerCalls } from "./processes";
 /** The Worker attached its clock and loaded natives before this bootstrap arrived. */
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {
   let closeDisplay = () => {}, closeIme = () => {}, closeWeb = () => {};
+  const release = () => { closeWeb(); closeIme(); closeDisplay(); guestClockControl.dispose(); };
   try {
     const { setProcessIdentity, setProcessName } = await import("../android/os");
     setProcessIdentity(data.pid, data.uid);
@@ -26,12 +27,10 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     closeWeb = () => { useWebSurfaces(null); surfaces.close(); };
     const { onProcessExit } = await import("../process-exit");
     // AppExitInfoTracker publishes the real record first, then these received owners close.
-    onProcessExit(() => { closeWeb(); closeIme(); closeDisplay(); guestClockControl.dispose(); closeProcessBrokerPort(); closeProcessBootstrap(data); });
+    onProcessExit(() => { release(); closeProcessBrokerPort(); closeProcessBootstrap(data); });
     return broker;
   } catch (error) {
-    closeWeb(); closeIme(); closeDisplay();
-    guestClockControl.dispose();
-    closeProcessBootstrap(data);
+    release(); closeProcessBootstrap(data);
     throw error;
   }
 }

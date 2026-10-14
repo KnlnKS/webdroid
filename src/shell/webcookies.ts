@@ -14,8 +14,8 @@ export class WebCookies {
     this.key = KEY + pkg;
     try { const saved = localStorage.getItem(this.key); if (saved) this.jar = CookieJar.deserializeSync(saved); } catch {}
   }
-  get(url: string, http = true): string {
-    try { return this.jar.getCookieStringSync(url, { http }); } catch { return ""; }
+  get(url: string): string {
+    try { return this.jar.getCookieStringSync(url, { http: true }); } catch { return ""; }
   }
   set(url: string, value: string, http = true): boolean {
     if (!this.accept) return false;

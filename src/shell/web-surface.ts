@@ -14,7 +14,10 @@ export interface WebSurface {
   replace(frame: FrameIdentity, url: string): void;
   remove(): void;
 }
-export function frameInside(win: Window, main: Window): boolean {
+/** whether `win` is the surface's main frame or one nested in it */
+function owned(win: Window, main: Window | null): main is Window {
+  if (!main) return false;
+  if (win === main) return true;
   for (let w = win, depth = 0; w !== w.parent && depth < 32; w = w.parent, depth++) if (w.parent === main) return true;
   return false;
 }
@@ -31,7 +34,7 @@ export function domWebSurface(layer: HTMLElement): WebSurface {
     ready(bridge, callback) {
       const end = onRendererReady(bridge, (event, win) => {
         const main = el.contentWindow;
-        if (main && (win === main || frameInside(win, main))) callback({data:event.data,origin:event.origin,frame:win,main:win === main});
+        if (owned(win, main)) callback({data:event.data,origin:event.origin,frame:win,main:win === main});
       });
       const close = () => { end(); watches.delete(close); };
       watches.add(close); return close;
@@ -39,12 +42,12 @@ export function domWebSurface(layer: HTMLElement): WebSurface {
     open(frame, origin, bridge, task, port) {
       if (typeof frame === "string") { port.close(); throw new Error("foreign renderer frame identity"); }
       const main = el.contentWindow;
-      if (!main || frame !== main && !frameInside(frame, main)) { port.close(); return; }
+      if (!owned(frame, main)) { port.close(); return; }
       openRenderer(frame, origin, bridge, task, port);
     },
     replace(frame, url) {
       const main = el.contentWindow;
-      if (typeof frame !== "string" && main && (frame === main || frameInside(frame,main))) frame.location.replace(url);
+      if (typeof frame !== "string" && owned(frame, main)) frame.location.replace(url);
     },
     remove() { for (const close of watches) close(); el.remove(); },
   };

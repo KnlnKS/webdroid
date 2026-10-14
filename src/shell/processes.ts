@@ -336,7 +336,7 @@ export class ProcessBroker {
       try {
         spare ??= spawnProcessWorker(this.workerUrl(entry.pid, wide), entry.pid);
         entry.workerDiagnostic = {url:spare.url};
-        entry.worker = startProcessWorker(spare, canvas, () => device,
+        entry.worker = startProcessWorker(spare, canvas,
           () => this.bootstrap(entry.pid), port => this.readyPort(entry.pid, port),
           message => this.fail(entry.pid, message, NOT_CRASHED), () => entry.ime?.focus());
       } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
@@ -762,11 +762,11 @@ export class ProcessBroker {
     } catch { return false; }
   }
   /** A control reply is not evidence that the Java main queue can dispatch a job. */
-  async visibleWorkersAlive(ms = 1500): Promise<boolean | null> {
+  async visibleWorkersAlive(ms: number): Promise<boolean | null> {
     const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
     return entries.length ? (await Promise.all(entries.map(entry => this.workerAlive(entry, ms)))).every(Boolean) : null;
   }
-  async visibleWorkerProcesses(ms = 1500) {
+  async visibleWorkerProcesses(ms: number) {
     const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
     const [rows, alive] = await Promise.all([this.workerSnapshots(entries), Promise.all(entries.map(entry => this.workerAlive(entry, ms)))]);
     return rows.map((row, i) => ({...row, alive: alive[i]}));

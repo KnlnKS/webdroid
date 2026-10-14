@@ -2,7 +2,7 @@ import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from
 import { callProxy, processError, type ProcessFailure } from "./process-port";
 import type { WorkerControl } from "./worker-control";
 import { workerControlMethods } from "./worker-control-methods";
-import { attachPointerInput, type PointerGeometry } from "./pointer-input";
+import { attachPointerInput } from "./pointer-input";
 import { createGuestClockPort } from "../guest-clock";
 import { serveAot } from "../jvm/tier";
 import { sendPlatformJars } from "../android/framework";
@@ -28,15 +28,15 @@ export function spawnProcessWorker(url: string, pid: number): SpareWorker {
 }
 
 /** Page-owned Worker, input and control ports. JVM endpoint ownership passes to the broker on ready. */
-export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
-  bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void, focusInput: () => void = () => {}) {
+export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement,
+  bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void, focusInput: () => void) {
   const { worker } = spare;
   const endpoint = new MessageChannel(), control = new MessageChannel();
   let closed = false, published = false, transferred = false;
   const client = callProxy<WorkerControl>(control.port1, workerControlMethods, [], processError,
     error => { if (!closed) failed(error.message ?? "Process Worker control closed"); });
   let focusTimer: ReturnType<typeof setTimeout> | undefined;
-  const pointers = attachPointerInput(canvas, geometry, client.endpoint.pointer, () => {
+  const pointers = attachPointerInput(canvas, () => device, client.endpoint.pointer, () => {
     clearTimeout(focusTimer);
     focusTimer = setTimeout(() => { focusTimer = undefined; if (!closed) focusInput(); }, 0);
   });
