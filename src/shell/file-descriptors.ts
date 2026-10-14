@@ -1,5 +1,5 @@
 import { E } from "../native/abi";
-import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
+import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
@@ -57,7 +57,7 @@ export class FileDescriptors {
     if (!target || target.dead || right.closed) return -E.BADF;
     return this.ordered(right.file,()=>{
       if (right.closed || target.dead) return -E.BADF;
-      const token=this.put(target,javaFcntlFd(right.fd,0x406,0));
+      const token=this.put(target,javaFcntlFd(right.fd,F_DUPFD_CLOEXEC,0));
       if (token >= 0) target.descriptors.get(token)!.incoming=true;
       return token;
     });
@@ -168,7 +168,7 @@ export class FileDescriptors {
           if (mode === 1 || prot & 2 && mode !== 2) return {result:-E.ACCES};
           if (prot & ~(file.content.ashmem?.prot ?? 7)) return {result:-E.PERM};
           if (offset + length > file.content.len) return {result:-E.NOTSUP};
-          const retained = javaFcntlFd(fd,0x406,0);
+          const retained = javaFcntlFd(fd,F_DUPFD_CLOEXEC,0);
           if (retained < 0) return {result:retained};
           detachFdScope(retained);
           const token = this.next++;
@@ -195,7 +195,7 @@ export class FileDescriptors {
           reply = {result}; break;
         }
         case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat,ashmemProt:descriptor.file.content.ashmem?.prot} : {result:-E.BADF}; break; }
-        case "dup": reply = {result:this.put(session, operation.cloexec ? javaFcntlFd(fd,0x406,0) : javaDupFd(fd))}; break;
+        case "dup": reply = {result:this.put(session, operation.cloexec ? javaFcntlFd(fd,F_DUPFD_CLOEXEC,0) : javaDupFd(fd))}; break;
         case "stage": {
           const token = this.put(session,javaDupFd(fd));
           if (token >= 0) session.descriptors.get(token)!.staged = true;
@@ -224,7 +224,7 @@ export class FileDescriptors {
     return this.ordered(descriptor.file, () => {
       try {
         if (source.dead || target.dead) return -E.BADF;
-        const received = this.put(target,javaFcntlFd(descriptor.fd,0x406,0));
+        const received = this.put(target,javaFcntlFd(descriptor.fd,F_DUPFD_CLOEXEC,0));
         if (received >= 0) target.descriptors.get(received)!.incoming = true;
         return received;
       }
