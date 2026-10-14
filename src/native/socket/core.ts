@@ -157,8 +157,14 @@ export abstract class Socket {
   get messages(): boolean { return this.type !== SOCK_STREAM; }
   option(level: number, name: number, fallback = 0): number { return this.options.get(level << 16 | name) ?? fallback; }
   wake(): void { const ws = [...this.waiters]; this.waiters.clear(); for (const w of ws) w(); }
+  /** the stream whose arrivals also wake the socket's waiters */
+  protected get rx(): Stream | null { return null; }
   /** call `waiter` once something about the socket changes */
-  watch(waiter: () => void): () => void { this.waiters.add(waiter); return () => { this.waiters.delete(waiter); }; }
+  watch(waiter: () => void): () => void {
+    this.waiters.add(waiter);
+    const rx = this.rx?.subscribe(waiter);
+    return () => { this.waiters.delete(waiter); rx?.(); };
+  }
 
   abstract bind(addr: SocketAddress): number;
   /** connect(2); null is AF_UNSPEC's dissolving of a datagram socket's association */

@@ -39,12 +39,7 @@ class UnixSocket extends Socket {
   backlog: UnixSocket[] | null = null;
   constructor(type: number) { super(type, 0); this.inbox = type === SOCK_DGRAM ? new Loopback(true) : null; }
   get listening(): boolean { return !!this.backlog; }
-  private get rx(): Loopback | null { return this.conn ?? this.inbox; }
-  watch(waiter: () => void): () => void {
-    this.waiters.add(waiter);
-    const rx = this.rx?.subscribe(waiter);
-    return () => { this.waiters.delete(waiter); rx?.(); };
-  }
+  protected override get rx(): Loopback | null { return this.conn ?? this.inbox; }
   bind(addr: SocketAddress): number {
     const path = pathOf(addr);
     if (typeof path === "number") return path;

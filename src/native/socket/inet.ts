@@ -143,11 +143,7 @@ class TcpSocket extends InetSocket {
     Object.assign(s, { stream, local, peer, connected: true });
     return s;
   }
-  watch(waiter: () => void): () => void {
-    this.waiters.add(waiter);
-    const stream = this.stream?.subscribe(waiter);
-    return () => { this.waiters.delete(waiter); stream?.(); };
-  }
+  protected override get rx(): Stream | null { return this.stream; }
   listen(): number {
     if (this.connected || this.connecting) return -E.INVAL;
     const r = this.bindAny();
