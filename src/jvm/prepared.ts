@@ -236,6 +236,9 @@ function annotateConstants(dex: DexFile, code: CodeItem, signature: ReturnType<t
   for (const instruction of instructions) if (isInstanceInvoke(instruction.op) && carriers.has(instruction.regs[0])) instruction.nullRecv = true;
 }
 
+const elementKind = (type: string): FloatKind | undefined => type === "[F" ? "F" : type === "[D" ? "D" : undefined;
+const NO_ARRAYS: ArrayKinds = new Map();
+
 function typeConstants(
   dex: DexFile,
   code: CodeItem,
@@ -257,50 +260,63 @@ function typeConstants(
   }
 
   const retType = signature.ret;
+  // definitions are read only for registers read as a float or double (any aput's array taken as one), receivers, and the moves into them
+  const read = new Set<number>();
+  for (const instruction of instructions) {
+    floatReads(dex, instruction, retType, () => "F", (reg) => read.add(reg));
+    if (isInstanceInvoke(instruction.op)) read.add(instruction.regs[0]);
+  }
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const { op, a, b } of instructions) if (isMove(op) && read.has(a) && !read.has(b)) { read.add(b); grown = true; }
+  }
   let liveDefs: Defs | null = null;
   const mark = (reg: number, kind: FloatKind) => {
     const definitions = liveDefs?.get(reg);
     if (definitions) for (const write of definitions) if (!write.constKind) write.constKind = kind;
   };
+  /** runs a block from its entry state, which it copies only on its first change; the states it hands out are never changed */
   const run = (leader: number, defs: Defs, arrays: ArrayKinds, markConsumers: boolean) => {
     const block = body.get(leader);
     if (!block) throw new Error(`missing basic block ${leader}`);
-    let lastReturnType = "";
+    let lastReturnType = "", ownDefs = false, ownArrays = false;
     liveDefs = markConsumers ? defs : null;
+    const setDef = (reg: number, value: ReadonlySet<MutableInstruction> | undefined) => {
+      if (defs.get(reg) === value) return;
+      if (!ownDefs) { defs = new Map(defs); ownDefs = true; if (liveDefs) liveDefs = defs; }
+      if (value) defs.set(reg, value); else defs.delete(reg);
+    };
+    const setArray = (reg: number, kind: FloatKind | undefined) => {
+      if (arrays.get(reg) === kind) return;
+      if (!ownArrays) { arrays = new Map(arrays); ownArrays = true; }
+      if (kind) arrays.set(reg, kind); else arrays.delete(reg);
+    };
     /** what each handler sees: the state before every instruction that can throw into it, not the state at the block's end */
     const thrown: [handler: number, defs: Defs, arrays: ArrayKinds][] = [];
     for (const instruction of block) {
       const { op, a, b, c } = instruction;
       if (!markConsumers && code.tries.length && canThrow(op)) {
-        for (const handler of handlersAt(code, instruction.pc)) if (body.has(handler)) thrown.push([handler, new Map(defs), new Map(arrays)]);
+        for (const handler of handlersAt(code, instruction.pc)) if (body.has(handler)) { thrown.push([handler, defs, arrays]); ownDefs = ownArrays = false; }
       }
       if (liveDefs) {
         floatReads(dex, instruction, retType, (reg) => arrays.get(reg), mark);
         if (isInstanceInvoke(op) && liveDefs.get(instruction.regs[0])?.size) instruction.nullRecv = true;
       }
 
-      const setArrayKind = (reg: number, type: string) => {
-        if (type === "[F") arrays.set(reg, "F");
-        else if (type === "[D") arrays.set(reg, "D");
-        else arrays.delete(reg);
-      };
-      if (op === 0x23) setArrayKind(a, dex.type(c));                                    // new-array
-      else if (op === 0x1f) setArrayKind(a, dex.type(b));                               // check-cast
-      else if (op === 0x54) setArrayKind(a, dex.type(dex.field(c).type));               // iget-object
-      else if (op === 0x62) setArrayKind(a, dex.type(dex.field(b).type));               // sget-object
-      else if (op === 0x0c) setArrayKind(a, lastReturnType);                            // move-result-object
-      else if (op >= 0x07 && op <= 0x09) {                                              // move-object
-        const kind = arrays.get(b);
-        if (kind) arrays.set(a, kind); else arrays.delete(a);
-      } else if (writesRegister(op)) arrays.delete(a);
+      if (op === 0x23) setArray(a, elementKind(dex.type(c)));                                   // new-array
+      else if (op === 0x1f) setArray(a, elementKind(dex.type(b)));                              // check-cast
+      else if (op === 0x54) setArray(a, elementKind(dex.type(dex.field(c).type)));              // iget-object
+      else if (op === 0x62) setArray(a, elementKind(dex.type(dex.field(b).type)));              // sget-object
+      else if (op === 0x0c) setArray(a, elementKind(lastReturnType));                           // move-result-object
+      else if (op >= 0x07 && op <= 0x09) setArray(a, arrays.get(b));                            // move-object
+      else if (writesRegister(op)) setArray(a, undefined);
       if (isMethodInvoke(op)) lastReturnType = dex.type(dex.proto(invokeProto(dex, instruction)).ret);
       else if (op !== 0x0c) lastReturnType = "";
 
-      if (isNumericConst(op)) defs.set(a, new Set([instruction]));
-      else if (isMove(op)) {
-        const source = defs.get(b);
-        if (source) defs.set(a, source); else defs.delete(a);
-      } else if (writesRegister(op)) defs.delete(a);
+      if (!read.has(a)) continue;
+      if (isNumericConst(op)) setDef(a, new Set([instruction]));
+      else if (isMove(op)) setDef(a, defs.get(b));
+      else if (writesRegister(op)) setDef(a, undefined);
     }
     return { defs, arrays, thrown };
   };
@@ -314,7 +330,7 @@ function typeConstants(
     paramRegister += isWide(paramType) ? 2 : 1;
   }
   if (leaders.length === 1) {
-    run(leaders[0], new Map(), new Map(paramArrays), true);
+    run(leaders[0], new Map(), paramArrays, true);
     return;
   }
 
@@ -365,7 +381,7 @@ function typeConstants(
     queued.delete(leader);
     const entryDefs = inDefs.get(leader);
     if (!entryDefs) throw new Error(`missing definition state for block ${leader}`);
-    const state = run(leader, new Map(entryDefs), new Map(inArrays.get(leader) ?? []), false);
+    const state = run(leader, entryDefs, inArrays.get(leader) ?? NO_ARRAYS, false);
     const targets = successors.get(leader);
     if (!targets) throw new Error(`missing successors for block ${leader}`);
     for (const target of targets) flow(target, state.defs, state.arrays);
@@ -374,7 +390,7 @@ function typeConstants(
   for (const leader of leaders) {
     const entryDefs = inDefs.get(leader);
     if (!entryDefs) throw new Error(`missing definition state for block ${leader}`);
-    run(leader, new Map(entryDefs), new Map(inArrays.get(leader) ?? []), true);
+    run(leader, entryDefs, inArrays.get(leader) ?? NO_ARRAYS, true);
   }
 }
 
