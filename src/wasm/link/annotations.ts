@@ -11,7 +11,7 @@ import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
 import { emitRestored, type Strand } from "./sched";
-import { T } from "../compiler/wasmbin";
+import { HT, T } from "../compiler/wasmbin";
 import type { Kind } from "../compiler/program";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
@@ -174,7 +174,7 @@ const def = (key: string, f: (cx: Compiler, c: Code) => void) => annotationIntri
 function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filtered: boolean): void {
   emitRestored(cx, c, [], [T.anyref], () => {
     c.i32(kind); element(); c.i32(0);
-    if (filtered) c.lget(1).externConvertAny(); else c.refNull(-17);        // an extern null
+    if (filtered) c.lget(1).externConvertAny(); else c.refNull(HT.extern);
     c.call(cx.imp.annotation);
     const wait = cx.global("rt", "wait", T.i32, true);
     c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));

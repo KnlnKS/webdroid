@@ -9,14 +9,14 @@ import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { rt } from "../compiler/rtfns";
 import { OP } from "../compiler/code";
-import { T, type VT } from "../compiler/wasmbin";
+import { HT, T, type VT } from "../compiler/wasmbin";
 import { Monitors, St, type Header } from "./monitor";
 import { promising, suspending } from "./module";
 import type { World } from "./world";
 
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
 export const SYSTEM_LOADER = "java/lang/ClassLoader$SystemClassLoader";
-const EXTERN = -17, MILLION = 0x412e848000000000n;
+const MILLION = 0x412e848000000000n;
 /** loop iterations of one activation between two chances for another strand to run (a power of two) */
 export const FUEL = 4096;
 /** the strand id of host code that enters Java outside any strand */
@@ -30,7 +30,7 @@ export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
 /** pushes the object (or null) and the number (or 0) of a host call */
-const operands = (c: Code, obj: (() => void) | null, a: (() => void) | null) => { if (obj) { obj(); c.externConvertAny(); } else c.refNull(EXTERN); if (a) a(); else c.f64const(0n); };
+const operands = (c: Code, obj: (() => void) | null, a: (() => void) | null) => { if (obj) { obj(); c.externConvertAny(); } else c.refNull(HT.extern); if (a) a(); else c.f64const(0n); };
 /** host.sync(op, obj, a): the status */
 export function emitSync(cx: Compiler, c: Code, op: Sync, obj: (() => void) | null = null, a: (() => void) | null = null): void {
   c.i32(op); operands(c, obj, a); c.call(cx.imp.sync);

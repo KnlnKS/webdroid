@@ -3,7 +3,7 @@
 // and character access is an array access instead of a call of a wasm:js-string builtin. A native sees the JS string, made and
 // cached on first use; a JS string a native answers is copied into an array once.
 import { Code, OP } from "../compiler/code";
-import { T, ref, refNull, type VT } from "../compiler/wasmbin";
+import { HT, T, ref, refNull, type VT } from "../compiler/wasmbin";
 import { kindOf } from "../compiler/program";
 import { H } from "../compiler/consts";
 import { parseMethodDesc } from "../../jvm/abi";
@@ -12,7 +12,6 @@ import { bytesFactory } from "./strfactory";
 import { rt } from "../compiler/rtfns";
 
 /** abstract heap types as ref.test/ref.cast immediates */
-const HT = { extern: -17, any: -18, eq: -19 } as const;
 
 export interface StringRepr {
   /** imports the string builtins; before any function of the module is defined */

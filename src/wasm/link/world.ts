@@ -10,7 +10,7 @@ import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
 import { compileSymbolicSite } from "../compiler/symbolic";
-import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
+import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
@@ -705,7 +705,7 @@ export class World {
     const saved = [c.newLocal(T.i32), c.newLocal(T.anyref), c.newLocal(T.i32)];
     const restore = () => {
       state.forEach((global, i) => c.lget(saved[i]).gset(global));
-      c.i32(Sync.Resume).refNull(-17).f64const(0n).call(sync).drop();
+      c.i32(Sync.Resume).refNull(HT.extern).f64const(0n).call(sync).drop();
     };
     c.lget(0).call(due).if_();
     state.forEach((global, i) => c.gget(global).lset(saved[i]));
@@ -821,8 +821,8 @@ export class World {
         if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
           if (typeof v !== "string" || consts.has(v)) continue;
           // a constant with a lone surrogate cannot be an import name: its units come from a data segment
-          if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(-17), false));
-          else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(-17)]));
+          if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(HT.extern), false));
+          else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(HT.extern)]));
         }
       }
       const literal = (c: Code, v: string) => {

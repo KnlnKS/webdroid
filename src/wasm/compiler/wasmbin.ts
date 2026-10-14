@@ -46,6 +46,8 @@ export function name(s: string, out: number[]): void {
 /** A value type: number for plain types, or {ref: idx, nullable} */
 export type VT = number | { ht: number; nullable: boolean };
 const vtKey = (t: VT): string => (typeof t === "number" ? String(t) : (t.nullable ? "n" : "r") + t.ht);
+/** abstract heap types, as the negative type indices they encode as */
+export const HT = { extern: -17, any: -18, eq: -19 } as const;
 export const refNull = (idx: number): VT => ({ ht: idx, nullable: true });
 export const ref = (idx: number): VT => ({ ht: idx, nullable: false });
 export function vt(t: VT, out: number[]): void {

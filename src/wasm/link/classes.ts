@@ -8,7 +8,7 @@
 // Anything that needs a struct type per class (allocation by Class.newInstance, Object.clone, arrays by component class) asks the
 // host for the slot of a generated function for that class.
 import { OP } from "../compiler/code";
-import { T, refNull } from "../compiler/wasmbin";
+import { HT, T, refNull } from "../compiler/wasmbin";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts";
 import { ACC, sameRuntimePackage, javaName as stripLoader, type JClass } from "../compiler/program";
 import { rt } from "../compiler/rtfns";
@@ -164,7 +164,7 @@ rt("mkClass", ["I"], "L", (cx, c) => {
   const info = (kind: number, b?: () => void) => cx.info(c, kind, () => c.lget(0), b);
   const set = (name: string, d: string, v: () => void) => { c.lget(k); v(); c.structSet(cs, field(cx, name, d)); };
   set("accessFlags", "I", () => info(Info.Flags)); set("primitiveType", "I", () => info(Info.Primitive)); set("dexTypeIndex", "I", () => c.lget(0));
-  set("classLoader", "Ljava/lang/ClassLoader;", () => { c.i32(LOADER_OF_CLASS); c.lget(0); c.i32(0); c.refNull(-17); c.call(cx.imp.obj).anyConvertExtern(); });
+  set("classLoader", "Ljava/lang/ClassLoader;", () => { c.i32(LOADER_OF_CLASS); c.lget(0); c.i32(0); c.refNull(HT.extern); c.call(cx.imp.obj).anyConvertExtern(); });
   for (const [name, kind] of [["superClass", Info.Super], ["componentType", Info.Component]] as const) {
     info(kind).if_(); set(name, "Ljava/lang/Class;", () => { info(kind); cx.callRt(c, "classOf"); }); c.end();
   }

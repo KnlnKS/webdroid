@@ -1,6 +1,6 @@
 import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
+import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
 import { ACC, Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
@@ -245,7 +245,7 @@ export class Compiler implements Base {
     return this.global(rt.mod, rt.id + ":" + name, t, true);
   }
   /** the immutable global holding String constant `s`, which the engine fills in at instantiation (WebAssembly.Module's importedStringConstants) */
-  stringConst(s: string): number { return this.global("#", s, ref(-17), false); }
+  stringConst(s: string): number { return this.global("#", s, ref(HT.extern), false); }
   vtGlobal(cls: string): number { return this.classGlobal(cls, "vt", refNull(this.tVT)); }
   initGlobal(cls: string): number { return this.classGlobal(cls, "init", T.i32); }
   /** the global holding static field `name` of type `desc` of `owner`, which must declare it (a dex may declare one name with several types, so callers that know the type pass it) */
