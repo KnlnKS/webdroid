@@ -156,7 +156,6 @@ export class Cpu {
     this.base = core.cpu_alloc(this.tid, this.osTid, this.pid, A64 ? 1 : 0) >>> 0;
     if (!this.base) throw new NativeFault("[native] out of memory for thread state");
     this.views();
-    mem.initHooks.push(() => this.views());
     this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
     // the TLS block, errno, the pthread key table the core serves lookups from, then the
@@ -174,6 +173,8 @@ export class Cpu {
     mem.st32(this.tlsBase + (A64 ? 8 : 4), this.pthreadSelf);
     cpus.add(this);
   }
+  // a memory committed whole detached every live thread's views
+  static { mem.initHooks.push(() => { for (const c of cpus) c.views(); }); }
   private views(): void {
     const b = mem.buf, base = this.base;
     this.w = new Int32Array(b, base + OFF_X, 64);
