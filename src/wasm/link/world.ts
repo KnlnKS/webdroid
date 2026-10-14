@@ -113,9 +113,8 @@ const MEGAMORPHIC = 32;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
  *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
-/** `stands`: whether the classes added since the platform build leave it true, once a precompiled module has checked */
-/** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty); `stands` is its answer for the classes added so far, once asked */
-interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number>; stands?: boolean }
+/** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
+interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
 export class World {
   prog: Program;
@@ -200,6 +199,11 @@ export class World {
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
     const heap = opts.heapUsed, heapBase = heap(), limit = opts.heapLimit ?? HEAP_LIMIT;
     const names = (id: number) => javaName(this.names[id]);
+    // a host call whose answer is pending parks the strand, which annotationWait settles with the answer
+    const park = (value: unknown, none: null | 0): unknown => {
+      if (!(value instanceof Promise)) return value;
+      this.sched.parkNative(value); return none;
+    };
     this.host = {
       ...Object.fromEntries(Object.keys(MATH_IMPORTS).map((f) => [f, Math[f as keyof typeof MATH_IMPORTS]])),
       fmod: (a: number, b: number) => a % b,
@@ -224,18 +228,12 @@ export class World {
       },
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
-      annotation: (kind: number, a: number, b: number, filter: object | null) => {
-        const value = hostObject(this, kind, a, b, filter);
-        if (!(value instanceof Promise)) return value;
-        this.sched.parkNative(value); return null;
-      },
-      annotationWait: suspending(() => null),
+      annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(this, kind, a, b, filter), null),
       proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => {
         const value = mhInvoke(this, mh, args, site, exact);
-        if (!(value instanceof Promise)) return this.javaValue(value);
-        this.sched.parkNative(value.then(v => this.javaValue(v))); return null;
+        return park(value instanceof Promise ? value.then((v) => this.javaValue(v)) : this.javaValue(value), null);
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       gwrote: (address: number, length: number) => opts.guest!.wrote(address >>> 0, length >>> 0),
@@ -244,21 +242,10 @@ export class World {
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => {
         const text = this.hostString(name) as string;
-        const value = mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current())
-          : classByName(this, text, scope, mode);
-        if (!(value instanceof Promise)) return value;
-        this.sched.parkNative(value); return 0;
+        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode), 0);
       },
-      dexOpen: (path: unknown, loader: object | null) => {
-        const value = dexOpen(this, path, loader);
-        if (!(value instanceof Promise)) return value;
-        this.sched.parkNative(value); return null;
-      },
-      dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => {
-        const value = dexOpenMemory(this, buffers, arrays, starts, ends, loader);
-        if (!(value instanceof Promise)) return value;
-        this.sched.parkNative(value); return null;
-      },
+      dexOpen: (path: unknown, loader: object | null) => park(dexOpen(this, path, loader), null),
+      dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(this, buffers, arrays, starts, ends, loader), null),
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
         const frames = this.callerFrames(n + 2), f = frames[n + 1];
@@ -1048,7 +1035,6 @@ export class World {
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
     // else to the one that has waited longest and asked again since, so it is still hot
     const t0 = performance.now(), clock = this.unitClock();
-    this.hotSince ??= t0;
     const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
     if (!this.upgradeAllowed(t0)) { wait(); return; }
     let pick = this.outermostWaiting() ?? slot;
@@ -1912,10 +1898,7 @@ export class World {
       const narrow = !mentions(a.desc), cache = narrow ? hierarchySubtypes : changedSubtypes;
       let by = cache.get(a.decl);
       if (!by) cache.set(a.decl, by = (lateBy.get(a.decl) ?? []).filter(narrow ? hierarchy : depends));
-      if (sameTarget && samePrototype && this.holds(a, by)) {
-        delete a.stands;
-        continue;
-      }
+      if (sameTarget && samePrototype && this.holds(a, by)) continue;
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
     }

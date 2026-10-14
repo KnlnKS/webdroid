@@ -10,7 +10,7 @@ import type { EncAnnotation, EncVal } from "../../jvm/dex";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
-import { emitRestored, type Strand } from "./sched";
+import { emitRestored, emitSettled, type Strand } from "./sched";
 import { HT, T } from "../compiler/wasmbin";
 import type { Kind } from "../compiler/program";
 
@@ -176,10 +176,7 @@ function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filtered: bo
     c.i32(kind); element(); c.i32(0);
     if (filtered) c.lget(1).externConvertAny(); else c.refNull(HT.extern);
     c.call(cx.imp.annotation);
-    const wait = cx.global("rt", "wait", T.i32, true);
-    c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
-    c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
-    c.end().anyConvertExtern();
+    emitSettled(cx, c);
   });
 }
 const classId = (cx: Compiler, c: Code) => { c.lget(0); idOfClass(cx, c); };

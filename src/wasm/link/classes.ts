@@ -18,7 +18,7 @@ import type { World } from "./world";
 import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
-import { Lookup, LOADER_OF_CLASS } from "./loaders";
+import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders";
 import { emitRestored } from "./sched";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
@@ -344,11 +344,9 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  const wait = cx.global("rt", "wait", T.i32, true);
   emitRestored(cx, c, [], [T.anyref], () => {
     c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).lset(id);
-    c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
-    c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end();
+    emitClassAnswer(cx, c, id);
   });
 });
 

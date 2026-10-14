@@ -16,7 +16,7 @@ import type { MC } from "../compiler/method";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import { canAccess, constClass, typeName } from "./classes";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage";
-import { emitRestored, type Strand } from "./sched";
+import { emitRestored, emitSettled, type Strand } from "./sched";
 import type { DexFile } from "../../jvm/dex";
 import { emitVarHandleAccess } from "../compiler/poly";
 import { invokeVarHandleView } from "./vhandleviews";
@@ -191,11 +191,9 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: st
 }
 
 export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args: () => void, site: string, mode: number): void {
-  const wait = cx.global("rt", "wait", T.i32, true);
   emitRestored(cx, c, [], [T.anyref], () => {
     handle(); c.externConvertAny(); args(); c.externConvertAny().gget(cx.stringConst(site)).i32(mode).call(cx.imp.mhInvoke);
-    c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
-    c.drop().i32(0).gset(wait).call(cx.imp.annotationWait); c.end().anyConvertExtern();
+    emitSettled(cx, c);
   });
 }
 

@@ -54,6 +54,13 @@ export function emitSave(cx: Compiler, c: Code): () => void {
   c.gget(sid).lset(s).gget(thr).lset(t).gget(depth).lset(d);
   return () => { c.lget(s).gset(sid).lget(t).gset(thr).lget(d).gset(depth); emitSync(cx, c, Sync.Resume); c.drop(); };
 }
+/** after a host import that answers an externref, or parks the strand (Sched.parkNative) and answers nothing: the answer, settled if it parked, as an anyref */
+export function emitSettled(cx: Compiler, c: Code): void {
+  const wait = cx.global("rt", "wait", T.i32, true);
+  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
+  c.end().anyConvertExtern();
+}
 /** JS Promise reactions can idle another strand before the engine resumes this catch. */
 export function emitRestored(cx: Compiler, c: Code, params: VT[], results: VT[], call: () => void, restore = emitSave(cx, c)): void {
   const run = cx.mb.addFuncType(params, results), thrown = cx.mb.addFuncType(params, [T.exnref]);
