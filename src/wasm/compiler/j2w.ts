@@ -98,6 +98,8 @@ export class Compiler implements Base {
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
    *  whose methods the second tier replaces one by one) */
   fn = new Map<string, number>();
+  /** the names and descriptors of `fn`'s methods: a virtual call of any other can have no target in the module */
+  private keys = new Set<string>();
   private direct = true;
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
@@ -115,7 +117,6 @@ export class Compiler implements Base {
   private owner?: MethodInfo;
   /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
   private assumer?: MethodInfo;
-  private install = false;
   private codes = new Map<string, Code | null>();
   /** the frame weight of the methods of this unit that count no depth, with everything they call (a leaf, or a method that calls only such methods) */
   bound = new Map<string, number>();
@@ -282,17 +283,13 @@ export class Compiler implements Base {
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
    *  class, a dex) may implement it, even for a frame that is already running */
   devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
-    // Raw host helpers have no Java method owner.
-    if (!this.assumer) return "many";
+    // Raw host helpers have no Java method owner; a target outside the module changes no code (callGuards), so no assumption is made for it
+    if (!this.assumer || !this.direct || !this.keys.has(name + desc)) return "many";
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length !== 1) return "many";
     // ART links no subclass of a final class and no override of a final method, so no later class can change these.
     const d = this.prog.get(decl);
-    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) {
-      // persisted code outlives the classes it was built among: an app's subclasses would undo it at load, to be recompiled on the page
-      if (this.install) return "many";
-      this.assumptions.push([decl, name, desc, t[0], this.assumer]);
-    }
+    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
@@ -624,9 +621,9 @@ export class Compiler implements Base {
     declareSymbolicSites(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
     const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
-    all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
+    all.forEach((m, i) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))); this.keys.add(m.key); });
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
-    this.direct = !install; this.install = install === true; this.head = methods[0];
+    this.direct = !install; this.head = methods[0];
     const codes = all.map((m) => this.compiled(m)!);
     phase.emit += performance.now() - t0 - (phase.prepare + phase.flow + phase.infer + phase.facts - analysed);
     const at: [number, number][] = [];

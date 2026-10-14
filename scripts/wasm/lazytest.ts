@@ -30,7 +30,6 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   const t = w.stats.units;
   check("Lz.test again compiles nothing", (w.entry("Lz", "test", "()I")(), w.stats.units - t), 0);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
-  check("falsified assumption undone", w.stats.invalidated >= 1, true);
   check("Lz2.test after", w.entry("Lz2", "test", "()I")(), 12);
   check("Lz.test after", w.entry("Lz", "test", "()I")(), 11);
 }
