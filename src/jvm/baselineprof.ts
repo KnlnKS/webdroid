@@ -1,4 +1,4 @@
-// An APK's own ART baseline profile (assets/dexopt/baseline.prof, docs/bytecode-first-plan.md §4.4):
+// An APK's own ART baseline profile (assets/dexopt/baseline.prof, docs/architecture.md, code delivery):
 // the methods its developers measured as hot or run at startup. A first launch's compile worker
 // emits their bodies first, so their first calls skip on-demand compiling and no tap waits on their
 // compile.

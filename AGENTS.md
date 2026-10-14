@@ -67,7 +67,8 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Compare ambiguous failures with the starting commit under matching inputs and settings.
   Live content, coordinate fallbacks and prior failures are hypotheses, not regression waivers.
   Keep visual goldens unchanged unless reference updates are explicitly requested.
-- Measure performance with `--jobs 1`, no competing diagnostic load and working rendering.
+- Measure performance with `--jobs 1`, no competing diagnostic load and working rendering
+  ([protocol and baselines](docs/performance.md)).
   Check visibility and advancing `wd.ticks`; throttling or a wedged app can mislead counters.
   Prefer headless Playwright for repeatable timing and disable expensive tracing.
 - `settleDelayMs` bounds scheduled work, not a mandatory sleep. Read `settled`/`busy` before
@@ -107,7 +108,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   details and rejected performance experiments.
 - Java runs on the Wasm tier, `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
   Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `bun run wasm <suite>` (`scripts/wasm/run.ts`);
-  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Map: [docs/wasm-architecture.md](docs/wasm-architecture.md).
+  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Map: [docs/architecture.md](docs/architecture.md).
 
 ## Diagnosis
 

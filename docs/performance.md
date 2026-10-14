@@ -1,0 +1,138 @@
+# Performance: how to measure, and where the time goes
+
+The targets are in-app latency and frame pacing: launch to first app frame, every gated tap at most 150 ms from
+`pointerup` to the answering frame, and scroll presentation intervals. [PLAN.md](../PLAN.md) ranks the open work;
+the [implementation history](implementation-history.md) records each measurement and rejected experiment, so check
+it before retrying an idea.
+
+## Measuring
+
+```bash
+WEBDROID_AOT_STALE=1 PORT=4191 bun run server.ts
+WEBDROID_URL=http://localhost:4191 bun run lat fitnotes calculatorm --gpu --warm
+WEBDROID_URL=http://localhost:4191 bun run lat komikku --gpu --cpuprofile
+bun run aot                                                # rebuild the platform build after a source edit
+WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile  # regenerate the bundled app builds
+```
+
+- **`lat`** (`scripts/lat/run.ts`) launches the browser with Playwright but drives it over raw CDP with only Page
+  and Target enabled (Playwright's `Runtime.enable` makes every Java exception about 5× dearer). It reports launch,
+  each gated tap (pointer-up to the intended UI state and response pixels) and a fixed scroll window (`fps` step:
+  presentation intervals and page long tasks), on a fixed 1080×2160@480 screen. Scenarios are in `scripts/lat/scenarios/` (calculatorm, fitnotes,
+  komikku, mihon; the heavy-app reports youtube, reddit, chatgpt and tiktok carry `"gate": false` and run only when named,
+  without failing the gate). Without `--warm` it measures a launch with no saved app build; `--warm` launches twice in one
+  profile and gates the second. `--gpu` uses the host GPU instead of SwiftShader, `--cpuprofile` profiles every
+  Worker, `--timeline` shows the app Worker's startup marks, `--trace` writes a browser-wide trace, and
+  `WEBDROID_JS_FLAGS` passes V8 flags; `--engine webkit`, `--json <file>` and `--query <params>` are also
+  accepted. For another app, add a temporary scenario and delete it afterwards.
+- **What a tap time is.** A tap is timed from `pointerup` to the first presented frame
+  that changes a response-region tile the settled frame also changed, outside the tapped node's bounds plus 72 px
+  (press and ripple feedback), and outside tiles that already moved while pressed, so a screen still animating at
+  `pointerdown` reports "did not change outside the pressed view"; time to the settled semantic state, presentation intervals and missed vsyncs are
+  reported beside it. The Worker sends ≤ 128 px crops of the response regions with each presentation, and nothing
+  probes the app between `pointerdown` and the end of the window. Tap times before 2026-10-13 used an earlier
+  semantic-plus-pixels clock and are not comparable. Each tap and `fps` step also carries the app Worker's
+  frame timeline (`src/timeline.ts`: vsyncs, input, doFrame, draw, composite, present, looper idle/wake), read
+  after the window. `--throttle N` applies CDP CPU throttling to the page only: Chrome cannot throttle Workers, so app processes run at full speed; `bundles=0` (on by
+  default in `lat`) keeps the bundled app builds out, so a run without `--warm` compiles the app on demand.
+- **Claims need matched runs:** the same inputs, serial (`--jobs 1`), nothing else running on the host, at least
+  three runs per side, alternating revisions. Compare a failure with the starting commit before calling it a
+  regression; Calculator and Lichess are flaky on unchanged code.
+- **Scroll needs `--gpu`.** Under SwiftShader the numbers measure the GPU process: in a scroll trace its compositor
+  spent 5.5 of 9 s in `SwapBuffers` while the app Worker was busy 0.4 s. Scroll p95 used to be bimodal from run to
+  run (about 18 or about 25 ms): a 120 Hz host rAF put every other frame on the 60 Hz virtual vsync's phase
+  boundary, so jitter chose between 8 and 25 ms frames. `recordVsync` now bounds the early tolerance by the host
+  period; still compare several runs.
+- **The probe costs time.** `lat` and e2e read UI state once per app frame; on Compose screens a probe walks the
+  accessibility tree on the main looper at 5–10 ms (about 31 ms per Komikku tap). Probing less would lower what
+  `lat` reports, not what a user sees.
+- **The platform build must match the source.** It is keyed by every file under `src/` and the AOT scripts; after
+  any edit the server answers 404 for `/aot/current.json` unless `WEBDROID_AOT_STALE=1`. That flag is right for
+  edits outside the compiler and linker; after one inside them, or after adding even a temporary counter under
+  `src/`, run `bun run aot`, or a `--warm` run silently becomes an on-demand one (it fails with "app code is not
+  saved"). Check `browserErrors` in `run.json` for a failed `/aot/current.json` and `wasmAotLoaded` above 0 in the
+  step counters.
+- **`vendor/wasm-aot` is shared** and ignored by Git; a worktree usually symlinks it. `bun run aot` prunes the
+  builds it replaces, including the bundled app builds, so regenerate those afterwards.
+- **The dev server serves source fresh.** Do not edit served code while an e2e or `lat` run is in progress; an e2e
+  run that reports "0 steps" just after an edit is the bundle rebuilding. Server-side code (`server.ts`,
+  `scripts/wasm/aot-*.ts`) loads once, so restart the server after editing it.
+- **Counters are not frame rates.** Shell ticks, guest instructions, EGL swaps, decoded frames and browser
+  presentations measure different work, and an idle or wedged app can advance ticks without presenting. Check that
+  rendering works and `wd.ticks` advance before trusting any rate. Keep CPU profiles apart from gated runs, and
+  confirm canvas self time with in-page timing (V8 once charged a WebGL canvas resize to width checks).
+
+### Profiling Workers during an e2e flow
+
+e2e has no profiling switch; use Chrome's remote debugging port:
+
+1. Temporarily add `...(process.env.ZZ_CDP ? ["--remote-debugging-port=" + process.env.ZZ_CDP] : [])` to the launch
+   `args` in `tests/e2e/drivers/webdroid.ts`, and revert it afterwards.
+2. Attach to `webSocketDebuggerUrl` from `http://127.0.0.1:<port>/json/version`. On the page target send
+   `Target.setAutoAttach` with `{ autoAttach: true, waitForDebuggerOnStart: true, flatten: true }`. On each
+   `Target.attachedToTarget`: for a `worker` target send `Profiler.enable`, `Profiler.setSamplingInterval`
+   (`{ interval: 500 }`) and `Profiler.start`; for any other target set auto-attach again; then send
+   `Runtime.runIfWaitingForDebugger`.
+3. When the step of interest ends, send `Profiler.stop` to each process Worker (URLs contain `process-worker` and
+   `pid=<n>`) and write `w<pid>.cpuprofile` for DevTools.
+
+## Current numbers
+
+`--gpu`, Worker processes, one job, Apple M4 Pro, medians or ranges of matched runs (2026-10-12/13). The platform
+build was rebuilt when the JS tier was deleted, so re-measure both sides before claiming a delta against these.
+
+| | Cold (no saved build) | Warm |
+|---|---|---|
+| FitNotes launch | 1,365–1,486 ms | 1,449 ms |
+| Calculator M launch | 2.7 s | 1,517 ms (1.6 s in the 2026-10-13 tap runs) |
+| Komikku launch | 6.7–7.0 s (8.1–8.2 s before compiling ahead) | 2.5–2.75 s |
+| FitNotes gated taps | | 12–110 ms |
+| Calculator M gated taps | `7` 127 ms, others 43–101 ms | 20–70 ms |
+| Komikku taps (Compose) | 190–290 ms | 160–230 ms |
+| FitNotes scroll p50 / p95 / p99 | | 16.6 / 18–26 / 19–33 ms |
+
+First response frame (the gate since 2026-10-13; not comparable with the rows above), one `--gpu` run each, 2026-10-13:
+
+| | Cold | Warm |
+|---|---|---|
+| Calculator M launch / taps | 3.2 s / 6–99 ms | 1.9 s / 10–33 ms |
+| FitNotes launch / taps | 2.4 s / 10–53 ms | 1.8 s / 11–53 ms |
+| Komikku launch / taps | 7.4 s / 58–149 ms | 2.9–3.1 s / 32–89 ms |
+| YouTube launch / taps (report) | 14 s / 205–445 ms | 5.3 s / 7–145 ms |
+| Reddit launch (report) | 11.9 s | 6.1 s |
+| ChatGPT launch (report) | 6.0 s | page crashed once |
+| TikTok launch (report) | 12.3 s | 8.2 s (its build attached from 2026-10-13) |
+
+Heavy-app launches wait for live content, so they vary with the network. Komikku's cold taps sit at the gate; they compile
+on demand. Warm YouTube taps compile almost nothing (21 methods in `you`) but run ~90 ms of first-tier Java in input dispatch.
+
+Mihon's launch is not measurable while its live update check opens a "New version available" dialog over
+onboarding; use Komikku for a Compose app. For scale, the 2026-10-10 baseline (SwiftShader, iframe processes) had
+FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60–390 ms, and the Resy e2e flow at
+61–66 s wedged, against 32 s now.
+
+## Where the time goes
+
+- **Warm taps** are bound by the app's own screen transitions and by the harness's probes, not by guest compute.
+  Komikku's input lands about 16 ms before its first frame, then frames follow at display rate until Compose's
+  transition ends; its semantics appear only then. Second-tier planning and adoption take 4–12 ms per tap and
+  render replay about 3 ms. V8 tiering is not a lever: a tenth of the default tier-up budget left Komikku's taps
+  unchanged.
+- **Cold taps** are mostly on-demand compiling, one module per method. Calculator's first cold tap links 229–342
+  methods: 57–78 ms compiling and 18–21 ms creating modules. Across a cold launch `linkSlot` is 52% compiler,
+  then `WebAssembly.Module` and `Instance`, encoding and import objects. The main process makes about 6,400
+  modules (3,953 from `linkSlot`, 911 `buildClasses`, 603 `linkEnsure`, 318 stub pools).
+- **Chrome charges a module about four times what Node does:** 18.5 µs against 4.2 µs per unit module, the same
+  with every V8 flag tried, so the lever is fewer modules. Instantiation costs about the same in both and grows
+  with exports.
+- **First launches without a saved build** compile broadly: Komikku compiles about 15,600 methods in 3.2 s (emit
+  1.5 s), about 115 µs a method in Node and 200 µs in the browser, into about 17,900 modules, with no single
+  hotspot. The compiler front end allocates about 200 MB/s, `Flow` construction the largest share.
+- **Later launches** spend about 280 ms in `loadC` instantiating code modules with about 172 global imports each;
+  most of the rest is `addDexes` and `linkSlot`. FitNotes' warm app thread is busy about 1.3 s (JS 0.7 s, Java
+  0.38 s).
+- **Process contention:** the broker answers app IPC on the page thread, so slow page work starves app queries
+  (the probe's synchronous readbacks once starved Komikku's chapter list).
+- **Not levers:** frame production (record, replay, composite) and text measurement and shaping were each under a
+  few percent of profiled windows; guest↔host crossings cost tens of nanoseconds; idle apps use about 2% of the
+  thread.

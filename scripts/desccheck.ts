@@ -1,7 +1,7 @@
 // Registered TS descriptors that AOSP does not declare: every native spec method must exist on
 // its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
 // delegate must be a native method its class declares. A spec method standing in for an AOSP
-// bytecode body is a reimplementation (plan §2) unless provenance's TS_SPECS allows its class.
+// bytecode body is a reimplementation (docs/architecture.md) unless provenance's TS_SPECS allows its class.
 //   bun run desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";

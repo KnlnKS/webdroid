@@ -43,7 +43,7 @@ export function isBytecode(name: string): boolean {
   return false;
 }
 
-/** §2: the only classes whose AOSP bytecode bodies a TS spec may stand in for (anywhere else a spec
+/** The only classes whose AOSP bytecode bodies a TS spec may stand in for (anywhere else a spec
  *  implements natives only), by exact name or package prefix (ending in `/`), each with why AOSP's
  *  bytecode cannot answer for it. In libcore's namespaces a spec needs an entry even for natives. */
 export const TS_SPECS: Record<string, string> = {
@@ -65,7 +65,7 @@ export const tsSpecAllowance = (name: string): string | undefined =>
   name in TS_SPECS ? name : Object.keys(TS_SPECS).find((k) => k.endsWith("/") && name.startsWith(k));
 /** libcore's namespaces, where AOSP's bytecode answers unless a spec is allowed there */
 const LIBCORE = /^(java|javax|jdk|sun|libcore|dalvik|android\/icu|org\/(json|xml|w3c|xmlpull)|com\/android\/(okhttp|org))\//;
-/** does a spec for `name` break §2: one that `reimplements` an AOSP bytecode body, or any in
+/** does a spec for `name` break the platform rules (docs/architecture.md): one that `reimplements` an AOSP bytecode body, or any in
  *  libcore's namespaces, needs TS_SPECS to allow its class */
 export const tsSpecViolation = (name: string, reimplements: boolean): boolean =>
   (reimplements || LIBCORE.test(name)) && !tsSpecAllowance(name);

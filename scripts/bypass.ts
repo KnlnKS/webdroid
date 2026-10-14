@@ -1,4 +1,4 @@
-// Override bypasses (docs/bytecode-first-plan.md §5.6): a TS spec method whose AOSP body calls an
+// Override bypasses (docs/architecture.md, static checks): a TS spec method whose AOSP body calls an
 // overridable method on `this`, where neither the TS method nor the helpers it calls ever name that
 // method, answers without the app's override. Only methods a corpus app overrides are reported; tests/fixtures/app-overrides.json
 // records those, with how many apps override each, so the check needs no APKs.

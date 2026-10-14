@@ -85,7 +85,7 @@ if (!process.argv.includes("--verify")) {
   }
   await mirror("/system/framework/framework-res.apk", "framework-res.apk");
   await mirror("/system/etc/preloaded-classes", "preloaded-classes");
-  // ART's boot image profile as text: the framework methods the platform measured hot (§4.3).
+  // ART's boot image profile as text: the framework methods the platform measured hot.
   // Only root may run profman.
   await asRoot();
   adb("shell", `/apex/com.android.art/bin/profman --profile-file=/system/etc/boot-image.prof ${bootJars.map((j) => `--apk=${j} --dex-location=${j}`).join(" ")}` +

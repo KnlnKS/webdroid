@@ -266,7 +266,7 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
 /** The methods `roots` call when they run, breadth first and at most `limit`: each call's target
  *  as its site declares it (a virtual call's declared class, without dispatch to subclasses) and
  *  the static initializers of the classes they touch. A compile worker emits them in this order
- *  after an APK's profile (docs/bytecode-first-plan.md §4.4). */
+ *  after an APK's profile (docs/architecture.md, code delivery). */
 /** a method a closure starts from: its class and name+descriptor */
 export type MethodRoot = { cls: string; sig: string };
 export function callClosure(p: Program, roots: MethodRoot[], limit: number): { cls: string; dex: DexFile; methodIdx: number }[] {
