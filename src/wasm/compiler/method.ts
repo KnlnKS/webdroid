@@ -16,11 +16,12 @@ import { emitHandleConstant, emitTypeConstant } from "../link/mhandles";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
-import { NO_THROW } from "./opinfo";
+import { NO_THROW, isFieldAccess } from "./opinfo";
 import { emitRestored, FUEL } from "../link/sched";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
+const NONE: readonly string[] = [];
 /** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
 const CHUNK = 1024;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
@@ -664,20 +665,18 @@ export class MC {
   private initedAt = new Map<number, readonly string[]>();
   /** the classes whose initialization `ins` requests, as its translation does: its target and the target's superclasses */
   initedBy(ins: Ins): readonly string[] {
+    const op = ins.op;
+    if (op !== 0x22 && (op < 0x60 || op > 0x6d) && op !== 0x71 && op !== 0x77) return NONE; // new-instance, sget/sput, invoke-static
     let r = this.initedAt.get(ins.pc);
     if (!r) { const cls = this.ensureTarget(ins); this.initedAt.set(ins.pc, r = cls ? this.cx.prog.chain(cls) : []); }
     return r;
   }
   private ensureTarget(ins: Ins): string | undefined {
-    const n = ins.name;
-    if (n !== "new-instance" && !n.startsWith("sget") && !n.startsWith("sput") && !n.startsWith("invoke-static") || this.deferredSite(ins)) return undefined;
-    if (n === "new-instance") { const name = this.dex.typeName(ins.b); return this.cx.str.isString(name) ? undefined : name; }
-    if (n.startsWith("sget") || n.startsWith("sput")) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
-    if (n === "invoke-static" || n === "invoke-static/range") {
-      const mr = this.dex.method(ins.b), decl = this.dex.typeName(mr.cls);
-      return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
-    }
-    return undefined;
+    if (this.deferredSite(ins)) return undefined;
+    if (ins.op === 0x22) { const name = this.dex.typeName(ins.b); return this.cx.str.isString(name) ? undefined : name; }
+    if (ins.op <= 0x6d) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
+    const mr = this.dex.method(ins.b), decl = this.dex.typeName(mr.cls);
+    return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
   }
   isStringInit(ins: Ins): boolean {
     const mr = this.dex.method(ins.b);
@@ -694,7 +693,7 @@ export class MC {
   /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
   private shadowAt = new Map<number, string | undefined>();
   shadowKey(ins: Ins): string | undefined {
-    if (!this.shadowKeys.size || !ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
+    if (!this.shadowKeys.size || !isFieldAccess(ins.op)) return undefined;
     if (this.shadowAt.has(ins.pc)) return this.shadowAt.get(ins.pc);
     const key = this.findShadowKey(ins);
     this.shadowAt.set(ins.pc, key);
@@ -712,7 +711,7 @@ export class MC {
   private findShadows() {
     const seen = new Set<string>();
     for (const ins of this.prepared.instructions) {
-      if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput") || this.deferredSite(ins)) continue;
+      if (!isFieldAccess(ins.op) || this.deferredSite(ins)) continue;
       const w = this.typing.use(ins.pc, ins.b);
       if (w < 0) continue;
       const r = this.fieldOf(ins.c, false);

@@ -47,7 +47,7 @@ export function step(mc: MC, ins: Ins, f: Facts): void {
   const nn = mc.definesNonNull(ins, f);
   f.nonNull.delete(d);
   if (nn) f.nonNull.add(d);
-  for (const k of f.typed) if (k.startsWith(d + ":")) f.typed.delete(k);
+  if (f.typed.size) { const p = d + ":"; for (const k of f.typed) if (k.startsWith(p)) f.typed.delete(k); }
 }
 
 /** the facts at the entry of each block */
