@@ -6,6 +6,7 @@
 //   bun run gen-framework --input    # record only the device's key character maps and key sets
 //   bun run gen-framework --settings # record only the device's settings tables
 //   bun run gen-framework --properties # record only the device's platform properties
+//   bun run gen-framework --overlays # record only the framework values the device's overlays replace
 //   bun run gen-framework --fonts    # record only the device's updated system fonts
 //   bun run gen-framework --identity [url] # record the identity properties and uname of a phone's
 //                                    factory image, by default the Pixel 9's (no device needed)
@@ -56,6 +57,7 @@ if (process.argv.includes("--charsets")) { await recordCharsets(); process.exit(
 if (process.argv.includes("--input")) { await recordInputDevices(); process.exit(0); }
 if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
 if (process.argv.includes("--properties")) { await recordProperties(); process.exit(0); }
+if (process.argv.includes("--overlays")) { await recordDeviceOverlays(); process.exit(0); }
 if (process.argv.includes("--fonts")) {
   const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
   await writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
@@ -107,7 +109,7 @@ if (!process.argv.includes("--verify")) {
     libraries[name] = { path, dependencies: at("dependency")?.split(":") ?? [] };
   }
   await Bun.write(`${OUT}/build.txt`, `${fingerprint}\nsdk ${adb("shell", "getprop", "ro.build.version.sdk")}\n`);
-  await recordDeviceColors();
+  await recordDeviceOverlays();
   await recordOsConstants();
   await recordCharsets();
   await recordInputDevices();
@@ -143,20 +145,42 @@ async function recordFontUpdates(): Promise<Record<string, number>> {
   return data;
 }
 
-/** The reference device's system_* colors as its overlays resolve them: SystemUI's Monet palette
- *  for the default wallpaper replaces most framework-res defaults, and apps read these colors. */
-async function recordDeviceColors() {
+/** The framework values the reference device's enabled overlays replace, as it resolves them in its
+ *  own configuration: SystemUI's Monet palette, the gestural navigation bar's insets and scrim, the
+ *  Google and Pixel configuration. Only inline values; strings, arrays and files keep framework-res's. */
+async function recordDeviceOverlays() {
   const table = new Arsc(unzipSync(new Uint8Array(await Bun.file(RES).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
-  const names = [...table.names("color").keys()].filter((n) => n.startsWith("system_"));
-  const script = names.map((n) => `echo "${n} $(cmd overlay lookup android android:color/${n})"`).join(";");
-  const colors: Record<string, string> = {};
-  for (const line of adb("shell", script).split("\n")) {
-    const [name, value] = line.trim().split(" ");
-    const own = table.entry(table.names("color").get(name)!)?.value;
-    if (/^#[0-9a-f]{1,8}$/.test(value) && parseInt(value.slice(1), 16) !== own?.data! >>> 0) colors[name] = "0x" + value.slice(1).padStart(8, "0");
+  const keys = new Set<string>();
+  for (const [, overlay] of adb("shell", "cmd", "overlay", "list", "android").matchAll(/^\[x\] (\S+)/gm))
+    for (const [, key] of adb("shell", "cmd", "overlay", "dump", overlay).matchAll(/^\s*0x[0-9a-f]{8} -> .*?\(((?:bool|integer|dimen|color)\/\w+)/gm)) keys.add(key);
+  const list = [...keys], values: [string, string][] = [];
+  // batched: a longer command line closes adb's shell
+  for (let i = 0; i < list.length; i += 100) {
+    for (const line of adb("shell", `for k in ${list.slice(i, i + 100).join(" ")}; do echo "$k $(cmd overlay lookup android android:$k)"; done`).split("\n")) {
+      const [key, text] = line.trim().split(" "), [type, name] = key.split("/");
+      const value = resValue(type, text), own = table.entry(table.names(type).get(name)!)?.value;
+      if (!value || own && own.data === value[1] && (own.type === value[0] || type === "color")) continue;
+      values.push([JSON.stringify(key), `[0x${value[0].toString(16)}, ${type === "color" ? "0x" + (value[1] >>> 0).toString(16) : value[1]}]`]);
+    }
   }
-  await writeGenerated("src/android/device-colors.ts", ": the reference device's overlaid system_* colors.",
-    constObject("DEVICE_COLORS", "Record<string, number>", Object.entries(colors)), `${Object.keys(colors).length} overlaid colors`);
+  await writeGenerated("src/android/device-overlays.ts", ": the framework values the reference device's overlays replace.",
+    constObject("DEVICE_OVERLAYS", "Record<string, [type: number, data: number]>", values.sort()), `${values.length} overlaid values`);
+}
+
+/** a value `cmd overlay lookup` prints as its Res_value type and data */
+function resValue(type: string, text: string): [number, number] | null {
+  if (type === "bool" && /^(true|false)$/.test(text)) return [0x12, text === "true" ? -1 : 0];
+  if (type === "integer" && /^-?\d+$/.test(text)) return [0x10, Number(text)];
+  if (type === "color" && /^#[0-9a-f]{8}$/.test(text)) return [0x1c, parseInt(text.slice(1), 16) | 0];
+  const dimension = type === "dimen" ? /^(-?[\d.]+)([a-z]*)$/.exec(text) : null;
+  const f = Number(dimension?.[1]), unit = ["px", "dip", "sp", "pt", "in", "mm"].indexOf(dimension?.[2]!);
+  if (dimension?.[2] === "") return [0x04, new Int32Array(new Float32Array([f]).buffer)[0]];
+  if (unit < 0) return null;
+  // TypedValue's complex form, packed as aapt's floatToComplex packs it
+  const bits = Math.round(Math.abs(f) * 2 ** 23);
+  const [radix, shift] = bits % 2 ** 23 === 0 ? [0, 23] : bits < 2 ** 23 ? [3, 0] : bits < 2 ** 31 ? [2, 8] : bits < 2 ** 39 ? [1, 16] : [0, 23];
+  const mantissa = (f < 0 ? -Math.floor(bits / 2 ** shift) : Math.floor(bits / 2 ** shift)) & 0xffffff;
+  return [0x05, mantissa << 8 | radix << 4 | unit];
 }
 
 /** android.system.OsConstants as the reference device's libcore initializes them (initConstants) */
