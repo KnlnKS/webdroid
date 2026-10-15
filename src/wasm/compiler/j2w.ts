@@ -69,6 +69,7 @@ const HOST_IMPORTS = {
   dexOpenMemory: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
   galloc: { params: [T.externref, T.i32], results: [T.i64] },
   gwrote: { params: [T.i32, T.i32], results: [] },
+  gblock: { params: [T.i32], results: [T.i32] },
   hot: { params: [T.i32], results: [] },
   long: { params: [T.i32], results: [] },
   mhInvoke: { params: [T.externref, T.externref, T.externref, T.i32], results: [T.externref] },
