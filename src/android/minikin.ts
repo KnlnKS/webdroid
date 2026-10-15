@@ -12,7 +12,7 @@
 // Glyph bounds are not known, so no run overhangs.
 
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
-import { charsToString, mangleMethod } from "../jvm/abi";
+import { charsToString } from "../jvm/abi";
 import { scall, vcall, after } from "../jvm/natives/jentry";
 import { isLead, isTrail } from "../jvm/natives/jstring";
 import { handle, deref, release, FINALIZER } from "./handles";
@@ -114,7 +114,6 @@ function isGraphemeBreak(adv: Float32Array | null, text: string, start: number, 
  *  cached, cleared wholesale when full. */
 const idleIterators = new Map<string, unknown[]>();
 let boundaryCache = new Map<string, Int32Array>();
-const NEXT = mangleMethod("next", "()I");
 const lineBoundaries = driven(function* lineBoundaries(text: string, tag: string): Gen<Int32Array> {
   const key = tag + "\0" + text, hit = boundaryCache.get(key);
   if (hit) return hit;
@@ -126,13 +125,8 @@ const lineBoundaries = driven(function* lineBoundaries(text: string, tag: string
   const out: number[] = [];
   try {
     yield vcall(it, "setText", "(Ljava/lang/String;)V", text);
-    const next = (it as Record<string, () => unknown>)[NEXT];
-    for (;;) {
-      let b = next.call(it);
-      if (b instanceof Promise) b = yield b;
-      if (b === -1) break;
-      out.push(b as number);
-    }
+    // vcall, not the facade's method: next() can wait (a dictionary of a script's break engine pages in)
+    for (let b: number; (b = yield vcall(it, "next", "()I")) !== -1;) out.push(b);
   } finally {
     let idle = idleIterators.get(tag);
     if (!idle) idleIterators.set(tag, idle = []);
