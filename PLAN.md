@@ -88,8 +88,8 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      `?attestation=1` but gets HTTP 500 (`DF-DFERH-01`): DroidGuard supplied zero bytes and microG had no auth token.
      A licensed Play Store oracle is needed before attributing that to webdroid.
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
-     bar arbitration; Google Maps zoom, active navigation, sign-in and backup transport. A native fault converted
-     into a Java exception can still leave native locks held.
+     bar arbitration; Google Maps pinch zoom (single-pointer input), sign-in and backup transport. A native fault
+     converted into a Java exception can still leave native locks held.
    - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
@@ -125,6 +125,8 @@ Unranked; each needs a measurement or a check against the current code before wo
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
+- **Input:** the shell dispatches a single pointer (`src/shell/pointer-input.ts`, `MotionEvent.obtain(JJIFFI)` in
+  `wm.ts`), so multi-touch gestures such as pinch zoom cannot be made.
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.
