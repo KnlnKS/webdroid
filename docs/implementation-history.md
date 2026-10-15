@@ -305,6 +305,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 - **Never cache a pending suspension** (2026-10-02..05). A pending promise carries its asker's frames: a `??=` memo of `theNetwork` wedged Harmonic, Reddit, TikTok, ChatGPT and YouTube; `applicationInfoOf` caching `rt.drive`'s result hung Mihon's first launch 7/22; a cached service constructor made a second `pms()` wait on itself. `once` shares a computation, `shareable` gives each caller its own continuation stack, and `scripts/generators.ts` flags pending results kept by `??=`, `||=`, `Map.set` or stores.
 - **Promises must not reach Java values** (2026-10-05..13). `DisplayEventReceiver.nativeInit` stored a pending `WeakReference.get`, failing at vsync; GMS got host Promises from `getPublicFieldRecursive` callbacks and `newArrayList` (`InternalError`). These now drive the generator/`after`. `JavaClass.new` zero-allocates without class init (a pending allocation killed Resy's GMS). Host code with no Java frame below enters on a new strand that suspends when a lazy link yields after 8 ms; `box`'s Promise reached a cursor row and aborted the owner; `valueOf` now links synchronously.
 - **Heap pressure in synchronous entries** (2026-10-08). Over budget in a host byte-array conversion, the allocation slow path tried to suspend across a JS frame and raised `SuspendError` instead of OOM (YouTube Shorts), even for an immediate return. Synchronous entries collect, recheck and throw OOM; suspendable callers keep two timer turns.
+- **The facade's methods cannot wait** (2026-10-15). Calling a Java method on its facade runs Java synchronously. In YouTube's Litho layout thread, minikin's `BreakIterator.next()` reached Thai text, whose break engine paged ICU's dictionary in, and raised `SuspendError`. A host loop over Java that can reach a lazy page, class or lock calls through `vcall`. In Chrome that costs 2.2 µs a boundary against the facade's 0.65 µs (a strand entry builds a JSPI stack); boundaries stay cached per text. Under node's test runner the per-entry cost grew round after round from its promise hooks, which a browser does not have.
 - **Rejected: synchronous outer native driver** (2026-10-09). Completing `hostForm`'s immediate values synchronously gained nothing (56.66/54.86 vs 56.40/55.66 presentations/s; FitNotes exercise list 188.5/194.8 vs 195.8/196.4 ms): 6,582 of 6,848 native scopes returned Promises anyway. Find remaining wait producers and nested callback paths first. Most Compose-app suspensions are legitimate (coroutine parks, contended monitors, background SQLite).
 
 ### JNI and guest natives
@@ -312,6 +313,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 - **Guest calls carry the caller's chain** (2026-10-02, `6a755f69`). `callGuestNative` and `loadModule` awaited before capturing the chain, so the guest ran as a fresh chain waiting on a lock its native caller held: `KevaImpl.<clinit>`'s `JNI_OnLoad` and YouTube's video-open wedged. A later `removeSyncBarrier` IllegalStateException (2/17 loaded runs) did not recur in 15 runs: not reproduced, not fixed.
 - **Synchronous JNI entry** (2026-10-02..03, `1a500de2`, `0abb33aa`). `Call<Type>Method` parks only for class init or a suspended callback (100k calls 64.71 → 47.60 ms); a JNI call enters the guest without awaiting when the base frame is free and completes on its caller's stack if done in the first slice (0.70 → 0.37 µs per trivial call). App effect was noise (Doodle Jump 33.2 → 34.4 fps). Parking, signals or a spent slice still suspend the caller.
 - **JNI semantics** (2026-10-05..08). `FindClass` enters the referring class's loader on a nested strand without initializing (ART) and leaves a pending exception on failure; an abstract target raises AbstractMethodError (`87facb0e`, per JDK 17). Suspended native array results travel through per-call tokens and resumed Wasm restores scratch before checking exceptions. Tracing prints `<reference>`, since `String()` throws on opaque Wasm objects.
+- **Empty accesses touch no page** (2026-10-15). Cronet's `NewString(env, NULL, 0)` (a JNI string of no chars) read zero bytes at address 0, and the memory bounds check raised SIGSEGV, killing YouTube at launch. A zero-length access returns before any page is checked.
 
 ### Bridge and host values
 
@@ -464,6 +466,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 - **One render-thread draw per frame** (2026-10-03, `bdb6be6a`). RT animators drew via `onNextVsync` before `doFrame`, so a vsync could composite twice (Calculator 291 draws / 126 main frames); the RT draw now runs behind `doFrame` and is skipped after a draw: 2.09 → 1.19 draws per main frame.
 - **No layer promotion for fading nodes** (2026-10-01). hwui's layer for a fading overlapping RenderNode doubled Compose draw time (58 ms compositing) and was dropped; alpha multiplies each draw, differing only where children overlap.
 - **Native handle lifetimes** (2026-10-05). RenderNode and HardwareRenderer JNI each hold a strong ref and `VirtualRefBasePtr` its own, so handles keep per-object counts (freeing on any release freed held nodes). `InputChannel.nativeDispose` freed its wrapper while its Cleaner stayed registered, which later freed a RenderNode reusing the slot (FitNotes); as in Android 15 JNI, dispose only clears the channel.
+- **A recording reaches its whole target** (2026-10-15). A display list records over a one-pixel mirror, so geometry taken from the mirror's canvas confined a BitmapShader fill, `drawPaint` and an inverse path or clip to a one-pixel strip at replay: YouTube's thumbnails and avatars stayed gray. A recording's target bounds are now the plane (±1e5), and a bitmap shader's pattern, which covers its target, is made at replay as a RuntimeShader's is.
 
 ### Canvas2D semantics
 
@@ -529,6 +532,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 ### Media codecs
 
 - **MediaCodec over WebCodecs** (2026-10-02). Decoders are `c2.webcodecs.<type>.decoder`, vendor and hardware-accelerated like the AVD's `c2.goldfish.*`; Exynos names were rejected because apps key quirks on them. Codec-config buffers lead the next key frame or become an audio description; input before a key frame and length-prefixed samples decode to nothing, as on devices. YouTube plays VP9 at parity.
+- **A new buffer per `getBuffer`** (2026-10-15). `MediaCodec.getInputBuffer` invalidates the cached buffer at that index and `queueInputBuffer` frees it, since JMediaCodec wraps the codec's memory with `NewDirectByteBuffer` on every call, read-only for output. Returning the codec's own buffer each time left the one ExoPlayer wrote into inaccessible and failed every YouTube playback; each call now hands out a new view.
 
 ### Relay, proxy, TLS and DNS
 
@@ -649,6 +653,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 ### YouTube
 
+- **Playing on the Wasm tier** (2026-10-15). After the empty-access, line-break, codec-buffer and recording fixes, the quick flow reached all 16 steps and a full capture played Big Buck Bunny and swiped Shorts with thumbnails drawn. The full lane's video-open tap is a coordinate (540,1350), which opened a Short placed first in the live results, so the player-control steps found no controls: live content, not a fault.
 - **Heap budget** (2026-10-08). The ConstraintLayout OOM's 8 MiB is the periodic `ALLOC_WINDOW` check; the browser's real budget is 2 GiB heap growth, host compiler growth included. TikTok/YouTube built 174,326/176,096 Wasm instances; a YouTube heap sample retained 2.14 GB, 800 MB under `instantiate`.
 
 ## Deployment and tooling
