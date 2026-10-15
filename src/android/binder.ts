@@ -209,9 +209,10 @@ export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj, 
 });
 /** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
  *  imported, are released once read */
+const created = (cls: string, parcel: JObj) => after(linkInit(cls), (c) => vcall(c.static("CREATOR"), "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel));
 export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData): Gen<JObj> {
-  const creator = (yield* awaited(linkInit(cls))).static("CREATOR"), parcel = yield* awaited(importParcel(data));
-  try { return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel); }
+  const parcel = yield* awaited(importParcel(data));
+  try { return yield* awaited(created(cls, parcel)); }
   finally { yield vcall(parcel, "recycle", "()V"); }
 });
 /** Explicit broker borrowing; ordinary unparcelled callers retain their Java ownership. */
@@ -220,8 +221,7 @@ export const unparcelledScoped = driven(function* (cls: string, data: ParcelData
   const parcel = yield* awaited(newParcel());
   try {
     yield* awaited(fillParcel(nativeParcel(parcel), data, take, scope, discard));
-    const creator = (yield* awaited(linkInit(cls))).static("CREATOR");
-    return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
+    return yield* awaited(created(cls, parcel));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
 /** A local Parcelable copy keeps descriptor identity without a wire snapshot. */
@@ -231,8 +231,7 @@ export const copyParcelable = driven(function* (cls: string, object: JObj, scope
     yield vcall(object, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     if (scope) for (const [at, o] of native.objects) if (o instanceof OwnedFd) native.objects.set(at, new OwnedFd(o.fd, scope));
     native.pos = 0;
-    const creator = (yield* awaited(linkInit(cls))).static("CREATOR");
-    return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
+    return yield* awaited(created(cls, parcel));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
 
