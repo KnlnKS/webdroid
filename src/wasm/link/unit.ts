@@ -31,8 +31,8 @@ export interface UnitResult {
   header: UnitHeader;
   /** what the unit numbered beyond the World it was asked by: that World takes it, or does not take the unit */
   numbering: Numbering;
-  /** the unit's module, which the worker has validated and compiled (a WebAssembly.Module crosses to the page whole) */
-  module: WebAssembly.Module;
+  /** the unit's module, which the worker has validated: its bytes, since a compiled module does not cross to another agent cluster, as from the compile host's frame */
+  bytes: Uint8Array;
   /** the stack traces of its functions: name, method id, Wasm offsets and the dex pcs they belong to */
   traces: { name: string; m: string; offsets: Int32Array; pcs: Int32Array }[];
 }
@@ -71,9 +71,8 @@ export class UnitCompiler {
     w.beginTouch();
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
     const touch = w.endTouch();
-    let module: WebAssembly.Module;
-    try { module = compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; }
-    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), module,
+    try { compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; }
+    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
   }
 }

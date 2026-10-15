@@ -117,7 +117,7 @@ const MEGAMORPHIC = 32;
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
 /** when a unit's compile began, and the compile time accounted by then (World.accountCompilation) */
 type Clock = { start: number; accounted: number };
-type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
+type Built = { bytes: Uint8Array; traces: FnTrace[] };
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
@@ -1218,7 +1218,7 @@ export class World {
     this.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
-    return { unit, imports, built: { bytes: result.module, traces } };
+    return { unit, imports, built: { bytes: result.bytes, traces } };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
