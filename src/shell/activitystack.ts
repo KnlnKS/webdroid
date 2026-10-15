@@ -16,8 +16,8 @@ export type StackPort = {
   entries(): Iterable<Entry>;
   connect(pkg: string, process: string): Entry;
   activity(entry: Entry, request: ActivityRequest): Promise<void>;
-  /** turns the display for the process in front */
-  rotate(landscape: boolean): void;
+  /** turns the display for the process whose activity sets its orientation */
+  rotate(entry: Entry): void;
 };
 
 export class ActivityStack {
@@ -40,10 +40,11 @@ export class ActivityStack {
     entry.translucent = translucent;
     if (pid === this.top) void this.enqueue(() => pid === this.top ? this.show(pid) : Promise.resolve());
   }
-  /** DisplayRotation follows the activity in front: a process reports the orientation its display turned to */
+  /** a process reports the orientation its display turned to */
   orientation(pid: number, landscape: boolean): void {
-    this.port.entry(pid).landscape = landscape;
-    if (pid === this.top) this.port.rotate(landscape);
+    const entry = this.port.entry(pid);
+    entry.landscape = landscape;
+    if (pid === this.layers[0]) this.port.rotate(entry);
   }
   launch(caller: number, pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null = null): Promise<void> {
     const source = this.port.entry(caller);
@@ -156,7 +157,8 @@ export class ActivityStack {
       surface.style.zIndex = String(layers.indexOf(entry.pid) + 1);
       surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";
     }
-    const { landscape } = this.port.entry(pid);
-    if (landscape !== undefined) this.port.rotate(landscape);
+    // DisplayRotation takes the orientation from the top activity that fills the display: a
+    // translucent one leaves it to the one beneath, the bottom of the shown layers
+    if (layers.length) this.port.rotate(this.port.entry(layers[0]));
   }
 }
