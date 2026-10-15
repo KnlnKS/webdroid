@@ -25,10 +25,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   earlier runs were the engine freeing merged-away units in one pause, now released in batches (`World.retire`).
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
   bursts of up to 30 ms. Heavy apps are reports (`"gate": false`). Scroll p95 is 17.3–17.8 ms with no missed vsyncs.
-  The re-architecture plan's items are done, rejected, or measured with nothing to recover, except precise reference
-  types (3.6) ([status](docs/perf-handoff.md#plan-status-2026-10-14)). What remains of a tap is the app's own Java, which
-  runs 3.2× slower than on ART in Kotlin-shaped workloads; in getter chains (9.3×) V8 inlines the calls, and the casts,
-  guards and fuel around them are the open lever. See [performance.md](docs/performance.md).
+  Every re-architecture plan item is done, rejected, or measured with nothing to recover
+  ([status](docs/perf-handoff.md#plan-status-2026-10-14)). What remains of a tap is the app's own Java, which runs 3.2×
+  slower than on ART in Kotlin-shaped workloads; skipping every Wasm cast left warm taps unchanged. See [performance.md](docs/performance.md).
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before

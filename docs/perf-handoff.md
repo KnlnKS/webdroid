@@ -195,33 +195,33 @@ it was measured and found to have nothing on the tap or frame path to recover.
 | 0.8 Baselines | Done | performance.md |
 | 1.1 Turn clock, vsync awareness | Rejected | "Rejected: a turn clock from the task's start" |
 | 1.2 Composite at latch | Not a lever | "Composite and frame close wait for nothing" |
-| 1.3 Vsync `fill()` scope | Done (`4fca56a56`) | "Vsync data reads are scoped"; the 1,000-vsync unit test was left out to keep tests to core behavior |
+| 1.3 Vsync `fill()` scope | Done (`4fca56a56`, `a062c394d`) | "Vsync data reads are scoped"; `wasm entry` reads a facade's array 1,000 times outside any scope and fails without the fix |
 | 1.4 Synchronous frame close | Not a lever | "Composite and frame close wait for nothing" |
 | 1.5 Shader prewarm | Not a lever | "RuntimeShader surface": 8.1–8.7 ms once per process with `--gpu` |
 | 1.6 Pipelined pointer events | Not a lever | "Pointer pipelining is not a lever" |
 | 1.7 Deferred upgrades | Done | "Worker answers wait out input" |
-| 1.8 APEX jars in the build | Not pursued | "Boot jars outside the platform build": 40–50 ms of a first launch for 29% more dex |
+| 1.8 APEX jars in the build | Rejected | "Rejected: every boot jar in the platform build": launches 2.5–9% faster, cold Komikku `appearance` 160 vs 136 ms |
 | 2.1 Deterministic numbering | Rejected | "Rejected: seeded app numbering to attach the first build mid-session" |
-| 2.2 Streamed app images | Not pursued | needs 2.1's numbering; the same entry measured a late code module costing the next tap 140–263 ms |
-| 2.3 Second tier in builds | Not pursued | repeat taps bound it at about 25–30 ms of a warm first visit, nothing cold |
-| 2.4 Second tier in Workers | Not pursued | "Rejected: compiling ahead in a Worker"; adoption needs the page's numbering (2.1) |
+| 2.2 Streamed app images | Rejected with 2.1 | it needs 2.1's numbering, and the 2.1 entry measured a late code module costing the next tap 140–263 ms |
+| 2.3 Second tier in builds | Not a lever | repeat taps bound it at about 25–30 ms of a warm first visit already inside the gate, nothing cold ("Repeat taps bound a shipped second tier") |
+| 2.4 Second tier in Workers | Rejected | "Rejected: compiling ahead in a Worker" (launch 8,645–8,670 → 8,792–8,911 ms); adoption needs the page's numbering (2.1) |
 | 2.5 Front-end throughput | Done | "Compiler front-end throughput" |
 | 3.1 Merged prologue | Rejected | "Rejected: one prologue call" |
 | 3.2 Final-target calls | Rejected | "Rejected: final targets called through their slot" |
-| 3.3 Inlined trivial bodies | Not pursued | "Not pursued: inlining trivial bodies" |
-| 3.4 Small items | Rejected or not a lever | array length: "Rejected: one array supertype"; the data reference is an immutable field of a final struct, which V8 can already reuse; literal globals and `acmp` were not tried |
+| 3.3 Inlined trivial bodies | Not a lever | 5–7% of calls ("Not pursued: inlining trivial bodies"); V8 already inlines such bodies in second-tier code (the `ktGetters` trace) |
+| 3.4 Small items | Rejected or not a lever | array length: "Rejected: one array supertype"; the data reference is an immutable field of a final struct, which V8 can already reuse; `acmp` is two casts inside the cast bound below; per-literal globals collide with lazily imported globals ("Kotlin-shaped workloads against ART") |
 | 3.5 Typed catches, constant-offset Unsafe | Not a lever | ART ratios: try/finally 0.5×, cancellation 1.6×; updater offsets are runtime values |
-| 3.6 Direct calls, precise types | Direct calls not a lever; precise types open | V8 already inlines `ktGetters`' getters in the second tier ("Kotlin-shaped workloads against ART"); the 9.3× left is casts, guards and fuel |
+| 3.6 Direct calls, precise types | Not a lever | V8 already inlines the getters; skipping every cast left warm Komikku taps unchanged (333 vs 330 ms) ("Kotlin-shaped workloads against ART") |
 | 4.1 Time-bounded preemption | Not a lever | "Background slices are short" |
-| 4.2 Background task priority | Not pursued | conditional on 4.1 |
+| 4.2 Background task priority | Not a lever | it would act on the background slices 4.1 measured short |
 | 5.1 Flat statics | Not a lever | "Flat statics are not a tap lever" |
-| 5.2 One stub per signature | Not pursued | all modules a cold tap creates take 3–17 ms (5.1 entry); its heap motive (TikTok) is unmeasured |
+| 5.2 One stub per signature | Not a lever | a cold launch makes about 318 stub pools of its ~6,400 modules, at ~18.5 µs a module in Chrome about 6 ms (performance.md); 5.1's entry puts all of a cold tap's modules at 3–17 ms |
 | 6.1 Batched input | Rejected | "Batched MOVEs (`?input=batched`)" |
 | 6.2 Batched SQLite | Not a lever | "App IPC is off the tap path": SQLite runs on background threads |
 | 6.3 Settings cache, PIC, binder pool | Not a lever | same entry: at most 5.4 ms in one window, no binder calls |
 | 6.4 system_server Worker | Condition unmet | same entry: service starts within 0.3 ms |
 | 7.1–7.3 Redraw less | Not a lever | "Composite and frame close wait for nothing": draw ≤ 0.9 ms, composite ≤ 0.5 ms at p95 |
-| 7.4 WebGL filters | Not pursued | only for apps that hit them; the gate apps' draws stay under 1 ms |
+| 7.4 WebGL filters | Not a lever in the gate apps | their draws, readbacks included, stay under 1 ms at p95 |
 
 Verified at `5bde3ee70`: `typecheck`; `bun run test` 1148/1148 on two straight runs (two earlier runs hit the `ZipException` flake); `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; `e2e --jobs 1` 7/7 in 175 s.
 
