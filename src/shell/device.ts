@@ -19,7 +19,7 @@ import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplic
 import { setAppHost } from "../android/apphost";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
-import { setManifest } from "../android/pm";
+import { extractNativeLibraries, setManifest } from "../android/pm";
 import { getPrefs, createAppData } from "../android/sharedprefs";
 import { filePathTransport } from "./file-path";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
@@ -190,6 +190,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest);
+  extractNativeLibraries();
   setTargetSdkVersion(target);
 
   hostWindowManager();

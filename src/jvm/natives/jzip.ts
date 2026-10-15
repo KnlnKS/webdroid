@@ -280,6 +280,8 @@ export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, re
   return into;
 }
 const lazyEntries = new WeakMap<Record<string, Uint8Array>, Map<string, [Uint8Array, ZEntry]>>();
+/** an entry's size, from the central directory while it is still compressed */
+export const treeEntrySize = (tree: Record<string, Uint8Array>, name: string): number => lazyEntries.get(tree)?.get(name)?.[1].size ?? tree[name].length;
 /** Inflate a tree's still-compressed entries that `wanted` names with the platform's native
  *  inflater, concurrently, ahead of the synchronous reads that would otherwise inflate in JS. */
 export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (name: string) => boolean): Promise<void> {
