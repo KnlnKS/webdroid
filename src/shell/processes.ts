@@ -135,7 +135,7 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
-  /** the orientation its display last turned to */
+  /** a Worker's display orientation: the screen it started on, then each turn it reports */
   landscape?: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
@@ -332,6 +332,7 @@ export class ProcessBroker {
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
     if (worker) {
       entry.presented = Promise.withResolvers();
+      entry.landscape = device.width > device.height;
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.dataset.pid = String(entry.pid); canvas.dataset.pkg = pkg;
       canvas.hidden = true;
