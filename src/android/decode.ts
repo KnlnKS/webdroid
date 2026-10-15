@@ -20,7 +20,7 @@ import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
 
 // ── headers
-interface ImageHeader {
+export interface ImageHeader {
   mime: string; width: number; height: number;
   /** how SkAndroidCodec samples the format: SkSampledCodec's floor, libjpeg's native scales, or SkScalingCodec's rounding */
   sampling: "floor" | "jpeg" | "round";
@@ -38,7 +38,7 @@ interface ImageHeader {
   layout: number[] | null; outline: number[] | null;
 }
 /** the input ends before the header does (SkCodec's kIncompleteInput) */
-const INCOMPLETE = "incomplete";
+export const INCOMPLETE = "incomplete";
 type Header = ImageHeader | typeof INCOMPLETE | null;
 const header = (mime: string, width: number, height: number, sampling: ImageHeader["sampling"], opaque: boolean): ImageHeader =>
   ({ mime, width, height, sampling, opaque, gray: false, frames: 1, orientation: 1, orientationAt: 0, orientationLE: false, complete: true, patch: null, layout: null, outline: null });
@@ -173,7 +173,7 @@ function bmff(b: Uint8Array, v: DataView): Header {
   return w ? header(avif ? "image/avif" : "image/heif", w, ht, "round", !alpha) : INCOMPLETE;
 }
 /** SkCodec::MakeFromStream's sniffing: null for a format none of the codecs claims */
-function readHeader(b: Uint8Array): Header {
+export function readHeader(b: Uint8Array): Header {
   // an empty input, or the start of a signature, is SkCodec's kIncompleteInput
   if (b.length < 4) return !b.length || [[0x89, 0x50, 0x4e], [0xff, 0xd8, 0xff], [0x47, 0x49, 0x46], [0x52, 0x49, 0x46], [0x42, 0x4d], [0, 0, 1]]
     .some((sig) => b.every((v, i) => i >= sig.length || v === sig[i])) ? INCOMPLETE : null;
@@ -213,7 +213,7 @@ function outputConfig(h: ImageHeader, preferred: number): number {
 /** The pixels of `region` (image coordinates, the whole image when null) at w x h, or null when
  *  the browser cannot decode them. `orient` applies EXIF orientation, as ImageDecoder does and
  *  BitmapFactory does not. */
-async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
+export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
   if (typeof createImageBitmap === "undefined") return null;
   let heif: ImageBitmap | null = null;
   try {
@@ -229,7 +229,7 @@ async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: nu
   } finally { heif?.close(); }
 }
 /** a decoded gray image as ALPHA_8 coverage */
-function grayToAlpha(b: NativeBitmap) {
+export function grayToAlpha(b: NativeBitmap) {
   const px = b.pixels();
   for (let i = 0; i < px.length; i += 4) { px[i + 3] = px[i]; px[i] = px[i + 1] = px[i + 2] = 0; }
   b.commit(0, 0, b.w, b.h);
@@ -440,11 +440,11 @@ const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Pr
   const h = readHeader(bytes);
   if (h === INCOMPLETE) throw yield decodeException(SOURCE_INCOMPLETE, "", null, source);
   if (!h) throw yield decodeException(SOURCE_MALFORMED_DATA, "Failed to create image decoder with message 'unimplemented'", null, source);
-  const [w, ht] = oriented(h, h.width, h.height);
+  const [w, ht] = oriented(h);
   return newObj(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies EncodedImage), w, ht, +(h.frames > 1), +!!h.patch);
 });
 /** width and height as SkAndroidCodec reports them once EXIF orientation is applied */
-const oriented = (h: ImageHeader, w: number, ht: number): [number, number] => h.orientation >= 5 ? [ht, w] : [w, ht];
+export const oriented = (h: ImageHeader, w = h.width, ht = h.height): [number, number] => h.orientation >= 5 ? [ht, w] : [w, ht];
 /** ImageDecoder's allocators */
 const ALLOCATOR_DEFAULT = 0, ALLOCATOR_HARDWARE = 3;
 /** PixelFormat's answers a PostProcessor gives */
@@ -481,7 +481,7 @@ rt.registerJnis(DECODER, {
       else if (conserveMemory) { if (header.opaque && !postProcess && allocator !== ALLOCATOR_HARDWARE && (allocator !== ALLOCATOR_DEFAULT || mutable)) config = RGB_565; }
       else if (extended) config = RGBA_F16;
       const hardware = !mutable && (allocator === ALLOCATOR_DEFAULT || allocator === ALLOCATOR_HARDWARE) && config !== ALPHA_8;
-      const [nw, nh] = oriented(header, header.width, header.height);
+      const [nw, nh] = oriented(header);
       if (unpremul && !header.opaque && (w !== nw || ht !== nh)) {
         const s = Math.max(1, Math.floor(nw / w)), [sw, sh] = oriented(header, ...sampledSize(header, s));
         if (sw !== w || sh !== ht) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot scale unpremultiplied pixels!");
