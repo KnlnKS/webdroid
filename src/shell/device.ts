@@ -240,7 +240,7 @@ export function pressBack(): Promise<void> {
  *  The display presents after it whether or not a window drew. */
 export async function testFrame(): Promise<void> {
   // the vsync's dispatch, then the Choreographer frame it posts, run on the main looper first
-  deliverVsync(true);
+  deliverVsync();
   await onMain(() => {});
   await onMain(() => {});
   redraw();

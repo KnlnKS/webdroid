@@ -87,7 +87,7 @@ export function recordVsync(time: number): boolean {
   note(Ev.Raf, 1);
   // An anchor taken from one jittered frame drifts toward the frames' mean phase, so the tolerance stays centred on it.
   nextVsync = elapsed < interval ? nextVsync + interval + (time - nextVsync) / 8 : time + interval;
-  deliverVsync();
+  deliver(false);
   return true;
 }
 /** The animation frame whose task is running, if one is: a picture handed over in that task is shown with that frame, one handed over later with the next */
@@ -123,12 +123,13 @@ export function frameDrawn(): void {
   perf.completedFrames++; perf.frameMs += performance.now() - frameStart;
   frameStart = null;
 }
-/** a vsync now: the display's, or with `stepped` one outside its pacing, a test harness stepping a
- *  frame on a controlled clock. A frame's request for the next vsync is answered by a later vsync,
- *  as a display's are a refresh period apart; under a controlled clock time can stand still, and a
- *  time-driven animation (a ValueAnimator's every update invalidates) then waits for time to pass
- *  rather than redraw the same frame at every host refresh. */
-export function deliverVsync(stepped = false): void {
+/** a vsync now, outside the display's pacing: a test harness stepping frames on a controlled clock */
+export function deliverVsync(): void { deliver(true); }
+/** A frame's request for the next vsync is answered by a later display vsync, as a display's are a
+ *  refresh period apart; under a controlled clock time can stand still, and a time-driven animation
+ *  (a ValueAnimator's every update invalidates) then waits for time to pass rather than redraw the
+ *  same frame at every host refresh. A `stepped` vsync answers every request. */
+function deliver(stepped: boolean): void {
   const at = uptimeMillis();
   latest = { nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
