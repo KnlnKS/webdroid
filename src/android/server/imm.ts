@@ -103,7 +103,10 @@ rt.register({ name: "webdroid/InputMethodSession", ctor: class extends JObj {}, 
     "appPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)V", "finishSession()V", "removeImeSurface()V",
     "updateCursorAnchorInfo(Landroid/view/inputmethod/CursorAnchorInfo;)V"),
 } });
-const methodSession = once(() => newObj("webdroid/InputMethodSession"));
+// a proxy, as an input method in its own process gives: IInputMethodSessionInvoker posts each call to
+// a local session with the editor's arguments unparceled, and the editor reuses its ExtractedText
+const methodSession = once(() => after(newObj("webdroid/InputMethodSession"), (session) =>
+  newObj("com/android/internal/inputmethod/IInputMethodSession$Stub$Proxy", "(Landroid/os/IBinder;)V", session)));
 
 const emptyInfoList = () => after(newArrayList(), list => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", list));
