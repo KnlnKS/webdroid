@@ -7,7 +7,7 @@
 // and a hyphenated line's glyphs; widths and line extents are reported.
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
-import { androidPlatform, androidTool } from "./android-sdk";
+import { adb, probeSdk, runDex } from "./adb";
 
 const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
 /** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
@@ -32,22 +32,12 @@ const PARAGRAPHS: [string, number, number, string?, number?][] = [
 const WIDTH_CASES = [100, 300, 400, 500, 700, 900].flatMap((w) => [10, 12, 13.5, 14, 16, 18, 20, 24, 32, 40].map((s) => `${w} ${s}`));
 
 if (process.argv.includes("--record")) {
-  const adb = (...args: string[]) => {
-    const r = Bun.spawnSync([androidTool("adb"), ...args], { stdout: "pipe", stderr: "pipe" });
-    if (r.exitCode) throw new Error(`adb ${args.join(" ")}: ${r.stderr}`);
-    return r.stdout.toString();
-  };
-  const dir = (await Bun.$`mktemp -d`.text()).trim(), javac = process.env.JAVA_HOME ? `${process.env.JAVA_HOME}/bin/javac` : "javac";
-  const jar = `${androidPlatform(35)}/android.jar`;
-  await Bun.$`${javac} --release 17 -cp ${jar} -d ${dir} scripts/TextLayoutProbe.java`.quiet();
-  await Bun.$`${androidTool("d8")} --min-api 34 --lib ${jar} --output ${dir} ${dir}/TextLayoutProbe.class`.quiet();
-  const cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t")).join("\n") + "\n";
+  const dir = (await Bun.$`mktemp -d`.text()).trim(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t")).join("\n") + "\n";
   await Bun.write(`${dir}/cases.txt`, cases);
   await Bun.write(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
-  adb("push", `${dir}/classes.dex`, "/data/local/tmp/webdroid-textlayout.dex");
   adb("push", `${dir}/cases.txt`, "/data/local/tmp/webdroid-textlayout.txt");
   adb("push", `${dir}/widths.txt`, "/data/local/tmp/webdroid-textwidths.txt");
-  const out = adb("shell", "CLASSPATH=/data/local/tmp/webdroid-textlayout.dex app_process / TextLayoutProbe /data/local/tmp/webdroid-textlayout.txt /data/local/tmp/webdroid-textwidths.txt").trim().split("\n");
+  const out = (await runDex("scripts/TextLayoutProbe.java", { sdk: probeSdk(), args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] })).split("\n");
   const layouts = out.filter((l) => !l.startsWith("widths "));
   await Bun.write(FIXTURE, `${cases.trimEnd().split("\n").map((c, i) => `case ${i}\t${c}`).join("\n")}\n${layouts.join("\n")}\n`);
   await Bun.write(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");

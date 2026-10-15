@@ -31,8 +31,7 @@ import { loadPlatformJar } from "../src/android/framework";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages";
 import { Arsc } from "../src/android/arsc";
 import { postScriptName } from "../src/android/sfnt";
-import { androidPlatform } from "./android-sdk";
-import { adb, asRoot, pull, runDex } from "./adb";
+import { adb, asRoot, probeSdk, pull, runDex } from "./adb";
 import { buildFixed, identity, recordIdentity, writeProperties } from "./identity";
 
 const OUT = "vendor/aosp";
@@ -256,7 +255,7 @@ async function recordProperties() {
  *  device reports having (InputDevice.hasKeys), which come from its key layout and its kernel's keys */
 async function recordInputDevices() {
   const keys: Record<string, number[]> = {};
-  for (const line of (await runDex("scripts/DumpInputDevices.java", { jar: `${androidPlatform(35)}/android.jar`, minApi: 34 })).split("\n")) {
+  for (const line of (await runDex("scripts/DumpInputDevices.java", { sdk: probeSdk() })).split("\n")) {
     const [name, codes = ""] = line.trim().split("\t");
     if (name === "Virtual" || name === "virtio_input_multi_touch_1") keys[name] = codes.split(" ").filter(Boolean).map(Number);
   }
