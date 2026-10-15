@@ -14,9 +14,10 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     const broker = attachProcessBrokerPort(data.broker);
     (await import("./device-storage")).useStorageReplica(data.storage, broker.storageWrite);
     const {sendFrames} = await import("./frame-port");
-    const {setScreenSink} = await import("./device");
+    const [{ setScreenSink, setDisplayChangeHandler }, { device }] = await Promise.all([import("./device"), import("./config")]);
     const display = sendFrames(data.display, data.screen);closeDisplay = display.close;
     setScreenSink(display.present);
+    setDisplayChangeHandler(() => void broker.displayOrientation(device.width > device.height));
     const [{ sendMedia }, { useAudioOut }, { useMediaElements }] = await Promise.all([import("./media-port"), import("../android/audio-output"), import("../android/mediaplayer")]);
     const media = sendMedia(data.media);
     useAudioOut(media.audio); useMediaElements(media.createElement);

@@ -34,6 +34,7 @@ export const runsHere = (pkg: string, process: string): boolean => pkg === appHo
 let appThread: JObj | null = null, launcher = false;
 /** whether this is the app the user launched, whose launcher activity starts with it */
 export const userLaunched = (): boolean => launcher;
+export const attached = (): boolean => appThread !== null;
 /** this process's IApplicationThread, once it attached */
 export function thisApp(): JObj {
   if (!appThread) throw rt.mkThrowable("java/lang/IllegalStateException", "Process has not attached");

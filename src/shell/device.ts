@@ -201,14 +201,17 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   return label;
 }
 
+const turnDisplay = async (landscape: boolean) => { if (applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged(); };
 /** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
  *  manager keeps the display in that orientation for it. */
 export function rotateDevice(landscape: boolean): Promise<void> {
   return onMain(async () => {
     const request = topOrientation();
-    if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
+    if (orientationForRequest(request) === null && request !== 5 && request !== 14) await turnDisplay(landscape);
   });
 }
+/** the display turned for another process's activity in front: this realm's configuration follows it */
+export const followDisplay = (landscape: boolean): Promise<void> => onMain(() => turnDisplay(landscape));
 function applyConfigChange(): void { postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
