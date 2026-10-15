@@ -32,6 +32,9 @@ export class NativeLooper {
   private woken = false;
   private waiter: (() => void) | null = null;
   polling = false;
+  /** the time of the vsync whose frame this looper is running (src/android/vsync.ts), until it next
+   *  waits for work: what the frame posts runs within it */
+  frameAt: number | null = null;
   constructor(readonly thread: JThread) {}
   wake(): void { this.woken = true; this.signal(); }
   /** run `fn` on this looper's thread at its next poll, between messages */
@@ -52,6 +55,7 @@ export class NativeLooper {
     const main = this === mainLooper;
     if (!this.callbacks.length && !this.woken) {
       this.polling = true;
+      if (timeout !== 0) this.frameAt = null;
       if (main) { mainDbg.depth--; note(Ev.LoopIdle, timeout); }
       try { await (timeout === 0 ? main ? wakeSoon() : yieldToLoop() : this.idle(timeout)); }
       finally { this.polling = false; if (main) { mainDbg.depth++; note(Ev.LoopWake); } }

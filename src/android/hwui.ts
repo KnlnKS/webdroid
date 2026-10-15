@@ -26,6 +26,8 @@ const SYNC_OK = 0, SYNC_LOST_SURFACE_REWARD_IF_FOUND = 2, SYNC_CONTEXT_IS_STOPPE
 interface Proxy {
   root: NativeRenderNode; surface: ReturnType<typeof nativeSurface>; opaque: boolean; stopped: boolean; frame: bigint;
   drawCallback: JObj | null; commitCallback: JObj | null; completeCallback: JObj | null; animating: boolean; running: boolean;
+  /** the time of the last frame drawn */
+  drawnAt: number;
 }
 const proxy = (h: bigint) => deref<Proxy>(h);
 
@@ -61,18 +63,19 @@ const drawFrame = driven(function* (p: Proxy): Gen<number> {
 const renderThread = Object.assign(new JThread(), { jname: "RenderThread" });
 /** render-thread animators step at the frame's time, and while any runs the next vsync draws again */
 function animate(p: Proxy): void {
-  p.running = animateRenderThread(uptimeMillis());
+  p.running = animateRenderThread(p.drawnAt = uptimeMillis());
   if (p.running) armAnimation(p);
 }
 /** draw at the next vsync unless a draw came first: the main thread's, sharing the vsync, has
- *  already stepped the animators */
+ *  already stepped the animators. A vsync no later than the last frame draws nothing new, which
+ *  hwui's CanvasContext::prepareTree declines to draw again (canDrawThisFrame). */
 function armAnimation(p: Proxy): void {
   if (p.animating) return;
   p.animating = true;
   const drawn = p.frame;
   onNextVsync(() => {
     p.animating = false;
-    if (p.frame === drawn) detached(() => callOn(renderThread, () => drawFrame(p)));
+    if (p.frame === drawn && uptimeMillis() > p.drawnAt) detached(() => callOn(renderThread, () => drawFrame(p)));
     else if (p.running) armAnimation(p);
   });
 }
@@ -93,7 +96,7 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
   "nCreateRootRenderNode()J": () => refBaseHandle(new NativeRenderNode("RootRenderNode"), 1),
   "nCreateProxy(ZJ)J": (translucent: number, root: bigint) => handle({
     root: deref<NativeRenderNode>(root), surface: null, opaque: !translucent, stopped: false, frame: 0n,
-    drawCallback: null, commitCallback: null, completeCallback: null, animating: false, running: false,
+    drawCallback: null, commitCallback: null, completeCallback: null, animating: false, running: false, drawnAt: -Infinity,
   } satisfies Proxy),
   "nDeleteProxy(J)V": (h: bigint) => release(h),
   "nSetSurface(JLandroid/view/Surface;Z)V": (h: bigint, surface: JObj | null) => { proxy(h).surface = nativeSurface(surface); },

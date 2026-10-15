@@ -34,7 +34,8 @@ export function vsync(): Promise<void> {
   });
 }
 
-interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj }
+/** `after`: a vsync answers it only once the time has passed this */
+interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj; after: number }
 const scheduled = new Set<Receiver>();
 let frame = 0;
 const DATA = "android/view/DisplayEventReceiver$VsyncEventData", TIMELINE = DATA + "$FrameTimeline";
@@ -122,15 +123,26 @@ export function frameDrawn(): void {
   perf.completedFrames++; perf.frameMs += performance.now() - frameStart;
   frameStart = null;
 }
-/** a vsync now, outside the display's pacing: a test harness stepping frames on a controlled clock */
-export function deliverVsync(): void {
-  latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
+/** a vsync now: the display's, or with `stepped` one outside its pacing, a test harness stepping a
+ *  frame on a controlled clock. A frame's request for the next vsync is answered by a later vsync,
+ *  as a display's are a refresh period apart; under a controlled clock time can stand still, and a
+ *  time-driven animation (a ValueAnimator's every update invalidates) then waits for time to pass
+ *  rather than redraw the same frame at every host refresh. */
+export function deliverVsync(stepped = false): void {
+  const at = uptimeMillis();
+  latest = { nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
   const hooks = vsyncHooks;
   vsyncHooks = [];
-  const dispatch = (r: Receiver) => { fill(r.data as never); return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count); };
+  const dispatch = (r: Receiver) => {
+    fill(r.data as never);
+    r.looper.frameAt = at;
+    return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count);
+  };
   let mainFrame = false;
   for (const r of scheduled) {
+    if (!stepped && at <= r.after) continue;
+    scheduled.delete(r);
     if (r.looper !== mainLooper) { r.looper.post(() => dispatch(r)); continue; }
     mainFrame = true;
     // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
@@ -147,7 +159,6 @@ export function deliverVsync(): void {
       }));
     });
   }
-  scheduled.clear();
   if (!mainFrame) for (const fn of hooks) fn();
   flushVsyncWaiters();
 }
@@ -159,10 +170,14 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
       // Java weak-reference reads may wait; native state must hold their referents.
       const r = yield ref(receiver), d = yield ref(data);
       if (!r || !d) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to initialize display event receiver.");
-      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d } satisfies Receiver);
+      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d, after: -Infinity } satisfies Receiver);
     }),
   "nativeGetDisplayEventReceiverFinalizer()J": () => FINALIZER,
-  "nativeScheduleVsync(J)V": (ptr: bigint) => { scheduled.add(deref<Receiver>(ptr)); },
+  "nativeScheduleVsync(J)V": (ptr: bigint) => {
+    const r = deref<Receiver>(ptr);
+    r.after = r.looper.frameAt ?? -Infinity;
+    scheduled.add(r);
+  },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
     const data = await newObj(DATA, "()V");
     fill(data);

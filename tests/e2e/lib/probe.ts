@@ -381,9 +381,11 @@ function installProbe(cfg: ProbeConfig): void {
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
       // an animation the app started after the clock ran through the window (a slow tap's ripple)
       // would stay at its first frame and ask for frames forever: time passes while frames are asked
-      // for, four display frames a sample, since only where the animation ends is captured
-      if (controlled && b.includes("vsync") && g.wd.guestClock.now() < animationEnd) {
-        await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
+      // for, four display frames a sample, since only where the animation ends is captured. A
+      // frame's request for the next waits for time, so past the bound this steps the frame, which
+      // also draws what came in meanwhile
+      if (controlled && b.includes("vsync")) {
+        if (g.wd.guestClock.now() < animationEnd) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
         await g.wd.testFrame();
       }
       // a still screen settles past timers and network, not past work under way: a main-thread job
