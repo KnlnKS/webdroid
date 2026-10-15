@@ -17,15 +17,20 @@ import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
 import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo";
 import { emitRestored, FUEL } from "../link/sched";
+import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
 const NONE: readonly string[] = [];
 /** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
 const CHUNK = 1024;
-import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 /** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
 const INVOKE_USE: Record<string, number> = { "invoke-virtual": 0, "invoke-direct": 1, "invoke-static": 2, "invoke-interface": 3 };
+/** the opcode of each binary operation that is one Wasm instruction, by operand type */
+const INT_OPS: Record<string, number> = { add: OP.i32_add, sub: OP.i32_sub, mul: OP.i32_mul, and: OP.i32_and, or: OP.i32_or, xor: OP.i32_xor, shl: OP.i32_shl, shr: OP.i32_shr_s, ushr: OP.i32_shr_u };
+const LONG_OPS: Record<string, number> = { add: OP.i64_add, sub: OP.i64_sub, mul: OP.i64_mul, and: OP.i64_and, or: OP.i64_or, xor: OP.i64_xor };
+const FLOAT_OPS: Record<string, number> = { add: OP.f32_add, sub: OP.f32_sub, mul: OP.f32_mul, div: OP.f32_div };
+const DOUBLE_OPS: Record<string, number> = { add: OP.f64_add, sub: OP.f64_sub, mul: OP.f64_mul, div: OP.f64_div };
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
@@ -154,7 +159,7 @@ export class MC {
   setF32() { this.store(this.cur); }
   setF64() { this.store(this.cur); }
 
-  run(): Code {
+  run(): void {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
     let t = performance.now();
     const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
@@ -208,10 +213,10 @@ export class MC {
     if (regions.length === 1 && !this.tries) {
       this.emitRegion(0);
       c.unreachable();
-      return c;
+      return;
     }
     this.regionLocal = c.newLocal(T.i32);
-    if (!this.tries) this.excLocal = c.newLocal(T.anyref);
+    if (this.excLocal < 0) this.excLocal = c.newLocal(T.anyref);
     this.push("$disp"); c.loop();
     if (this.tries) {
       this.push("$caught"); c.block(T.anyref);
@@ -238,7 +243,6 @@ export class MC {
     }
     this.pop(); c.end();                            // $disp loop
     c.unreachable();
-    return c;
   }
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;
@@ -333,7 +337,7 @@ export class MC {
     // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
     if (open.length) {
       const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
-      if (open.some((k) => loops.some(([from, to]) => +k.split(":")[0] >= from && +k.split(":")[0] <= to))) return true;
+      if (open.some((k) => { const pc = parseInt(k); return loops.some(([from, to]) => pc >= from && pc <= to); })) return true;
     }
     if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
     this.sites = new Set([...open, ...cold]);
@@ -348,10 +352,11 @@ export class MC {
     if (target && target !== "dynamic") return this.cx.directFunc(target) === undefined ? [] : [target];
     return virtual ? this.cx.guards(...virtual) : [];
   }
-  /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
+  /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
   private deferredSite(ins: Ins): boolean {
     return this.symbolic && this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
   }
+  /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   callee(ins: Ins): MethodInfo | null | "dynamic" {
     if (this.deferredSite(ins)) return "dynamic";
     let r = this.callees.get(ins.pc);
@@ -785,10 +790,7 @@ export class MC {
         this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
       case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(dex.typeName(ins.c))); this.set("I"); return;
-      case "array-length": {
-        // any array wrapper has the data array in field 2; use the ref wrapper type check-free via per-kind unknown -> test kinds
-        this.arrayLength(b); this.set("I"); return;
-      }
+      case "array-length": this.arrayLength(b); this.set("I"); return;
       case "new-instance": {
         if (this.unresolved(dex.type(b))) return;
         const name = dex.typeName(b);
@@ -866,7 +868,7 @@ export class MC {
     const kinds: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
     for (let i = 0; i < kinds.length; i++) {
       const k = kinds[i];
-      if (i < kinds.length - 1) { c.lget(this.tmpL).refTest(cx.tArr[k]).if_(T.i32); } 
+      if (i < kinds.length - 1) c.lget(this.tmpL).refTest(cx.tArr[k]).if_(T.i32);
       c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).arrayLen();
       if (i < kinds.length - 1) c.else_();
     }
@@ -883,7 +885,7 @@ export class MC {
       default: return { k: "i16", sign: "s" };
     }
   }
-  /** leaves the data array of array register `reg` in tmp local ... returns local holding (ref $Data) */
+  /** the local of each element kind that holds the data array of the array being accessed */
   dataLocal = new Map<ElemKind, number>();
   dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(ref(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
   idxCheck(k: ElemKind, idxReg: number) {
@@ -1046,10 +1048,6 @@ export class MC {
     const decl = declared[0] === "[" ? "java/lang/Object" : declared;
     const p = dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     const isStatic = kind === "invoke-static";
-    const pushArgs = () => {
-      let ri = isStatic ? 0 : 1;
-      for (const pt of p.params) { this.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
-    };
     const sigIdx = () => cx.descSig(desc, isStatic);
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
@@ -1058,22 +1056,20 @@ export class MC {
     if (site) this.enterSite();
     const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (isStatic) {
-      const t = target;
-      this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
+      this.ensure(target.cls); pushArgs(this, ins, p.params, 0); cx.callMethod(c, target);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
-      pushArgsFrom(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
+      pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
-      const t = target;
-      this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
+      this.nonNull(ins.regs[0]); pushArgs(this, ins, p.params); cx.callMethod(c, target);
     } else {
       // A native callback can load an override while this activation is still running.
       const declC = prog.get(decl);
       // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
-      const guards = this.callGuards(ins), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
+      const guards = this.callGuards(ins);
       this.nonNull(ins.regs[0]); c.lset(this.tmpL);
-      recv();
+      c.lget(this.tmpL); pushArgs(this, ins, p.params);
       c.lget(this.tmpL); cx.str.vtab(c, decl);
       if (declC && !declC.isInterface) {
         c.i32(cx.w.vslot(decl, target.key)).arrayGet(cx.tVT);
@@ -1148,23 +1144,21 @@ export class MC {
     };
     const fin = () => (type === "float" ? this.setF32() : this.setF64());
     if (type === "int") {
-      const map: Record<string, number> = { add: OP.i32_add, sub: OP.i32_sub, mul: OP.i32_mul, and: OP.i32_and, or: OP.i32_or, xor: OP.i32_xor, shl: OP.i32_shl, shr: OP.i32_shr_s, ushr: OP.i32_shr_u };
-      if (n === "rsub-int" || n.startsWith("rsub-int")) { c.i32(ins.c); this.get("I", b); c.raw(OP.i32_sub); this.set("I"); return; }
+      if (n.startsWith("rsub-int")) { c.i32(ins.c); this.get("I", b); c.raw(OP.i32_sub); this.set("I"); return; }
       if (opn === "div" || opn === "rem") {
         const direct = lit && ins.c !== 0 && ins.c !== -1;
         X(); Y();
         if (direct) c.raw(opn === "div" ? OP.i32_div_s : OP.i32_rem_s); else c.call(cx.helper(opn === "div" ? "idiv" : "irem"));
         this.set("I"); return;
       }
-      X(); Y(); c.raw(map[opn]); this.set("I"); return;
+      X(); Y(); c.raw(INT_OPS[opn]); this.set("I"); return;
     }
     if (type === "long") {
-      const map: Record<string, number> = { add: OP.i64_add, sub: OP.i64_sub, mul: OP.i64_mul, and: OP.i64_and, or: OP.i64_or, xor: OP.i64_xor };
       if (opn === "shl" || opn === "shr" || opn === "ushr") {
         X(); this.get("I", yr); c.raw(OP.i64_extend_i32_u, opn === "shl" ? OP.i64_shl : opn === "shr" ? OP.i64_shr_s : OP.i64_shr_u); this.set("J"); return;
       }
       if (opn === "div" || opn === "rem") { X(); Y(); c.call(cx.helper(opn === "div" ? "ldiv" : "lrem")); this.set("J"); return; }
-      X(); Y(); c.raw(map[opn]); this.set("J"); return;
+      X(); Y(); c.raw(LONG_OPS[opn]); this.set("J"); return;
     }
     // float/double
     if (opn === "rem") {
@@ -1172,13 +1166,11 @@ export class MC {
       else { X(); Y(); c.call(cx.imp.fmod); }
       fin(); return;
     }
-    const f32 = { add: OP.f32_add, sub: OP.f32_sub, mul: OP.f32_mul, div: OP.f32_div } as Record<string, number>;
-    const f64 = { add: OP.f64_add, sub: OP.f64_sub, mul: OP.f64_mul, div: OP.f64_div } as Record<string, number>;
-    X(); Y(); c.raw((type === "float" ? f32 : f64)[opn]); fin();
+    X(); Y(); c.raw((type === "float" ? FLOAT_OPS : DOUBLE_OPS)[opn]); fin();
   }
 }
 
-function pushArgsFrom(mc: MC, ins: Ins, params: string[]) {
-  let ri = 1;
+/** pushes the arguments of `params` from the invoke's registers, the first at `ins.regs[ri]` (past the receiver unless it is 0) */
+function pushArgs(mc: MC, ins: Ins, params: string[], ri = 1) {
   for (const pt of params) { mc.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
 }
