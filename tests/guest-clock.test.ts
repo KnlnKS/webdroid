@@ -21,7 +21,8 @@ describe("ControlledGuestClock", () => {
   test("remote callbacks acknowledge nested scheduling before the next deadline and cancel on death", async () => {
     const clock = new ControlledGuestClock(100), calls: string[] = [];
     const ports = new MessageChannel();
-    const server = serveClock(ports.port1, clock, 2, () => {});
+    let due = 0;
+    const server = serveClock(ports.port1, clock, 2, () => {}, () => due++);
     const client = connectClock({ controlled: true, now: 100, bootTime: 0, wallAtStart: 1000, port: ports.port2 })!;
     try {
       client.schedule(() => {
@@ -33,6 +34,14 @@ describe("ControlledGuestClock", () => {
       clock.schedule(() => calls.push("local"), 10, 1);
       expect(await clock.advanceToAsync(110, server.synchronize)).toBe(3);
       expect(calls).toEqual(["local", "remote:110", "nested:110"]);
+      expect(due).toBe(1);
+      // posted before the realm hears of an advance past it, a timer is due on arrival
+      await clock.advanceToAsync(115, async () => {});
+      client.schedule(() => calls.push(`late:${client.now}`), 2);
+      await server.synchronize(115);
+      expect(due).toBe(2);
+      expect(await clock.advanceToAsync(115, server.synchronize)).toBe(1);
+      expect(calls.at(-1)).toBe("late:115");
       expect(clock.pending()).toBe(0);
       client.schedule(() => calls.push("dead"), 1);
       await server.synchronize(110);
