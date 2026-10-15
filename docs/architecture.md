@@ -103,7 +103,7 @@ is how host code calls Java.
   ready for the next launch (`src/shell/processes.ts`).
 - **App:** after a first launch, a compile Worker builds the methods the app ran, ordered by the APK's own ART
   baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`src/jvm/reach.ts`), and persists the
-  build (`host/appcode.ts`, `host/persist.ts`). Bundled builds cover the gate apps
+  build (`host/appcode.ts`, `host/persist.ts`); the first process of an app to launch makes it. Bundled builds cover the gate apps
   (`vendor/wasm-aot/*/apps.json`). The build is refined once new demand reaches `REFINE_SHARE` (an eighth) of
   what it covers. A warm launch links the app's default namespace statically under a standard app loader.
 - **On demand:** anything not in a build compiles through the lazy-link stubs, in batches; classes linked on
@@ -111,6 +111,8 @@ is how host code calls Java.
   saved build, `World.ahead` compiles likely callees in the app thread's idle time.
 - **Second tier:** hot methods are recompiled in a compile Worker under the same numbering and adopted only if the
   World has not renumbered meanwhile (`link/unit.ts`).
+- Compile Workers start in a sandboxed frame of the page (`host/compilehost.ts`), which Chrome's site isolation
+  gives its own renderer, so they do not share the app's 4 GB pointer cage.
 
 ## Processes and system services
 

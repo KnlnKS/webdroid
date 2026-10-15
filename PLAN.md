@@ -59,10 +59,10 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
    content); do not raise the limit.
 3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
-   launch budget is not rechecked). Its 4 GB shared cage runs at 3.7–4.2 GB after 100 s; native code takes 27.6 s and
-   on-demand compiling 26 s of the main process's busy time. Lowering memory is the structural fix. The largest item
-   is 358,000 pool stubs, 72% for slots never looked up; passing the slot at the call site would let one stub per
-   signature serve every unlinked method.
+   launch budget is not rechecked). With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
+   native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. The main process holds
+   ~1.34 GB live, ~240 MB of it Program/dex metadata and ~80 MB pool stubs (358,000, 72% for slots never looked up;
+   passing the slot at the call site would let one stub per signature serve every unlinked method).
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
