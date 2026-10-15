@@ -223,6 +223,8 @@ it was measured and found to have nothing on the tap or frame path to recover.
 | 7.1–7.3 Redraw less | Not a lever | "Composite and frame close wait for nothing": draw ≤ 0.9 ms, composite ≤ 0.5 ms at p95 |
 | 7.4 WebGL filters | Not pursued | only for apps that hit them; the gate apps' draws stay under 1 ms |
 
+Verified at `5bde3ee70`: `typecheck`; `bun run test` 1148/1148 on two straight runs (two earlier runs hit the `ZipException` flake); `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; `e2e --jobs 1` 7/7 in 175 s.
+
 ---
 
 # Appendix: the approved plan
