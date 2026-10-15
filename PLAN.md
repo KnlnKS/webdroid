@@ -126,11 +126,6 @@ Unranked; each needs a measurement or a check against the current code before wo
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
-- **Reloads:** a page navigated away keeps its heap: after one Google Maps launch, `about:blank` still held
-  135 MB of heap and 455 MB of ArrayBuffers, retained from `(Stack roots)` through `WasmImportData`. That is
-  consistent with `system_server`'s suspended stacks never resuming. Same-site reloads reuse the renderer, so the
-  retained heap accumulates: after about an hour, 8.1 GB and ~78% GC time during a launch. Attribute the stacks
-  before choosing a fix, such as unwinding them on `pagehide` or moving `system_server` into a Worker (item 6).
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.
 - **Platform gaps recorded before the Wasm tier:** WebView has no Safe Browsing or saveState, and cross-origin
