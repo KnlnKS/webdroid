@@ -83,13 +83,13 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   req.signal?.throwIfAborted();
   // merges wait for the launch's first frame, and leave the memory to a build while one is made
   const compiler = new CompileClient(() => req.spawn(), () => !watching || builder.busy), builder = new Builder(req, key);
-  let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined, release = () => {};
   const close = () => {
     if (closed) return;
     closed = true;
     req.signal?.removeEventListener("abort", close);
     clearTimeout(timer); timer = undefined;
-    compiler.close(); builder.close();
+    compiler.close(); builder.close(); release();
   };
   req.signal?.addEventListener("abort", close, { once: true });
   if (req.signal?.aborted) close();
@@ -106,9 +106,24 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     refine, watch: (world) => {
       if (closed || watching) return;
       watching = true;
-      if (!saved) { fresh(world); (code.made = rebuild(world)).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); }); }
-      if (req.persist) watch(world);
+      claim(() => {
+        if (!saved) { fresh(world); (code.made = rebuild(world)).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); }); }
+        if (req.persist) watch(world); else void code.made?.then(release, release);
+      });
     }, settle, builds, close };
+
+  /** Every process of an app builds under the same key, each worker holding a World over the app's dexes and replacing the others' build: the first
+   *  process to launch makes it until its watch ends. */
+  function claim(start: () => void): void {
+    const locks = globalThis.navigator?.locks;
+    if (!locks) { start(); return; }
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    void locks.request(`webdroid:wasm-app:${key}`, { ifAvailable: true }, (lock) => {
+      if (!lock || closed) return;
+      start();
+      return released;
+    }).catch(() => {});
+  }
 
   /** how much `world` built on demand that the saved build lacks */
   function fresh(world: World): number {
@@ -155,7 +170,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     const tick = () => {
       timer = undefined;
       if (closed) return;
-      if (performance.now() > until && !building && !builder.busy) { builder.close(undefined, false); return; }
+      if (performance.now() > until && !building && !builder.busy) { builder.close(undefined, false); release(); return; }
       if (building || builder.busy) { again(); return; }
       const now = fresh(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
@@ -163,7 +178,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       if (now >= Math.max(MIN_FRESH, covered * REFINE_SHARE) && now === last) {
         building = true;
         refine(world, 1).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
-          .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(undefined, false); else again(); });
+          .finally(() => { building = false; if (++refines >= MAX_REFINES) { builder.close(undefined, false); release(); } else again(); });
         return;
       }
       last = now;
