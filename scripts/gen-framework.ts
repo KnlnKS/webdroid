@@ -7,6 +7,7 @@
 //   bun run gen-framework --settings # record only the device's settings tables
 //   bun run gen-framework --properties # record only the device's platform properties
 //   bun run gen-framework --overlays # record only the framework values the device's overlays replace
+//   bun run gen-framework --compat   # record only the device's target-SDK-gated and disabled compat changes
 //   bun run gen-framework --fonts    # record only the device's updated system fonts
 //   bun run gen-framework --identity [url] # record the identity properties and uname of a phone's
 //                                    factory image, by default the Pixel 9's (no device needed)
@@ -58,6 +59,7 @@ if (process.argv.includes("--input")) { await recordInputDevices(); process.exit
 if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
 if (process.argv.includes("--properties")) { await recordProperties(); process.exit(0); }
 if (process.argv.includes("--overlays")) { await recordDeviceOverlays(); process.exit(0); }
+if (process.argv.includes("--compat")) { await recordCompatChanges(); process.exit(0); }
 if (process.argv.includes("--fonts")) {
   const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
   await writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
@@ -110,6 +112,7 @@ if (!process.argv.includes("--verify")) {
   }
   await Bun.write(`${OUT}/build.txt`, `${fingerprint}\nsdk ${adb("shell", "getprop", "ro.build.version.sdk")}\n`);
   await recordDeviceOverlays();
+  await recordCompatChanges();
   await recordOsConstants();
   await recordCharsets();
   await recordInputDevices();
@@ -181,6 +184,19 @@ function resValue(type: string, text: string): [number, number] | null {
   const [radix, shift] = bits % 2 ** 23 === 0 ? [0, 23] : bits < 2 ** 23 ? [3, 0] : bits < 2 ** 31 ? [2, 8] : bits < 2 ** 39 ? [1, 16] : [0, 23];
   const mantissa = (f < 0 ? -Math.floor(bits / 2 ** shift) : Math.floor(bits / 2 ** shift)) & 0xffffff;
   return [0x05, mantissa << 8 | radix << 4 | unit];
+}
+
+/** the compat changes the reference device's PlatformCompat disables for some app: by id, the target
+ *  SDK each is enabled from, Infinity for those it disables for every app */
+async function recordCompatChanges() {
+  const changes: [string, string][] = [];
+  for (const [, id, rest] of adb("shell", "dumpsys", "platform_compat").matchAll(/^ChangeId\((\d+); name=\w+(.*)\)\s*$/gm)) {
+    const since = Number(/; enableSinceTargetSdk=(\d+)/.exec(rest)?.[1] ?? 0);
+    if (rest.includes("; disabled")) changes.push([id, "Infinity"]);
+    else if (since > 1) changes.push([id, String(since)]);
+  }
+  await writeGenerated("src/android/compat-changes.ts", ": the compat changes the reference device disables for some app.",
+    constObject("COMPAT_CHANGES", "Record<number, number>", changes), `${changes.length} changes`);
 }
 
 /** android.system.OsConstants as the reference device's libcore initializes them (initConstants) */

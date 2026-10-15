@@ -21,6 +21,7 @@ import { packages } from "../packages";
 import { checkUidPermission } from "../permissions";
 import { mkPfd } from "../os";
 import { clearUserData } from "../appdata";
+import { COMPAT_CHANGES } from "../compat-changes";
 
 export const GET_SHARED_LIBRARY_FILES = 0x400n;
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
@@ -49,6 +50,10 @@ export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): P
   lane = call.catch(() => {});
   return call;
 }
+/** PlatformCompat.getDisabledChanges: the changes the device disables for an app targeting `target`,
+ *  sorted, as AppCompatCallbacks binary-searches them */
+const disabledChanges = (target: number) =>
+  BigInt64Array.from(Object.entries(COMPAT_CHANGES).flatMap(([id, since]) => target < since ? [BigInt(id)] : [])).sort();
 export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 const bind = driven(function* (app: JObj): Gen<void> {
@@ -69,7 +74,8 @@ const bind = driven(function* (app: JObj): Gen<void> {
     "IZZZZLandroid/content/res/Configuration;Landroid/content/res/CompatibilityInfo;Ljava/util/Map;Landroid/os/Bundle;Ljava/lang/String;" +
     "Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V",
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
-    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), yield* systemFontMap(), now, now);
+    yield newObj("android/os/Bundle", "()V"), "unknown", null, null,
+    disabledChanges(getDeclared(info, APP_INFO, "targetSdkVersion")), new BigInt64Array(0), yield* systemFontMap(), now, now);
   if (launcher) yield startMainActivity(app, pkg);
 });
 
