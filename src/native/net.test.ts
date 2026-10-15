@@ -1,21 +1,19 @@
 import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jentry";
 import { Cpu, setA64 } from "./cpu";
-import { defineHost, ldp, lookupHost } from "./host";
+import { ldp } from "./host";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { mem } from "./mem";
-import { NET_SYSCALLS, netInit, socketCreate } from "./socket/syscalls";
+import { netInit, socketCreate } from "./socket/syscalls";
 import type { Socket, Accepted } from "./socket/core";
 import { SOL_SOCKET, type SocketAddress } from "./socket/abi";
 import { E } from "./abi";
-import { FS_SYSCALLS, javaCloseFd, readSocket, socketOf } from "./fs";
+import { javaCloseFd, readSocket, socketOf } from "./fs";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address";
 import { loopbackFetch } from "../shell/devicefetch";
+import { kernelCalls, libCalls } from "./calls.testkit";
 
-/** a 64-bit process's socket and file calls, each defined once */
-const KERNEL = { ...NET_SYSCALLS, ...FS_SYSCALLS }, slots = new Map<string, number>();
-const kernel = (name: string): number => { let at = slots.get(name); if (at === undefined) slots.set(name, (at = defineHost(name, KERNEL[name]))); return at; };
 
 const sock = (fd: number) => socketOf(fd) as Socket;
 const inet = (address: number[], port: number): SocketAddress => ({ family: address.length === 4 ? AF_INET : AF_INET6, ep: { address, port } });
@@ -52,7 +50,7 @@ test("a loopback TCP connection stays in the process, with Linux's errors", asyn
 test("getifaddrs exposes the same loopback interface as Java networking", async () => {
   setA64(false); kernelInit(); libcInit(); netInit();
   const cpu = new Cpu(mainThread, "ifaddrs-test"), result = mem.malloc(4);
-  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const call = libCalls(cpu, "libc.so");
   try {
     expect(await call("getifaddrs", result)).toBe(0);
     const entry = ldp(result), address = ldp(entry + 12);
@@ -66,7 +64,7 @@ test("getifaddrs exposes the same loopback interface as Java networking", async 
 test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpacket message whole", async () => {
   setA64(false); kernelInit(); libcInit(); netInit();
   const cpu = new Cpu(mainThread, "inet6-test"), scratch = mem.malloc(256);
-  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const call = libCalls(cpu, "libc.so");
   const sockaddr = scratch, length = scratch + 32, pair = scratch + 40, msg = scratch + 64, iov = scratch + 96, data = scratch + 128;
   try {
     const server = await call("socket", AF_INET6, 1, 0);
@@ -100,7 +98,7 @@ test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpac
 test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and recvmsg", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "msghdr-test"), scratch = mem.malloc(512);
-  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
+  const call = kernelCalls(cpu);
   const sockaddr = scratch, length = scratch + 32, msg = scratch + 64, iov = scratch + 128, data = scratch + 160, from = scratch + 224;
   const message = (name: number, nameLength: number, base: number, size: number) => {
     mem.memset(msg, 0, 56);
@@ -129,7 +127,7 @@ test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and r
 test("AF_UNIX passes descriptors and credentials, times out receives and breaks pipes as Linux does", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "scm-test"), scratch = mem.malloc(512);
-  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
+  const call = kernelCalls(cpu);
   const pair = scratch, msg = scratch + 16, iov = scratch + 80, data = scratch + 96, control = scratch + 128, option = scratch + 256, pipe = scratch + 288;
   const message = (controlLength: number) => {
     mem.memset(msg, 0, 56);

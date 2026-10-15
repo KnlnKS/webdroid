@@ -13,6 +13,7 @@ import { mkAssetFd } from "../src/android/resnative";
 import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { defineHost, lookupHost } from "../src/native/host";
+import { kernelCalls } from "../src/native/calls.testkit";
 import { libcInit } from "../src/native/libc";
 import { mem, guestAt } from "../src/native/mem";
 import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs";
@@ -550,7 +551,7 @@ describe("file-input-descriptor", () => {
   test("descriptor streams wait for pipe bytes without closing borrowed descriptors", async () => {
     setA64(true); kernelInit();
     const cpu = new Cpu(mainThread, "input-descriptor-pipe"), buffer = mem.malloc(16);
-    const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, FS_SYSCALLS[name]), args);
+    const call = kernelCalls(cpu);
     expect(await call("pipe2", buffer, 0)).toBe(0);
     const fd = await mkFd(mem.ld32(buffer));
     const writer = mem.ld32(buffer + 4);

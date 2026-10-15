@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jentry";
 import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost, ldp, stp } from "./host";
+import { defineHost, ldp, stp } from "./host";
+import { libCalls } from "./calls.testkit";
 import { libcInit, TM, readTs, writeTs } from "./libc";
 import { KLAYOUT, kernelInit } from "./syscall";
 import { mem } from "./mem";
@@ -14,7 +15,7 @@ test("native time fields preserve signed longs and the process ABI width", async
       setA64(a64); kernelInit();
       if (!a64) libcInit();
       const cpu = new Cpu(mainThread, "time-test"), value = mem.hostAlloc(16), tm = mem.hostAlloc(TM.size);
-      const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+      const call = libCalls(cpu, "libc.so");
       try {
         // the tm functions are an ARM32 process's alone; the kernel layer's timespecs are both ABIs'
         if (!a64) {
@@ -41,7 +42,7 @@ test("native time fields preserve signed longs and the process ABI width", async
 test("POSIX thread timers pass sigval and disarm after a one-shot expiry", async () => {
   setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "timer-test"), event = mem.hostAlloc(64), out = mem.hostAlloc(4), value = mem.hostAlloc(2 * KLAYOUT.TS_SIZE);
-  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const call = libCalls(cpu, "libc.so");
   const delivered = Promise.withResolvers<number>();
   let callback: Cpu | undefined, timer = 0;
   try {

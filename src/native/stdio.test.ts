@@ -2,16 +2,13 @@ import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jentry";
 import { vfs } from "../shell/vfs";
 import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost, stp, type HostFn } from "./host";
-import { LIBC_SYSCALLS, libcInit } from "./libc";
+import { lookupHost, stp } from "./host";
+import { libcInit } from "./libc";
 import { mem } from "./mem";
-import { FS_SYSCALLS, fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, javaReadFd, renamePath } from "./fs";
+import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, javaReadFd, renamePath } from "./fs";
 import { kernelInit } from "./syscall";
+import { kernel, kernelCalls, libCalls } from "./calls.testkit";
 
-/** a 64-bit process's calls are the kernel's: no HLE libc serves them */
-const KERNEL: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS };
-const slots = new Map<string, number>();
-const kernel = (name: string): number => { let at = slots.get(name); if (at === undefined) slots.set(name, (at = defineHost(name, KERNEL[name]))); return at; };
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
   setA64(false); kernelInit(); libcInit();
@@ -161,7 +158,7 @@ test("independent file opens share writes, growth and truncation without sharing
   const cpu = new Cpu(mainThread, "shared-file-test"), path = "/shared-file-test";
   vfs.write(path, Uint8Array.of(1, 2));
   const writer = javaOpenFd(path, 2), reader = javaOpenFd(path, 0), buf = mem.hostAlloc(8192);
-  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
+  const call = kernelCalls(cpu);
   try {
     mem.st8(buf, 7);
     expect(await call("pwrite64", writer, buf, 1, 5000)).toBe(1);
@@ -216,7 +213,7 @@ test("descriptor bytes retain shared positions and read lazy files through short
 test("descriptor bytes await pipe data without closing the caller's descriptor", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "descriptor-pipe-test"), buffer = mem.malloc(16);
-  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
+  const call = kernelCalls(cpu);
   expect(await call("pipe2", buffer, 0)).toBe(0);
   const reader = mem.ld32(buffer), writer = mem.ld32(buffer + 4);
   try {
@@ -232,7 +229,7 @@ test("descriptor bytes await pipe data without closing the caller's descriptor",
 test("inotify waits on a real descriptor and reports completed file writes", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "inotify-test"), path = "/inotify-test", buf = mem.malloc(32), name = mem.strdup(path);
-  const call = (method: string, ...args: number[]) => cpu.call(kernel(method), args);
+  const call = kernelCalls(cpu);
   vfs.write(path, Uint8Array.of(1));
   const fd = await call("inotify_init"), wd = await call("inotify_add_watch", fd, name, 0x8);
   try {
@@ -272,7 +269,7 @@ test("fts walks directories in pre- and postorder", async () => {
 test("writev and readv move each iovec in order through a pipe, stopping short rather than waiting", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "iovec-test"), buffer = mem.malloc(64);
-  const call = (name: string, ...args: number[]) => cpu.call(kernel(name), args);
+  const call = kernelCalls(cpu);
   const iov = (at: number, ...parts: [number, number][]) => parts.forEach(([base, len], i) => { mem.st64(at + i * 16, BigInt(base)); mem.st64(at + i * 16 + 8, BigInt(len)); });
   expect(await call("pipe2", buffer, 0)).toBe(0);
   const reader = mem.ld32(buffer), writer = mem.ld32(buffer + 4);
@@ -293,7 +290,7 @@ test("writev and readv move each iovec in order through a pipe, stopping short r
 test("a fifo goes with its file and ends when its last writer closes", async () => {
   setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "fifo-test"), path = mem.strdup("/fifo-test"), buf = mem.malloc(4);
-  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const call = libCalls(cpu, "libc.so");
   try {
     expect(await call("mkfifo", path, 0o600)).toBe(0);
     const reader = javaOpenFd("/fifo-test", 0x800), writer = javaOpenFd("/fifo-test", 1), copy = javaDupFd(writer);

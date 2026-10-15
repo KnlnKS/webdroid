@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jentry";
 import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost, ldp } from "./host";
+import { defineHost, ldp } from "./host";
+import { libCalls } from "./calls.testkit";
 import { mem } from "./mem";
 import { aaudioInit } from "./aaudio";
 
@@ -9,7 +10,7 @@ test("AAudio copies builder settings and exposes actual stream state at either p
   for (const a64 of [false, true]) {
     setA64(a64); aaudioInit();
     const cpu = new Cpu(new JThread(), "aaudio-test"), out = mem.malloc(16);
-    const call = (name: string, ...args: (number | bigint)[]) => cpu.call(lookupHost(name, "libaaudio.so")!, args);
+    const call = libCalls(cpu, "libaaudio.so");
     let stream = 0, builder = 0;
     try {
       expect(await call("AAudio_createStreamBuilder", out)).toBe(0); builder = ldp(out);
