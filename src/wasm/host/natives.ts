@@ -106,9 +106,8 @@ export class Natives implements NativeBinder {
   /** the plans of the natives by id, for the imports; and of every method, since what a method binds to depends on the Program it is in (a host class changes it) */
   private plans = new Map<string, Plan | string>();
   private byMethod = new WeakMap<MethodInfo, Plan | string>();
-  constructor(private src?: NativeSource) {}
-  get source(): NativeSource | undefined { return this.src; }
-  bridge(w: World): HostBridge { return new Bridge(w, this.src); }
+  constructor(readonly source: NativeSource | undefined = undefined) {}
+  bridge(w: World): HostBridge { return new Bridge(w, this.source); }
 
   /** `m` as a host import; `override` asks for the production method even where the bytecode would run (an intrinsic's error path) */
   private plan(m: MethodInfo, override = false): Plan | string {
@@ -121,7 +120,7 @@ export class Natives implements NativeBinder {
     // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
     if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); this.byMethod.set(m, p); return p; }
     // a native with no implementation yet (a JNI library binds its natives when it is loaded) finds one when it is called
-    const cls = specClass(m.cls), fn = this.src?.find(cls, m.key, m.isStatic, m.codeOff !== 0) ?? (!m.codeOff && m.flags & ACC.NATIVE ? this.src?.late?.(cls, m.key) : undefined);
+    const cls = specClass(m.cls), fn = this.source?.find(cls, m.key, m.isStatic, m.codeOff !== 0) ?? (!m.codeOff && m.flags & ACC.NATIVE ? this.source?.late?.(cls, m.key) : undefined);
     const raw = !!fn?.javaValues, opaque = (d: string) => (raw && isRef(d) ? OBJECT : d);
     const args = (recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params).map(opaque), params: VT[] = [];
     p = !fn ? "unregistered" : "";
@@ -233,7 +232,7 @@ export class Natives implements NativeBinder {
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
     const rlen = p.retArray ? c.newLocal(T.i32) : -1;
     if (p.retArray) c.lset(rlen);
-    for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).lget(a.alias).raw(OP.i32_eqz).raw(OP.i32_and).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(this.copy(cx, a.ek, false)).end();
+    for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).lget(a.alias).raw(OP.i32_eqz).raw(OP.i32_and).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(copyFn(cx, a.ek, false)).end();
     if (p.retArray) this.copyOut(cx, c, p.retArray, rlen, scratch);
     if (top >= 0) c.gget(scratch).lget(top).raw(OP.i32_le_u).if_().lget(sp0).gset(scratch).end();
     else if (back >= 0) c.lget(back).gset(scratch);
@@ -257,7 +256,7 @@ export class Natives implements NativeBinder {
       c.lget(o).i32(0).raw(OP.i32_ge_s).lget(n).i32(0).raw(OP.i32_ge_s).raw(OP.i32_and).lget(o).lget(len).raw(OP.i32_le_s).raw(OP.i32_and)
         .lget(n).lget(len).lget(o).raw(OP.i32_sub).raw(OP.i32_le_s).raw(OP.i32_and).if_().lget(o).lset(from).lget(n).lset(count).end();
     }
-    c.lget(data).refAsNonNull().lget(ptr).lget(from).lget(count).call(this.copy(cx, ek, true)).end();
+    c.lget(data).refAsNonNull().lget(ptr).lget(from).lget(count).call(copyFn(cx, ek, true)).end();
     same.forEach(() => c.end());
     return { i, data, ptr, len, from, count, ek, alias, ranged: !!range };
   }
@@ -266,7 +265,7 @@ export class Natives implements NativeBinder {
     const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true });
     c.lget(rlen).i32(0).raw(OP.i32_lt_s).if_(T.anyref).anyNull().else_()
       .lget(rlen).arrayNewDefault(cx.tData[ek]).lset(data)
-      .lget(data).refAsNonNull().gget(sp).i32(0).lget(rlen).call(this.copy(cx, ek, false))
+      .lget(data).refAsNonNull().gget(sp).i32(0).lget(rlen).call(copyFn(cx, ek, false))
       .gget(cx.vtGlobal(d)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(cx.tArr[ek]).end();
   }
   /** reserve(bytes) -> pointer: 8-aligned scratch past the current top, the memory grown to hold it */
@@ -280,7 +279,6 @@ export class Natives implements NativeBinder {
       return cx.mb.addFunc(cx.mb.addFuncType([T.i32], [T.i32]), c.finish(), "$reserve");
     });
   }
-  private copy(cx: Compiler, ek: ElemKind, toMem: boolean): number { return copyFn(cx, ek, toMem); }
 
   /** the "n" import module for `ids`: each native with its exception and suspension handling, and its arrays viewed in memory */
   imports(ctx: HostContext, ids: Iterable<string>): Record<string, HostFn> {
@@ -292,7 +290,7 @@ export class Natives implements NativeBinder {
       throw ctx.raise(j);
     };
     const raise = (e: unknown): never => {
-      const t = this.src?.thrown(e);
+      const t = this.source?.thrown(e);
       if (!t) throw e;
       return throwJava(t);
     };
@@ -338,17 +336,17 @@ export class Natives implements NativeBinder {
       if (key === "land") { out[key] = land as HostFn; continue; }
       const waits = key.endsWith("#s"), landing = key.endsWith("#p"), id = waits || landing ? key.slice(0, -2) : key, p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      const suspending = waits, cache = waits ? (p.waiting ??= new WeakMap()) : landing ? (p.plainLanding ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
+      const cache = waits ? (p.waiting ??= new WeakMap()) : landing ? (p.plainLanding ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
+      if (cached) { out[key] = cached; continue; }
       // The module's import name fixes its suspension/landing ABI, even when a
       // native bound after the build is now known to answer Promises.
       const abiPlan = { ...p, suspends: waits || landing, always: waits && p.always };
-      if (cached) { out[key] = cached; continue; }
       const planned = (suspending: boolean) => wrapper(abiPlan, landing ? p.fn : hostForm(p.fn), raise, () => {
         reportSuspended(id);
         ctx.gap(`${id}: native suspended (answers a Promise)`);
         return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });
       }, view, put, ctx.bridge, parkable(abiPlan) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { reportSuspended(id); ctx.sched.parkNative(promise); }, owes: () => ctx.sched.owes(), yield: (promise) => ctx.sched.parkNative(promise) } : aux, suspending);
-      cache.set(ctx, out[key] = adaptImport(planned, ctx, suspending));
+      cache.set(ctx, out[key] = adaptImport(planned, ctx, waits));
     }
     return out;
   }

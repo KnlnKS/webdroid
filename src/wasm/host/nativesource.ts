@@ -22,9 +22,8 @@ export const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
 });
-const hostSpecs = (): HostSpec[] => [...rt.natives.values()].map(hostSpec);
 export const nativeSource: NativeSource = {
-  hostSpecs,
+  hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
     if (cls === "java/lang/String") { const f = stringMethods.get(key) as HostFn | undefined; if (f || hasBody) return f; }
@@ -48,8 +47,7 @@ export const nativeSource: NativeSource = {
     const java = refOf(e);
     if (java) return { cls: "", msg: null, java };
     // a JS error escaping a native is the Java throwable rt.jx makes of it: a TypeError on null is a NullPointerException, a typed array too long an OutOfMemoryError.
-    // A suspension the engine refused is the harness's to see
-    // or a stack overflow, which the World turns into a StackOverflowError at the boundary
+    // A suspension the engine refused is the harness's to see, and a stack overflow the World turns into a StackOverflowError at the boundary
     if (e instanceof Error && e.name !== "SuspendError" && !(e instanceof RangeError && e.message.includes("call stack"))) e = rt.jx(e);
     return e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined;
   },

@@ -9,8 +9,8 @@ import { count } from "./stats";
 const AsyncFunction = (async () => {}).constructor;
 type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, unknown> };
 
-/** natives whose production implementation answers a Promise for some arguments without being written as a generator or an async function (the
- *  survey's flag C: `after(...)` and `awaited(...)` results returned as they are) */
+/** natives whose production implementation answers a Promise for some arguments without being written as a generator or an async function
+ *  (`after(...)` and `awaited(...)` results returned as they are) */
 export const MAY_SUSPEND = new Set<string>([
   "webdroid/FnRunnable.run()V",
   "com/android/org/conscrypt/NativeCrypto.EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I",
@@ -31,7 +31,6 @@ export const MAY_SUSPEND = new Set<string>([
   "sun/nio/ch/FileDispatcherImpl.force0(Ljava/io/FileDescriptor;Z)I",
   "sun/nio/ch/FileChannelImpl.map0(IJJ)J",
   "java/net/HttpURLConnection$$host.getInputStream()Ljava/io/InputStream;",
-  "libcore/io/Memory.peekIntNative(J)I",
   "android/graphics/BitmapFactory.nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
   "android/text/AndroidCharacter.getEastAsianWidth(C)I",
   "sun/nio/fs/UnixNativeDispatcher.init()I",
@@ -102,7 +101,9 @@ for (const id of ["sun/misc/Unsafe.setMemory(JJB)V","android/os/SharedMemory.nCr
  *  `guestAddress`), or hands on the result of a call into Java, which is a Promise when that call waits. The build lists the natives this holds for (`waitingNatives`), as the page
  *  cannot read it from minified code. A native with arrays needs it: it cannot be settled where it was called (natives.ts `parkable`). */
 const WAITS = /\b(after|awaited|pagesIn|external|externalRead|externalWrite|writeAt|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
-export const mayWait = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || WAITS.test(Function.prototype.toString.call(fn));
+/** a generator native (`driven`) or an async function, which always runs as Suspending */
+const declaredAsync = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction;
+export const mayWait = (fn: HostFn): boolean => declaredAsync(fn) || WAITS.test(Function.prototype.toString.call(fn));
 /** the natives the platform build was made for as Suspending, when the page has it */
 let declared: Set<string> | null = null;
 export const declareWaiting = (ids: string[]): void => { declared = new Set(ids); };
@@ -140,7 +141,7 @@ async function drive(it: Generator<unknown, unknown, unknown>, ctx: HostContext 
 export const SERVICES = "webdroid/";
 /** whether native `id` is imported as Suspending */
 export function suspends(id: string, fn: HostFn, arrays: boolean): boolean {
-  return (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || MAY_SUSPEND.has(id) || suspendedNatives.has(id) || (arrays && (id.startsWith(SERVICES) || (declared ? declared.has(id) : mayWait(fn))));
+  return declaredAsync(fn) || MAY_SUSPEND.has(id) || suspendedNatives.has(id) || (arrays && (id.startsWith(SERVICES) || (declared ? declared.has(id) : mayWait(fn))));
 }
 
 /** a plain import answered a Promise: nothing can wait there. It is reported, and the next module that imports it gets it as Suspending */
