@@ -8,6 +8,7 @@ import { loadDexes, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { externs } from "../../src/wasm/link/intrinsics";
 import { prepareApp } from "../../src/wasm/host/appcode";
+import { spawnCompileWorker } from "../../src/wasm/host/compiler";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import type { World } from "../../src/wasm/link/world";
 import { mountPlatform, natives, startProcess } from "./harness";
@@ -69,7 +70,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   const { dexes, prog } = workloadProgram(cfg), key = basename(aotDir!), persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
   const code = await prepareApp({ dexes, aot: { base: `/aot/${key}/`, key } as unknown as FetchStore, persist, roots: { launch: [] },
-    spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return new Worker("/wasm-compile-worker.js", { type: "module" }) as never; } });
+    spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return spawnCompileWorker(undefined, "/wasm-compile-worker.js"); } });
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;

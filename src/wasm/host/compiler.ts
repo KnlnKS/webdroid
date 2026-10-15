@@ -17,8 +17,41 @@ export interface WorkerPort extends Port { terminate(): void; onerror: ((e: Erro
 /** jobs waiting for the worker; a hot method that finds the queue full asks again after another budget */
 const MAX_QUEUE = 16, MAX_FAILURES = 3;
 /** a merge (World.mergeJob) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
- *  faster than collections shrink it, in the address space every process of the page shares */
+ *  faster than collections shrink it, in the address space the page's compile workers share (compilehost.ts) */
 const MERGE_REST = 2;
+
+/** what starts a compile worker: the ports of its protocol, of its fetches and of its end (it posts a failure's message, and is terminated when sent anything) */
+export interface CompileWorkerRequest { port: MessagePort; fetcher: MessagePort; ctl: MessagePort }
+/** A compile worker. The page's compile host starts it in a process of its own (compilehost.ts) when `host` is that host's port; a realm without one starts
+ *  it itself. Its fetches are this realm's, whose origin they are on. */
+export function spawnCompileWorker(host: MessagePort | undefined, url: string): WorkerPort {
+  const data = new MessageChannel(), fetcher = new MessageChannel(), ctl = new MessageChannel();
+  const req: CompileWorkerRequest = { port: data.port2, fetcher: fetcher.port2, ctl: ctl.port2 };
+  if (host) host.postMessage(req, [req.port, req.fetcher, req.ctl]); else startCompileWorker(url, req);
+  fetcher.port1.onmessage = async ({ data: [id, url] }: MessageEvent<[number, string]>) => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: ${res.status}`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      fetcher.port1.postMessage([id, bytes], [bytes.buffer]);
+    } catch (e) { fetcher.port1.postMessage([id, null, String(e)]); }
+  };
+  const worker: WorkerPort = {
+    onmessage: null, onerror: null,
+    postMessage: (m, transfer = []) => data.port1.postMessage(m, transfer),
+    terminate: () => { ctl.port1.postMessage(0); data.port1.close(); fetcher.port1.close(); },
+  };
+  data.port1.onmessage = (e) => worker.onmessage?.(e);
+  ctl.port1.onmessage = ({ data: message }) => worker.onerror?.({ message } as ErrorEvent);
+  return worker;
+}
+/** starts the compile worker of script `url` for `req` in this realm. The compile host's document runs its source, so it uses nothing outside itself. */
+export function startCompileWorker(url: string, req: CompileWorkerRequest, type: WorkerType = "module"): void {
+  const worker = new Worker(url, { type });
+  worker.onerror = (e) => req.ctl.postMessage(e.message || "the compile worker failed");
+  req.ctl.onmessage = () => { worker.terminate(); req.ctl.close(); };
+  worker.postMessage({ port: req.port, fetcher: req.fetcher }, [req.port, req.fetcher]);
+}
 
 /** `dexes` as the archives they are views of, copied for the worker (the copies are transferred) */
 export function containers(dexes: Iterable<DexFile>): Containers {

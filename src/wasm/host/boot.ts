@@ -31,7 +31,7 @@ import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode, type Built } from "./appcode";
 import { prefetchInWorker, serveStore } from "./aotload";
 import { openPersist } from "./persist";
-import type { CompileClient, WorkerPort } from "./compiler";
+import { spawnCompileWorker, type CompileClient } from "./compiler";
 import { onProcessExit, processExited } from "../../process-exit";
 
 
@@ -184,9 +184,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       const w = current(), prefix = w.since(w.base);
       if (JSON.stringify(prefix) !== JSON.stringify(seen)) void persisting.then((persist) => persist?.savePrefix(store!.key, prefix)).catch(() => {});
       try {
-        const workerUrl = new URL("/wasm-compile-worker.js", location.href);
-        workerUrl.searchParams.set("owner", location.href);
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await persisting, spawn: () => new Worker(workerUrl, { type: "module" }) as unknown as WorkerPort, roots, prefix, signal: lifetime.signal });
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await persisting, spawn: () => spawnCompileWorker(compileHost, "/wasm-compile-worker.js"), roots, prefix, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
@@ -242,9 +240,9 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled. Undefined when the
  *  server has no build for the sources, which leaves all code to the on-demand compiler. */
-let aotPort: MessagePort | undefined;
-/** a process Worker's store takes its modules from the page's (`serveAot`) */
-export function useAotPort(port: MessagePort): void { aotPort = port; }
+let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined;
+/** a process Worker's store takes its modules from the page's (`serveAot`), and the page's compile host starts its compile workers */
+export function usePagePorts(aot: MessagePort, compile: MessagePort): void { aotPort = aot; compileHost = compile; }
 export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
 
 export function openAot(): Promise<FetchStore | undefined> {

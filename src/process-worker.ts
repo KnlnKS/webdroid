@@ -14,11 +14,11 @@ globalThis.addEventListener("unhandledrejection", event => {
   logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
 });
 
-type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; warm: boolean };
+type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: boolean };
 let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
-async function prepare({ clock, aot, jars, warm }: Prestart) {
+async function prepare({ clock, aot, jars, compile, warm }: Prestart) {
   (await import("./guest-clock")).attachGuestClockPort(clock);
   await import("./natives");
   (await import("./android/framework")).receivePlatformJars(jars);
@@ -27,7 +27,7 @@ async function prepare({ clock, aot, jars, warm }: Prestart) {
     import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"), import("./jvm/natives/jvmruntime"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
-  await tier.useAotPort(aot);
+  await tier.usePagePorts(aot, compile);
   const runtime = Promise.all([skia.loadSkia(), tier.loadTier()]);
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package

@@ -57,10 +57,11 @@ export function receivePlatformJars(port: MessagePort): void {
   jars = new Promise<Uint8Array[] | null>((resolve) => { port.onmessage = ({ data }) => { port.close(); resolve(data); }; })
     .then((list) => list ?? (jars = null, fetchPlatformJars()));
 }
+export const platformJarUrl = (jar: string): string => `/vendor/aosp/${jar}`;
 /** start fetching the platform jars, ahead of the app they are indexed behind */
 export function fetchPlatformJars(): Promise<Uint8Array[]> {
   return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
-    const res = await fetch(`/vendor/aosp/${jar}`);
+    const res = await fetch(platformJarUrl(jar));
     if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: bun run gen-framework`);
     return new Uint8Array(await res.arrayBuffer());
   }));

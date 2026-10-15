@@ -3,6 +3,7 @@ import { fetchPlatformJars, jarDexes } from "../../src/android/framework";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { openAot, platformProgram } from "../../src/wasm/host/boot";
 import { prepareApp } from "../../src/wasm/host/appcode";
+import { spawnCompileWorker } from "../../src/wasm/host/compiler";
 import { openPersist } from "../../src/wasm/host/persist";
 import { dexesIn } from "../../src/jvm/dex";
 import { Program } from "../../src/wasm/compiler/program";
@@ -59,7 +60,7 @@ async function probe(): Promise<ProbeResult> {
   const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   const dexes = dexesIn(new Uint8Array(await (await fetch("/app.dex")).arrayBuffer()), "app.dex"), persist = await openPersist();
    const p0 = performance.now();
-  const code = await prepareApp({ dexes, aot: store!, persist, spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }), roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } });
+  const code = await prepareApp({ dexes, aot: store!, persist, spawn: () => spawnCompileWorker(undefined, "/wasm-compile-worker.js"), roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } });
   const prepareMs = performance.now() - p0, b0 = performance.now(), w = new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, net: hostNet, guest: guestMemory, aot: store, app: code.saved, compiler: code.compiler });
   code.start(w);  await startProcess(w);  const bootMs = performance.now() - b0, s = w.stats;
   // the app: a loop hot enough to ask for the second tier, and the entry points whose answers every load must agree on

@@ -30,8 +30,12 @@ export function loadTier(): Promise<void> {
 export function serveAot(port: MessagePort): void {
   void import("../wasm/host/boot").then((host) => host.serveAot(port));
 }
-export async function useAotPort(port: MessagePort): Promise<void> {
-  (await import("../wasm/host/boot")).useAotPort(port);
+/** and the page's compile host (wasm/host/compilehost.ts) starts its compile workers */
+export function serveCompileWorkers(port: MessagePort): void {
+  void import("../wasm/host/compilehost").then((host) => host.serveCompileWorkers(port));
+}
+export async function usePagePorts(aot: MessagePort, compile: MessagePort): Promise<void> {
+  (await import("../wasm/host/boot")).usePagePorts(aot, compile);
 }
 
 /** the Wasm tier's compiled app code, once the app's dex files are loaded */
