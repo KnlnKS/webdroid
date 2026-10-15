@@ -14,7 +14,8 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     const broker = attachProcessBrokerPort(data.broker);
     (await import("./device-storage")).useStorageReplica(data.storage, broker.storageWrite);
     const {sendFrames} = await import("./frame-port");
-    const [{ setScreenSink, setDisplayChangeHandler }, { device }] = await Promise.all([import("./device"), import("./config")]);
+    const [{ setScreenSink, setDisplayChangeHandler, setRotation }, { device }] = await Promise.all([import("./device"), import("./config")]);
+    setRotation(data.rotation);
     const display = sendFrames(data.display, data.screen);closeDisplay = display.close;
     setScreenSink(display.present);
     setDisplayChangeHandler(() => void broker.displayOrientation(device.width > device.height));

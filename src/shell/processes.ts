@@ -23,7 +23,7 @@ import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceSt
 import { ActivityStack } from "./activitystack";
 import type { FileSource } from "./lazyfile";
 import { vfs } from "./vfs";
-import { device, formatScreen } from "./config";
+import { device, formatScreen, naturalLandscape } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
 import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
@@ -255,7 +255,7 @@ export class ProcessBroker {
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
     rotate: async (entry) => { if (entry.landscape !== undefined) await (await import("./device")).followDisplay(entry.landscape); },
-  }, device.orientation === 2);
+  }, naturalLandscape);
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
       const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
@@ -409,7 +409,8 @@ export class ProcessBroker {
       ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
         registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker.port,
-        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry) };
+        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry),
+        rotation: this.activities.rotation };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       entry.ime = ime; entry.display = frames;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.

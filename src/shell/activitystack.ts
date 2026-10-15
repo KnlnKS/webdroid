@@ -3,6 +3,7 @@
 // visibility changes, made one at a time. The shown processes' canvases are layered to match.
 import type { ParcelData } from "../android/binder";
 import { guestSleep } from "../guest-clock";
+import type { Rotation } from "./config";
 import type { ActivityRequest, Entry } from "./processes";
 
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
@@ -31,10 +32,14 @@ export class ActivityStack {
   private layers: number[] = [];
   /** the display turning for the last orientation the process that fills it reported */
   private following: Promise<void> = Promise.resolve();
-  /** `sensor`: the physical rotation, landscape or not. Like the proposed rotation DisplayRotation
-   *  reads from the orientation sensor, it is device-wide state, not an event: it starts as the
-   *  screen is configured, and each rotation sets it. */
-  constructor(private port: StackPort, private sensor: boolean) {}
+  /** the physical rotation, landscape or not. Like the proposed rotation DisplayRotation reads from
+   *  the orientation sensor, it is device-wide state, not an event: each rotation sets it. */
+  private sensor: boolean;
+  /** `natural`: the display's natural rotation (ROTATION_0), landscape or not, as the screen is
+   *  configured; the sensor starts there */
+  constructor(private port: StackPort, private natural: boolean) { this.sensor = natural; }
+  /** the rotation state a process starts with */
+  get rotation(): Rotation { return { sensor: this.sensor, natural: this.natural }; }
 
   get foreground(): number { return this.top; }
   shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
@@ -59,11 +64,16 @@ export class ActivityStack {
    * and the display follows the turn it reports. Like DisplayRotation, which defers a rotation while
    * a transition runs, it waits for the activity changes before it, and then sends the state as it
    * is: a process that came to fill the display meanwhile resolved it as it did (show).
+   * Every other process records the state at once, so that an activity it later launches or
+   * resumes starts in that rotation; a visible one there that sets its own orientation turns now.
    */
   rotate(caller: number, landscape: boolean): Promise<void> | null {
     this.sensor = landscape;
-    const owner = this.layers[0];
-    if (!owner || owner === caller || !this.port.alive(owner)) return null;
+    const owner = this.layers[0], routed = !!owner && owner !== caller && this.port.alive(owner);
+    for (const entry of this.port.entries()) {
+      if (entry.pid !== owner && (routed || entry.pid !== caller) && this.port.alive(entry.pid)) this.notify(entry, { kind: "rotate", landscape });
+    }
+    if (!routed) return null;
     return this.enqueue(async () => {
       const owner = this.layers[0];
       if (owner === caller || !this.port.alive(owner)) return;
@@ -192,9 +202,10 @@ export class ActivityStack {
     if (!layers.length) return;
     const entry = this.port.entry(layers[0]);
     void this.port.rotate(entry);
-    if (layers[0] !== owner) {
-      this.port.activity(entry, { kind: "rotate", landscape: this.sensor })
-        .catch((error) => { if (!entry.dead) console.error("[activity process]", error); });
-    }
+    if (layers[0] !== owner) this.notify(entry, { kind: "rotate", landscape: this.sensor });
+  }
+  /** a request no activity change waits on */
+  private notify(entry: Entry, request: ActivityRequest): void {
+    this.port.activity(entry, request).catch((error) => { if (!entry.dead) console.error("[activity process]", error); });
   }
 }

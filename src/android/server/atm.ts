@@ -91,7 +91,7 @@ function* resume(r: ActivityRecord): Gen<void> {
   const results = r.results.splice(0);
   r.state = "resumed";
   yield* setClientVisible(r.token, true);
-  if (displayHooks.requestOrientation?.(r.orientation)) yield configurationChanged();
+  if (displayHooks.requestOrientation?.(orientationRequest())) yield configurationChanged();
   const top = yield topResumedItem(r, true);
   if (yield* ensureConfiguration(r, results, yield resumeItem(r), top)) return;
   const delivery = results.length ? yield item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, yield newArrayList(results)) : null;
@@ -117,8 +117,8 @@ function* ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JOb
     r.token, results.length ? yield newArrayList(results) : null, null, changes, merged, 1, windowInfo), after], lifecycle);
   return true;
 }
-/** the shell's display: turns it for an orientation request, answering whether it turned */
-export const displayHooks: { requestOrientation?: (request: number) => boolean } = {};
+/** the shell's display: turns it for the request orientationRequest finds, answering whether it turned */
+export const displayHooks: { requestOrientation?: (request: number | null) => boolean } = {};
 /** ActivityTaskManagerService.updateConfigurationLocked: the process hears the new configuration,
  *  then each visible activity (the others when they next resume), then each window its new frames */
 export const configurationChanged = driven(function* (): Gen<void> {
@@ -134,8 +134,19 @@ export const configurationChanged = driven(function* (): Gen<void> {
   }
   yield resizeWindows();
 });
-/** the orientation the top activity asks for, or unspecified */
-export const topOrientation = (): number => stack.at(-1)?.orientation ?? -1;
+/**
+ * WindowContainer.getOrientation over this process's task: from the top, the first visible activity
+ * that asks for an orientation or covers what is beneath it. Null when none does: every activity
+ * here is stopped, or translucent over another process's activity, which then sets it.
+ */
+export function orientationRequest(records: readonly Pick<ActivityRecord, "orientation" | "translucent" | "state" | "finishing">[] = stack): number | null {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const r = records[i];
+    if (r.finishing || r.state === "stopping" || r.state === "stopped" || r.state === "destroying") continue;
+    if (r.orientation !== -1 || !r.translucent) return r.orientation;
+  }
+  return null;
+}
 function* stop(r: ActivityRecord): Gen<void> {
   if (r.state !== "paused") return;
   r.state = "stopping";
@@ -222,13 +233,13 @@ function* startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityR
     if (yield* reuseActivity(intent, info)) return;
     const token = yield* awaited(systemToken());
     const prev = stack.at(-1);
-    const orientation = getDeclared<number>(info, AI, "screenOrientation");
+    const orientation = getDeclared<number>(info, AI, "screenOrientation"), translucent = yield* translucentTheme(info);
     if (prev) yield pause(prev);
-    // the display turns for an activity that fixes its orientation before it launches
-    if (displayHooks.requestOrientation?.(orientation)) yield configurationChanged();
+    // the display turns for the activity before it launches, so that it starts in that orientation
+    if (displayHooks.requestOrientation?.(orientationRequest([...stack, { orientation, translucent, state: "launching", finishing: false }]))) yield configurationChanged();
     const { global, override } = yield* awaited(configurations());
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent: yield* translucentTheme(info), pausing: null, owed: null, remote, config: global, orientation };
+      translucent, pausing: null, owed: null, remote, config: global, orientation };
     stack.push(r);
     reportPresentation();
     const windowInfo = yield newObj("android/window/ActivityWindowInfo", "()V");
@@ -465,7 +476,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token);
     if (!r || r.orientation === orientation) return;
     r.orientation = orientation;
-    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) detached(configurationChanged, logUncaught);
+    if (displayHooks.requestOrientation?.(orientationRequest())) detached(configurationChanged, logUncaught);
   },
   "willActivityBeVisible(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => setTranslucent(token, true),
