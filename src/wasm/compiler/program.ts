@@ -292,13 +292,13 @@ export class Program {
     seen.add(loader);
     const loaded = this.initiatedBy(loader, name);
     if (loaded) return loaded;
-    if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
+    if (loader === this.boot) return this.definedBy(loader, name);
     // as DelegateLastClassLoader.loadClass: the boot loader, then findClass, then the parent
     const first = loader.ownFirst ? this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name)
       : loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
     if (first) return first;
     for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
-    const own = loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
+    const own = this.definedBy(loader, name);
     if (own) return own;
     for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
     return loader.ownFirst && loader.parent ? this.lookup(loader.parent, name, seen) : undefined;
