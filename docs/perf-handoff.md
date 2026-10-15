@@ -118,6 +118,13 @@ A maintainability pass followed the performance work: `git log 7ef4de0b5^..bdff1
   - `fwtest` 31/31, and `smoke apks/FitNotes.apk` with no unexplained failures.
   - After `bun run aot`, `bun run e2e --jobs 1` passed 7/7 in 170 s with empty telemetry.
   - `wasm all` last ran clean before the native commits; none of them touches the shared front end.
+
+A second pass (`git log 2510a6a77..`) cut TypeScript by 121 lines net (+113/−234), and removed the broken `scripts/libc-bench`. jscpd 4.0.5 (`--min-lines 4 --min-tokens 50` over src, scripts and tests) went from 42 clones and 227 duplicated lines to 35 and 184.
+
+- **Removed.** `waitsFor`/`Strand.waitsOn` (no reader), `answeringInput` (the input window is `answeringFor` alone), the unused test `axmlBytes` and harness `unbits`.
+- **Consolidated.** One CREATOR helper in binder, one surrogate pair in jstring, one `BOX` table in `compiler/fields.ts`, and one AEAD core in conscrypt. try_table catch clauses are encoded once. The native tests share `calls.testkit.ts`, and the device probes record through `runDex`.
+- **Left.** The fdlibm `log`/`log10` and `cha.ts` walk clones; the first mirrors the C reference, and the second would need a visit protocol on a compile hot path.
+- **Verified at `866f1ceca`.** `typecheck`; `bun run test` 1148/1148; `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; and, after `bun run aot`, `e2e --jobs 1` 7/7 in 175 s. The rewritten vector and input probes reproduce their fixtures on the reference AVD, apart from per-boot input-device generation counters. The AVD kills `textcmp --record` both before and after the change.
   - The parallel quick gate (5 jobs) failed 5/7 at host load ~9. Every failure was a timeout, a wedged main loop, or a Worker stuck at "Reading package…", and each failed flow passed on a serial rerun. That fits the host-capacity failures noted below, but no matched parallel run of the starting commit was made.
 
 ## Verification status (end of 2026-10-13)
