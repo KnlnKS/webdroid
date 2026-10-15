@@ -89,7 +89,8 @@ function makeEntry(w: World): Entry {
   };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
-    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s;
+    // the globals name the strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own
+    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : hostStrands.get(s) === rt.cur ? s : null;
     if (running) return running;
     const captured = javaStrands.get(rt.cur);
     return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
