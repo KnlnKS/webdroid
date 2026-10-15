@@ -532,8 +532,8 @@ describe("file-input-descriptor", () => {
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
       const a = new Int8Array(3), b = new Int8Array(3);
-      expect(await Promise.all([vcall(input, "read", "([B)I", a), vcall(input, "read", "([B)I", b)])).toEqual([2, 2]);
-      expect([...a, ...b]).toEqual([5, 6, 0, 7, 8, 0]);
+      expect(await Promise.all([vcall(input, "read", "([B)I", a), vcall(input, "read", "([B)I", b)])).toEqual([3, 1]);
+      expect([...a, ...b]).toEqual([5, 6, 7, 8, 0, 0]);
       expect(await vcall(input, "read", "([BII)I", a, 3, 0)).toBe(0);
       expect(await vcall(input, "markSupported", "()Z")).toBe(0);
       for (const [method, desc, args, error] of [

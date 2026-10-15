@@ -50,6 +50,18 @@ export class SliceFile implements FileSource {
   }
 }
 
+/** `length` bytes at `offset`, fewer only at the end: a source may answer one read in chunks */
+export function readAt(source: FileSource, offset: number, length: number): Uint8Array | Promise<Uint8Array> {
+  const complete = (first: Uint8Array): Uint8Array | Promise<Uint8Array> => first.length >= length || !first.length ? first
+    : readFully(source, offset + first.length, length - first.length).then((rest) => {
+      const out = new Uint8Array(first.length + rest.length);
+      out.set(first); out.set(rest, first.length);
+      return out;
+    });
+  const first = source.read(offset, length);
+  return first instanceof Promise ? first.then(complete) : complete(first);
+}
+
 export async function readFully(source: FileSource, offset = 0, length = source.size - offset): Promise<Uint8Array> {
   const end = Math.min(source.size, offset + Math.max(0, length));
   const size = Math.max(0, end - offset);
