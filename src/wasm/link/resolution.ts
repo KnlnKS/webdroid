@@ -34,20 +34,26 @@ export function resolveHandleReference(w: World, method: MethodInfo, index: numb
   return ready instanceof Promise ? ready.then(signature) : signature();
 }
 
+/** a throwable of `cls` with `message` whose cause is the Java throwable `cause` */
+export function causedThrowable(w: World, cls: string, message: string, cause: object): object {
+  const throwable = w.makeThrowable(cls, message);
+  w.hostFn("throwable:cause", ["L", "L"], "V", (cx, c) => {
+    const t = "java/lang/Throwable", st = cx.structFor(t);
+    c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(t, { owner: t, name: "cause", desc: "Ljava/lang/Throwable;" }));
+  })(throwable, cause);
+  return throwable;
+}
+
 export function resolveType(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
-  const component = name[0] === "[" ? name.replace(/^\[+/, "") : `L${name};`;
+  const symbolic = name[0] === "[" ? name : `L${name};`, component = symbolic.replace(/^\[+/, "");
+  const message = `Failed resolution of: ${symbolic}`;
   if (!objectOfLoader(w, loader) && component[0] === "L" && !w.prog.lookup(loader, descToName(component))) {
-    throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: ${name[0] === "[" ? name : `L${name};`}`));
+    throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", message));
   }
   const fail = (error: unknown): never => {
     const cause = w.throwable(error);
     if (!cause || !w.prog.isSubclass(w.classNameOf(cause), "java/lang/ClassNotFoundException")) throw error;
-    const throwable = w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: ${name[0] === "[" ? name : `L${name};`}`);
-    w.hostFn("resolve:type:cause", ["L", "L"], "V", (cx, c) => {
-      const cls = "java/lang/Throwable", st = cx.structFor(cls);
-      c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(cls, { owner: cls, name: "cause", desc: "Ljava/lang/Throwable;" }));
-    })(throwable, cause);
-    throw w.exception(throwable);
+    throw w.exception(causedThrowable(w, "java/lang/NoClassDefFoundError", message, cause));
   };
   try { const key = resolveClass(w, loader, name, owner); return key instanceof Promise ? key.catch(fail) : key; }
   catch (error) { return fail(error); }

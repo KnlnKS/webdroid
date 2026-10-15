@@ -4,7 +4,7 @@ import { symbolicMethod } from "../compiler/linkage";
 import { rt } from "../compiler/rtfns";
 import { T } from "../compiler/wasmbin";
 import { canAccess } from "./classes";
-import { resolveType } from "./resolution";
+import { causedThrowable, resolveType } from "./resolution";
 import { emitSave, type Strand } from "./sched";
 import type { World } from "./world";
 
@@ -103,12 +103,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
   const linkage = (message: string, error?: unknown): never => {
     const cause = error === undefined ? undefined : w.throwable(error);
     if (error !== undefined && !cause) throw error;
-    const value = w.makeThrowable("java/lang/LinkageError", message);
-    if (cause) w.hostFn("signature:cause", ["L", "L"], "V", (cx, c) => {
-      const t = cx.structFor("java/lang/Throwable");
-      c.lget(0).refCast(t).lget(1).structSet(t, cx.fieldIndex("java/lang/Throwable", { owner: "java/lang/Throwable", name: "cause", desc: "Ljava/lang/Throwable;" }));
-    })(value, cause);
-    throw w.exception(value);
+    throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.makeThrowable("java/lang/LinkageError", message));
   };
   const type = (m: MethodInfo, descriptor: string): string | Promise<string> => {
     if (descriptor[0] !== "L" && descriptor[0] !== "[") return descriptor;
