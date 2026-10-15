@@ -1,4 +1,4 @@
-// The calls the entry suite makes from the host, through the names jentry exports, whichever Entry is selected, and what they answer as lines of text.
+// The calls the entry suite makes from the host, through the names jentry exports, and what they answer as lines of text.
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,11 +11,13 @@ import { processFailure } from "../../src/shell/process-port";
 import { JAVA } from "./paths";
 import { dexAndroid, shellIn } from "./tools";
 
-/** the fixture E (and its nested classes) as a dex */
+let built: string | undefined;
+/** the fixture E (and its nested classes) as a dex, built once per process */
 export function entryDex(): string {
+  if (built) return built;
   const out = mkdtempSync(join(tmpdir(), "wasm-entry-"));
   dexAndroid(shellIn(out), out, [join(JAVA, "E.java")]);
-  return join(out, "classes.dex");
+  return built = join(out, "classes.dex");
 }
 
 const STR = "Ljava/lang/String;", INT = "Ljava/lang/Integer;", E = "E";
