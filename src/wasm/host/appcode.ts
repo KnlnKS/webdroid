@@ -1,9 +1,8 @@
-// The app's compiled code before a launch: a build saved by an earlier launch is
-// loaded, and a launch without one has a worker compile the methods the app is likely to run for the next launch to find, once the launch is under way (`watch`) and its loader's
-// shared libraries, which the build resolves through, are bound. A launch also notes what its World compiled and built on demand despite the build, and once that has settled a
-// worker makes the build again with it, so the launches after the next find it too. A compile worker for the
-// launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only while it has numbered what it had when the app's dexes
-// arrived, as when the build was made (the zygote's numbering).
+// The app's compiled code before a launch: a build saved by an earlier launch is loaded, and a launch without one has a worker compile the methods the app is likely
+// to run for the next launch to find, once the launch is under way (`watch`) and its loader's shared libraries, which the build resolves through, are bound. A launch
+// also notes what its World compiled and built on demand despite the build, and once that has settled a worker makes the build again with it, so the launches after
+// the next find it too. A compile worker for the launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only
+// while it has numbered what it had when the app's dexes arrived, as when the build was made (the zygote's numbering).
 import type { World, WorldOptions } from "../link/world";
 import type { Demand, Numbering } from "../link/aot";
 import { mid } from "../compiler/ids";
@@ -13,7 +12,7 @@ import { buildFiles, appKey, SavedBuild, type Persist } from "./persist";
 import { fetchBundle } from "./bundle";
 import { switchOn } from "../../switches";
 import { prefetchInWorker } from "./aotload";
-import { CompileClient, containers, type WorkerPort } from "./compiler";
+import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./compiler";
 import type { BuildRoots, CompileResponse, Containers } from "./compile-serve";
 import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program";
 
@@ -200,11 +199,7 @@ function rootLibraries(world: World): RootLibraries | undefined {
   };
   for (const library of [...prog.root.before ?? [], ...prog.root.after ?? []]) add(library);
   if (!closure.size) return undefined;
-  const groups = new Map<LoaderId, DexFile[]>();
-  for (const [dex, loader] of prog.loadedDexes()) if (closure.has(loader)) {
-    const id = prog.loaderId(loader);
-    (groups.get(id) ?? groups.set(id, []).get(id)!).push(dex);
-  }
+  const groups = dexesByLoader(prog, (l) => closure.has(l));
   const ids = new Set<LoaderId>([0, ...[...closure].map(l => prog.loaderId(l))]), snapshot = prog.loaderSnapshot();
   return { loaders: { ...snapshot, libraries: snapshot.libraries.filter(([id]) => ids.has(id)), initiated: snapshot.initiated.filter(([id]) => ids.has(id)) },
     scopes: [...groups].map(([id, dexes]) => [id, containers(dexes)]) };

@@ -8,7 +8,7 @@ import type { AppIndex, Marks } from "../link/aot";
 import type { UpgradeJob } from "../link/unit";
 import type { ProxyDefinition } from "../link/proxy";
 import type { World } from "../link/world";
-import type { Loader, LoaderId } from "../compiler/program";
+import type { Loader, LoaderId, Program } from "../compiler/program";
 import type { DexFile } from "../../jvm/dex";
 import type { CompileRequest, CompileResponse, Containers, Port } from "./compile-serve";
 
@@ -20,6 +20,8 @@ const MAX_QUEUE = 16, MAX_FAILURES = 3;
  *  faster than collections shrink it, in the address space the page's compile workers share (compilehost.ts) */
 const MERGE_REST = 2;
 
+/** where the server and the production build serve compile-worker.ts */
+export const COMPILE_WORKER_URL = "/wasm-compile-worker.js";
 /** what starts a compile worker: the ports of its protocol, of its fetches and of its end (it posts a failure's message, and is terminated when sent anything) */
 export interface CompileWorkerRequest { port: MessagePort; fetcher: MessagePort; ctl: MessagePort }
 /** A compile worker. The page's compile host starts it in a process of its own (compilehost.ts) when `host` is that host's port; a realm without one starts
@@ -60,6 +62,18 @@ export function containers(dexes: Iterable<DexFile>): Containers {
   return [...byBytes].map(([bytes, name]) => [name, bytes.slice()]);
 }
 
+/** the dex files `prog` has loaded, by the id of their defining loader: of every loader, or of those `keep` takes */
+export function dexesByLoader(prog: Program, keep?: (loader: Loader) => boolean): Map<LoaderId, DexFile[]> {
+  const groups = new Map<LoaderId, DexFile[]>();
+  for (const [dex, loader] of prog.loadedDexes()) if (!keep || keep(loader)) {
+    const id = prog.loaderId(loader);
+    let list = groups.get(id);
+    if (!list) groups.set(id, list = []);
+    list.push(dex);
+  }
+  return groups;
+}
+
 export class CompileClient implements CompileService {
   readonly stats = { jobs: 0, adopted: 0, stale: 0, failed: 0, workerMs: 0, adoptMs: 0, startMs: 0 };
   private state: "idle" | "starting" | "ready" | "retired" = "idle";
@@ -91,19 +105,12 @@ export class CompileClient implements CompileService {
   start(w: World, aotBase: string | undefined, app: AppIndex | undefined): void {
     if (this.state === "retired") return;
     this.w = w; this.setup = { aotBase, app };
-    if (!this.port) return;
-    this.initialize();
+    if (this.port) this.initialize();
   }
   // Capture current numbering and DEX only when real work arrives; an unused service owns no compiler World.
   private initialize(): void {
     const w = this.w!, { aotBase, app } = this.setup!;
-    const loaders = w.prog.loaderSnapshot(), groups = new Map<LoaderId, DexFile[]>();
-    for (const [dex, loader] of w.prog.loadedDexes()) {
-      const id = w.prog.loaderId(loader);
-      let list = groups.get(id);
-      if (!list) groups.set(id, list = []);
-      list.push(dex);
-    }
+    const loaders = w.prog.loaderSnapshot(), groups = dexesByLoader(w.prog);
     const scopes: [LoaderId, Containers][] = [...groups].filter(([id]) => id !== 0).map(([id, dexes]) => [id, containers(dexes)]);
     this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(groups.get(0) ?? []);
@@ -121,8 +128,9 @@ export class CompileClient implements CompileService {
       try { this.attach((this.source as () => WorkerPort)()); this.initialize(); }
       catch (e) { this.retire(`the compile worker could not start: ${String(e)}`); }
     }
-    return this.state === "ready" || this.state === "starting";
+    return this.started;
   }
+  private get started(): boolean { return this.state === "ready" || this.state === "starting"; }
   submit(_w: World, slot: number): boolean | "later" {
     if (!this.serving()) return false;
     if (this.queue.length >= MAX_QUEUE) return "later";
@@ -139,11 +147,10 @@ export class CompileClient implements CompileService {
     this.post({ type: "add", dexes: list, loader: this.w.prog.loaderId(loader ?? this.w.prog.root), loaders: this.w.prog.loaderSnapshot() }, list.map(([, b]) => b.buffer as ArrayBuffer));
   }
   proxy(definition: ProxyDefinition): void {
-    if (this.state !== "ready" && this.state !== "starting") return;
-    this.post({ type: "proxy", definition, loaders: this.w!.prog.loaderSnapshot() });
+    if (this.started) this.post({ type: "proxy", definition, loaders: this.w!.prog.loaderSnapshot() });
   }
   namespaces(): void {
-    if (this.state === "ready" || this.state === "starting") this.post({ type: "namespaces", loaders: this.w!.prog.loaderSnapshot() });
+    if (this.started) this.post({ type: "namespaces", loaders: this.w!.prog.loaderSnapshot() });
   }
   private pump(): void {
     if (this.state !== "ready" || this.holding()) return;

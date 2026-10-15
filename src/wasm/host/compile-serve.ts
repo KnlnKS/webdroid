@@ -140,8 +140,8 @@ export function serveCompile(port: Port, env: CompileEnv): void {
   const receive = async (req: CompileRequest) => {
     const id = "id" in req ? req.id : undefined, t0 = performance.now();
     try {
-      if (req.type === "init" && req.oneShot && !req.build) throw new Error("one-shot compilation requires build roots");
       if (req.type === "init") {
+        if (req.oneShot && !req.build) throw new Error("one-shot compilation requires build roots");
         const ms = await init(req);
         if (!req.oneShot) send({ type: "ready", ms });
       }
