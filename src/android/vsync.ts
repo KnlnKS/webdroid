@@ -34,7 +34,8 @@ export function vsync(): Promise<void> {
   });
 }
 
-interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj }
+/** `after`: a vsync answers it only once the time has passed this */
+interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj; after: number }
 const scheduled = new Set<Receiver>();
 let frame = 0;
 const DATA = "android/view/DisplayEventReceiver$VsyncEventData", TIMELINE = DATA + "$FrameTimeline";
@@ -44,7 +45,7 @@ const F = {
   vsyncId: mangleField(TIMELINE, "vsyncId"), present: mangleField(TIMELINE, "expectedPresentationTime"),
   deadline: mangleField(TIMELINE, "deadline"),
 };
-let latest = { nanos: 0n, frame: 0 };
+let latest = { at: -Infinity, nanos: 0n, frame: 0 };
 /** VsyncEventData as NativeDisplayEventReceiver fills it: the browser predicts one presentation, a
  *  frame interval out, which is also the deadline */
 function fill(data: Record<string, unknown>): void {
@@ -86,7 +87,7 @@ export function recordVsync(time: number): boolean {
   note(Ev.Raf, 1);
   // An anchor taken from one jittered frame drifts toward the frames' mean phase, so the tolerance stays centred on it.
   nextVsync = elapsed < interval ? nextVsync + interval + (time - nextVsync) / 8 : time + interval;
-  deliverVsync();
+  deliver(false);
   return true;
 }
 /** The animation frame whose task is running, if one is: a picture handed over in that task is shown with that frame, one handed over later with the next */
@@ -112,9 +113,10 @@ export function hostFrames(frame: (time: number) => void): void {
   setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
 }
 export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
-let vsyncHooks: (() => void)[] = [];
-/** run `fn` at the next vsync: a renderer drawing on its own cadence */
-export function onNextVsync(fn: () => void): void { vsyncHooks.push(fn); }
+let vsyncHooks: { fn: () => void; after: number }[] = [];
+/** run `fn` at a vsync later than the latest: a renderer drawing on its own cadence only steps its
+ *  animators, a draw hwui declines twice at one vsync (CanvasContext::canDrawThisFrame) */
+export function onNextVsync(fn: () => void): void { vsyncHooks.push({ fn, after: latest.at }); }
 let frameStart: number | null = null;
 /** the renderer drew the main thread's frame */
 export function frameDrawn(): void {
@@ -123,14 +125,27 @@ export function frameDrawn(): void {
   frameStart = null;
 }
 /** a vsync now, outside the display's pacing: a test harness stepping frames on a controlled clock */
-export function deliverVsync(): void {
-  latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
+export function deliverVsync(): void { deliver(true); }
+/** A frame's request for the next vsync is answered by a later display vsync, as a display's are a
+ *  refresh period apart; under a controlled clock time can stand still, and a time-driven animation
+ *  (a ValueAnimator's every update invalidates) then waits for time to pass rather than redraw the
+ *  same frame at every host refresh. A `stepped` vsync answers every receiver. */
+function deliver(stepped: boolean): void {
+  const at = uptimeMillis();
+  latest = { at, nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
-  const hooks = vsyncHooks;
-  vsyncHooks = [];
-  const dispatch = (r: Receiver) => { fill(r.data as never); return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count); };
+  const later = (r: { after: number }) => at > r.after;
+  const hooks = vsyncHooks.filter(later).map(h => h.fn);
+  vsyncHooks = vsyncHooks.filter(h => !later(h));
+  const dispatch = (r: Receiver) => {
+    fill(r.data as never);
+    r.looper.frameAt = at;
+    return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count);
+  };
   let mainFrame = false;
   for (const r of scheduled) {
+    if (!stepped && !later(r)) continue;
+    scheduled.delete(r);
     if (r.looper !== mainLooper) { r.looper.post(() => dispatch(r)); continue; }
     mainFrame = true;
     // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
@@ -147,7 +162,6 @@ export function deliverVsync(): void {
       }));
     });
   }
-  scheduled.clear();
   if (!mainFrame) for (const fn of hooks) fn();
   flushVsyncWaiters();
 }
@@ -159,10 +173,14 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
       // Java weak-reference reads may wait; native state must hold their referents.
       const r = yield ref(receiver), d = yield ref(data);
       if (!r || !d) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to initialize display event receiver.");
-      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d } satisfies Receiver);
+      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d, after: -Infinity } satisfies Receiver);
     }),
   "nativeGetDisplayEventReceiverFinalizer()J": () => FINALIZER,
-  "nativeScheduleVsync(J)V": (ptr: bigint) => { scheduled.add(deref<Receiver>(ptr)); },
+  "nativeScheduleVsync(J)V": (ptr: bigint) => {
+    const r = deref<Receiver>(ptr);
+    r.after = r.looper.frameAt;
+    scheduled.add(r);
+  },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
     const data = await newObj(DATA, "()V");
     fill(data);

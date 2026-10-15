@@ -7,7 +7,14 @@ import { shownFrameAt } from "../android/vsync";
 /** screen regions [left,top,right,bottom], each sent scaled to fit `max` px on its long side */
 export type MirrorCrops = {regions:[number,number,number,number][];max:number};
 export type Mirror = boolean | MirrorCrops;
-type DisplayMessage = {kind:"shown";at:number;frame?:number;copy:ImageBitmap|null;crops?:ImageBitmap[];still?:boolean} | {kind:"mirror";on:Mirror} | {kind:"close"};
+type Shown = {kind:"shown";at:number;frame?:number;copy:ImageBitmap|null;crops?:ImageBitmap[];still?:boolean};
+type DisplayMessage = Shown | {kind:"mirror";on:Mirror} | {kind:"taken"} | {kind:"close"};
+/** the bitmaps a frame message carries: transferred with it, and closed by whoever drops it */
+const bitmaps=(m:Shown)=>m.copy?[m.copy]:m.crops??[];
+const release=(m:Shown)=>{for(const b of bitmaps(m))b.close();};
+/** mirrored frames the page has yet to take: a page thread held up (a readback waiting on a GPU
+ *  backlog) would otherwise queue a full-screen copy for every frame presented meanwhile */
+const MIRRORED_IN_FLIGHT=3;
 export type FrameSender = {present(bitmap:ImageBitmap):void;close():void};
 
 /** whoever reads presented frames (lat, the e2e probe): `copy` is a frame's pixels, or `crops` the
@@ -19,21 +26,32 @@ declare global { var __wdPresented: DisplayObserver | undefined; }
 export function sendFrames(port:MessagePort,screen:OffscreenCanvas):FrameSender {
   const context=screen.getContext("bitmaprenderer");
   if(!context)throw new Error("Bitmap presentation context unavailable");
-  let closed=false,mirror:Mirror=false;
+  let closed=false,mirror:Mirror=false,inFlight=0;
+  /** the latest frame presented while MIRRORED_IN_FLIGHT were untaken, mirrored once one is */
+  let held:{at:number;frame:number}|null=null;
   const finish=()=>{if(!closed){closed=true;port.close();}};
   port.onmessageerror=finish;
-  const sendCrops=(spec:MirrorCrops,at:number,still:boolean,frame?:number)=>{
-    void Promise.all(spec.regions.map(([l,t,r,b])=>{
-      const scale=Math.min(1,spec.max/Math.max(r-l,b-t));
-      return createImageBitmap(screen,l,t,r-l,b-t,{resizeWidth:Math.max(1,Math.round((r-l)*scale)),resizeHeight:Math.max(1,Math.round((b-t)*scale))});
-    })).then(crops=>{
-      if(closed)crops.forEach(c=>c.close());else port.postMessage({kind:"shown",at,frame,copy:null,crops,still} satisfies DisplayMessage,crops);
-    },()=>{});
+  const send=(message:Promise<Shown>)=>{
+    inFlight++;
+    void message.then(m=>{if(closed)release(m);else port.postMessage(m,bitmaps(m));},()=>{inFlight--;});
+  };
+  const sendCrops=(spec:MirrorCrops,at:number,still:boolean,frame?:number)=>send(Promise.all(spec.regions.map(([l,t,r,b])=>{
+    const scale=Math.min(1,spec.max/Math.max(r-l,b-t));
+    return createImageBitmap(screen,l,t,r-l,b-t,{resizeWidth:Math.max(1,Math.round((r-l)*scale)),resizeHeight:Math.max(1,Math.round((b-t)*scale))});
+  })).then(crops=>({kind:"shown",at,frame,copy:null,crops,still})));
+  const mirrorFrame=(at:number,frame:number)=>{
+    if(mirror===true)send(createImageBitmap(screen).then(copy=>({kind:"shown",at,frame,copy})));
+    else if(mirror)sendCrops(mirror,at,false,frame);
   };
   port.onmessage=({data}:MessageEvent<DisplayMessage>)=>{
     if(data.kind==="close"){finish();return;}
+    if(data.kind==="taken"){
+      inFlight--;
+      if(held){const {at,frame}=held;held=null;mirrorFrame(at,frame);}
+      return;
+    }
     if(data.kind!=="mirror")return;
-    mirror=data.on;
+    mirror=data.on;held=null;
     if(typeof mirror==="object"&&screen.width>1)sendCrops(mirror,performance.timeOrigin+performance.now(),true);
   };
   return {
@@ -44,11 +62,9 @@ export function sendFrames(port:MessagePort,screen:OffscreenCanvas):FrameSender 
       context.transferFromImageBitmap(bitmap);
       note(Ev.Present);
       const now=performance.now(),at=performance.timeOrigin+now,frame=performance.timeOrigin+shownFrameAt(now);
-      if(!mirror){port.postMessage({kind:"shown",at,frame,copy:null} satisfies DisplayMessage);return;}
-      if(mirror!==true){sendCrops(mirror,at,false,frame);return;}
-      void createImageBitmap(screen).then(copy=>{
-        if(closed)copy.close();else port.postMessage({kind:"shown",at,frame,copy} satisfies DisplayMessage,[copy]);
-      });
+      if(!mirror)port.postMessage({kind:"shown",at,frame,copy:null} satisfies DisplayMessage);
+      else if(inFlight>=MIRRORED_IN_FLIGHT)held={at,frame};
+      else mirrorFrame(at,frame);
     },
     close(){if(!closed)try{port.postMessage({kind:"close"} satisfies DisplayMessage);}finally{finish();}},
   };
@@ -62,10 +78,11 @@ export function receiveFrames(port:MessagePort,canvas:HTMLCanvasElement,shown:()
   port.onmessage=({data}:MessageEvent<DisplayMessage>)=>{
     if(data.kind==="close"){close();return;}
     if(data.kind!=="shown")return;
-    if(closed){data.copy?.close();data.crops?.forEach(c=>c.close());return;}
+    if(closed){release(data);return;}
+    if(data.copy||data.crops)port.postMessage({kind:"taken"} satisfies DisplayMessage);
     if(!data.still)shown();
     const observe=globalThis.__wdPresented;
-    if(observe)observe(canvas,data.copy,data.at-performance.timeOrigin,data.crops,data.still,data.frame===undefined?undefined:data.frame-performance.timeOrigin);else{data.copy?.close();data.crops?.forEach(c=>c.close());}
+    if(observe)observe(canvas,data.copy,data.at-performance.timeOrigin,data.crops,data.still,data.frame===undefined?undefined:data.frame-performance.timeOrigin);else release(data);
   };
   return {mirror:on=>{if(!closed)port.postMessage({kind:"mirror",on} satisfies DisplayMessage);},close};
 }

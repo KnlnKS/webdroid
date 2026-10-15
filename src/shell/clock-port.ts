@@ -10,8 +10,10 @@ export interface ClockClient {
 type Request = { kind: "schedule"; id: number; at: number } | { kind: "cancel" | "ack"; id: number } | { kind: "close" };
 type Tick = { kind: "sync" | "fire"; id: number; now: number; timer?: number } | { kind: "close" };
 
-/** Scheduling and completion use the same port: timers posted by a callback precede its acknowledgment. */
-export function serveClock(port: MessagePort, clock: ControlledGuestClock, realm: number, onClose: () => void) {
+/** Scheduling and completion use the same port: timers posted by a callback precede its acknowledgment.
+ *  A timer due when it arrives, posted before the realm saw an advance past its time, calls `due`:
+ *  that advance has finished, and the next may wait on the timer (a looper's wake-up). */
+export function serveClock(port: MessagePort, clock: ControlledGuestClock, realm: number, onClose: () => void, due: () => void) {
   const timers = new Map<number, number>(), pending = new Map<number, () => void>();
   let nextRequest = 1, closed = false;
   const close = () => {
@@ -42,6 +44,7 @@ export function serveClock(port: MessagePort, clock: ControlledGuestClock, realm
       timers.delete(data.id);
       return send("fire", clock.nowMs, data.id);
     }, Math.max(0, data.at - clock.nowMs), realm));
+    if (data.at <= clock.nowMs) due();
   };
   return { close, synchronize: (now: number) => send("sync", now) };
 }

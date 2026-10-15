@@ -185,7 +185,7 @@ export function createGuestClockPort(pid: number): { data: ClockBootstrap; close
   const data: ClockBootstrap = { controlled: !!clock, now: guestNow(), bootTime, wallAtStart };
   if (!clock) return { data, close() {} };
   const { port1, port2 } = new MessageChannel();
-  const served = serveClock(port1, clock, pid, () => clockPorts.delete(served));
+  const served = serveClock(port1, clock, pid, () => clockPorts.delete(served), () => void advanceTo(clock.nowMs));
   remoteAdvancement = true;
   clockPorts.add(served); data.port = port2;
   return { data, close: served.close };
