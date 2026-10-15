@@ -5,8 +5,9 @@
 import { tables as T } from "../android/gl";
 import { g, H, contextState } from "./gles3-state";
 
-/** `size`: the data store's bytes as WebGL holds them, -1 when not known */
-export interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number; size: number }
+/** `size`: the data store's bytes as WebGL holds them, -1 when not known; `mirror`: its contents on the
+ *  host once a mapping needed them, kept by each write so later mappings read nothing back */
+export interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; mirror: Uint8Array | null; usage: number; size: number }
 export const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
 export const recOf = new WeakMap<object, BufRec>();
 export const rec = (h: number): BufRec | null => { const o = H(T().buffers, h); return o ? recOf.get(o) ?? null : null; };
@@ -42,7 +43,14 @@ export function writeBuffers(t: number, fn: (target: number) => void): void {
   gl.bindBuffer(target, storage(r, target === ELEM));
   try { fn(target); } finally { gl.bindBuffer(target, boundStorage(target)); }
 }
-export const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else writeBuffers(t, (tt) => g().bufferSubData(tt, off, data)); };
+export function writeBack(t: number, off: number, data: Uint8Array): void {
+  const r = shadowed(t);
+  if (r) { r.shadow!.set(data, off); return; }
+  recAt(t)?.mirror?.set(data, off);
+  writeBuffers(t, (tt) => g().bufferSubData(tt, off, data));
+}
+/** the contents of the buffer bound to `t` */
+export const contents = (t: number, r: BufRec): Uint8Array => shadowed(t)?.shadow ?? (r.mirror ??= withTarget(t, (tt) => readBound(g(), tt)));
 /** the whole of the buffer bound to `target`, read back (WebGL copies nothing between index and vertex storage) */
 function readBound(gl: WebGL2RenderingContext, target: number): Uint8Array {
   const data = new Uint8Array(gl.getBufferParameter(target, gl.BUFFER_SIZE));
@@ -72,8 +80,9 @@ export function realize(t: number, r: BufRec | null, h: number): WebGLBuffer | n
   return r.other;
 }
 
-/** after GL wrote a buffer's vertex storage, refresh its index copy */
+/** after GL wrote a buffer's vertex storage, refresh its index copy and forget its mirror */
 export function syncVertexBuffer(r: BufRec | null | undefined): void {
+  if (r) r.mirror = null;
   if (!r?.other) return;
   const gl = g();
   gl.bindBuffer(ARRAY, storage(r, false));

@@ -18,7 +18,7 @@ import {
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, pbo, type GL, type ContextState,
 } from "./gles3-state";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels";
-import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers";
+import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers";
 import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays";
 import {
   keepsClean, keptClean, forgetImages, untrust, texParamAccepted, storageAccepted, imageAccepted, recordImage, subImageAccepted, pixelStoreAccepted,
@@ -263,7 +263,7 @@ export function gles3Init(): void {
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
 
     // ── buffers
-    glGenBuffers: keepsClean((_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4, size: 0 }); return o; }); }),
+    glGenBuffers: keepsClean((_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, mirror: null, usage: 0x88e4, size: 0 }); return o; }); }),
     glDeleteBuffers: keepsClean((_c, a) => {
       const n = a.i(), state = contextState();
       del(T().buffers, n, a.p(), (o) => {
@@ -291,7 +291,7 @@ export function gles3Init(): void {
       const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t), bound = recAt(t), data = p ? u8(p, n) : null;
       const accepted = BUFFER_TARGETS.has(t) && !!bound && n >= 0 && USAGES.has(usage) && !contextState().feedback;
       if (!accepted) unsure();
-      if (bound) bound.size = accepted ? data?.length ?? n : -1;
+      if (bound) { bound.size = accepted ? data?.length ?? n : -1; if (bound.mirror) bound.mirror = data ? data.slice() : new Uint8Array(n); }
       if (r) { r.shadow = new Uint8Array(n); if (data) r.shadow.set(data); r.usage = usage; }
       else { if (bound) bound.usage = usage; writeBuffers(t, (tt) => { if (data) g().bufferData(tt, data, usage); else g().bufferData(tt, n, usage); }); }
     }),
@@ -309,8 +309,9 @@ export function gles3Init(): void {
     glMapBufferRange: (_c, a) => {
       const t = a.i(), off = a.i(), len = a.i(), access = a.i(), b = recAt(t);
       if (!b) { raise(0x502); return 0; }
-      const ptr = mem.malloc(len), r = shadowed(t);
-      if (access & 1) { if (r) u8(ptr, len).set(r.shadow!.subarray(off, off + len)); else withTarget(t, (tt) => g().getBufferSubData(tt, off, u8(ptr, len))); }
+      const ptr = mem.malloc(len);
+      // a range read, or written without MAP_INVALIDATE_{RANGE,BUFFER}_BIT, holds the contents the guest leaves unwritten
+      if (access & 1 || !(access & 0xc)) u8(ptr, len).set(contents(t, b).subarray(off, off + len));
       mapped.set(b, { ptr, off, len, access });
       return ptr;
     },
