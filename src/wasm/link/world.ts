@@ -5,8 +5,6 @@
 //  - A stub calls host.link(slot), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry,
 //    then calls through the slot; every call between modules is `call_indirect slot`, so a compiled method needs no relinking.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
-//
-// A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
 import { compileSymbolicSite } from "../compiler/symbolic";
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
@@ -103,7 +101,13 @@ const MERGE_AT = 1024, MERGE_MAX = 512;
 const RETIRE_BATCH = 32, RETIRE_WAIT_MS = 5000;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
-type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
+type Kinds = { params: Kind[]; ret: Kind | "V" };
+type StubRequest = Kinds & { slot: number };
+/** the kinds of a vtable entry's parameters (the receiver first) and result, from its method key */
+function entryKinds(key: string): Kinds {
+  const p = parseMethodDesc(key.slice(key.indexOf("(")));
+  return { params: ["L", ...p.params.map(kindOf)], ret: p.ret === "V" ? "V" : kindOf(p.ret) };
+}
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees (size in code units) that ran at least COPY_MIN times, and guards for at most MAX_GUARDS
  *  implementations per virtual call. A small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, LEAF_WAITS = 3, COPY_MIN = 64;
@@ -112,6 +116,9 @@ const MEGAMORPHIC = 32;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
  *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
+/** when a unit's compile began, and the compile time accounted by then (World.accountCompilation) */
+type Clock = { start: number; accounted: number };
+type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
@@ -410,7 +417,7 @@ export class World {
   /** the String objects made of JS strings, which are the constants and what String.intern answers */
   private interned = new Map<string, object>();
   /** a value a host function answers, as a Java value: a JS string becomes a String */
-  javaValue<V>(v: V): V | unknown { return typeof v === "string" ? this.javaString(v) : v; }
+  private javaValue(v: unknown): unknown { return typeof v === "string" ? this.javaString(v) : v; }
   /** a String a host function is given, as the JS string it works with */
   hostString(v: unknown): unknown {
     return typeof v === "object" && v !== null && this.classNameOf(v) === "java/lang/String" ? this.bridge.toHost(v) : v;
@@ -526,13 +533,13 @@ export class World {
         if (candidate && !candidate.isStatic) { m = candidate; break; }
       }
       const target = m ?? symbolicDispatchFor(this.prog, receiver, key);
-      cache.set(sel, slot = target && !failed(target) && !(target.flags & ACC.PUBLIC) ? this.interfaceAccessSlot(key) : this.dispatchSlot(key, target));
+      cache.set(sel, slot = target && !failed(target) && !(target.flags & ACC.PUBLIC) ? this.interfaceAccessSlot(entryKinds(key)) : this.dispatchSlot(key, target));
     }
     return slot;
   }
 
   // ---------- slots
-  reserveSlots(n: number): number {
+  private reserveSlots(n: number): number {
     const base = this.slots.length;
     this.slots.length += n;
     const have = this.table.length;
@@ -541,8 +548,8 @@ export class World {
   }
   slotOf(m: MethodInfo): number { return this.link(m.cls).slotBase + m.index; }
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
-  /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called */
-  /** `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
+  /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called;
+   *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
   synthSlot(name: string, d: Synth, eager = false): number {
     this.touching?.add("!" + name);
     let slot = this.synth.get(name);
@@ -577,32 +584,28 @@ export class World {
       const [key, message] = JSON.parse(name.slice("conflict:".length)) as [string, string];
       this.conflictSlot(key, message); return;
     }
-    const access = /^interfaceAccess:([ILJ]*)>([ILJV])$/.exec(name);
-    if (access) { this.interfaceAccessSlot("method(" + [...access[1]].slice(1).map(k => k === "L" ? "Ljava/lang/Object;" : k).join("") + ")" + (access[2] === "L" ? "Ljava/lang/Object;" : access[2])); return; }
-    const m = /^abstract:([ILJ]*)>([ILJV])$/.exec(name);
-    this.synthSlot(name, m ? { params: [...m[1]] as Kind[], ret: m[2] as Kind | "V", body: (cx, c) => { cx.callThrower(c, "ame"); } } : rtfns.get(name)!);
+    const kinds = /^(abstract|interfaceAccess):([ILJ]*)>([ILJV])$/.exec(name);
+    if (!kinds) { this.synthSlot(name, rtfns.get(name)!); return; }
+    const k: Kinds = { params: [...kinds[2]] as Kind[], ret: kinds[3] as Kind | "V" };
+    if (kinds[1] === "abstract") this.abstractSlot(k); else this.interfaceAccessSlot(k);
   }
   /** a stub for a method the class does not implement: AbstractMethodError, with the signature of the vtable entry it fills */
-  private abstractSlot(key: string): number {
-    const p = parseMethodDesc(key.slice(key.indexOf("(")));
-    const params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+  private abstractSlot({ params, ret }: Kinds): number {
     return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
   }
 
   private dispatchSlot(key: string, target: ReturnType<typeof symbolicDispatchFor>): number {
-    return target ? failed(target) ? this.conflictSlot(key, target.message) : this.slotOf(target) : this.abstractSlot(key);
+    return target ? failed(target) ? this.conflictSlot(key, target.message) : this.slotOf(target) : this.abstractSlot(entryKinds(key));
   }
 
   /** A default conflict keeps the physical dispatch signature and throws only when invoked. */
   private conflictSlot(key: string, message: string): number {
-    const p = parseMethodDesc(key.slice(key.indexOf("("))), params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
-    return this.synthSlot("conflict:" + JSON.stringify([key, message]), { params, ret, body: (cx, c) => {
+    return this.synthSlot("conflict:" + JSON.stringify([key, message]), { ...entryKinds(key), body: (cx, c) => {
       cx.linkError(c, { thrower: "icce", message });
     } });
   }
 
-  private interfaceAccessSlot(key: string): number {
-    const p = parseMethodDesc(key.slice(key.indexOf("("))), params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+  private interfaceAccessSlot({ params, ret }: Kinds): number {
     return this.synthSlot(`interfaceAccess:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => {
       const cls = "java/lang/IllegalAccessError", e = c.newLocal(T.anyref);
       cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(e).lget(e);
@@ -780,9 +783,9 @@ export class World {
   }
   /** a host class defined after classes were linked from the build: repairs the vtables of the ones it concerns */
   repairLinked(): void { for (const [name, rt] of this.classes) if (rt.mod[0] === "g" || rt.mod[0] === "e") this.repairVtable(name); }
-  /** The bytes of a module that defines classes `rts`: what a build-time mode stores beside the unit modules of Compiler.buildUnit, and instantiates
-   *  in the same order (importing the same table), instead of this linker doing both on demand. A `lean` module (a class linked on demand) holds only
-   *  the class's globals, since a module with code costs the engine far more: its slots get shared stubs and its ensure() is compiled on first call. */
+  /** The bytes of a module that defines classes `rts`: what a build (aot-build, apps.ts) stores beside its unit modules and instantiates in the same
+   *  order (importing the same table). A `lean` module (a class linked on demand) holds only the class's globals, since a module with code costs the
+   *  engine far more: its slots get shared stubs and its ensure() is compiled on first call. */
   classModule(rts: ClassRt[], lean = false): Uint8Array {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     let link = -1, sid = -1, iw = -1, tag = -1;
@@ -855,7 +858,7 @@ export class World {
     return mb.build();
   }
   /** the kinds of the parameters (the receiver first) and result of `m` */
-  private methodKinds(m: MethodInfo): { params: Kind[]; ret: Kind | "V" } {
+  private methodKinds(m: MethodInfo): Kinds {
     return { params: (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)), ret: m.ret === "V" ? "V" : kindOf(m.ret) };
   }
   /** the stubs of a class linked on demand, whose module holds no code: shared ones in its method slots and its ensure slot (a function that does nothing
@@ -1053,7 +1056,7 @@ export class World {
       if (s.pending) continue;
       this.refreshing = true;
       let start: number | undefined;
-      let clock: { start: number; accounted: number } | undefined;
+      let clock: Clock | undefined;
       try {
         const taken = this.opts.compiler?.submit(this, slot);
         if (taken) { if (taken === true) s.pending = true; return; }
@@ -1178,7 +1181,7 @@ export class World {
     const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
     const refresh = this.hotUnits.get(slot);
-    if (!this.sound(job, result, epoch) || s?.k !== "method" || !s.done) return false;
+    if (!this.sound(result, epoch) || s?.k !== "method" || !s.done) return false;
     if (job.refresh === undefined ? s.hot : !s.hot || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.table)) return false;
     if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
     if (job.refresh !== undefined) {
@@ -1204,7 +1207,7 @@ export class World {
     return true;
   }
   /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
-  private sound(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
+  private sound(result: UnitResult, epoch: number): boolean {
     const head = result.header;
     return head.version === VERSION && epoch === this.epoch && head.natives.every((id) => this.nativeBound(id));
   }
@@ -1214,22 +1217,21 @@ export class World {
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return undefined;
     for (const id of head.touch) this.link(this.names[id]);
     for (const name of head.synth) this.ensureSynth(name);
-    const method = (id: string) => methodOf(this.prog, id);
     const target = (cls: string, key: string) => (cls ? this.prog.get(cls)?.byKey.get(key) : undefined);
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
-    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []) };
+    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []) };
     this.classImports(head.classImports, imports);
-    const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
+    const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
-    return { unit, imports, built: { bytes: mod, traces } };
+    return { unit, imports, built: { bytes: result.module, traces } };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const groups = this.merging, clock = this.unitClock();
     this.merging = [];
-    const r = this.sound(job, result, epoch) ? this.received(result) : undefined;
+    const r = this.sound(result, epoch) ? this.received(result) : undefined;
     if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
     const liveGroups = groups.filter((g) => this.mergeable(g)), live = liveGroups.flat(), merged = new Set(live);
     if (!live.length) return true;
@@ -1261,7 +1263,7 @@ export class World {
   private hotSince?: number;
   private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): void {
+  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
     const s = this.slotAt(slot)!;
     let exports: Record<string, any>;
     try { exports = this.instantiateUnit(cx, imports, built, slot, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
@@ -1281,8 +1283,8 @@ export class World {
       if (s.k === "ensure") { s.done = true; this.table.set(slot, exports["m" + slot]); }
     } else set(slot, "m");
   }
-  private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }
-  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number | undefined, clock: { start: number; accounted: number }): Record<string, any> {
+  private unitClock(): Clock { return { start: performance.now(), accounted: this.stats.compileMs }; }
+  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock): Record<string, any> {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.accountCompilation(clock);
     const exports = this.instantiate(built.bytes, imports).exports;
@@ -1290,7 +1292,7 @@ export class World {
     this.recordUnit(cx, built.traces, slot);
     return exports;
   }
-  private accountCompilation(clock: { start: number; accounted: number }): void {
+  private accountCompilation(clock: Clock): void {
     this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
   }
   private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot?: number): void {
@@ -1409,8 +1411,7 @@ export class World {
           }
         }
         if (key !== undefined) {
-          // An older initialization guard remains valid: class initialization
-          // never reverses, and calls still use the live method table.
+          // an older initialization guard remains valid: class initialization never reverses, and calls still use the live method table
           this.symbolicOperations.set(key, operation);
           if (this.symbolicOperations.size > 2048) this.symbolicOperations.delete(this.symbolicOperations.keys().next().value!);
         }
@@ -1428,7 +1429,7 @@ export class World {
   }
   private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;
-  hostContext(): HostContext {
+  private hostContext(): HostContext {
     return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), sched: this.sched, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
@@ -1743,7 +1744,7 @@ export class World {
     if (this.opts.intrinsics.has(mid(t))) return true;
     return !!t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
   }
-  /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
+  /** the gaps compiling `m` runs into, without installing it (a static check) */
   gapsOf(m: MethodInfo): string[] {
     let g = this.compiled.get(m);
     if (!g) { const cx = new Compiler(this); cx.buildUnit([m]); this.compiled.set(m, g = cx.gaps); }
@@ -1974,7 +1975,7 @@ export class World {
   /** the concrete classes among `names` (the late ones by default) by each of their supertypes in `decls`, themselves included. Only the
    *  supertypes an assumption names are asked about, so no index of every late class by every supertype is kept: an app's classes number
    *  in the hundreds of thousands, each with dozens of supertypes. */
-  lateBy(decls: ReadonlySet<string>, names: Iterable<string> = this.lateKnown): Map<string, string[]> {
+  private lateBy(decls: ReadonlySet<string>, names: Iterable<string> = this.lateKnown): Map<string, string[]> {
     const out = new Map<string, string[]>(), memo = new Map<string, readonly string[]>(), none: readonly string[] = [];
     // most classes reach no decl or the decls of one supertype only: those share an array
     const within = (n: string): readonly string[] => {
@@ -2026,33 +2027,32 @@ export class World {
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
-    const m = this.prog.resolve(cls, name, desc);
-    if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
-    const slot = this.slotOf(m);
+    const m = this.entryMethod(cls, name, desc), slot = this.slotOf(m);
     return (...args) => this.synchronous(() => {
       this.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
       try {
         if (m.isStatic && this.needsInit(m.cls)) (this.table.get(this.ensureSlot(m.cls)) as Function)();
-        const r = (this.table.get(slot) as Function)(...args.map((a) => typeof a === "string" ? this.javaString(a) : a));
-        return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
+        return this.hostString((this.table.get(slot) as Function)(...args.map((a) => this.javaValue(a))));
       } catch (e) { throw this.boundary(e); } finally { this.rt.depth.value = depth; }
     });
   }
   /** `entry` for a call that may block: it runs on a stack of its own, as a new strand of the main thread, and answers a Promise */
   entryAsync(cls: string, name: string, desc: string): (...args: unknown[]) => Promise<unknown> {
-    const m = this.prog.resolve(cls, name, desc);
-    if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
-    const slot = this.slotOf(m);
+    const m = this.entryMethod(cls, name, desc), slot = this.slotOf(m);
     return async (...args) => {
       const s = this.sched.strand();
       try {
         if (m.isStatic && this.needsInit(m.cls)) await this.freshStack(() => s.call(this.table.get(this.ensureSlot(m.cls)) as Function));
-        const r = await this.freshStack(() => s.call(this.table.get(slot) as Function, ...args.map((a) => typeof a === "string" ? this.javaString(a) : a)));
-        return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
+        return this.hostString(await this.freshStack(() => s.call(this.table.get(slot) as Function, ...args.map((a) => this.javaValue(a)))));
       } catch (e) { throw this.boundary(e); } finally { s.end(); }
     };
+  }
+  private entryMethod(cls: string, name: string, desc: string): MethodInfo {
+    const m = this.prog.resolve(cls, name, desc);
+    if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
+    return m;
   }
   /** runs `f`, a call into Java, leaving the frame depth as it was when a Java exception unwinds it */
   unwound<T>(f: () => T): T {
@@ -2134,7 +2134,7 @@ export class World {
       return this.helperSlots[-slot - 1]!;
     };
   }
-  private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: { start: number; accounted: number }, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
+  private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
     const dependent = cx.assumptions.some(a => !a[4]) || cx.absent.some(a => !a[1]);
     if (slot !== undefined || !dependent) {
       const raw = this.instantiateUnit(cx, imports, built, slot, clock).m as Function;
@@ -2153,7 +2153,9 @@ export class World {
     this.stats.units++;
     return this.helperUnit(cx, this.unitImports(cx), built, clock, this.hostRebuilder(name, params, ret, body, prepare), slot);
   }
-  private synchronousHelper(get: () => Function): Function {
+  /** a helper callable from the host: its function, or one that follows its rebuilds */
+  private synchronousHelper({ get, raw: fixed }: { get: () => Function; raw?: Function }): Function {
+    if (fixed) return this.sched.synchronousExport(fixed);
     let raw: Function | undefined, call: Function;
     return (...args: unknown[]) => {
       const current = get();
@@ -2170,8 +2172,7 @@ export class World {
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {
     let f = this.hostFns.get(name);
     if (!f) {
-      const helper = this.buildHostFn(name, params, ret, body, prepare);
-      this.hostFns.set(name, f = helper.raw ? this.sched.synchronousExport(helper.raw) : this.synchronousHelper(helper.get));
+      this.hostFns.set(name, f = this.synchronousHelper(this.buildHostFn(name, params, ret, body, prepare)));
     }
     return f as never;
   }
@@ -2268,11 +2269,10 @@ export class World {
     if (!read) {
       const f = this.prog.resolveField(cls, name, desc);
       if (!f) throw new Error(`field ${cls}.${name} not found`);
-      const helper = this.buildHostFn("get:" + key, ["L"], f.kind, (cx, c) => {
+      this.fieldReaders.set(key, read = this.synchronousHelper(this.buildHostFn("get:" + key, ["L"], f.kind, (cx, c) => {
         const st = cx.structFor(cls);
         c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f));
-      });
-      this.fieldReaders.set(key, read = (helper.raw ? this.sched.synchronousExport(helper.raw) : this.synchronousHelper(helper.get)) as (obj: object) => unknown);
+      })) as (obj: object) => unknown);
     }
     return read as (obj: object) => T;
   }
