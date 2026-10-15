@@ -28,13 +28,13 @@ export function installLatencyObserver(counters: string[]) {
   host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, onCrops: null, times: null, snapshot };
   // a process Worker's canvas names its process
   const appOf = (canvas: HTMLCanvasElement) => canvas.dataset.pkg ? { pkg: canvas.dataset.pkg, pid: canvas.dataset.pid ?? null } : null;
-  globalThis.__wdPresented = (canvas: HTMLCanvasElement, copy: ImageBitmap | null, at: number, crops?: ImageBitmap[], still?: boolean) => {
+  globalThis.__wdPresented = (canvas: HTMLCanvasElement, copy: ImageBitmap | null, at: number, crops?: ImageBitmap[], still?: boolean, frame?: number) => {
     const observer = host.__wdLatObserver, app = appOf(canvas);
     const drop = () => { copy?.close(); crops?.forEach(c => c.close()); };
     // receipts only while a capture listens: visibility checks read computed styles
     if (!app || !(observer.onFrame || observer.onCrops || observer.times || !observer.firstApp)) { drop(); return; }
     const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, visible: shown(canvas), still: !!still };
-    if (receipt.visible && !still) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
+    if (receipt.visible && !still) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(frame ?? at); }
     if (crops && observer.onCrops) { observer.onCrops(receipt, crops); copy?.close(); }
     else if (observer.onFrame && copy) { observer.onFrame(receipt, copy); crops?.forEach(c => c.close()); }
     else drop();

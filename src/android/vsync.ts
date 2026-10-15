@@ -89,11 +89,25 @@ export function recordVsync(time: number): boolean {
   deliverVsync();
   return true;
 }
+/** The animation frame whose task is running, if one is: a picture handed over in that task is shown with that frame, one handed over later with the next */
+let displayFrameAt = -Infinity, inDisplayFrame = false;
+const frameOver = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
+if (frameOver) {
+  frameOver.port1.onmessage = () => { inDisplayFrame = false; };
+  (frameOver.port1 as unknown as { unref?: () => void }).unref?.();
+}
+function displayFrame(time: number): void { displayFrameAt = time; inDisplayFrame = true; frameOver?.port2.postMessage(0); }
+/** when the host display frame that shows a picture handed over now began: presentation intervals as the display has them, free of when in its frame the app finished */
+export function shownFrameAt(now = performance.now()): number {
+  if (inDisplayFrame || displayFrameAt === -Infinity) return inDisplayFrame ? displayFrameAt : now;
+  const period = Math.min(vsyncIntervalMs(), hostPeriodMs);
+  return displayFrameAt + period * Math.ceil((now - displayFrameAt) / period);
+}
 /** The host's frame loop: an animation frame while the realm has them (a process Worker's come with
  *  the canvas it presents to), a timer while the browser runs none, as in a hidden tab */
 export function hostFrames(frame: (time: number) => void): void {
   let framed = -Infinity;
-  const loop = (time: number) => { framed = performance.now(); frame(time); requestAnimationFrame(loop); };
+  const loop = (time: number) => { framed = performance.now(); displayFrame(time); frame(time); requestAnimationFrame(loop); };
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(loop);
   setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
 }
