@@ -189,7 +189,6 @@ export class World {
   epoch = 0;
   private touching: Set<string> | null = null;
   private imtCache = new Map<number, Map<number, number>>();
-  private compiled = new Map<MethodInfo, string[]>();
   private hotUnits = new HotUnits();
   private refreshing = false;
   hotRefreshes = 0;
@@ -1737,12 +1736,6 @@ export class World {
     if (this.opts.intrinsics.has(mid(t))) return true;
     return !!t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
   }
-  /** the gaps compiling `m` runs into, without installing it (a static check) */
-  gapsOf(m: MethodInfo): string[] {
-    let g = this.compiled.get(m);
-    if (!g) { const cx = new Compiler(this); cx.buildUnit([m]); this.compiled.set(m, g = cx.gaps); }
-    return g;
-  }
 
   // ---------- open world
   /** A BaseDexClassLoader supplies its immutable library graph before opening its own DEX path. Metadata and ahead-of-time code may already exist. */
@@ -1856,7 +1849,7 @@ export class World {
     this.epoch++;
     this.opts.compiler?.namespaces();
     this.cha = new Cha(this.prog); this.implemented.clear(); this.allocatedIndex = undefined;
-    this.compiled.clear(); this.fieldReaders.clear();
+    this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);

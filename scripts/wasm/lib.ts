@@ -9,14 +9,11 @@ import { zipTree } from "../../src/jvm/natives/jzip";
 import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
 import { intrinsics, externs } from "../../src/wasm/link/intrinsics";
-import { intrinsicFor } from "../../src/wasm/compiler/j2w";
-import type { NativeBinder } from "../../src/wasm/link/hostapi";
 import { Natives } from "../../src/wasm/host/natives";
 import { hostNet } from "../../src/wasm/host/inet";
 import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { useWorld } from "../../src/wasm/host/boot";
-import type { MethodInfo } from "../../src/wasm/compiler/program";
 
 export function loadDexes(path: string) {
   return dexesFrom(new Uint8Array(readFileSync(path)), path);
@@ -35,8 +32,6 @@ export function program(paths: string[]) {
   const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
   return prog;
 }
-/** what reach treats as a leaf: a method implemented without its bytecode */
-export const isIntrinsic = (natives: NativeBinder) => (m: MethodInfo) => !!intrinsicFor(intrinsics, natives, m);
 /** the dex files of the jar or dex file the VFS holds at `path`, for DexFile.openDexFileNative; none for a file without any (a jar of resources) */
 function vfsDexes(path: string): DexFile[] | undefined {
   const bytes = vfs.readFile(path);
