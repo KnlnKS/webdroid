@@ -74,8 +74,8 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *TikTok playback and input:* capture repeatable source media and separate decoded-video, EGL-swap and
      presentation counts; profile dense clips and warmed action latency. Its unchanged ByteVC decoder reached a
      near-30/s cadence on one 30-fps HEVC segment.
-   - *YouTube:* search, thumbnails, playback and Shorts work; about 1 in 9 walks crashes at the fullscreen step
-     with an inflation that reads the wrong element (history, YouTube). The full lane's video-open tap is a
+   - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
+     walks) was a stale handle long naming a reused slot (history, YouTube). The full lane's video-open tap is a
      coordinate that can land on a live Short.
    - *Cut the Rope:* the intro video stalls or shows black; gameplay beyond the level-one sample (36 frames/s at
      1080×2160) is unmeasured on an idle host. Player ID/backend paths are unvalidated; it has no full-matrix flow.
