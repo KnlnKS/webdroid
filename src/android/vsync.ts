@@ -175,7 +175,7 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
   "nativeGetDisplayEventReceiverFinalizer()J": () => FINALIZER,
   "nativeScheduleVsync(J)V": (ptr: bigint) => {
     const r = deref<Receiver>(ptr);
-    r.after = r.looper.frameAt ?? -Infinity;
+    r.after = r.looper.frameAt;
     scheduled.add(r);
   },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
