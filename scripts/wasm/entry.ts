@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { rt } from "../../src/jvm/runtime";
+import { mangleField } from "../../src/jvm/abi";
 import { JThread, resumeAs } from "../../src/jvm/natives/jentry";
 import { perf } from "../../src/perf";
 import { runningThread, wasmEntry } from "../../src/wasm/host/entry";
@@ -29,6 +30,11 @@ let failed = 0;
 expected.forEach((want, i) => { if (wasm[i] !== want) { failed++; console.log(`FAIL wasm: ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${wasm[i]}`); } });
 if (wasm.length !== expected.length) { failed++; console.log(`FAIL wasm: ${wasm.length} answers for ${expected.length}`); }
 if (!counted) { failed++; console.log("FAIL a read no field backs is not counted in perf and the missing entries"); }
+// a facade read outside any native's scope (a looper callback reading vsync data) copies the array in a scope of its own and leaves nothing to undo
+const scope = w.bridge as unknown as { undo: unknown[]; live: Map<object, unknown> };
+let copies = 0;
+for (let i = 0; i < 1000; i++) copies += +((facade[mangleField("E", "slots")] as Int32Array)[2] === 3);
+if (copies !== 1000 || scope.undo.length || scope.live.size) { failed++; console.log(`FAIL unscoped facade reads: ${copies} copies, ${scope.undo.length} undo entries, ${scope.live.size} live`); }
 // An allocation may wait before newObj enters its constructor. Another completion owns the
 // host turn then; the constructor still belongs to the allocating caller, including a non-main caller.
 const ownerFailures = failed;

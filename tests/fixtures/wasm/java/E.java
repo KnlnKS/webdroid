@@ -33,6 +33,7 @@ public class E {
 
     int v;
     public E peer;
+    public int[] slots = {1, 2, 3};
     public E(int v) { this.v = v; }
     public E() { this(5); }
     public int get() { return v; }
