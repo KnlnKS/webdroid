@@ -4,6 +4,7 @@ import { openDb, txDone } from "./idb";
 import { DiskFile, DiskStore } from "./diskstore";
 
 type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number; attributes?: FileAttributes };
+type DiskValue = Extract<FileValue, { kind: "disk" }>;
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
 const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
@@ -100,8 +101,8 @@ export class PrivateFiles {
   private load(key: string, prefixes: string[], include: (path: string) => boolean): Promise<void> {
     let loaded = this.loaded.get(key);
     if (!loaded) {
-      loaded = this.db().then((db) => {
-        const transaction = db.transaction("files"), store = transaction.objectStore("files");
+      loaded = this.db().then(async (db) => {
+        const transaction = db.transaction("files"), store = transaction.objectStore("files"), disks: [string, DiskValue][] = [];
         for (const prefix of prefixes) {
           const request = store.openCursor(IDBKeyRange.bound(prefix, prefix + "\uffff"));
           request.onsuccess = () => {
@@ -122,13 +123,22 @@ export class PrivateFiles {
                 if (uid !== undefined) attributes = {uid,gid:uid,mode:value.kind === "directory" ? 0o755 : 0o644};
               }
               if (value.kind === "directory") this.update(path, { kind: "directory", mtime,attributes });
-              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size, mtime,attributes });
+              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") disks.push([path, { kind: "disk", id: value.id, size: value.size, mtime,attributes }]);
               else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes, mtime,attributes });
             }
             cursor.continue();
           };
         }
-        return txDone(transaction);
+        await txDone(transaction);
+        // a file whose bytes the origin's storage lost is absent, as after a restore without it
+        await Promise.all(disks.map(async ([path, value]) => {
+          const held = await this.disk.holds(value.id, value.size);
+          if (this.values.has(path) || this.pending.has(path)) return;
+          if (held) return this.update(path, value);
+          this.orphans.add(value.id);
+          this.pending.set(path, null);
+          this.schedule();
+        }));
       });
       this.loaded.set(key, loaded);
     }

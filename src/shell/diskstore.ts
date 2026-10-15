@@ -5,15 +5,15 @@
 import type { WritableSource } from "./lazyfile";
 
 const WORKER = `
-let root;
 const handles = new Map(), MAX_OPEN = 128;
-function open(id) {
+// resolved for each open rather than kept, so a directory removed under this worker is made again
+const dir = async () => (await navigator.storage.getDirectory()).getDirectoryHandle("webdroid-disk", {create: true});
+/** a read opens only a file that exists: one the origin's storage lost is an error, not an empty file */
+function open(id, create) {
   let h = handles.get(id);
   if (h) { handles.delete(id); handles.set(id, h); return h; }
-  h = (async () => {
-    root ??= await (await navigator.storage.getDirectory()).getDirectoryHandle("webdroid-disk", {create: true});
-    return (await root.getFileHandle(id, {create: true})).createSyncAccessHandle();
-  })();
+  h = dir().then((d) => d.getFileHandle(id, {create})).then((f) => f.createSyncAccessHandle());
+  h.catch(() => { if (handles.get(id) === h) handles.delete(id); });
   handles.set(id, h);
   if (handles.size > MAX_OPEN) { const [old, oldest] = handles.entries().next().value; handles.delete(old); oldest.then(x => x.close(), () => {}); }
   return h;
@@ -23,18 +23,18 @@ onmessage = ({data: {seq, op, id, at, size, bytes}}) => { queue = queue.then(asy
   try {
     if (op === "remove") {
       const h = handles.get(id); handles.delete(id);
-      if (h) (await h).close();
-      await (root ??= await (await navigator.storage.getDirectory()).getDirectoryHandle("webdroid-disk", {create: true})).removeEntry(id).catch(() => {});
+      if (h) await h.then(x => x.close(), () => {});
+      await (await dir()).removeEntry(id).catch(() => {});
       return postMessage({seq});
     }
     if (op === "clear") {
-      for (const h of handles.values()) (await h).close();
-      handles.clear(); root = undefined;
+      for (const h of handles.values()) await h.then(x => x.close(), () => {});
+      handles.clear();
       await (await navigator.storage.getDirectory()).removeEntry("webdroid-disk", {recursive: true}).catch(() => {});
       return postMessage({seq});
     }
-    if (op === "flush") { for (const h of handles.values()) (await h).flush(); return postMessage({seq}); }
-    const h = await open(id);
+    if (op === "flush") { for (const h of handles.values()) await h.then(x => x.flush(), () => {}); return postMessage({seq}); }
+    const h = await open(id, op !== "read");
     if (op === "read") { const out = new Uint8Array(size); const n = h.read(out, {at}); return postMessage({seq, bytes: out.subarray(0, n)}, [out.buffer]); }
     if (op === "write") h.write(bytes, {at});
     else if (op === "truncate") h.truncate(size);
@@ -88,6 +88,12 @@ export class DiskStore {
     return this.call("clear", "");
   }
   flush(): Promise<unknown> { return this.worker ? this.call("flush", "") : Promise.resolve(); }
+  /** whether file `id` still holds `size` bytes: not once the origin's storage lost it or cut it
+   *  short. A file another page holds open is kept. */
+  holds(id: string, size: number): Promise<boolean> {
+    if (!size) return Promise.resolve(true);
+    return this.call("read", id, size - 1, 1).then((bytes) => bytes?.length === 1, (error) => !String(error).includes("NotFoundError"));
+  }
 }
 
 export class DiskFile implements WritableSource {
