@@ -12,7 +12,7 @@ import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
-import { answeringInput, yieldToLoop } from "../jvm/yield";
+import { answeringFor, yieldToLoop } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
 import { never, processExited } from "../process-exit";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals";
@@ -46,7 +46,7 @@ export function noteNativeFrame(cpu: Cpu): void {
 }
 
 function sliceBudget(): number {
-  return answeringInput() ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
+  return answeringFor() ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
 }
 
 /** an argument to a guest function: a float or double travels in a V register on AAPCS64 and as
@@ -645,7 +645,7 @@ export class Cpu {
         // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
         // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
         const now = performance.now();
-        if (!this.foreground(now) && (answeringInput(now) || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
+        if (!this.foreground(now) && (answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
