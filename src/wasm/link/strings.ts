@@ -48,7 +48,6 @@ export class StructStrings implements StringRepr {
     if (decl === STRING) throw new Error(`String.${field}: a field of the representation`);
   }
   vtab(c: Code, _decl: string): void { c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0); }
-  /** the constants are String objects the host put in the shared table (World.stringId) */
   /** a constant is made on first use and kept in a table of the module that uses it: the interned String of the JS string the engine imports as a constant */
   literal(c: Code, s: string): void {
     const cx = this.cx;
