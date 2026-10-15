@@ -18,7 +18,8 @@
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true}] }   (pick offers a synthetic photo;
 //     fps scrolls back and forth for ms and reports presentation intervals and page long tasks)
 // "gate": false makes a scenario a report, run only when named (heavy apps: YouTube, Reddit, ChatGPT, TikTok).
-// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
+// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated, and a scenario also fails when its launch loaded no build
+// module or a realm reported an uncaught error; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap. --trace writes the gated launch's browser-wide trace (every
@@ -632,7 +633,12 @@ async function resetData(browser: BrowserDriver): Promise<void> {
 }
 
 type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
-  accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
+  accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string; browserErrors?: string[] };
+/** the page's uncaught errors and every realm's unhandled rejections; a Worker's console.error is app logcat, not a browser error */
+function browserErrors(after: any): string[] {
+  const uncaught = (l: string) => /^(window\.error|unhandledrejection):/.test(l);
+  return [...(after?.frames ?? []).flatMap((f: any) => f.logs ?? []), ...(after?.workers ?? []).flatMap((w: any) => w.snapshot?.logs ?? [])].filter(uncaught);
+}
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
@@ -662,6 +668,10 @@ for (const name of names) {
     if (row.error) throw new Error(row.error);
     const { launch: started, taps } = row;
     if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");
+    // a launch that loaded none of the build's modules compiled everything on demand, and is not the path being measured
+    if (!started.perf.wasmAotLoaded) throw new Error("the launch loaded no build module (wasmAotLoaded=0)");
+    row.browserErrors = browserErrors(row.processesAfter);
+    if (row.browserErrors.length) throw new Error(`browser errors: ${row.browserErrors.slice(0, 3).join("; ").slice(0, 300)}`);
     const counters = Object.entries(started.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
     console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
     if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
