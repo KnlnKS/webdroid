@@ -14,17 +14,9 @@ type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
  *  re-entry from another job's. Each entry from host code runs as a strand of its own (callOn),
  *  and every frame resumes as the strand it captured (Runtime.cur). A thread's root strand is Java
  *  that no entry gave a chain (host tools, tests): it shares its thread's locks and class
- *  initializations with every chain of that thread, and its waits are not recorded. */
+ *  initializations with every chain of that thread. */
 export class Strand {
-  /** the strand this one waits for: the one initializing a class or holding a lock it needs */
-  waitsOn: Strand | null = null;
   constructor(readonly thread: unknown, readonly root = false) {}
-}
-/** whether `holder` waits, through the strands it waits for, on `waiter` */
-export function waitsFor(holder: Strand, waiter: Strand): boolean {
-  if (waiter.root) return false;
-  for (let c: Strand | null = holder, n = 0; c && !c.root; c = c.waitsOn) if (c === waiter || ++n > 64) return true;
-  return false;
 }
 
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */
