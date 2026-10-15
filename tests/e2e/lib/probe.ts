@@ -243,6 +243,7 @@ function installProbe(cfg: ProbeConfig): void {
     if (d.queued > 0) r.push("queued");
     if (wd.vsyncScheduled?.()) r.push("vsync");
     if (wd.pendingTransitions?.()) r.push("transition");
+    if (wd.processStarting?.()) r.push("starting");
     if (wd.yields.pending()) r.push("yields");
     const worker = await foreground();
     if (worker) {
@@ -389,13 +390,13 @@ function installProbe(cfg: ProbeConfig): void {
         await g.wd.testFrame();
       }
       // a still screen settles past timers and network, not past work under way: a main-thread job
-      // or its queue (its result is not drawn yet) or an activity start or finish, nor on a real
+      // or its queue (its result is not drawn yet), an activity start or finish or a process start, nor on a real
       // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
       // stretch changes no pixels; a background thread's result is not shown yet). A controlled
       // clock has already run through the window, and a loop that keeps going without changing
       // the screen (a paused game) is still.
       activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
-      const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition") ||
+      const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition" || k === "starting") ||
         (!controlled && activeSince > 0 && now - activeSince < 1500);
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
