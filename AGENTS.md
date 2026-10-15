@@ -33,9 +33,8 @@ run the entire suite solely for documentation edits.
 ```bash
 bun run typecheck
 bun run test
-bun run smoke apks/FitNotes.apk
 bun run fwtest
-bun run wasm all    # src/wasm suites under node: diff classdiff customdiff linkdiff loaders lazytest fuzz threads sweep aottest persist …
+bun run wasm all    # src/wasm tests under node: diff classdiff … sweep (boot jars and FitNotes) aottest persist; `bun run wasm` lists them
 PORT=4090 bun run server.ts
 WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 bun run e2e
@@ -59,7 +58,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   compares a conformance suite with its baseline in `tests/conformance/`; `--bytecode <prefixes>`
   measures a provenance cut. `bun run gen-framework` (reference AVD booted) refreshes the
   platform class path, framework-res, ICU/tz data and the recorded device colors.
-- Smoke-compile affected APKs (`smoke` is the Wasm sweep); require no unexplained failures or
+- Smoke-compile affected APKs (`smoke <apk>` is the Wasm sweep; `wasm all` sweeps FitNotes); require no unexplained failures or
   explicitly report a reproduced baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
 - Inspect per-step `run.json`: `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,
   completed rendering and performance. Empty telemetry proves only observed-path coverage.
