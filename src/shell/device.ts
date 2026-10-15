@@ -16,7 +16,7 @@ import { qualify as componentClass } from "../jvm/roots";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative";
-import { setAppHost } from "../android/apphost";
+import { appHost, setAppHost } from "../android/apphost";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
@@ -208,7 +208,8 @@ export function rotateDevice(landscape: boolean): Promise<void> {
     if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
   });
 }
-function applyConfigChange(): void { postMain(configurationChanged); }
+// system_server's realm hosts no app to hear it
+function applyConfigChange(): void { if (appHost) postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
