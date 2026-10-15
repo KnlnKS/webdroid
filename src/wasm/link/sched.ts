@@ -29,6 +29,11 @@ export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
+const threadField = (cx: Compiler, name: string, desc: string) => cx.fieldIndex(THREAD, { owner: THREAD, name, desc });
+/** stores the long `value` in the Thread on the stack's nativePeer, which Thread.isAlive reads */
+const setPeer = (cx: Compiler, c: Code, value: bigint) => { const st = cx.structFor(THREAD); c.refCast(st).i64(value).structSet(st, threadField(cx, "nativePeer", "J")); };
+/** with a Thread (cast) and a ClassLoader on the stack: the loader becomes the thread's context loader */
+const setContextLoader = (cx: Compiler, c: Code) => c.structSet(cx.structFor(THREAD), threadField(cx, "contextClassLoader", `L${LOADER};`));
 /** pushes the object (or null) and the number (or 0) of a host call */
 const operands = (c: Code, obj: (() => void) | null, a: (() => void) | null) => { if (obj) { obj(); c.externConvertAny(); } else c.refNull(HT.extern); if (a) a(); else c.f64const(0n); };
 /** host.sync(op, obj, a): the status */
@@ -38,8 +43,7 @@ export function emitSync(cx: Compiler, c: Code, op: Sync, obj: (() => void) | nu
 /** host.block(op, obj, a, b): the status. The strand's identity is kept in locals across the call, since other strands run while it waits. Host code at the
  *  top level has no stack of its own to suspend (the engine would refuse): there the status says so, without the call */
 export function emitBlock(cx: Compiler, c: Code, op: Block, obj: (() => void) | null = null, a: (() => void) | null = null, b: (() => void) | null = null): void {
-  const sid = sidOf(cx), s = c.newLocal(T.i32);
-  c.gget(sid).lset(s).lget(s).i32(ROOT).raw(OP.i32_eq).if_(T.i32);
+  c.gget(sidOf(cx)).i32(ROOT).raw(OP.i32_eq).if_(T.i32);
   emitSync(cx, c, Sync.Plain); c.drop().i32(St.Nbs);
   c.else_();
   const restore = emitSave(cx, c);
@@ -123,9 +127,8 @@ rt("curThread", [], "L", (cx, c) => {
     if (name === "main") c.else_();
   }
   c.end();
-  // ART records the native thread in the peer, which is what Thread.isAlive reads
-  const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
-  c.gget(g).refCast(st).i64(1n).structSet(st, peer);
+  // ART records the native thread in the peer
+  c.gget(g); setPeer(cx, c, 1n);
   emitSync(cx, c, Sync.Bind, () => c.gget(g)); c.drop();
   // and the runtime gives the main thread the system class loader as its context loader, which threads started from it inherit
   const system = cx.prog.resolve(LOADER, "getSystemClassLoader", `()L${LOADER};`);
@@ -154,7 +157,7 @@ def(thread("currentThread()Ljava/lang/Thread;"), (cx, c) => { cx.callRt(c, "curT
 def(thread("setContextClassLoader(Ljava/lang/ClassLoader;)V"), (cx, c) => {
   // Android's setter only writes this field (SecurityManager is removed).
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0).refCast(cx.structFor(THREAD)).lget(1).structSet(cx.structFor(THREAD), cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+  c.lget(0).refCast(cx.structFor(THREAD)).lget(1); setContextLoader(cx, c);
   emitSync(cx, c, Sync.ContextSet, () => c.lget(0)); c.drop();
 });
 def(thread("nativeGetStatus(Z)I"), (cx, c) => { emitSync(cx, c, Sync.Status, () => c.lget(0), () => c.lget(1).raw(OP.f64_convert_i32_s)); });
@@ -166,8 +169,7 @@ def(thread("yield()V"), (cx, c) => { cx.callRt(c, "yieldNow"); });
 def(thread("setPriority0(I)V"), () => {});
 def(thread("setNativeName(Ljava/lang/String;)V"), (cx, c) => { emitSync(cx, c, Sync.Rename, () => c.lget(0)); c.drop(); });
 def(thread("nativeCreate(Ljava/lang/Thread;JZ)V"), (cx, c) => {
-  const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
-  c.lget(0).refCast(st).i64(1n).structSet(st, peer);
+  c.lget(0); setPeer(cx, c, 1n);
   emitSync(cx, c, Sync.Create, () => c.lget(0)); c.drop();
 });
 // Thread.sleep(lock, millis, nanos): a timed wait on the thread's own lock, which Thread.sleep(long, int) holds and nothing notifies
@@ -319,10 +321,15 @@ export class Sched {
     return this.monitors.tryEnter(obj, s) === St.Ok ? St.Ok : this.monitors.enter(obj, s);
   }
   private rootStrand(rec: ThreadRec): Strand {
+    const id = this.freeId();
+    return this.strands[id] = new Strand(id, rec, true, this);
+  }
+  /** the next unused strand id; ids wrap below 1 << 22 */
+  private freeId(): number {
     let id = this.next;
     while (this.strands[id]) id = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
     this.next = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
-    return this.strands[id] = new Strand(id, rec, true, this);
+    return id;
   }
   /** a thread the host made: it runs Java as a thread of its own, whose Thread object is made when it first asks for it */
   hostThread(): ThreadRec { return new ThreadRec(null); }
@@ -341,19 +348,16 @@ export class Sched {
         this.running = s; this.onThread?.(s.thread, false); throw e;
       }
       this.idle();
-      // Immediate imports retain their engine stacks. Clear the quota only
-      // when the import actually suspends.
-      if (r instanceof Promise) { s.nested = 0; this.suspensions++; }
+      if (!(r instanceof Promise)) return r;
+      // an import that answers at once keeps its engine stacks: the quota clears only when it suspends
+      s.nested = 0; this.suspensions++;
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
-      return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; }) : r;
+      return r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; });
     }) as unknown as (...a: A) => R;
   }
   /** a new strand of `thread` (the main thread's when none), for a call into Java from the native `parent` runs, if any */
   strand(thread: ThreadRec = this.main, parent: Strand | null = null): Strand {
-    let id = this.next;
-    while (this.strands[id]) id = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
-    this.next = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
-    const s = this.strands[id] = new Strand(id, thread, false, this);
+    const id = this.freeId(), s = this.strands[id] = new Strand(id, thread, false, this);
     s.parent = parent;
     return s;
   }
@@ -406,7 +410,7 @@ export class Sched {
       case Sync.SystemLoaderReady: {
         if (obj && this.pendingContext.size) {
           const set = this.w.hostFn("thread:context", ["L", "L"], "V", (cx, c) => {
-            c.lget(0).refCast(cx.structFor(THREAD)).lget(1).structSet(cx.structFor(THREAD), cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+            c.lget(0).refCast(cx.structFor(THREAD)).lget(1); setContextLoader(cx, c);
           });
           for (const peer of this.pendingContext) set(peer, obj);
           this.pendingContext.clear();
@@ -494,9 +498,9 @@ export class Sched {
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
       s.thread.alive = false; this.started.delete(s.thread);
       const done = this.threadFn("finish", () => w.hostFn("thr:finish", ["L"], "V", (cx, c) => {
-        const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" }), lock = cx.fieldIndex(THREAD, { owner: THREAD, name: "lock", desc: "Ljava/lang/Object;" }), l = c.newLocal(T.anyref);
-        c.lget(0).refCast(st).i64(0n).structSet(st, peer);
-        c.lget(0).refCast(st).structGet(st, lock).lset(l);
+        const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
+        c.lget(0); setPeer(cx, c, 0n);
+        c.lget(0).refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);
         c.lget(l).call(cx.helper("menter"));
         emitSync(cx, c, Sync.NotifyAll, () => c.lget(l)); c.drop();
         c.lget(l).call(cx.helper("mexit"));
