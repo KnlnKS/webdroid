@@ -79,7 +79,8 @@ export function* receivers(intent: JObj): Gen<Receiver[]> {
 export type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
 export type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
-  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
+  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" }
+  | { kind: "rotate"; landscape: boolean };
 export type ProcessEndpoint = {
   processDied: (token: number) => Promise<void>;
   activity: (request: ActivityRequest) => Promise<void>;
@@ -253,7 +254,7 @@ export class ProcessBroker {
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
-    rotate: (entry) => void import("./device").then(({ followDisplay }) => followDisplay(entry.landscape)),
+    rotate: (entry) => import("./device").then(({ followDisplay }) => followDisplay(entry.landscape)),
   });
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {

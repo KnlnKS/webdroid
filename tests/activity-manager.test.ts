@@ -46,7 +46,7 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   const entry = {pid:1001} as import("../src/shell/processes").Entry;
   const first = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   let calls = 0, available = true;
-  const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:()=>{},
+  const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:async()=>{},
     activity:async (_entry,request)=>{expect(request.kind).toBe("back");calls++;
       if(calls===1){entered.resolve();await first.promise;} else if(calls===2)throw new Error("owner back failure");}});
   stack.setForeground(entry.pid);
@@ -63,4 +63,25 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   expect(calls).toBe(2);
   expect(await stack.bringToFront(1002).then(()=>"unexpected success",error=>error.message)).toBe("target died");
   available=true;await stack.back(1000);expect(calls).toBe(3);expect(done).toBe(true);
+});
+
+test("a physical rotation reaches the process whose activity fills the display, and the display follows its turn", async () => {
+  const { ActivityStack } = await import("../src/shell/activitystack");
+  const app = {pid:1001,landscape:false} as import("../src/shell/processes").Entry;
+  const followed: boolean[] = [], requests: unknown[] = [];
+  const turned = Promise.withResolvers<void>();
+  const stack: InstanceType<typeof ActivityStack> = new ActivityStack({entry:()=>app,alive:()=>true,entries:()=>[app],connect:()=>app,
+    rotate:async(entry)=>{await turned.promise;followed.push(entry.landscape!);},
+    activity:async(_entry,request)=>{requests.push(request);
+      // the app's own display turns, and it reports that before it answers
+      if(request.kind==="rotate")stack.orientation(app.pid,request.landscape);}});
+  stack.setForeground(app.pid);
+  expect(stack.rotate(app.pid,true)).toBeNull();
+  let done=false;
+  const rotated=stack.rotate(1000,true)!.then(()=>{done=true;});
+  await Promise.resolve();await Promise.resolve();
+  expect(requests).toEqual([{kind:"rotate",landscape:true}]);
+  expect(done).toBe(false);
+  turned.resolve();await rotated;
+  expect(followed).toEqual([true]);
 });

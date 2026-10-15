@@ -17,7 +17,7 @@ export type StackPort = {
   connect(pkg: string, process: string): Entry;
   activity(entry: Entry, request: ActivityRequest): Promise<void>;
   /** turns the display for the process whose activity sets its orientation */
-  rotate(entry: Entry): void;
+  rotate(entry: Entry): Promise<void>;
 };
 
 export class ActivityStack {
@@ -28,6 +28,8 @@ export class ActivityStack {
   private shownPids = new Set<number>();
   /** the shown processes as show() last layered them, bottom to top */
   private layers: number[] = [];
+  /** the display turning for the last orientation the process that fills it reported */
+  private following: Promise<void> = Promise.resolve();
   constructor(private port: StackPort) {}
 
   get foreground(): number { return this.top; }
@@ -44,7 +46,22 @@ export class ActivityStack {
   orientation(pid: number, landscape: boolean): void {
     const entry = this.port.entry(pid);
     entry.landscape = landscape;
-    if (pid === this.layers[0]) this.port.rotate(entry);
+    if (pid === this.layers[0]) this.following = this.port.rotate(entry);
+  }
+  /**
+   * A physical rotation goes to the process whose activity fills the display, as DisplayRotation
+   * resolves the sensor's rotation against the orientation that activity requested; null when
+   * that is the caller's own. Its process turns or keeps its display, and the display follows the
+   * turn it reports. Like DisplayRotation, which defers a rotation while a transition runs, it
+   * waits for the activity changes before it.
+   */
+  rotate(caller: number, landscape: boolean): Promise<void> | null {
+    const owner = this.layers[0];
+    if (!owner || owner === caller || !this.port.alive(owner)) return null;
+    return this.enqueue(async () => {
+      await this.port.activity(this.port.entry(this.layers[0]), { kind: "rotate", landscape });
+      await this.following;
+    });
   }
   launch(caller: number, pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null = null): Promise<void> {
     const source = this.port.entry(caller);
@@ -159,6 +176,6 @@ export class ActivityStack {
     }
     // DisplayRotation takes the orientation from the top activity that fills the display: a
     // translucent one leaves it to the one beneath, the bottom of the shown layers
-    if (layers.length) this.port.rotate(this.port.entry(layers[0]));
+    if (layers.length) void this.port.rotate(this.port.entry(layers[0]));
   }
 }

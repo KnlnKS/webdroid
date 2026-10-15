@@ -204,8 +204,9 @@ const turnDisplay = async (landscape: boolean) => { if (applyOrientationRequest(
 /** the page's own orientation, which the user's rotations set: the display leaves it to follow
  *  another process's activity and returns to it when the page's own fills the display again */
 let ownLandscape = device.orientation === 2;
-/** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
- *  manager keeps the display in that orientation for it. */
+/** A physical rotation, in the process whose activity fills the display (ActivityStack.rotate). An
+ *  activity that fixed or locked its orientation keeps it, as the window manager keeps the display
+ *  in that orientation for it. */
 export function rotateDevice(landscape: boolean): Promise<void> {
   return onMain(async () => {
     const request = topOrientation();

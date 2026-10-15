@@ -50,6 +50,10 @@ const back = async () => {
   const routed = processBroker().activities.back(PROCESS_PID);
   if (routed) await routed; else await pressBack();
 };
+const rotate = async (landscape: boolean) => {
+  const routed = processBroker().activities.rotate(PROCESS_PID, landscape);
+  if (routed) await routed; else await rotateDevice(landscape);
+};
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
@@ -189,7 +193,7 @@ const wd = {
   foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundWorker()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
-  configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
+  configuration: (orientation: "portrait" | "landscape") => rotate(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // the shown processes' windows bottom to top, then the system windows above them
