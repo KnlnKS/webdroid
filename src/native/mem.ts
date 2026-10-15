@@ -17,7 +17,8 @@ const buffers = new WeakSet<ArrayBufferLike>();
 /** a host access of n bytes: in range, and backed where it lands in a plane (which may commit
  *  the plane's writable pages under it) */
 function checkAddr(a: number, n: number): void {
-  if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
+  // an empty access touches no memory, as memcpy(NULL, p, 0) does not (JNI NewString(NULL, 0))
+  if (((a >>> 0) - LOW) >>> 0 > SPAN - n) { if (n) badAddr(a); return; }
   if (planes && !core.commit_phys(a >>> 0, n)) throw new BadAddress(BigInt(mem.va(a >>> 0)), `[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
 }
 function localBytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); }
