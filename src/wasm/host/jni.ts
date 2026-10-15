@@ -130,7 +130,8 @@ export function wasmJni(w: World): JniVm {
         const mark = bridge.begin();
         try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(mark); }
       }
-      const ctor = prog.get(c.name)?.byKey.get("<init>" + view(c, sig));
+      // GetMethodID finds a superclass's constructor too (ART's FindClassMethod); NewObject runs it on a new `c`
+      const ctor = prog.resolve(c.name, "<init>", view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);
       const o = newInstance(w, c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
       return done instanceof Promise ? done.then(() => o) : o;
