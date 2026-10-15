@@ -25,9 +25,9 @@ class Monitor {
 
 /** whether `s` holds what `owner` holds: the same strand, a strand that native code of the other entered Java on (the same thread, up the chain of `parent`s), or
  *  one of its thread's other strands when either is the thread's root (host code that enters Java outside any job shares the thread's locks) */
-export const owns = (owner: Strand | null, s: Strand): boolean => {
+const owns = (owner: Strand | null | undefined, s: Strand): boolean => {
   if (owner === s) return true;
-  if (owner === null || owner.thread !== s.thread) return false;
+  if (!owner || owner.thread !== s.thread) return false;
   if (owner.root || s.root) return true;
   for (let p = s.parent; p; p = p.parent) if (p === owner) return true;
   for (let p = owner.parent; p; p = p.parent) if (p === s) return true;
@@ -46,11 +46,8 @@ export class Monitors {
     this.header.setLock(obj, INFLATED | index);
     return m;
   }
-  /** the monitor of `obj` if it has one, with a thin lock held by a strand that has ended taken as free */
-  private monitor(obj: object): Monitor | null {
-    const l = this.header.lock(obj);
-    return l < 0 ? this.table[l & 0x7fffffff]! : null;
-  }
+  /** the monitor an inflated lock word names */
+  private inflated(l: number): Monitor { return this.table[l & 0x7fffffff]!; }
   private thin(l: number): Strand | undefined { return this.strands[l >>> 8]; }
   private deflate(m: Monitor): void {
     if (m.owner || m.depth || m.entrants.length || m.waiters.length || m.pending) return;
@@ -59,8 +56,8 @@ export class Monitors {
   /** the monitor of `obj` as `s` holds it, inflating a thin lock; undefined when `s` does not hold it */
   private held(obj: object, s: Strand): Monitor | undefined {
     const l = this.header.lock(obj);
-    if (l < 0) { const m = this.table[l & 0x7fffffff]!; return owns(m.owner, s) ? m : undefined; }
-    if (l === 0 || !owns(this.thin(l) ?? null, s)) return undefined;
+    if (l < 0) { const m = this.inflated(l); return owns(m.owner, s) ? m : undefined; }
+    if (l === 0 || !owns(this.thin(l), s)) return undefined;
     return this.inflate(obj, s, l & 255);
   }
 
@@ -75,15 +72,14 @@ export class Monitors {
       this.inflate(obj, o, l & 255);
       return s.canSuspend ? St.Block : St.Nbs;
     }
-    const m = this.table[l & 0x7fffffff]!;
+    const m = this.inflated(l);
     if (!m.owner) { m.owner = s; m.depth = 1; return St.Ok; }
     if (owns(m.owner, s)) { m.depth++; return St.Ok; }
     return s.canSuspend ? St.Block : St.Nbs;
   }
   /** waits for the owner of an inflated monitor to hand it over */
   enter(obj: object, s: Strand): Promise<void> {
-    const m = this.monitor(obj)!;
-    return this.queue(m, s, 1);
+    return this.queue(this.inflated(this.header.lock(obj)), s, 1);
   }
   private queue(m: Monitor, s: Strand, depth: number): Promise<void> {
     if (!m.owner) { m.owner = s; m.depth = depth; return Promise.resolve(); }
@@ -94,11 +90,11 @@ export class Monitors {
   exit(obj: object, s: Strand): St {
     const l = this.header.lock(obj);
     if (l > 0) {
-      if (!owns(this.thin(l) ?? null, s)) return St.Imse;
+      if (!owns(this.thin(l), s)) return St.Imse;
       this.header.setLock(obj, (l & 255) === 1 ? 0 : l - 1);
       return St.Ok;
     }
-    const m = l < 0 ? this.table[l & 0x7fffffff]! : undefined;
+    const m = l < 0 ? this.inflated(l) : undefined;
     if (!m || !owns(m.owner, s)) return St.Imse;
     if (--m.depth === 0) this.release(m);
     return St.Ok;
@@ -109,16 +105,9 @@ export class Monitors {
     m.owner = null;
     this.deflate(m);
   }
-  /** Current owned recursion depth, for validating a continuation's held locks. */
-  depth(obj: object, s: Strand): number {
-    const l = this.header.lock(obj);
-    if (l > 0) return owns(this.thin(l) ?? null, s) ? l & 255 : 0;
-    const m = l < 0 ? this.table[l & 0x7fffffff] : undefined;
-    return m && owns(m.owner, s) ? m.depth : 0;
-  }
   holds(obj: object, s: Strand): boolean {
     const l = this.header.lock(obj);
-    return l > 0 ? owns(this.thin(l) ?? null, s) : l < 0 && owns(this.table[l & 0x7fffffff]!.owner, s);
+    return l > 0 ? owns(this.thin(l), s) : l < 0 && owns(this.inflated(l).owner, s);
   }
   notify(obj: object, s: Strand, all: boolean): St {
     const m = this.held(obj, s);
