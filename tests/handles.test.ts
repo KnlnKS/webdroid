@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { rt } from "../src/jvm/runtime";
+import "../src/natives";
+import { rt, declaredField } from "../src/jvm/runtime";
+import { newObj } from "../src/jvm/natives/jentry";
 import { handle, deref, release, ownedHandle } from "../src/android/handles";
 
 const SLOT = 0xffffff;
@@ -36,4 +38,14 @@ test("a long field holding a stale or plain number claims no owned object", asyn
   for (let i = 0; i < 5; i++) { Bun.gc(true); await new Promise((r) => setTimeout(r, 10)); }
   expect(deref<object>(h)).toBe(owned!);
   release(h);
+});
+
+// Camera's constructor native stores its native state's long from the host; as with a long a Java
+// constructor stores, the state goes once its owner is collected
+test("the native state a native stores for its receiver goes with the receiver", async () => {
+  const cls = "android/graphics/Camera";
+  const h = await (async () => (await newObj(cls, "()V") as Record<string, bigint>)[declaredField(cls, "native_instance")])();
+  expect(deref(h)).toBeDefined();
+  for (let i = 0; i < 20 && deref(h) !== undefined; i++) { Bun.gc(true); await new Promise((r) => setTimeout(r, 10)); }
+  expect(deref(h)).toBeUndefined();
 });

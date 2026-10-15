@@ -213,7 +213,7 @@ export class Bridge implements HostBridge {
       set(_t, p, v) {
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
         if (!f) throw new Error(`${name} has no field behind ${String(p)}`);
-        bridge.accessor("set", f)(o, f.kind === "L" ? bridge.toJava(v, f.desc) : toBits(v, f.desc));
+        bridge.write(f, o, f.kind === "L" ? bridge.toJava(v, f.desc) : v);
         return true;
       },
     });
@@ -348,9 +348,14 @@ export class Bridge implements HostBridge {
     const raw = f.isStatic ? this.staticAccessor("get", f)() : this.accessor("get", f)(o);
     return f.kind === "L" ? raw : fromBits(raw, f.desc);
   }
+  /** a native's store into a long field claims the handle it holds as compiled code's store does (World.claims) */
   write(f: FieldInfo, o: object | null, v: unknown): void {
     const given = f.kind === "L" ? v : toBits(v, f.desc);
-    if (f.isStatic) this.staticAccessor("set", f)(given); else this.accessor("set", f)(o, given);
+    if (f.isStatic) this.staticAccessor("set", f)(given);
+    else {
+      this.accessor("set", f)(o, given);
+      if (this.w.claims(f)) this.w.opts.claim?.(o!, given as bigint);
+    }
   }
   private staticAccessor(op: "get" | "set", f: FieldInfo): Fn {
     const cache = this.accessors[op === "get" ? "gets" : "sets"];
