@@ -117,8 +117,8 @@ export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promi
   })();
 }
 
-/** boots the app, resolving to its label */
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<string> {
+/** boots the app */
+export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<void> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   mark("bootApk"); onStatus("Reading package…"); booting = true;
@@ -164,7 +164,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await vfs.prepare(pkg);
   // a Worker's files live with the broker, whose prepare created its app data
   if (!filePathTransport.calls) await createAppData(pkg);
-  const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
   mark("dataReady"); onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
@@ -177,7 +176,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await onMain(applyDeviceConfiguration);
   const res = nativeRes(jres);
-  const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
   setAppHost({
     res, pkg, assetKey, zip,
@@ -197,7 +195,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   displayHooks.requestOrientation = applyOrientationRequest;
   mark("resourcesReady"); onStatus("Starting app…");
   await onMain(() => startActivityThread(!processName));
-  return label;
 }
 
 /** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window

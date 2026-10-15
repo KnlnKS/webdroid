@@ -1,5 +1,5 @@
 import { attr, attrStr, TV, type XmlNode } from "./axml";
-import { normRV, type Resources } from "./res";
+import { normRV, resString, type Resources } from "./res";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
 import type { PackageState } from "../shell/packagedata";
 
@@ -52,6 +52,12 @@ export class PackageRecord {
   process(node: XmlNode): string {
     const name = attrStr(node, "process") ?? (this.application && attrStr(this.application, "process")) ?? this.pkg;
     return name.startsWith(":") ? this.pkg + name : name;
+  }
+
+  /** the application's label as the launcher shows it, or the package name without one */
+  label(): string {
+    const value = this.application && attr(this.application, "label");
+    return (value && (value.type === TV.REFERENCE ? resString(this.res, value.data) : value.str)) || this.pkg;
   }
 
   /** a boolean manifest attribute, read through this package's resources when it names one (@bool/...) */
