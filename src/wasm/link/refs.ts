@@ -6,10 +6,7 @@ import { T } from "../compiler/wasmbin";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 
 const REFERENCE = "java/lang/ref/Reference", FINALIZER = "java/lang/ref/FinalizerReference";
-const field = (cx: Compiler, name: string, desc: string) => {
-  const owner = REFERENCE, f = { owner, name, desc }, st = cx.structFor(owner);
-  return { st, at: cx.fieldIndex(owner, f) };
-};
+const field = (cx: Compiler, name: string, desc: string) => ({ st: cx.structFor(REFERENCE), at: cx.fieldIndex(REFERENCE, { owner: REFERENCE, name, desc }) });
 
 export const refIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => refIntrinsics.set(key, (cx, m, c) => f(cx, c));

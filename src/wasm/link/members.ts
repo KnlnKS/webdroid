@@ -23,6 +23,7 @@ const enum TextKind { SimpleName }
 const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
 const visible = (set: EncAnnotation[] | undefined) => (set ?? []).filter((a) => a.visibility === RUNTIME);
+const present = (set: EncAnnotation[] | undefined, type: string) => visible(set).some((a) => a.type === type);
 
 /** the executables of a class the host last counted for `ExecAt` */
 let listed: number[] = [];
@@ -78,7 +79,6 @@ export function hostMembers(w: World, kind: MInfo, a: number, b: number): number
     }
   }
 }
-const present = (set: EncAnnotation[] | undefined, type: string) => visible(set).some((a) => a.type === type);
 
 /** the strings the host answers (host.text) */
 export function hostText(w: World, kind: TextKind, a: number): string {

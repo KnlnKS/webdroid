@@ -6,7 +6,7 @@ import { T } from "../compiler/wasmbin";
 import { methodOf } from "../compiler/ids";
 import { typeFailure } from "../compiler/linkage";
 import { constClass, typeName } from "./classes";
-import { box, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, mhInvoke, resolveHandleMember } from "./mhandles";
+import { box, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles";
 import type { DexFile, EncVal } from "../../jvm/dex";
 import type { Compiler } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
@@ -14,13 +14,12 @@ import type { MethodInfo } from "../compiler/program";
 import type { World } from "./world";
 import type { Strand } from "./sched";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution";
-import { methodTypeSignatureTypes } from "./mhandles";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
 const chain = <A, B>(v: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => v instanceof Promise ? v.then(f) : f(v);
 const scalarType: Record<number, string> = { 0: "I", 2: "I", 3: "I", 4: "I", 6: "J", 0x10: "F", 0x11: "D", 0x15: `L${MT};`, 0x16: `L${MH};`, 0x17: "Ljava/lang/String;", 0x18: "Ljava/lang/Class;", 0x1f: "I" };
-export type BootstrapReference = { argument: number } & (
+type BootstrapReference = { argument: number } & (
   { kind: "handle"; index: number } | { kind: "methodType"; index: number } | { kind: "class"; owner: string; descriptor: string }
 );
 

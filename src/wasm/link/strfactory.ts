@@ -23,13 +23,14 @@ interface CharsTarget {
 export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: number | undefined): number | undefined {
   const { params } = parseMethodDesc(desc), chars = cx.tData.i16, bytes = cx.tData.i8;
   const hibyte = desc === "([BI)V" || desc === "([BIII)V", compact = desc === "([BB)V";
-  const named = desc.endsWith("String;)V") && desc.startsWith("([B") || desc.endsWith("Charset;)V"), isCharset = desc.endsWith("Charset;)V");
+  const isCharset = desc.endsWith("Charset;)V"), named = isCharset || desc.startsWith("([B") && desc.endsWith("String;)V");
   const ranged = desc === "([BII)V" || desc === "([BIII)V" || desc.startsWith("([BIIL");
   if (!hibyte && !compact && !named && desc !== "([B)V" && desc !== "([BII)V") return undefined;
   if (!compact && host === undefined) return undefined;
   const offAt = desc === "([BIII)V" ? 2 : 1, countAt = offAt + 1, csAt = ranged ? 3 : 1;
   const c = new Code(params.length);
   const d = c.newLocal(ref(bytes)), from = c.newLocal(T.i32), n = c.newLocal(T.i32), i = c.newLocal(T.i32), acc = c.newLocal(T.i32), b = c.newLocal(T.i32), out = c.newLocal(ref(chars)), name = c.newLocal(T.anyref);
+  const done = () => { t.finish(c, out); return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`); };
   const viaHost = () => { params.forEach((_, k) => c.lget(k)); c.call(host!).ret(); };
   const npe = () => { c.lget(0).refIsNull().if_(); if (compact) cx.callThrower(c, "npe"); else viaHost(); c.end(); };
   const outOfRange = () => c.lget(offAt).i32(0).raw(OP.i32_lt_s).lget(countAt).i32(0).raw(OP.i32_lt_s).raw(OP.i32_or).lget(offAt).lget(n).lget(countAt).raw(OP.i32_sub).raw(OP.i32_gt_s).raw(OP.i32_or);
@@ -57,8 +58,7 @@ export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: n
     byte(() => c.lget(i).i32(1).raw(OP.i32_shl)); byte(() => c.lget(i).i32(1).raw(OP.i32_shl).i32(1).raw(OP.i32_add)); c.i32(8).raw(OP.i32_shl).raw(OP.i32_or);
     c.else_(); byte(() => c.lget(i)); c.end();
     c.arraySet(chars).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-    t.finish(c, out);
-    return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`);
+    return done();
   }
   if (ranged) {
     outOfRange().if_(); viaHost(); c.end();
@@ -72,6 +72,5 @@ export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: n
   else c.lget(out).lget(i).lget(b).arraySet(chars).lget(acc).lget(b).raw(OP.i32_or).lset(acc);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
   if (!hibyte) { c.lget(acc).i32(0x80).raw(OP.i32_and).if_(); viaHost(); c.end(); }
-  t.finish(c, out);
-  return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`);
+  return done();
 }

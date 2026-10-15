@@ -11,13 +11,13 @@ import type { Strand } from "./sched";
 
 export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
   const BB = "java/nio/ByteBuffer", array = storage === "java/lang/invoke/ByteArrayViewVarHandle";
-  const element = varHandleValues(mode)! ? params[2] : ret, K = kindOf(element), width = element === "S" || element === "C" ? 2 : element === "J" || element === "D" ? 8 : 4;
+  const element = varHandleValues(mode) ? params[2] : ret, K = kindOf(element), width = element === "S" || element === "C" ? 2 : element === "J" || element === "D" ? 8 : 4;
   const nativeOrder = w.fieldReader<number>(storage, "nativeByteOrder", "Z")(handle);
   return handleThunk(w, `vh:view:${array ? "array" : "buffer"}:${mode}:${element}:${nativeOrder}`, ["L"], "L", (cx, c, arg) => {
     const value = (index: number) => { arg(0); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(index).arrayGet(cx.tData.ref); };
     const field = (local: number, owner: string, name: string, desc: string) => {
-      const f = cx.prog.resolveField(owner, name, desc)!;
-      c.lget(local).refCast(cx.structFor(owner)).structGet(cx.structFor(owner), cx.fieldIndex(owner, f));
+      const st = cx.structFor(owner);
+      c.lget(local).refCast(st).structGet(st, cx.fieldIndex(owner, cx.prog.resolveField(owner, name, desc)!));
     };
     const failure = (cls: string) => {
       const local = c.newLocal(T.anyref); cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local);

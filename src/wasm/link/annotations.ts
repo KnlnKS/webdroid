@@ -71,7 +71,7 @@ function make(w: World) {
 }
 
 /** the Java array of `items` with element descriptor `elem` */
-function arrayOf(w: World, s: ReturnType<typeof make>, elem: string, items: unknown[]): object {
+function arrayOf(s: ReturnType<typeof make>, elem: string, items: unknown[]): object {
   const j = s.newArray("[" + elem)(items.length);
   items.forEach((x, i) => s.aset(j, i, x));
   return j;
@@ -91,7 +91,7 @@ function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: Enc
     if (elem.length === 1) return w.bridge.toJava(VIEWS[elem].from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
     const values: unknown[] = [];
     for (const x of items) values.push(yield* valueOf(w, s, strand, dex, x, elem));
-    return arrayOf(w, s, elem, values);
+    return arrayOf(s, elem, values);
   }
   if (v === null) return v;
   if (typeof v === "string") return w.javaString(v);
@@ -117,7 +117,7 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
     const v = yield* valueOf(w, s, strand, a.dex, value, m.ret);
     members.push(yield s.member(strand, w.javaString(name), v, s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0)));
   }
-  return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(w, s, `L${MEMBER};`, members));
+  return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(s, `L${MEMBER};`, members));
 }
 
 /** host.annotation(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is */
@@ -135,11 +135,11 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, filter: ob
   return advance();
 }
 function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, filter: object | null): Generator<unknown, object | null, any> {
-  const s = (states.get(w) ?? (states.set(w, make(w)), states.get(w)!));
-  const classId = w.fieldReader("java/lang/Class", "dexTypeIndex", "I") as (c: object) => number;
+  let s = states.get(w);
+  if (!s) states.set(w, s = make(w));
   if (kind === Ann.SignatureOfClass || kind === Ann.SignatureOfExecutable || kind === Ann.SignatureOfField) {
     const { set } = elementOf(w, kind, a), sig = ofKind(set, SYSTEM).find((x) => x.type === SIGNATURE)?.elements.value;
-    return Array.isArray(sig) ? arrayOf(w, s, "Ljava/lang/String;", (sig as string[]).map((x) => w.javaString(x))) : null;
+    return Array.isArray(sig) ? arrayOf(s, "Ljava/lang/String;", (sig as string[]).map((x) => w.javaString(x))) : null;
   }
   if (kind === Ann.DefaultValue) {
     // the AnnotationDefault of the method's annotation class holds a nested annotation whose elements are the defaults
@@ -155,18 +155,18 @@ function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, fil
     for (const p of params) {
       const annotations: object[] = [];
       for (const x of ofKind(p, RUNTIME)) annotations.push(yield* annotation(w, s, strand, x));
-      groups.push(arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations));
+      groups.push(arrayOf(s, "Ljava/lang/annotation/Annotation;", annotations));
     }
-    return arrayOf(w, s, "[Ljava/lang/annotation/Annotation;", groups);
+    return arrayOf(s, "[Ljava/lang/annotation/Annotation;", groups);
   }
   const runtime = ofKind(set, RUNTIME);
   if (filter) {
-    const want = w.nameOf(classId(filter)), hit = runtime.find((x) => x.type === want);
+    const want = w.nameOf(w.fieldReader<number>("java/lang/Class", "dexTypeIndex", "I")(filter)), hit = runtime.find((x) => x.type === want);
     return hit ? yield* annotation(w, s, strand, hit) : null;
   }
   const annotations: object[] = [];
   for (const x of runtime) annotations.push(yield* annotation(w, s, strand, x));
-  return arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations);
+  return arrayOf(s, "Ljava/lang/annotation/Annotation;", annotations);
 }
 
 export const annotationIntrinsics = new Map<string, Intrinsic>();
