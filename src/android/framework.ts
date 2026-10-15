@@ -8,7 +8,7 @@
 
 import { yieldToLoop } from "../jvm/yield";
 import { Arsc } from "./arsc";
-import { DEVICE_COLORS } from "./device-colors";
+import { DEVICE_OVERLAYS } from "./device-overlays";
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt } from "../jvm/runtime";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex";
@@ -22,7 +22,6 @@ import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
 
-const TYPE_INT_COLOR_ARGB8 = 0x1c;
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
 
@@ -84,7 +83,7 @@ export function loadFramework(): Promise<Arsc> {
   })();
 }
 
-/** framework-res.apk's table as the platform package, with the device's color overlays */
+/** framework-res.apk's table as the platform package, with the device's overlays */
 export function installFramework(apk: Uint8Array): Arsc {
   const dir = centralDir(apk);
   const inflated = new Map<string, Uint8Array | null>();
@@ -121,11 +120,10 @@ export function installFramework(apk: Uint8Array): Arsc {
     packages.set(platform.pkg, platform);
   }
 
-  // the reference device's overlays (SystemUI's Monet palette) replace these defaults
-  const colors = arsc.names("color");
-  for (const [name, argb] of Object.entries(DEVICE_COLORS)) {
-    const id = colors.get(name);
-    if (id !== undefined) arsc.overlay(id, { type: TYPE_INT_COLOR_ARGB8, data: argb | 0 });
+  // the reference device's overlays (SystemUI's Monet palette, gestural navigation) replace these defaults
+  for (const [key, [type, data]] of Object.entries(DEVICE_OVERLAYS)) {
+    const slash = key.indexOf("/"), id = arsc.names(key.slice(0, slash)).get(key.slice(slash + 1));
+    if (id !== undefined) arsc.overlay(id, { type, data: data | 0 });
   }
   setFramework(arsc);
   return arsc;

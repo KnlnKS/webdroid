@@ -29,6 +29,9 @@ import { hostStub, oneway, parceledList } from "./binder";
 import { deleteVersioned, enforceDeletePackages } from "./appdata";
 import { installerService } from "./packageinstaller";
 import { checkPermission } from "./permissions";
+import { libraryAbi } from "../jvm/natives/jlang";
+import { classpathFile } from "../jvm/natives/jzip";
+import { ABIS_64 } from "../shell/properties";
 
 const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
@@ -46,7 +49,8 @@ export const GL_ES_VERSION = 0x30000;
 
 // ── the booted package
 let currentPackage: PackageRecord | null = null;
-/** registers the package this process booted from its manifest, at /data/app/base.apk */
+/** registers the package this process booted from its manifest, at /data/app/base.apk, with its
+ *  native libraries where the installer leaves them */
 export function setManifest(root: XmlNode): void {
   const pkg = attrStr(root, "package") ?? "";
   if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
@@ -57,6 +61,25 @@ export function setManifest(root: XmlNode): void {
     return bytes ? cachedCertificates(bytes, host.zip) : [];
   });
   packages.set(pkg, currentPackage);
+  extractNativeLibraries(currentPackage);
+}
+
+// ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
+const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
+/** primaryCpuAbi: the ABI of the package's libraries a process here loads, null when it ships none */
+const primaryAbi = (record: PackageRecord): string | null =>
+  libraryAbi(record === currentPackage ? rt.classpathNames() : Object.keys(record.res.zip));
+const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slice(0, record.path.lastIndexOf("/"))}/lib`;
+/** <codePath>/lib/<instruction set>, the device's own when the package ships no libraries */
+const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
+/** The installer's copy of the booted package's primary-ABI libraries into its nativeLibraryDir,
+ *  which ClassLoader.findLibrary searches; extractNativeLibs="false" leaves them in the apk. */
+function extractNativeLibraries(record: PackageRecord): void {
+  const abi = primaryAbi(record);
+  if (!abi || !record.flag(record.application, "extractNativeLibs", true)) return;
+  const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
+  for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
+    vfs.mount(dir + name.slice(prefix.length - 1), classpathFile(name));
 }
 
 // ── the parsed manifest, read as ParsingPackageUtils reads it. The Java side is built in generators
@@ -145,6 +168,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
   const ai: JObj = yield newObj(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
   const own = record === currentPackage && appHost?.pkg === pkg ? appHost : null;
   const splits = own?.splits.length ? own.splits : null;
+  const abi = primaryAbi(record);
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
   const className = qualified("name");
   setDeclared(ai, APP, {
@@ -162,7 +186,8 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     splitNames: splits && strArray(splits),
     splitSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     splitPublicSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
-    nativeLibraryDir: "/lib", dataDir: `/data/data/${pkg}`, credentialProtectedDataDir: `/data/data/${pkg}`,
+    primaryCpuAbi: abi, nativeLibraryRootDir: nativeLibraryRoot(record), nativeLibraryRootRequiresIsa: 1,
+    nativeLibraryDir: nativeLibraryDir(record, abi), dataDir: `/data/data/${pkg}`, credentialProtectedDataDir: `/data/data/${pkg}`,
     deviceProtectedDataDir: `/data/user_de/0/${pkg}`, storageUuid: yield uuidDefault(),
     enabled: record.enabled ? 1 : 0, enabledSetting: 0, category: intAttr(app, "appCategory", -1),
     networkSecurityConfigRes: intAttr(app, "networkSecurityConfig", 0),

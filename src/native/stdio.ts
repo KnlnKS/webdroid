@@ -11,7 +11,7 @@ import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs, storageEstimate } from "../shell/vfs";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdReadFully, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
   statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
 
@@ -350,7 +350,7 @@ export function stdioInit(): void {
       if (!pending?.length) pushback.delete(fp);
       if (used === total) return n;
       const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
-      const r = fdReadFully(cpu, fileFd(fp), p + used, total - used);
+      const r = fdRead(cpu, fileFd(fp), p + used, total - used);
       return r instanceof Promise ? r.then(fin) : fin(r);
     },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return r instanceof Promise ? r.then(written => Math.floor(written / sz)) : Math.floor(r / sz); },
