@@ -45,7 +45,7 @@ const F = {
   vsyncId: mangleField(TIMELINE, "vsyncId"), present: mangleField(TIMELINE, "expectedPresentationTime"),
   deadline: mangleField(TIMELINE, "deadline"),
 };
-let latest = { nanos: 0n, frame: 0 };
+let latest = { at: -Infinity, nanos: 0n, frame: 0 };
 /** VsyncEventData as NativeDisplayEventReceiver fills it: the browser predicts one presentation, a
  *  frame interval out, which is also the deadline */
 function fill(data: Record<string, unknown>): void {
@@ -113,9 +113,11 @@ export function hostFrames(frame: (time: number) => void): void {
   setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
 }
 export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
-let vsyncHooks: (() => void)[] = [];
-/** run `fn` at the next vsync: a renderer drawing on its own cadence */
-export function onNextVsync(fn: () => void): void { vsyncHooks.push(fn); }
+let vsyncHooks: { fn: () => void; after: number }[] = [];
+/** run `fn` at the next vsync later than the latest: a renderer drawing on its own cadence, whose
+ *  draw steps only its animators, which hwui's CanvasContext::prepareTree declines at the same vsync
+ *  (canDrawThisFrame) */
+export function onNextVsync(fn: () => void): void { vsyncHooks.push({ fn, after: latest.at }); }
 let frameStart: number | null = null;
 /** the renderer drew the main thread's frame */
 export function frameDrawn(): void {
@@ -128,13 +130,14 @@ export function deliverVsync(): void { deliver(true); }
 /** A frame's request for the next vsync is answered by a later display vsync, as a display's are a
  *  refresh period apart; under a controlled clock time can stand still, and a time-driven animation
  *  (a ValueAnimator's every update invalidates) then waits for time to pass rather than redraw the
- *  same frame at every host refresh. A `stepped` vsync answers every request. */
+ *  same frame at every host refresh. A `stepped` vsync answers every receiver. */
 function deliver(stepped: boolean): void {
   const at = uptimeMillis();
-  latest = { nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
+  latest = { at, nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
-  const hooks = vsyncHooks;
-  vsyncHooks = [];
+  const later = (r: { after: number }) => at > r.after;
+  const hooks = vsyncHooks.filter(later).map(h => h.fn);
+  vsyncHooks = vsyncHooks.filter(h => !later(h));
   const dispatch = (r: Receiver) => {
     fill(r.data as never);
     r.looper.frameAt = at;
@@ -142,7 +145,7 @@ function deliver(stepped: boolean): void {
   };
   let mainFrame = false;
   for (const r of scheduled) {
-    if (!stepped && at <= r.after) continue;
+    if (!stepped && !later(r)) continue;
     scheduled.delete(r);
     if (r.looper !== mainLooper) { r.looper.post(() => dispatch(r)); continue; }
     mainFrame = true;
