@@ -178,6 +178,7 @@ const wd = {
   displayCanvases: () => processBroker().displayCanvases(canvas),
   mirrorFrames: (on: Mirror) => processBroker().mirrorFrames(on),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  processStarting: () => processBroker().starting(),
   /** the foreground process's frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
   foregroundTimeline: async (from: number) => (await processBroker().foregroundWorker()?.control.timeline(from)) ?? [],
   /** the page's own events since `from` (ms since the epoch), as foregroundTimeline */

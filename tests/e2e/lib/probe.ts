@@ -243,6 +243,7 @@ function installProbe(cfg: ProbeConfig): void {
     if (d.queued > 0) r.push("queued");
     if (wd.vsyncScheduled?.()) r.push("vsync");
     if (wd.pendingTransitions?.()) r.push("transition");
+    if (wd.processStarting?.()) r.push("starting");
     if (wd.yields.pending()) r.push("yields");
     const worker = await foreground();
     if (worker) {
@@ -283,6 +284,7 @@ function installProbe(cfg: ProbeConfig): void {
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
+  const WORKING = new Set(["queued", "transition", "starting"]);
   const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
@@ -381,19 +383,21 @@ function installProbe(cfg: ProbeConfig): void {
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
       // an animation the app started after the clock ran through the window (a slow tap's ripple)
       // would stay at its first frame and ask for frames forever: time passes while frames are asked
-      // for, four display frames a sample, since only where the animation ends is captured
-      if (controlled && b.includes("vsync") && g.wd.guestClock.now() < animationEnd) {
-        await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
+      // for, four display frames a sample, since only where the animation ends is captured. A
+      // frame's request for the next waits for time, so past the bound this steps the frame, which
+      // also draws what came in meanwhile
+      if (controlled && b.includes("vsync")) {
+        if (g.wd.guestClock.now() < animationEnd) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
         await g.wd.testFrame();
       }
       // a still screen settles past timers and network, not past work under way: a main-thread job
-      // or its queue (its result is not drawn yet) or an activity start or finish, nor on a real
-      // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
-      // stretch changes no pixels; a background thread's result is not shown yet). A controlled
-      // clock has already run through the window, and a loop that keeps going without changing
-      // the screen (a paused game) is still.
+      // or its queue (its result is not drawn yet), an activity start or finish or a process start,
+      // nor on a real clock during the first 1.5 s of frames scheduled or threads running (a fling's
+      // overscroll stretch changes no pixels; a background thread's result is not shown yet). A
+      // controlled clock has already run through the window, and a loop that keeps going without
+      // changing the screen (a paused game) is still.
       activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
-      const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition") ||
+      const working = b.some((k) => k.startsWith("job:") || WORKING.has(k)) ||
         (!controlled && activeSince > 0 && now - activeSince < 1500);
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }

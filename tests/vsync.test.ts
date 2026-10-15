@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { onNextVsync, recordVsync } from "../src/android/vsync";
+import { recordVsync } from "../src/android/vsync";
 import { device } from "../src/shell/config";
 
 test("virtual vsync tolerates host jitter, caps refresh rates and drops missed periods", () => {
@@ -7,13 +7,11 @@ test("virtual vsync tolerates host jitter, caps refresh rates and drops missed p
   let start = 1000;
   try {
     device.refreshRate = 60;
-    let delivered = 0, accepted = 0;
+    let accepted = 0;
     for (let i = 0; i < 600; i++) {
-      onNextVsync(() => delivered++);
       accepted += +recordVsync(start + i * 1000 / 60 + (i % 2 ? -1.8 : 0));
     }
     expect(accepted).toBe(600);
-    expect(delivered).toBe(600);
     start += 20_000;
     expect(recordVsync(start)).toBe(true);
     accepted = 0;

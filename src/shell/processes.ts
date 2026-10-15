@@ -776,6 +776,8 @@ export class ProcessBroker {
     if (!entry?.worker && !entry?.workerDiagnostic) return null;
     return (await this.workerSnapshots([entry]))[0] ?? null;
   }
+  /** whether a process Worker is still booting: it serves its endpoint once it is ready */
+  starting(): boolean { return [...this.entries.values()].some(e => e.worker && !e.dead && !this.endpointPorts.has(e.pid)); }
   /** settles once the process has presented a frame, or has died */
   presented(pid: number): Promise<void> { return this.entries.get(pid)?.presented?.promise ?? Promise.resolve(); }
   foregroundWorker(): Entry["worker"] {
