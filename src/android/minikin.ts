@@ -14,6 +14,7 @@
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall, after } from "../jvm/natives/jentry";
+import { isLead, isTrail } from "../jvm/natives/jstring";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
@@ -22,7 +23,7 @@ import {
   type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
 } from "./hyphenator";
-import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, isLead, isTrail, graphemes, isBidiControl } from "./shaping";
+import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping";
 import { setEdges } from "./graphics";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────

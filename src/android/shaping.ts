@@ -11,6 +11,7 @@
 import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { after } from "../jvm/natives/jentry";
+import { isLead, isTrail } from "../jvm/natives/jstring";
 import { handle, deref, FINALIZER } from "./handles";
 import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts";
 import { cssFace } from "./cssfonts";
@@ -23,8 +24,6 @@ import { emptyBox, type Box } from "./graphics";
 import { variedAdvances } from "./sfnt";
 
 export const f32 = Math.fround;
-export const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
-export const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff;
 export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /** the directional formatting characters, which have no advance of their own */
 export const isBidiControl = (c: number) => c === 0x200e || c === 0x200f || c >= 0x202a && c <= 0x202e || c >= 0x2066 && c <= 0x2069;
@@ -336,7 +335,7 @@ export function hasGlyph(text: string, rtl: boolean, p: NativePaint): boolean | 
     let chars = 0, prev = -1;
     for (let i = 0; i < text.length; i++) {
       let c = text.charCodeAt(i);
-      if (isSurrogate(c)) {
+      if (isLead(c) || isTrail(c)) {
         if (isTrail(c) || !isTrail(text.charCodeAt(i + 1))) return false;
         c = text.codePointAt(i++)!;
       }

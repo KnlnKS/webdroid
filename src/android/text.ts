@@ -1,6 +1,7 @@
 // android.text: AndroidCharacter's natives.
 import { rt, driven, type Gen } from "../jvm/runtime";
 import { after } from "../jvm/natives/jentry";
+import { isLead, isTrail } from "../jvm/natives/jstring";
 import { uchar } from "../jvm/natives/jicu";
 
 // android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)
@@ -18,7 +19,7 @@ function checkRange(length: number, start: number, count: number) {
 const perCodePoint = driven(function* perCodePoint(src: Uint16Array, start: number, count: number, dest: Int8Array, value: (c: number) => unknown): Gen {
   for (let i = 0; i < count; i++) {
     const c = src[start + i], next = i + 1 < count ? src[start + i + 1] : 0;
-    if (c >= 0xd800 && c <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    if (isLead(c) && isTrail(next)) {
       dest[i] = dest[i + 1] = yield value(0x10000 + ((c - 0xd800) << 10) + (next & 0x3ff));
       i++;
     } else dest[i] = yield value(c);

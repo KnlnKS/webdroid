@@ -14,22 +14,22 @@ const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => { string
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }
-const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff, isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+export const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 /** code point access shared by String, StringBuilder and Character, with Java's bounds */
 function cpAt(s: string, i: number, limit = s.length): number {
   if (i < 0 || i >= limit) sioobe(i);
   const c = s.charCodeAt(i);
-  return isHigh(c) && i + 1 < limit && isLow(s.charCodeAt(i + 1)) ? s.codePointAt(i)! : c;
+  return isLead(c) && i + 1 < limit && isTrail(s.charCodeAt(i + 1)) ? s.codePointAt(i)! : c;
 }
 function cpBefore(s: string, i: number, start = 0): number {
   if (i <= start || i > s.length) sioobe(i);
   const c = s.charCodeAt(i - 1);
-  return isLow(c) && i - 1 > start && isHigh(s.charCodeAt(i - 2)) ? s.codePointAt(i - 2)! : c;
+  return isTrail(c) && i - 1 > start && isLead(s.charCodeAt(i - 2)) ? s.codePointAt(i - 2)! : c;
 }
 function cpCount(s: string, a: number, b: number): number {
   if (a < 0 || b < a || b > s.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
   let n = b - a;
-  for (let i = a; i < b - 1; i++) if (isHigh(s.charCodeAt(i)) && isLow(s.charCodeAt(i + 1))) { n--; i++; }
+  for (let i = a; i < b - 1; i++) if (isLead(s.charCodeAt(i)) && isTrail(s.charCodeAt(i + 1))) { n--; i++; }
   return n;
 }
 sm("length()I", function () { return this.length; });
@@ -214,12 +214,12 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
   while (offset > 0 && index < text.length) {
     const c = text.charCodeAt(index++);
-    if (isHigh(c) && index < text.length && isLow(text.charCodeAt(index))) index++;
+    if (isLead(c) && index < text.length && isTrail(text.charCodeAt(index))) index++;
     offset--;
   }
   while (offset < 0 && index > 0) {
     const c = text.charCodeAt(--index);
-    if (isLow(c) && index > 0 && isHigh(text.charCodeAt(index - 1))) index--;
+    if (isTrail(c) && index > 0 && isLead(text.charCodeAt(index - 1))) index--;
     offset++;
   }
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
