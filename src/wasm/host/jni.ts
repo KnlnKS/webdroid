@@ -127,8 +127,8 @@ export function wasmJni(w: World): JniVm {
         // a String is built by the production constructor table out of host values, then made a Java String
         const make = (rt.newStr as Record<string, (...a: unknown[]) => string>)[sig];
         if (!make) return noSuchMethod("<init>", sig);
-        const mark = bridge.begin();
-        try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(mark); }
+        bridge.begin();
+        try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(); }
       }
       const ctor = prog.get(c.name)?.byKey.get("<init>" + view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);

@@ -34,7 +34,8 @@ for (const failure of unlike(expected, wasm)) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 {
-  const array = w.bridge.toJava(new Int32Array(2), "[I") as object, before = handle(array), mark = w.bridge.begin();
+  const array = w.bridge.toJava(new Int32Array(2), "[I") as object, before = handle(array);
+  w.bridge.begin();
   try {
     if (deref(before) === array) fail("a Wasm array handle did not produce a host view");
     release(before);
@@ -42,7 +43,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
     try {
       if (after === before || deref(after) === undefined) fail("a released Wasm array retained its stale handle");
     } finally { release(after); }
-  } finally { w.bridge.end(mark); }
+  } finally { w.bridge.end(); }
 }
 
 {

@@ -140,7 +140,7 @@ function makeEntry(w: World): Entry {
   /** a call made of `body` */
   const call = (key: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]): unknown =>
     onStrand((s) => w.callFn(key, params, ret, body)(s, ...args));
-  const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
+  const scoped = <T>(f: () => T): T => { bridge.begin(); try { return f(); } finally { bridge.end(); } };
   /** a JThread (what host code holds of a thread) is the Java Thread of its strands: the main thread's is made by its first Thread.currentThread() */
   const threadObject = (t: JThread): object => {
     const rec = recOf(t);

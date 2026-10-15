@@ -389,19 +389,20 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
       if (r) args[r[0]] = `B.offsetIn(h${i},a${at[r[0]]})`;
     });
     const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
-    const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
+    // a native that waits holds its scope (`back` takes it up again), so the call it returns from does not end it
+    const scope = bridged ? ["let back=null;B.begin()", "B.end()"] : ["const back=null", ""];
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
-    const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}if(X.owes()){const back=${bridged ? "B.hold()" : "null"};X.yield(Promise.resolve(r).then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
+    const park = `if(r instanceof Promise){if(!X.canWait())return suspended();${bridged ? "back=B.hold();" : ""}X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}if(X.owes()){${bridged ? "back=B.hold();" : ""}X.yield(Promise.resolve(r).then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
     const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
     const returned = lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result;
     // a Suspending native answers a Promise only when it waits: a value answered at once leaves the strand on its stack
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"};return(async()=>{try{try{r=await r}catch(e){back?.();throw e}back?.();${toJava}}catch(e){${failure}}finally{${scope[1]}}
+    const wait = susp ? `if(r instanceof Promise){${bridged ? "back=B.hold();" : ""}return(async()=>{try{try{r=await r}catch(e){back?.();throw e}back?.();${toJava}}catch(e){${failure}}finally{${scope[1]}}
 ${returned}})()}`
       : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
     make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};${failure}}
-${susp ? wait : ""}try{${susp ? "" : wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
+${susp ? wait : ""}try{${susp ? "" : wait}${toJava}}catch(e){${failure}}finally{${bridged ? "if(!back)B.end()" : ""}}
 ${returned}}`) as Maker;
     makers.set(key, make);
   }

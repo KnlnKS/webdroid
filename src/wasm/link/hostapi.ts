@@ -60,8 +60,8 @@ export interface GuestMemory {
 
 /** how Java objects cross to a native and back */
 export interface HostBridge {
-  begin(): number;
-  end(mark: number): void;
+  begin(): void;
+  end(): void;
   initialize(cls: string, run: () => unknown): void;
   toHost(v: unknown, desc?: string, range?: [number, number]): unknown;
   offsetIn(host: unknown, offset: number): number;
