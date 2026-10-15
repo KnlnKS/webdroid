@@ -17,7 +17,7 @@ function bitmap(cpu: Cpu, a: ArgReader): NativeBitmap | null {
   return env && env === cpu.env && iof(o, "android/graphics/Bitmap") ? bitmapOf(o as object) : null;
 }
 
-// libjnigraphics' AImageDecoder (imagedecoder.cpp): the whole image, oriented as its EXIF says, decoded by decode.ts. The header info is the decoder.
+// libjnigraphics' AImageDecoder (imagedecoder.cpp): the whole image, oriented as its EXIF says and in its own color space, decoded by decode.ts. The header info is the decoder.
 interface Decoder { bytes: Uint8Array; header: ImageHeader; config: number; unpremul: boolean }
 const decoders = new Map<number, Decoder>();
 let lastDecoder = 0;
@@ -31,7 +31,7 @@ const outConfig = (h: ImageHeader, format: number): number | undefined => {
 };
 async function decodeImage(d: Decoder, pixels: number, stride: number): Promise<number> {
   const { bytes, header, config } = d, [w, h] = oriented(header);
-  const img = await decodePixels(bytes, header, header.width, header.height, null, true), b = new NativeBitmap(w, h, config, header.opaque ? OPAQUE : d.unpremul ? UNPREMUL : PREMUL, stride);
+  const img = await decodePixels(bytes, header, header.width, header.height, null, true, { ownSpace: true, unpremul: d.unpremul }), b = new NativeBitmap(w, h, config, header.opaque ? OPAQUE : d.unpremul ? UNPREMUL : PREMUL, stride);
   if (img) b.setImage(img);
   if (config === ALPHA_8) grayToAlpha(b);
   memoryOf(b, mem.bytes(pixels, stride * (h - 1) + w * bytesPerPixel(config)));

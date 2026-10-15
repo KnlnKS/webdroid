@@ -14,7 +14,7 @@ import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat, unshared } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
-import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
+import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL, type RGBA } from "./bitmap";
 import { decodeHeif } from "./heif";
 import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
@@ -212,8 +212,14 @@ function outputConfig(h: ImageHeader, preferred: number): number {
 
 /** The pixels of `region` (image coordinates, the whole image when null) at w x h, or null when
  *  the browser cannot decode them. `orient` applies EXIF orientation, as ImageDecoder does and
- *  BitmapFactory does not. */
-export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean): Promise<ImageBitmap | null> {
+ *  BitmapFactory does not. `ownSpace` decodes in the image's color space, as AImageDecoder does,
+ *  where BitmapFactory and ImageDecoder convert to sRGB (a PNG's gAMA included). `unpremul` asks
+ *  for a whole image's unpremultiplied pixels as encoded, which a canvas, holding them premultiplied,
+ *  cannot keep for translucent pixels. */
+export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: number, region: [number, number, number, number] | null, orient: boolean,
+  { ownSpace = false, unpremul = false } = {}): Promise<ImageBitmap | RGBA | null> {
+  const colorSpaceConversion = ownSpace ? "none" : "default";
+  if (unpremul && !region && !h.opaque && w === h.width && ht === h.height) { const px = await decodeStraight(bytes, h, colorSpaceConversion); if (px) return px; }
   if (typeof createImageBitmap === "undefined") return null;
   let heif: ImageBitmap | null = null;
   try {
@@ -222,11 +228,31 @@ export async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number,
     const [sx, sy, sw, sh] = region ?? [0, 0, 0, 0];
     const resize: ImageBitmapOptions = region ? (sw !== w || sh !== ht ? { resizeWidth: w, resizeHeight: ht } : {})
       : w !== h.width || ht !== h.height ? { resizeWidth: w, resizeHeight: ht } : {};
-    return await (region ? createImageBitmap(source, sx, sy, sw, sh, resize) : createImageBitmap(source, resize));
+    const options = { ...resize, colorSpaceConversion } as const;
+    return await (region ? createImageBitmap(source, sx, sy, sw, sh, options) : createImageBitmap(source, options));
   } catch (e) {
     if (h.complete) console.warn("[decode]", h.mime, e);
     return null;
   } finally { heif?.close(); }
+}
+/** a whole image's unpremultiplied RGBA from WebCodecs, whose frames are not premultiplied, or null where it cannot give them */
+async function decodeStraight(bytes: Uint8Array, h: ImageHeader, colorSpaceConversion: ColorSpaceConversion): Promise<RGBA | null> {
+  if (typeof ImageDecoder === "undefined" || h.orientation !== 1) return null;
+  const decoder = new ImageDecoder({ data: unshared(bytes), type: h.mime, colorSpaceConversion });
+  try {
+    const { image } = await decoder.decode();
+    try {
+      const format = image.format, rect = image.visibleRect;
+      if (!format || !/^(RGB|BGR)[AX]$/.test(format) || rect?.width !== h.width || rect.height !== h.height) return null;
+      const px = new Uint8ClampedArray(h.width * h.height * 4);
+      await image.copyTo(px);
+      if (format !== "RGBA") for (let i = 0; i < px.length; i += 4) {
+        if (format[0] === "B") { const b = px[i]; px[i] = px[i + 2]; px[i + 2] = b; }
+        if (format[3] === "X") px[i + 3] = 255;
+      }
+      return px;
+    } finally { image.close(); }
+  } catch { return null; } finally { decoder.close(); }
 }
 /** a decoded gray image as ALPHA_8 coverage */
 export function grayToAlpha(b: NativeBitmap) {
@@ -306,7 +332,7 @@ const javaConfig = (config: number) => scall("android/graphics/Bitmap$Config", "
 
 /** The decoded pixels as a bitmap: the reused one reconfigured to hold them, or a new one (HARDWARE
  *  for a hardware 8888 decode). Pixels the browser could not decode leave it empty. */
-function placePixels(img: ImageBitmap | null, w: number, h: number, config: number, alphaType: number, hardware: boolean, reuse: NativeBitmap | null = null): NativeBitmap {
+function placePixels(img: ImageBitmap | RGBA | null, w: number, h: number, config: number, alphaType: number, hardware: boolean, reuse: NativeBitmap | null = null): NativeBitmap {
   const b = reuse ?? new NativeBitmap(w, h, hardware && config === ARGB_8888 ? HARDWARE : config, alphaType);
   if (reuse) reuse.reconfigure(w, h, config, alphaType);
   if (img) b.setImage(img);
@@ -334,7 +360,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
   let reuse = inBitmap ? bitmapAt(inBitmap) : null;
   if (reuse?.immutable) reuse = null;
   if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
-  const img = yield* awaited(decodePixels(bytes, h, sw, sh, null, false));
+  const img = yield* awaited(decodePixels(bytes, h, sw, sh, null, false, { unpremul: !premultiplied }));
   // an incomplete input decodes as far as it goes (here: not at all), a corrupt one fails
   if (!img && h.complete) return null;
   const b = placePixels(img, sw, sh, config, h.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
@@ -486,9 +512,9 @@ rt.registerJnis(DECODER, {
         const s = Math.max(1, Math.floor(nw / w)), [sw, sh] = oriented(header, ...sampledSize(header, s));
         if (sw !== w || sh !== ht) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot scale unpremultiplied pixels!");
       }
-      let img = yield* awaited(decodePixels(bytes, header, ...oriented(header, w, ht), null, true));
+      let img = yield* awaited(decodePixels(bytes, header, ...oriented(header, w, ht), null, true, { unpremul: !!unpremul && !crop }));
       const [bw, bh] = crop ? [crop.right - crop.left, crop.bottom - crop.top] : [w, ht];
-      if (img && crop) { const whole = img; img = yield* awaited(createImageBitmap(whole, crop.left, crop.top, bw, bh)); whole.close(); }
+      if (img && !ArrayBuffer.isView(img) && crop) { const whole = img; img = yield* awaited(createImageBitmap(whole, crop.left, crop.top, bw, bh)); whole.close(); }
       // SkCodec::kIncompleteInput or kErrorInInput: the listener may take what was decoded
       const partial = !header.complete ? SOURCE_INCOMPLETE : !img ? SOURCE_MALFORMED_DATA : 0;
       if (partial) yield vcall(jdecoder, "onPartialImage", "(ILjava/lang/Throwable;)V", partial, null);
