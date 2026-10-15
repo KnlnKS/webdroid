@@ -190,7 +190,8 @@ export class Bridge implements HostBridge {
           return Reflect.get(t, p);
         }
         const raw = bridge.accessor("get", f)(o);
-        return f.kind === "L" ? bridge.toHost(raw, f.desc) : fromBits(raw, f.desc);
+        // outside a native's scope (a callback after its call waited) the read opens its own, which nothing else would close
+        return f.kind !== "L" ? fromBits(raw, f.desc) : bridge.saved.length ? bridge.toHost(raw, f.desc) : bridge.scoped(() => bridge.toHost(raw, f.desc));
       },
       set(_t, p, v) {
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
