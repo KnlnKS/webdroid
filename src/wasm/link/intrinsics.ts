@@ -62,14 +62,14 @@ def("java/lang/Double.isNaN(D)Z", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpr
 // System.setIn, setOut and setErr store the stream in the static final field, which the Wasm class holds as a global
 for (const [name, desc] of [["in", "Ljava/io/InputStream;"], ["out", "Ljava/io/PrintStream;"], ["err", "Ljava/io/PrintStream;"]])
   def(`java/lang/System.set${name[0].toUpperCase()}${name.slice(1)}0(${desc})V`, (cx, m, c) => { c.lget(0).gset(cx.staticGlobal("java/lang/System", name, desc)); });
-def("java/lang/StrictMath.sqrt(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9f, OP.i64_reinterpret_f64); });
-def("java/lang/StrictMath.floor(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9c, OP.i64_reinterpret_f64); });
-def("java/lang/StrictMath.ceil(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9b, OP.i64_reinterpret_f64); });
+/** a double function that is one Wasm instruction: f64.sqrt/floor/ceil/nearest round as Java does */
+const f64Op = (op: number): Intrinsic => (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, op, OP.i64_reinterpret_f64); };
+for (const [name, op] of [["sqrt", 0x9f], ["floor", 0x9c], ["ceil", 0x9b]] as const) def(`java/lang/StrictMath.${name}(D)D`, f64Op(op));
 for (const [f, { params }] of Object.entries(MATH_IMPORTS)) def(`java/lang/Math.${f}(${"D".repeat(params.length)})D`, (cx, m, c) => {
   params.forEach((_, i) => c.lget(i).raw(OP.f64_reinterpret_i64));
   c.call(cx.imp[f as keyof typeof MATH_IMPORTS]).raw(OP.i64_reinterpret_f64);
 });
-def("java/lang/Math.sqrt(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9f, OP.i64_reinterpret_f64); });
+def("java/lang/Math.sqrt(D)D", f64Op(0x9f));
 
 // System.arraycopy(Object src, int sp, Object dst, int dp, int n): an element kind's arrays copy as one array.copy; a pair of arrays of
 // different classes (int[] to float[], or not both arrays) is an ArrayStoreException, a bad range the production AIOOBE message
@@ -106,7 +106,6 @@ for (const [d, k] of [["Z", "i8"], ["B", "i8"], ["C", "i16"], ["S", "i16"], ["I"
     c.lget(2).refCast(t).structGet(t, 2).lget(3).lget(0).refCast(t).structGet(t, 2).lget(1).lget(4).arrayCopy(a, a);
   });
 }
-// Math natives with a Wasm instruction: Math.floor/ceil/rint are f64.floor/ceil/nearest, which round as Java does
-for (const [name, op] of [["floor", 0x9c], ["ceil", 0x9b], ["rint", 0x9e]] as const) def(`java/lang/Math.${name}(D)D`, (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, op, OP.i64_reinterpret_f64); });
+for (const [name, op] of [["floor", 0x9c], ["ceil", 0x9b], ["rint", 0x9e]] as const) def(`java/lang/Math.${name}(D)D`, f64Op(op));
 
 for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics, ...threadIntrinsics, ...refIntrinsics, ...memoryIntrinsics, ...fieldIntrinsics, ...memberIntrinsics, ...inetIntrinsics, ...proxyIntrinsics, ...annotationIntrinsics, ...loaderIntrinsics, ...handleIntrinsics]) intrinsics.set(key, f);
