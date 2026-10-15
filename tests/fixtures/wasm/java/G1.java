@@ -1,7 +1,8 @@
 import java.util.*;
 
 /** Extra G1 workloads in the shape of scripts/jbench/Bench.java (a `case` per line of run), for the code the jbench set leaves out: strings, arithmetic
- *  loops, field and array access, direct, virtual and interface calls. g1.ts cuts each case into its own static method. */
+ *  loops, field and array access, direct, virtual and interface calls, and the `kt` shapes Kotlin compiles to. g1.ts cuts each case into its own static
+ *  method; g1art.ts runs the same cases on the reference device. */
 public class G1 {
   interface Shape { int area(); }
   static final class Sq implements Shape { final int s; Sq(int s) { this.s = s; } public int area() { return s * s; } }
@@ -11,6 +12,39 @@ public class G1 {
   static class B extends Node { int val() { return v * 2; } }
   static class P { int x, y; P(int x, int y) { this.x = x; this.y = y; } int sum() { return x + y; } }
   static class Counter { int n; synchronized void inc() { n++; } synchronized int get() { return n; } void plain() { n++; } void tryinc() { try { n++; } finally { n--; n++; } } }
+  // the shapes Kotlin compiles to (Compose and coroutine code): final getter chains, a lone implementation behind an interface, generic lambdas, parameter
+  // null checks, IntArray slot tables, field updaters, try/finally, continuation state machines and stackless cancellation
+  static final class Leaf { private final int v; Leaf(int v) { this.v = v; } public final int getV() { return v; } }
+  static final class Mid { private final Leaf leaf; Mid(Leaf l) { leaf = l; } public final Leaf getLeaf() { return leaf; } }
+  static final class Top { private final Mid mid; Top(Mid m) { mid = m; } public final Mid getMid() { return mid; } }
+  interface Store { int read(int key); }
+  static final class OnlyStore implements Store { final int[] data = new int[64]; public int read(int key) { return data[key & 63] + key; } }
+  interface Function2<P1, P2, R> { R invoke(P1 a, P2 b); }
+  static final class Intrinsics { static void checkNotNullParameter(Object o, String name) { if (o == null) throw new NullPointerException(name); } }
+  static int sized(String s, Object tag) { Intrinsics.checkNotNullParameter(s, "s"); Intrinsics.checkNotNullParameter(tag, "tag"); return s.length(); }
+  static final class Slots { final int[] groups = new int[4096]; int size;
+    void start(int key, int flags) { int at = size; groups[at] = key; groups[at + 1] = flags << 2 | 1; size = at + 2; }
+    int key(int at) { return groups[at]; } int flags(int at) { return groups[at + 1] >>> 2; } }
+  static final class Job { volatile int state; volatile Object result; }
+  static final java.util.concurrent.atomic.AtomicIntegerFieldUpdater<Job> STATE = java.util.concurrent.atomic.AtomicIntegerFieldUpdater.newUpdater(Job.class, "state");
+  static final java.util.concurrent.atomic.AtomicReferenceFieldUpdater<Job, Object> RESULT = java.util.concurrent.atomic.AtomicReferenceFieldUpdater.newUpdater(Job.class, Object.class, "result");
+  static final Object SUSPENDED = new Object();
+  /** a continuation as kotlinc writes one: a label, the locals it spills, and a resume that re-enters the state machine */
+  static final class Cont { int label, acc, i; }
+  static Object step(Cont c, int v) { return (v & 3) == 0 ? SUSPENDED : (Object) Integer.valueOf(v); }
+  static Object machine(Cont c) {
+    for (;;) switch (c.label) {
+      case 0: c.i = 0; c.acc = 0; c.label = 1;
+      case 1: if (c.i >= 64) return c.acc; c.label = 2; { Object r = step(c, c.i); if (r == SUSPENDED) return SUSPENDED; c.acc += (Integer) r; } c.label = 3; break;
+      case 2: c.acc += c.i; c.label = 3; break;
+      case 3: c.i++; c.label = 1; break;
+      default: throw new IllegalStateException();
+    }
+  }
+  static final class Cancelled extends RuntimeException { Cancelled() { super("cancelled", null, false, false); } }
+  static final Cancelled CANCEL = new Cancelled();
+  static int ensureActive(int i) { if ((i & 7) == 7) throw CANCEL; return i; }
+  static int using(Counter c, int i) { try { c.n += i; try { return c.n & 1; } finally { c.n--; } } finally { c.n++; } }
   static String[] WORDS = new String[200];
   static { for (int i = 0; i < WORDS.length; i++) WORDS[i] = "word" + (i * 7919 % 1000) + (i % 3 == 0 ? "Alpha" : "beta"); }
 
@@ -51,6 +85,15 @@ public class G1 {
       case "strSubstr": { String t = "0123456789abcdefghijklmnopqrstuvwxyz"; int s = 0; for (int r = 0; r < 3000; r++) for (int i = 0; i + 4 < t.length(); i += 3) s += t.substring(i, i + 4).length() + t.substring(i).length(); return s; }
       case "strCompare": { int s = 0; for (int r = 0; r < 20; r++) for (int i = 1; i < WORDS.length; i++) s += WORDS[i].compareTo(WORDS[i - 1]) > 0 ? 1 : 2; return s; }
       case "parseInts": { int s = 0; for (int r = 0; r < 300; r++) for (int i = 0; i < 20; i++) s += Integer.parseInt(Integer.toString(r * i)); return s; }
+      case "ktGetters": { Top[] ts = { new Top(new Mid(new Leaf(3))), new Top(new Mid(new Leaf(5))) }; int s = 0; for (int i = 0; i < 100000; i++) s += ts[i & 1].getMid().getLeaf().getV(); return s; }
+      case "ktSingleImpl": { Store st = new OnlyStore(); int s = 0; for (int i = 0; i < 100000; i++) s += st.read(i); return s; }
+      case "ktLambda": { Function2<Integer, Integer, Integer> add = (a, b) -> a + b; Function2<Integer, Integer, Integer> mul = (a, b) -> a * b; int s = 0; for (int i = 0; i < 50000; i++) s = add.invoke(s, mul.invoke(i & 7, 3)) & 0xffffff; return s; }
+      case "ktNullChecks": { int s = 0; for (int i = 0; i < 100000; i++) s += sized(WORDS[i % 200], WORDS); return s; }
+      case "ktSlots": { Slots t = new Slots(); int s = 0; for (int r = 0; r < 50; r++) { t.size = 0; for (int k = 0; k < 2000; k++) t.start(k * 31, k & 15); for (int at = 0; at < t.size; at += 2) s += t.key(at) ^ t.flags(at); } return s; }
+      case "ktUpdaters": { Job j = new Job(); int s = 0; for (int i = 0; i < 50000; i++) { int v = STATE.get(j); if (STATE.compareAndSet(j, v, v + 1)) s++; RESULT.compareAndSet(j, null, WORDS[i % 200]); RESULT.set(j, null); } return s + j.state; }
+      case "ktTryFinally": { Counter c = new Counter(); int s = 0; for (int i = 0; i < 100000; i++) s += using(c, i); return s + c.n; }
+      case "ktStateMachine": { Cont c = new Cont(); int s = 0; for (int r = 0; r < 2000; r++) { c.label = 0; Object o; while ((o = machine(c)) == SUSPENDED) c.label = 2; s += (Integer) o; } return s; }
+      case "ktCancel": { int s = 0; for (int i = 0; i < 20000; i++) { try { s += ensureActive(i); } catch (Cancelled e) { s -= 1; } } return s; }
       case "exceptions": { int s = 0; for (int i = 0; i < 3000; i++) { try { if ((i & 3) == 0) throw new IllegalStateException(); s++; } catch (IllegalStateException e) { s += 2; } } return s; }
     }
     throw new IllegalArgumentException(w);
