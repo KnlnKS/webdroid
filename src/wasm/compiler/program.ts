@@ -5,6 +5,10 @@ import { parseMethodDesc } from "../../jvm/abi";
 export { ACC };
 export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref
 export const kindOf = (desc: string): Kind => desc[0] === "J" || desc[0] === "D" ? "J" : desc[0] === "L" || desc[0] === "[" ? "L" : "I";
+export type Kinds = { params: Kind[]; ret: Kind | "V" };
+/** the kinds of the parameters (the receiver first) and result of `m` */
+export const methodKinds = (m: MethodInfo): Kinds =>
+  ({ params: (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)), ret: m.ret === "V" ? "V" : kindOf(m.ret) });
 
 export interface FieldInfo { owner: string; name: string; desc: string; kind: Kind; isStatic: boolean; flags: number }
 export interface MethodInfo {

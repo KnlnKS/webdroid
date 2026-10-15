@@ -12,7 +12,7 @@ import { descToName, parseMethodDesc } from "../../jvm/abi";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
-import { definingLoader, recordDefinedClass } from "./loaders";
+import { definingLoader } from "./loaders";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
 const NM_TABLE = 1, PROXY_FLAG = 0x40000;
@@ -48,7 +48,7 @@ export function generateProxy(w: World, name: string, interfaces: object, object
   }
   defineProxy(w, { name: internal, loader: loader === w.prog.boot ? "boot" : loader.id,
     ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))), methods: [...entries.values()] }, loader);
-  recordDefinedClass(w, loader, binary, internal);
+  w.initiateClass(loader, binary, internal);
   return r.classOf(w.idOf(internal));
 }
 

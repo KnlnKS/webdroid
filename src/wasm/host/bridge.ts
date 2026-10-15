@@ -9,7 +9,7 @@ import { demangle, mangleField } from "../../jvm/abi";
 import { rt, JObj } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
-import { javaName, kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
+import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
 import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
@@ -280,7 +280,7 @@ export class Bridge implements HostBridge {
     const cache = suspend ? this.strandCallers : this.callers;
     let entry = cache.get(m);
     if (entry?.cls === m.cls && entry.key === m.key) return entry;
-    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
+    const { params: kinds, ret: rk } = methodKinds(m);
     const slot = this.w.slotOf(m), ensure = m.isStatic && this.w.needsInit(m.cls) ? this.w.ensureSlot(m.cls) : -1;
     let call: Fn;
     if (suspend) { const invoke = this.w.invoker(kinds, rk, true); call = (s: Strand, ...a: unknown[]) => invoke(s, slot, ensure, ...a); }

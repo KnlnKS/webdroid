@@ -1,5 +1,5 @@
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { parseMethodDesc } from "../../jvm/abi";
+import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
 import { ACC, Program, kindOf, type Kind, type MethodInfo } from "./program";
@@ -13,7 +13,7 @@ import type { ClassRt, World } from "../link/world";
 import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
 import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
 import { emitStoreCheck } from "../link/classes";
 import type { NativeBinder } from "../link/hostapi";
@@ -40,7 +40,7 @@ export function declareBase(mb: ModuleBuilder): Base {
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
-export const kindVT = (_tObj: number, k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
+export const kindVT = (k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
 
 const D_D = { params: [T.f64], results: [T.f64] }, DD_D = { params: [T.f64, T.f64], results: [T.f64] };
 /** java.lang.Math's transcendental natives: the host's Math, imported as they are rather than wrapped as natives */
@@ -202,7 +202,7 @@ export class Compiler implements Base {
   get prog(): Program { return this.w.prog; }
 
   // ---------- types
-  vtOf(k: Kind): VT { return kindVT(this.tObj, k); }
+  vtOf(k: Kind): VT { return kindVT(k); }
   sig(params: Kind[], ret: Kind | "V"): number {
     const key = params.join("") + ">" + ret;
     let s = this.sigType.get(key);
@@ -591,7 +591,7 @@ export class Compiler implements Base {
         const c = new Code(2), bytes = c.newLocal(T.i64), g = this.global("rt", "alloc", T.i32, true);
         c.lget(0).i32(0).raw(OP.i32_lt_s).if_().lget(0); this.callThrower(c, "nase"); c.end();
         c.lget(0).raw(OP.i64_extend_i32_u).lget(1).raw(OP.i64_extend_i32_u, OP.i64_shl).lset(bytes);
-        c.lget(bytes).i64(BigInt(MAX_ARRAY_BYTES)).raw(OP.i64_gt_u).if_().lget(bytes); this.callThrower(c, "oom"); c.end();
+        c.lget(bytes).i64(BigInt(HEAP_LIMIT)).raw(OP.i64_gt_u).if_().lget(bytes); this.callThrower(c, "oom"); c.end();
         c.gget(g).lget(bytes).raw(OP.i32_wrap_i64, OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
         return c.lget(0).finish();
       }];

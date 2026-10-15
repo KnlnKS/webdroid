@@ -3,7 +3,7 @@ import { ModuleBuilder, T } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
-import { HEAP_LIMIT, oomMessage } from "../../jvm/abi";
+import { oomMessage } from "../../jvm/abi";
 import { prettyType } from "../compiler/linkage";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
@@ -11,7 +11,6 @@ export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
   try { return new Error(); } finally { Error.stackTraceLimit = prior; }
 }
-export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 /** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. Scratch for natives starts after them. */
@@ -133,7 +132,7 @@ const wasmFrame = (line: string) => FRAME.exec(line) ?? WEBKIT_FRAME.exec(line);
 /** the names of the Wasm functions on an engine stack, innermost first */
 export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = wasmFrame(line)?.[1]; return name ? [name] : []; });
 /** Java frames, innermost first. WebKit names functions but does not report module offsets. */
-export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = Infinity, lines = true): JavaFrame[] {
+export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "get">, count = Infinity, lines = true): JavaFrame[] {
   const out: JavaFrame[] = [];
   let chunk: string | undefined;
   for (const line of stack.split("\n")) {

@@ -71,10 +71,6 @@ export function definingLoader(w: World, object: object | null): Loader {
   return loader;
 }
 
-export function recordDefinedClass(w: World, loader: Loader, name: string, key: string): void {
-  w.initiateClass(loader, name, key);
-}
-
 export function objectOfLoader(w: World, loader: Loader): object | null {
   return loader.object ?? (loader === w.prog.root ? states.get(w)?.appLoader ?? null : null);
 }

@@ -200,7 +200,8 @@ export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args
 }
 
 /** the modes of host.mhInvoke besides 0 (invoke) and 1 (invokeExact): an EmulatedStackFrame, an invoke-custom site (compiler/custom.ts), a VarHandle accessor */
-const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2, CUSTOM_INVOKE = 3, VAR_HANDLE_INVOKE = 4;
+export const CUSTOM_INVOKE = 3;
+const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2, VAR_HANDLE_INVOKE = 4;
 export const handleIntrinsics = new Map<string, Intrinsic>([
   [`${MH}.invokeExactWithFrame(L${FRAME};)V`, (cx, _m, c) => {
     c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
@@ -394,7 +395,8 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
 }
 
 const primitiveNames: Record<string, string> = { Z: "Boolean", B: "Byte", C: "Char", S: "Short", I: "Int", J: "Long", F: "Float", D: "Double" };
-const chain = <A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B>): B | Promise<B> => value instanceof Promise ? value.then(next) : next(value);
+/** `next` applied to `value`, after it settles when it is a promise */
+export function chain<A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B>): B | Promise<B> { return value instanceof Promise ? value.then(next) : next(value); }
 
 /** Use libcore's frame accessors: they own reference slots, little-endian primitive storage and return offsets. */
 function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret: boolean): number {

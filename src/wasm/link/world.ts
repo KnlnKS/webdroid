@@ -9,7 +9,7 @@ import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../c
 import { compileSymbolicSite } from "../compiler/symbolic";
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
+import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -101,7 +101,6 @@ const MERGE_AT = 1024, MERGE_MAX = 512;
 const RETIRE_BATCH = 32, RETIRE_WAIT_MS = 5000;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
-type Kinds = { params: Kind[]; ret: Kind | "V" };
 type StubRequest = Kinds & { slot: number };
 /** the kinds of a vtable entry's parameters (the receiver first) and result, from its method key */
 function entryKinds(key: string): Kinds {
@@ -153,9 +152,7 @@ export class World {
   private vslotCache = new Map<string, string[]>();
   traces = new Map<string, FnTrace>();
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
-  private frameTraces = { get: (name: string) => {
-    return this.traces.get(name) ?? this.aot?.trace(name);
-  } } as Map<string, FnTrace>;
+  private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) };
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
   private frames: JavaFrame[] = [];
@@ -626,7 +623,7 @@ export class World {
     return inst;
   }
   /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
-  restoreStub(slot: number, m: MethodInfo): Function { return this.poolStubs([{ ...this.methodKinds(m), slot }])[0]; }
+  restoreStub(slot: number, m: MethodInfo): Function { return this.poolStubs([{ ...methodKinds(m), slot }])[0]; }
   private importLink(mb: ModuleBuilder): number {
     return mb.importFunc("rt", "link", mb.addFuncType([T.i32], []));
   }
@@ -649,12 +646,12 @@ export class World {
       if (free < n) grow.push({ k, w, size: Math.max(n - free, Math.min(STUB_POOL, 4 * (p?.size ?? 4))) });
     }
     if (grow.length) {
-      const mb = new ModuleBuilder(), b = declareBase(mb);
+      const mb = new ModuleBuilder(); declareBase(mb);
       mb.importTable("rt", "table", T.funcref, 0);
       const link = this.importLink(mb), slotOf = mb.importFunc("host", "stubSlot", mb.addFuncType([T.i32], [T.i32]));
       let at = this.stubSlots.length, e = 0;
       const made = grow.map(({ k, w, size }) => {
-        const vts = w.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vts, w.ret === "V" ? [] : [kindVT(b.tObj, w.ret)]), first = e, base = at;
+        const vts = w.params.map((k) => kindVT(k)), sig = mb.addFuncType(vts, w.ret === "V" ? [] : [kindVT(w.ret)]), first = e, base = at;
         // a stub's body, in bytes: (local i32) i32.const at, call slotOf, local.tee, call link, the params and the slot, call_indirect
         const tail = [0x10]; uleb(slotOf, tail); tail.push(0x22); uleb(vts.length, tail); tail.push(0x10); uleb(link, tail);
         vts.forEach((_, j) => { tail.push(0x20); uleb(j, tail); });
@@ -720,7 +717,7 @@ export class World {
     mb.export("classId", "func", cid);
     mb.export("nop", "func", mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "nop"));
     for (const name of Object.keys(SLOT) as Thrower[]) {
-      const params = THROWERS[name].params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, []);
+      const params = THROWERS[name].params.map((k) => kindVT(k)), sig = mb.addFuncType(params, []);
       const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, link), "stub:" + name);
       mb.addElemActive(0, SLOT[name], [f]);
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
@@ -831,12 +828,12 @@ export class World {
       mb.export(id + ":init", "global", initG);
       const statics = new Map<FieldInfo, number>();
       for (const f of jc?.fields ?? []) if (f.isStatic) {
-        const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
+        const g = mb.addGlobal(kindVT(f.kind), true, zero(f.kind)); statics.set(f, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
       }
       if (lean) continue;
       const stubs = methods.map((m, i) => {
-        const { params, ret } = this.methodKinds(m);
-        const vt = params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vt, ret === "V" ? [] : [kindVT(b.tObj, ret)]);
+        const { params, ret } = methodKinds(m);
+        const vt = params.map((k) => kindVT(k)), sig = mb.addFuncType(vt, ret === "V" ? [] : [kindVT(ret)]);
         return mb.addFunc(sig, this.stubBody(slotBase + i, sig, vt, link));
       });
       if (initialize) {
@@ -857,14 +854,10 @@ export class World {
     }
     return mb.build();
   }
-  /** the kinds of the parameters (the receiver first) and result of `m` */
-  private methodKinds(m: MethodInfo): Kinds {
-    return { params: (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)), ret: m.ret === "V" ? "V" : kindOf(m.ret) };
-  }
   /** the stubs of a class linked on demand, whose module holds no code: shared ones in its method slots and its ensure slot (a function that does nothing
    *  for a class with nothing to initialize) */
   private stubClass(rt: ClassRt, jc: JClass | undefined): void {
-    const want: StubRequest[] = (jc?.methods ?? []).map((m, i) => ({ ...this.methodKinds(m), slot: rt.slotBase + i })), ensure = rt.slotBase + rt.nMethods;
+    const want: StubRequest[] = (jc?.methods ?? []).map((m, i) => ({ ...methodKinds(m), slot: rt.slotBase + i })), ensure = rt.slotBase + rt.nMethods;
     if (jc && this.needsInit(rt.name)) want.push({ params: [], ret: "V", slot: ensure });
     else if (jc) this.table.set(ensure, this.rt.nop);
     this.poolStubs(want).forEach((f, i) => this.table.set(want[i].slot, f));
@@ -2194,13 +2187,13 @@ export class World {
     return slot => this.buildCallFn(name, params, ret, body, prepare, state, slot).get();
   }
   private buildCallFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void, state?: { d: WebAssembly.Global; v: WebAssembly.Global; thr: WebAssembly.Global }, slot?: number) {
-    const clock = this.unitClock(), cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
+    const clock = this.unitClock(), cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(ret);
     prepare?.(cx);
     const d = state?.d ?? new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = state?.thr ?? new WebAssembly.Global({ value: "externref", mutable: true }, null);
     const v = state?.v ?? new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
     const built = cx.buildSynthetic(name, ["I", ...params], (c) => {
       const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
-      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(cx.tObj, ret));
+      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(ret));
       c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
       body(cx, c, (i) => { c.lget(i + 1); });
       if (res >= 0) { c.lset(res).lget(res); if (ret === "L") c.externConvertAny(); c.gset(value); }
