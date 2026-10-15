@@ -1,15 +1,14 @@
 // Class-model differential test: the static int(int) methods of java/C.java, compiled lazily over the AOSP boot dex, against the
 // JDK. Each method runs once in a fresh World (class initialization state persists).
 // Needs javac, d8 and java on PATH. Run: bun run wasm classdiff [method-name-filter]
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { program, world } from "./lib";
 import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { mountPlatform, natives } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { shellIn } from "./tools";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
+import { filesIn, onJdk, shellIn } from "./tools";
 import { ACC, declaredMethod } from "../../src/wasm/compiler/program";
 import { Cha } from "../../src/wasm/compiler/cha";
 import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe";
@@ -19,7 +18,7 @@ import { T } from "../../src/wasm/compiler/wasmbin";
 const out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "C.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^C.*\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^C.*\.class$/)]);
 
 await mountPlatform(ROOT);
 // System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
@@ -29,9 +28,9 @@ intrinsics.set("java/lang/System.<clinit>()V", () => {});
 sh(["mkdir", "-p", "am"]);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am1/Am.java"), join(JAVA, "am1/AmBase.java")]);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am2/AmBase.java")]);
-sh(["d8", "--release", "--output", join(out, "am"), ...readdirSync(join(out, "am")).filter((f) => /^Am.*\.class$/.test(f)).map((f) => join(out, "am", f))]);
+sh(["d8", "--release", "--output", join(out, "am"), ...filesIn(join(out, "am"), /^Am.*\.class$/)]);
 const amExpected = sh(["java", "-cp", join(out, "am"), "Am"]).trim();
-const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
+const dex = join(out, "classes.dex"), jars = PLATFORM_PATHS.slice(0, 2);
 const prog = program([dex, ...jars]), only = process.argv[2];
 const resolved = prog.resolve("C", "classIdent", "(I)I")!;
 if (resolved !== prog.resolve("C", "classIdent", "(I)I") || resolved !== prog.require("C").methods[resolved.index]) throw new Error("method identity changed when class members were materialized");
@@ -59,7 +58,7 @@ if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== reg
 }
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const cases = methods.map((m) => ({ m, args: [0n] }));
-const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `C.${c.m.name} 0`).join("\n") + "\n").trim().split("\n");
+const jdk = onJdk(sh, out, cases.map((c) => `C.${c.m.name} 0`));
 let bad = 0;
 const hit: number[] = [];
 for (const [i, c] of cases.entries()) {

@@ -4,14 +4,13 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brotliCompressSync, constants } from "node:zlib";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { AOT_ROOT, sourceKey, sourcePaths, type AotManifest } from "./aot-key";
-import { AOSP, ROOT } from "./paths";
+import { PLATFORM_PATHS, ROOT } from "./paths";
 
 let current: { stamp: string; source: string } | undefined;
 /** the key of the sources now, recomputed when a file has changed */
 function currentSource(): string {
-  const paths = [...sourcePaths().map((f) => join(ROOT, f)), ...PLATFORM_JARS.map((j) => join(AOSP, j))];
+  const paths = [...sourcePaths().map((f) => join(ROOT, f)), ...PLATFORM_PATHS];
   const stamp = paths.map((path) => { const s = statSync(path); return `${path}:${s.mtimeMs}:${s.size}`; }).join("\n");
   if (current?.stamp !== stamp) current = { stamp, source: sourceKey() };
   return current.source;

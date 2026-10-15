@@ -3,7 +3,6 @@
 // Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: bun run wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
 import { externs } from "../../src/wasm/link/intrinsics";
 import { Program } from "../../src/wasm/compiler/program";
@@ -11,7 +10,7 @@ import { Compiler } from "../../src/wasm/compiler/j2w";
 import { natives } from "./harness";
 import { mid } from "../../src/wasm/compiler/ids";
 import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module";
-import { AOSP, ROOT } from "./paths";
+import { PLATFORM_PATHS, ROOT } from "./paths";
 
 const KNOWN = [/^native: /];
 // Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.
@@ -19,8 +18,8 @@ const validate = WebAssembly.validate as unknown as (bytes: BufferSource, option
 
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
-const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_JARS.slice(0, 6).map((j) => join(AOSP, j)), join(ROOT, "apks/FitNotes.apk")];
-const jars = PLATFORM_JARS.map((j) => join(AOSP, j));
+const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_PATHS.slice(0, 6), join(ROOT, "apks/FitNotes.apk")];
+const jars = PLATFORM_PATHS;
 let unexplained = 0;
 for (const target of targets) {
   // the boot class path comes first, as in ART: an app's stubs of platform classes (R8 API outlines) never shadow the platform's, and an app sees only the platform

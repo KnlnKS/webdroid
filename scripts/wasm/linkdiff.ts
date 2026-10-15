@@ -4,13 +4,11 @@
 import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
 import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { CORE_PATHS, JAVA, ROOT } from "./paths";
+import { filesIn, onJdk, shellIn } from "./tools";
 
-const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 const out = mkdtempSync(join(tmpdir(), "j2w-lk-")), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const sh = shellIn(out);
 const src = (d: string, ...n: string[]) => n.map((x) => join(JAVA, "lk", d, `${x}.java`));
@@ -24,11 +22,10 @@ sh(["d8", "--release", "--output", out, ...filesIn(run, /^Lk/)]);
 sh(["d8", "--release", "--output", gone, ...filesIn(v1, /^LkGone/)]);
 
 const loc = join(out, "classes.dex"), at = (cls: string) => ` (declaration of '${cls}' appears in ${loc})`;
-const ncdfe = (d: string) => `java.lang.NoClassDefFoundError: Failed resolution of: ${d}`;
+const gonePart = (d = "LLkGone;") => `java.lang.NoClassDefFoundError: Failed resolution of: ${d}`;
 const nsm = (kind: string, sig: string) => `java.lang.NoSuchMethodError: No ${kind} method ${sig} in class LLkP; or its super classes${at("LkP")}`;
 const nsf = (kind: string, name: string) => `java.lang.NoSuchFieldError: No ${kind} field ${name} of type I in class LLkP; or its superclasses${at("LkP")}`;
 const icce = (m: string) => `java.lang.IncompatibleClassChangeError: ${m}${at("Lk")}`;
-const gonePart = (d = "LLkGone;") => ncdfe(d);
 const expected: Record<string, string> = {
   newGone: gonePart(), staticGone: gonePart(), virtualGone: gonePart(), sgetGone: gonePart(), sputGone: gonePart(), igetGone: gonePart(), castGone: gonePart(),
   instGone: gonePart(), classGone: gonePart(), arrayGone: gonePart("[LLkGone;"),
@@ -39,12 +36,12 @@ const expected: Record<string, string> = {
   classNowInterface: icce("Found interface LkC, but class was expected"),
 };
 await mountPlatform(ROOT);   // makes the ICU data resident, which natives cannot wait for
-const w = world([join(out, "classes.dex"), ...jars], { natives });
+const w = world([join(out, "classes.dex"), ...CORE_PATHS], { natives });
 await startProcess(w);
 const hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 const names = Object.keys(expected);
-const jdk = sh(["java", "-cp", run, "Ref"], names.map((n) => `Lk.${n}`).join("\n") + "\n").trim().split("\n");
+const jdk = onJdk(sh, run, names.map((n) => `Lk.${n}`));
 const catchGone = w.entry("LkX", "catchGone", "()Ljava/lang/String;")();
 if (catchGone !== "rte") { console.log(`FAIL catchGone: ${catchGone}`); process.exit(1); }
 let failed = 0;

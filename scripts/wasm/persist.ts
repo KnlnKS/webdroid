@@ -7,7 +7,6 @@ import { guestMemory } from "../../src/wasm/host/guest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { APP_VERSION, VERSION, packModule, sameMarks } from "../../src/wasm/link/aot";
 import { Program } from "../../src/wasm/compiler/program";
@@ -24,9 +23,9 @@ import { fetchBundle } from "../../src/wasm/host/bundle";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { current, loadDexes } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
+import { checker, filesIn, shellIn } from "./tools";
 import type { FetchStore } from "../../src/wasm/link/aotstore";
 import type { DexFile } from "../../src/jvm/dex";
 
@@ -40,25 +39,20 @@ sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...fil
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
 await mountPlatform(ROOT);
 
-let failed = 0;
-const check = (what: string, got: unknown, want: unknown) => { if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
+const suite = checker(), { check, fail } = suite;
 const until = async (what: string, done: () => boolean, ms = 60000) => {
   const t0 = performance.now();
-  while (!done()) { if (performance.now() - t0 > ms) { failed++; console.log(`FAIL ${what}: timed out`); return false; } await new Promise((r) => setTimeout(r, 2)); }
+  while (!done()) { if (performance.now() - t0 > ms) { fail(`${what}: timed out`); return false; } await new Promise((r) => setTimeout(r, 2)); }
   return true;
 };
 
-const platformDexes = PLATFORM_JARS.flatMap((j) => loadDexes(join(AOSP, j)));
+const platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
 const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, guest: guestMemory, aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
-function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
-  const w = world(dexes, opts);
-  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
-  return w;
-}
+const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => addHostClasses(world(dexes, opts));
 
 // A combined image links the app's default namespace as the Program resolves it.
 {
@@ -196,7 +190,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   }
   worker.selectorId("pst.extra()V");      // what a unit that needs a selector the page lacks would number
   const unit = uc.upgrade(job);
-  if (typeof unit === "string") { failed++; console.log("FAIL upgrade:", unit); } else {
+  if (typeof unit === "string") { fail(`upgrade: ${unit}`); } else {
     check("the unit carries the selector it numbered", unit.numbering.selectors.join(), "pst.extra()V");
     check("it was numbered from the page's state", sameMarks(unit.numbering.from, from), true);
     page.selectorId("pst.other()V");        // the page numbered something meanwhile
@@ -493,5 +487,5 @@ if (saved) {
   check("the prefix leaves the bounded entries alone", [await p.load("c") !== undefined, (await p.save("d", [["x", blob(100)]]), await p.prefix("platform") !== undefined)].join(), "true,true");
 }
 for (const p of ports) p.terminate();
-console.log(failed ? `${failed} failures` : "persist: all pass");
-process.exit(failed ? 1 : 0);
+console.log(suite.failed ? `${suite.failed} failures` : "persist: all pass");
+process.exit(suite.failed ? 1 : 0);

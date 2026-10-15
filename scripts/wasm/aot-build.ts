@@ -22,7 +22,7 @@ import { synthModules } from "../../src/wasm/link/apps";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
 import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
-import { AOSP } from "./paths";
+import { PLATFORM_PATHS } from "./paths";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
@@ -47,7 +47,7 @@ if (!out) {
 const aotCompiles = (m: MethodInfo): boolean => !!m.codeOff || !!w.intrinsic(m);
 
 /** the group key of a class: its own, its outermost class's, its package, or the first N components of the package */
-export function keyOf(mode: string, name: string): string {
+function keyOf(mode: string, name: string): string {
   if (mode === "class") return name;
   if (mode === "outer") return name.split("$")[0];
   if (mode === "all") return "all";
@@ -97,7 +97,7 @@ function withSupers(names: string[]): string[] {
   names.forEach(add);
   return out;
 }
-const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
+const dexes = PLATFORM_PATHS.map(loadDexes);
 // an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
 const appDexes = appPath ? loadDexes(appPath) : [];
 const platform = new Program(dexes.flat()); platform.addExterns(externs);

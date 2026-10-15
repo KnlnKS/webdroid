@@ -4,16 +4,15 @@
 //   WEBDROID_AOT=DIR bun run wasm g1startup <workload ...>
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { program, world } from "./lib";
 import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, G1_DIR, ROOT } from "./paths";
+import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths";
 
 const dir = process.env.WEBDROID_AOT, dex = join(G1_DIR, "classes.dex"), files = new Set<string>();
 if (!dir) throw new Error("set WEBDROID_AOT to a build made with --app");
 await mountPlatform(ROOT);
 for (const workload of process.argv.slice(2)) {
-  const w = world(program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]), { natives });
+  const w = world(program([dex, ...PLATFORM_PATHS]), { natives });
   await startProcess(w);
   const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));
   if (!cls) throw new Error(`no workload ${workload}`);

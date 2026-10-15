@@ -4,10 +4,8 @@
 import { runInNewContext } from "node:vm";
 import { setFlagsFromString } from "node:v8";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { rt } from "../../src/jvm/runtime";
 import { resumeAs, scall } from "../../src/jvm/natives/jentry";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
 import { useWorld } from "../../src/wasm/host/boot";
 import { Program } from "../../src/wasm/compiler/program";
@@ -16,27 +14,24 @@ import { Block, emitBlock } from "../../src/wasm/link/sched";
 import { St } from "../../src/wasm/link/monitor";
 import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases";
+import { checker, recorded, unlike } from "./tools";
 
-const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
+const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => PLATFORM_PATHS[i]);
 await mountPlatform(ROOT);
-const expected = readFileSync(join(JAVA, "hc/expected.txt"), "utf8").trimEnd().split("\n");
+const expected = recorded(join(JAVA, "hc/expected.txt"));
 
-const w = world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) }), gaps: string[] = [];
+const w = addHostClasses(world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) })), gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
-for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
-const wasm = await hostCases(async (cls, name, desc) => w.entryAsync(cls, name, desc)());
+const wasm = await hostCases(enter.call);
 
-let failed = 0;
-const fail = (what: string) => { failed++; console.log("FAIL " + what); };
-expected.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  want  ${want}\n  wasm  ${wasm[i]}`); });
-if (wasm.length !== expected.length) fail(`${wasm.length} answers for ${expected.length}`);
+const suite = checker(), { fail } = suite;
+for (const failure of unlike(expected, wasm)) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
-
 
 {
   const array = w.bridge.toJava(new Int32Array(2), "[I") as object, before = handle(array), mark = w.bridge.begin();
@@ -52,7 +47,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 {
   const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;
-  for (const spec of natives.source!.hostSpecs!()) worker.addHostClass(spec);
+  addHostClasses(worker);
   worker.link("java/net/HttpURLConnection");
   worker.repairLinked();
   const method = worker.prog.get("Hc")!.byKey.get("http()Ljava/lang/String;")!;
@@ -62,7 +57,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 // Worlds over one platform Program, as the process frames of a tab are: the host classes are each World's own, the platform's classes are not changed, and every World behaves alike
 {
-  const platform = program(jars), mk = () => { const x = world(new Program(loadDexes(dex), platform), { natives }); for (const spec of natives.source!.hostSpecs!()) x.addHostClass(spec); return x; };
+  const platform = program(jars), mk = () => addHostClasses(world(new Program(loadDexes(dex), platform), { natives }));
   const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
   for (const cls of ["java/lang/StringBuilder", "java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor"]) {
@@ -165,8 +160,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
 }
 
 {
-  const fresh = world([dex, ...jars], { natives });
-  for (const spec of natives.source!.hostSpecs!()) fresh.addHostClass(spec);
+  const fresh = addHostClasses(world([dex, ...jars], { natives }));
   fresh.sched.turnDue = () => true;
   const entry = wasmEntry(fresh);
   for (const name of ["Hc$Boot", "javax/net/ssl/HttpsURLConnection"]) {
@@ -178,5 +172,5 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-console.log(failed ? `${failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
-process.exit(failed ? 1 : 0);
+console.log(suite.failed ? `${suite.failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
+process.exit(suite.failed ? 1 : 0);

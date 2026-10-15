@@ -15,6 +15,8 @@ const kindOfParam = (p: string) => (p === "F" || p === "D" ? p : kindOf(p));
 const retKind = (m: MethodInfo) => (m.ret === "F" || m.ret === "D" ? m.ret : "I");
 
 export type Case = { m: MethodInfo; args: bigint[] };
+/** a case as the line the JDK's Ref runs */
+export const caseLine = (c: Case) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`;
 /** `small` lists the arguments of single-int-parameter methods whose cost grows with the argument */
 export function genCases(methods: MethodInfo[], small: Record<string, number[]> = {}, perMethod = 40): Case[] {
   return methods.flatMap((m) => {

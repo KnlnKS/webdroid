@@ -1,8 +1,7 @@
 // The framework delegates' exercises (scripts/fwtest/*) over a World: AOSP's own bytecode for the cut classes runs as Wasm against our delegates, and host code
 // drives it through the entry seam. Run: bun run fwtest [prefix ...]
-import { join } from "node:path";
 import { DEFAULT_CUTS } from "../fwtest/cuts";
-import { BYTECODE, PLATFORM_JARS, isBytecode } from "../../src/jvm/provenance";
+import { BYTECODE, isBytecode } from "../../src/jvm/provenance";
 
 const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
@@ -11,10 +10,10 @@ BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 const { rt } = await import("../../src/jvm/runtime");
 const { world } = await import("./lib");
 const { mountPlatform, natives, startProcess } = await import("./harness");
-const { AOSP, ROOT } = await import("./paths");
+const { PLATFORM_PATHS, ROOT } = await import("./paths");
 
 await mountPlatform(ROOT);
-const w = world(PLATFORM_JARS.map((j) => join(AOSP, j)), { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+const w = world(PLATFORM_PATHS, { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 const gaps = new Set<string>();
 w.onGap = (id) => gaps.add(w.gapList[id]);
 const hosted = new Set<string>();

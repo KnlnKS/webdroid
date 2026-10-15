@@ -4,7 +4,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { compileModule } from "../../src/wasm/link/module";
@@ -14,12 +13,12 @@ import { buildApp } from "../../src/wasm/link/apps";
 import { natives } from "./harness";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
-import { AOSP, JAVA } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { JAVA, PLATFORM_PATHS } from "./paths";
+import { checker, filesIn, shellIn } from "./tools";
 
 const build = process.env.WEBDROID_AOT;
 if (!build) { console.log("aottest: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
-const jars = PLATFORM_JARS.map((j) => join(AOSP, j));
+const jars = PLATFORM_PATHS;
 const out = mkdtempSync(join(tmpdir(), "j2w-aot-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Aot.java"), join(JAVA, "Aot2.java")]);
@@ -27,8 +26,7 @@ sh(["d8", "--release", "--output", out, ...filesIn(out, /^Aot(\$\w+)?\.class$/)]
 sh(["mkdir", "-p", "out2"]);
 sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Aot2(\$\w+)?\.class$/)]);
 
-let failed = 0, checks = 0;
-const check = (what: string, got: unknown, want: unknown) => { checks++; if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
+const suite = checker(), { check } = suite;
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
@@ -305,5 +303,5 @@ for (const [what, make, expected] of stores) {
   check(`${what}: a subclass overriding indexOf takes effect`, w.entry("Aot2", "sub", "()I")(), 1);
   check(`${what}: and the plain list is as before`, w.entry("Aot2", "plain", "()I")(), 0);
 }
-console.log(failed ? `${failed} failures / ${checks} checks` : `aottest: all ${checks} checks pass`);
-process.exit(failed ? 1 : 0);
+console.log(suite.failed ? `${suite.failed} failures / ${suite.checks} checks` : `aottest: all ${suite.checks} checks pass`);
+process.exit(suite.failed ? 1 : 0);

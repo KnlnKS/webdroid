@@ -1,9 +1,8 @@
 // Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex) and on the
 // JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { world } from "./lib";
 import { dexesIn } from "../../src/jvm/dex";
 import { descToName } from "../../src/jvm/abi";
@@ -11,14 +10,14 @@ import { insnLen } from "../../src/jvm/opcodes";
 import { mountPlatform, natives, startProcess } from "./harness";
 import { ACC } from "../../src/wasm/compiler/program";
 import { namesWasmFrames } from "../../src/wasm/link/exc";
-import { compare, genCases } from "./cases";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { shellIn } from "./tools";
+import { caseLine, compare, genCases } from "./cases";
+import { CORE_PATHS, JAVA, ROOT } from "./paths";
+import { filesIn, onJdk, shellIn } from "./tools";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "W.java"), join(JAVA, "S.java"), join(JAVA, "N.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--output", out, ...readdirSync(out).filter((f) => /^[WSN](\$\w+)?\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["d8", "--release", "--output", out, ...filesIn(out, /^[WSN](\$\w+)?\.class$/)]);
 
 const dex = join(out, "classes.dex");
 // the d8 that built the apps ended a try range at the invoke, leaving its move-result outside (a block of its own, Doodle Jump's RamLogger.Append); this one keeps it inside: end every range that way
@@ -38,7 +37,7 @@ const dex = join(out, "classes.dex");
   writeFileSync(dex, bytes);
 }
 await mountPlatform(ROOT);
-const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives }), hit: string[] = [];
+const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 await startProcess(w);
 // S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
@@ -53,12 +52,12 @@ const small: Record<string, number[]> = {
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
 const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
-const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
+const jdk = onJdk(sh, out, cases.map(caseLine));
 const r = await compare(cases, (m) => entries.get(m)!, jdk, hit);
 let wideBad = 0, dispatchBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
-  const wide = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives });
+  const wide = world([dex, ...CORE_PATHS], { natives });
   const wideEntry = wide.entryAsync.bind(wide);
   const a = wide.idOf("java/util/ArrayList"), b = wide.idOf("java/util/HashMap"), low = wide.selectorId("hashCode()I");
   if (b !== a + 1) throw new Error("full-width dispatch fixture requires adjacent class IDs");

@@ -2,16 +2,15 @@
 // scripts/jbench/expected.json records: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
 // --survey also compiles everything the workloads can reach (the old whole-program build) and lists what blocks it.
 // VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
-// does not give, so a run under Bun re-executes itself bundled under node (undernode.ts).
+// does not give, so run.ts runs it bundled under node (undernode.ts).
 // Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: bun run wasm jbench [workload ...] [-v] [--survey]
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { isIntrinsic, program, world } from "./lib";
 import { mountPlatform, natives, startProcess } from "./harness";
 import { reach } from "./reach";
-import { AOSP, ROOT } from "./paths";
+import { PLATFORM_PATHS, ROOT } from "./paths";
 import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 
 const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
@@ -22,7 +21,7 @@ const { names, source } = cutWorkloads(text);
 writeFileSync(join(out, "Bench.java"), source);
 dexAndroid(sh, out, ["Bench.java"]);
 
-const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]);
+const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_PATHS]);
 await mountPlatform(ROOT);
 const todo = names.filter((n) => !only.length || only.includes(n));
 const isIntr = isIntrinsic(natives);

@@ -18,7 +18,6 @@ test("Wasm imports retain Unicode and long module names across repeated builds",
   expect(WebAssembly.Module.imports(new WebAssembly.Module(mb.build() as BufferSource)).map(({ module, name, kind }) => ({ module, name, kind }))).toEqual(expected);
 });
 
-
 test("Wasm import compaction preserves calls, table entries and function references", () => {
   const mb = new ModuleBuilder(), type = mb.addFuncType([], [T.i32]);
   for (let i = 0; i < 200; i++) mb.importFunc("host", "f" + i,

@@ -13,7 +13,7 @@ import { lookup, natives, settled } from "../../src/wasm/host/nativesource";
 import type { World } from "../../src/wasm/link/world";
 import { world } from "./lib";
 import { vfs } from "../../src/shell/vfs";
-export { natives } from "../../src/wasm/host/nativesource";
+export { natives };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
 const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
@@ -56,6 +56,12 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<void> 
   // the natives are called as host code, on a World of the ICU jars: none of a harness's Worlds sees them run
   world(icu, { natives, aot: undefined });
   for (const [cls, key] of ICU_VERSIONS) { const f = lookup(cls, key, true); if (f) settled.set(cls + "." + key, await f.call(null)); }
+}
+
+/** `w` with the classes the host implements, added after the constructor as host/boot.ts adds them */
+export function addHostClasses<W extends World>(w: W): W {
+  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
+  return w;
 }
 
 /** the process state ActivityThread.main leaves, entered asynchronously as a process starts: System's initialization reads files and the user database, which wait */

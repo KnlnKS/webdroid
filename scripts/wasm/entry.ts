@@ -1,34 +1,32 @@
 // The entry seam (B1): host code calls Java through jentry's names over a World, and the answers, the exceptions that leave the calls and the identity
 // of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: bun run wasm entry
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { rt } from "../../src/jvm/runtime";
 import { mangleField } from "../../src/jvm/abi";
-import { JThread, resumeAs } from "../../src/jvm/natives/jentry";
+import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry";
 import { perf } from "../../src/perf";
 import { runningThread, wasmEntry } from "../../src/wasm/host/entry";
 import { world } from "./lib";
 import { mountPlatform, natives } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
 import { entryCases, entryDex } from "./entrycases";
+import { recorded, unlike } from "./tools";
 
-const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
+const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => PLATFORM_PATHS[i]);
 await mountPlatform(ROOT);
-const expected = readFileSync(join(JAVA, "E.expected.txt"), "utf8").trimEnd().split("\n");
+const expected = recorded(join(JAVA, "E.expected.txt"));
 
 const w = world([dex, ...jars], { natives }), gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
 const entry = wasmEntry(w);
 const missesBefore = perf.wasmFacadeMisses;
 const wasm = await entryCases();
-const facade = (await (await import("../../src/jvm/natives/jentry")).newObj("E")) as Record<string, unknown>;
+const facade = (await newObj("E")) as Record<string, unknown>;
 void facade.noSuchField;
 const counted = perf.wasmFacadeMisses - missesBefore === 1 && rt.missing.has("facade E.noSuchField") && perf.wasmEntries > 0;
 
 let failed = 0;
-expected.forEach((want, i) => { if (wasm[i] !== want) { failed++; console.log(`FAIL wasm: ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${wasm[i]}`); } });
-if (wasm.length !== expected.length) { failed++; console.log(`FAIL wasm: ${wasm.length} answers for ${expected.length}`); }
+for (const failure of unlike(expected, wasm)) { failed++; console.log("FAIL " + failure); }
 if (!counted) { failed++; console.log("FAIL a read no field backs is not counted in perf and the missing entries"); }
 // a facade read outside any native's scope (a looper callback reading vsync data) copies the array in a scope of its own and leaves nothing to undo
 const scope = w.bridge as unknown as { undo: unknown[]; live: Map<object, unknown> };

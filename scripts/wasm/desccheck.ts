@@ -3,12 +3,10 @@
 // native) is keyed by class, name and descriptor, and a key the platform class does not declare never applies and nothing says so.
 // Run: bun run wasm desccheck
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
 import { BASELINE, descriptorMismatches, hasPlatformJars, withoutHint } from "../desccheck";
 import { program } from "./lib";
-import { AOSP } from "./paths";
+import { PLATFORM_PATHS } from "./paths";
 
 if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars: run bun run gen-framework");
 let bad = 0;
@@ -17,7 +15,7 @@ for (const [cls, found] of descriptorMismatches()) {
   const news = found.map(withoutHint).filter((m) => !accepted[cls]?.includes(m));
   for (const m of news) { bad++; console.log(`new mismatch ${cls}: ${m}`); }
 }
-const prog = program(PLATFORM_JARS.map((j) => join(AOSP, j)));
+const prog = program(PLATFORM_PATHS);
 const skip = new Set(externs);
 for (const key of intrinsics.keys()) {
   if (skip.has(key)) continue;

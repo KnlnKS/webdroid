@@ -10,9 +10,8 @@
 import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
-import { AOSP, G1_DIR, JAVA, ROOT } from "./paths";
+import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths";
 import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 import { sourceKey } from "./aot-key";
 import { createHash } from "node:crypto";
@@ -72,7 +71,7 @@ async function chromeRun() {
   const { chromium } = await import("playwright");
   const bundlePath = await bundle(true);
   const aotDir = process.env.WEBDROID_AOT;
-  const preload = [dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))];
+  const preload = [dex, ...PLATFORM_PATHS];
   // an installed app's saved build, and the compile worker the page's launch starts (host/compile-worker.ts)
   const worker = installedDir ? await Bun.build({ entrypoints: [join(here, "../../src/wasm/host/compile-worker.ts")], target: "browser" }) : undefined;
   if (worker && !worker.success) throw new Error(worker.logs.join("\n"));

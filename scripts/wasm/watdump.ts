@@ -2,15 +2,14 @@
 // built whose function names contain the filter. Run: bun run wasm watdump <workload> <method-name-filter> (needs the dex g1.ts builds)
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { program, world } from "./lib";
 import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, G1_DIR, ROOT } from "./paths";
+import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths";
 
 const [workload, filter] = process.argv.slice(2);
 const dex = join(G1_DIR, "classes.dex");
 await mountPlatform(ROOT);
-const w = world(program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]), { natives });
+const w = world(program([dex, ...PLATFORM_PATHS]), { natives });
 await startProcess(w);
 const units: Uint8Array[] = [];
 const inst = (w as unknown as { instantiate(b: Uint8Array, i: unknown): unknown }).instantiate;

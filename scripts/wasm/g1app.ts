@@ -4,7 +4,6 @@
 //   WEBDROID_AOT=<platform build> bun run wasm g1app --out DIR [workload ...]
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { Program } from "../../src/wasm/compiler/program";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
 import type { FetchStore } from "../../src/wasm/link/aotstore";
@@ -15,13 +14,13 @@ import type { WorkerPort } from "../../src/wasm/host/compiler";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { loadDexes, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { AOSP, G1_DIR, ROOT } from "./paths";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
+import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths";
 
 const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
 if (!AOT || !out) throw new Error("usage: WEBDROID_AOT=<platform build> g1app --out DIR [workload ...]");
 const workloads = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && v[i - 1] !== "--out");
-const app = loadDexes(join(G1_DIR, "classes.dex")), platformDexes = PLATFORM_JARS.flatMap((j) => loadDexes(join(AOSP, j)));
+const app = loadDexes(join(G1_DIR, "classes.dex")), platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const BASE = "aot://platform/", key = basename(AOT);
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
@@ -34,11 +33,7 @@ const spawn = (): WorkerPort => {
 };
 const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key } as unknown as FetchStore, persist, spawn, roots: { launch: [] } };
 /** a launch as the page makes one: the app over the platform's Program, the saved build attached, the host's classes */
-const launch = (code: AppCode): World => {
-  const w = world(new Program(app, platform), { natives, app: code.saved });
-  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
-  return w;
-};
+const launch = (code: AppCode): World => addHostClasses(world(new Program(app, platform), { natives, app: code.saved }));
 const run = async (w: World, reps: number) => {
   for (const workload of workloads) {
     const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));

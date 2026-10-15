@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import "../../src/natives";
 import { loadPlatformJar } from "../../src/android/framework";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { BOOT_JAR_PATHS } from "../../src/jvm/bootclasspath";
 import { vfs } from "../../src/shell/vfs";
 import { BytesFile } from "../../src/shell/lazyfile";
@@ -11,27 +10,27 @@ import { dexesIn } from "../../src/jvm/dex";
 import { loadDex, loadTier } from "../../src/jvm/tier";
 import { getDeclared } from "../../src/jvm/runtime";
 import { mountPlatform } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
 import { entryCases, entryDex } from "./entrycases";
+import { recorded, unlike } from "./tools";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors";
 import { descriptorTransport } from "../../src/native/process-fd";
 import { callProxy, serveCalls } from "../../src/shell/process-port";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio";
 
-const expected = readFileSync(join(JAVA, "E.expected.txt"), "utf8").trimEnd().split("\n");
+const expected = recorded(join(JAVA, "E.expected.txt"));
 await mountPlatform(ROOT);
 await loadTier();
 // every jar of the boot class path is on the device; the classes of the four the fixture needs are loaded
-PLATFORM_JARS.forEach((jar, i) => {
-  const bytes = new Uint8Array(readFileSync(join(AOSP, jar)));
+PLATFORM_PATHS.forEach((path, i) => {
+  const bytes = new Uint8Array(readFileSync(path));
   if ([0, 1, 5, 12].includes(i)) loadPlatformJar(bytes, i); else vfs.mount(BOOT_JAR_PATHS[i], new BytesFile(bytes));
 });
 for (const d of dexesIn(new Uint8Array(readFileSync(entryDex())), "E")) loadDex(d);
 const got = await entryCases();
 let failed = 0;
-expected.forEach((want, i) => { if (got[i] !== want) { failed++; console.log(`FAIL ${want.split(":")[0]}\n  want  ${want}\n  wasm  ${got[i]}`); } });
-if (got.length !== expected.length) { failed++; console.log(`FAIL ${got.length} answers for ${expected.length}`); }
+for (const failure of unlike(expected, got)) { failed++; console.log("FAIL " + failure); }
 await inMemoryControl();
 console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as recorded through the page's seam`);
 process.exit(failed ? 1 : 0);

@@ -3,15 +3,14 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
 import { HEAP_LIMIT } from "../../src/jvm/abi";
-import { AOSP, JAVA } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { JAVA, PLATFORM_PATHS } from "./paths";
+import { checker, filesIn, shellIn } from "./tools";
 import { Natives } from "../../src/wasm/host/natives";
 import { bundleForNode } from "./undernode";
 
-const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
+const jars = PLATFORM_PATHS.slice(0, 2);
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
 const sh = shellIn(out);
 const src = ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`));
@@ -20,8 +19,7 @@ sh(["d8", "--release", "--output", out, ...filesIn(out, /^(Ex|Lz)(\$\w+)?\.class
 sh(["mkdir", "-p", "out2"]);
 sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Lz2(\$\w+)?\.class$/)]);
 
-let failed = 0;
-const check = (what: string, got: unknown, want: unknown) => { if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
+const suite = checker(), { check } = suite;
 
 // ---- CHA under open-world loading
 {
@@ -113,7 +111,7 @@ const node = Bun.which("node");
 if (node) {
   const r = Bun.spawnSync(await bundleForNode(join(here, "trace.ts"), [join(out, "classes.dex"), ...jars]));
   console.log(r.stdout.toString().trim() + r.stderr.toString().trim());
-  if (r.exitCode) failed++;
+  if (r.exitCode) suite.failed++;
 } else console.log("trace: skipped, node (V8) not found");
-console.log(failed ? `${failed} failures` : "lazytest: all pass");
-process.exit(failed ? 1 : 0);
+console.log(suite.failed ? `${suite.failed} failures` : "lazytest: all pass");
+process.exit(suite.failed ? 1 : 0);

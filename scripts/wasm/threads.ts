@@ -3,11 +3,10 @@
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
 // answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH; node runs it with --experimental-wasm-jspi (run.ts).
 // Run: bun run wasm threads [case,case,... | substrate]
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { world } from "./lib";
 import { mountPlatform, startProcess } from "./harness";
 import { nativeSource } from "../../src/wasm/host/nativesource";
@@ -25,19 +24,19 @@ import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc";
 import { HEAP_LIMIT } from "../../src/jvm/abi";
 import { T } from "../../src/wasm/compiler/wasmbin";
 import { classIntrinsics } from "../../src/wasm/link/classes";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { shellIn } from "./tools";
+import { CORE_PATHS, JAVA, ROOT } from "./paths";
+import { filesIn, shellIn } from "./tools";
 
 if (!hasJspi()) { console.error("threads needs JSPI: run it with bun run wasm threads (node --experimental-wasm-jspi)"); process.exit(2); }
 const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^Th.*\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^Th.*\.class$/)]);
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0, rejectAdmission = false, idleBeforeResume = false;
-const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives({
+const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
 } satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => {
@@ -315,7 +314,7 @@ if (substrate) {
     } finally { readyStrand.end(); w.sched.idle(); admissionProbe = true; }
     expect("admission releases its strands", w.sched.strands.filter(Boolean).length, parked);
   } finally { admissionProbe = false; }
-  const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });
+  const cold = world([dex, ...CORE_PATHS], { natives: new Natives(nativeSource) });
   expect("lazy linking near the stack limit", await cold.entryAsync("Th", "linkDeep", "(I)I")(0), 0);
   // natives that wait: async, a generator, one that enters Java through a promising entry that waits again
   expect("async native", await show(() => w.entryAsync("Th", "trap", "(I)I")(4)), 5);
