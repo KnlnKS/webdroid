@@ -14,7 +14,6 @@ export class Code {
   /** an i32 local for values that live within one expression */
   scratch(): number { return this.scratchI32 < 0 ? (this.scratchI32 = this.newLocal(T.i32)) : this.scratchI32; }
   locals = new Set<number>();
-  localOffset = 0;
   compactLocals = false;
   localMap = new Map<number, number>();
   private materializing = false;
@@ -39,7 +38,7 @@ export class Code {
   private local(op: number, i: number, nonNull: boolean): this {
     if (this.nullableLocals) this.locals.add(i);
     if (this.compactLocals && !this.materializing) { this.defer((c) => { c.local(op, i, nonNull); }); return this; }
-    const index = this.compactLocals ? this.localMap.get(i) : i + this.localOffset;
+    const index = this.compactLocals ? this.localMap.get(i) : i;
     if (index === undefined) throw new Error(`Unmapped outlined local ${i}`);
     this.b.push(op); uleb(index, this.b);
     if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull();

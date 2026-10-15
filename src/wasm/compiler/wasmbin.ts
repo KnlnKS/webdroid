@@ -27,7 +27,7 @@ export function sleb(n: number | bigint, out: number[]): void {
   }
 }
 const enc = new TextEncoder();
-export function name(s: string, out: number[]): void {
+function name(s: string, out: number[]): void {
   const start = out.length;
   uleb(s.length, out);
   for (let i = 0; i < s.length; i++) {
@@ -54,8 +54,7 @@ export function vt(t: VT, out: number[]): void {
   if (typeof t === "number") { out.push(t); return; }
   out.push(t.nullable ? 0x63 : 0x64); sleb(t.ht, out);
 }
-type StorageT = VT;
-interface FieldT { t: StorageT; mut: boolean }
+interface FieldT { t: VT; mut: boolean }
 export interface FunctionType { params: readonly VT[]; results: readonly VT[] }
 const functionKey = (params: readonly VT[], results: readonly VT[]) => params.map(vtKey).join() + ">" + results.map(vtKey).join();
 type TypeDef =
@@ -141,8 +140,7 @@ export class ModuleBuilder {
   addDataPassive(bytes: Uint8Array | number[]): number { const d: number[] = [0x01]; uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); return this.datas.length - 1; }
 
   private encodeTypeDef(d: TypeDef, out: number[]): void {
-    const subbed = d.sup !== undefined || d.final === false;
-    if (subbed) { out.push(d.final === false || d.sup !== undefined ? (d.final === false ? 0x50 : 0x4f) : 0x4f); uleb(d.sup !== undefined ? 1 : 0, out); if (d.sup !== undefined) uleb(d.sup, out); }
+    if (d.sup !== undefined || d.final === false) { out.push(d.final === false ? 0x50 : 0x4f); uleb(d.sup !== undefined ? 1 : 0, out); if (d.sup !== undefined) uleb(d.sup, out); }
     switch (d.k) {
       case "func": out.push(0x60); uleb(d.params.length, out); for (const p of d.params) vt(p, out); uleb(d.results.length, out); for (const r of d.results) vt(r, out); break;
       case "struct": out.push(0x5f); uleb(d.fields.length, out); for (const f of d.fields) { vt(f.t, out); out.push(f.mut ? 1 : 0); } break;
