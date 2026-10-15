@@ -197,14 +197,23 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await onMain(() => startActivityThread(!processName));
 }
 
+const turnDisplay = async (landscape: boolean) => { if (applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged(); };
+/** the page's own orientation, which the user's rotations set: the display leaves it to follow
+ *  another process's activity and returns to it when the page's own fills the display again */
+let ownLandscape = device.orientation === 2;
 /** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
  *  manager keeps the display in that orientation for it. */
 export function rotateDevice(landscape: boolean): Promise<void> {
   return onMain(async () => {
     const request = topOrientation();
-    if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
+    if (orientationForRequest(request) !== null || request === 5 || request === 14) return;
+    ownLandscape = landscape;
+    await turnDisplay(landscape);
   });
 }
+/** the display turns for the process whose activity sets its orientation: to a Worker's display,
+ *  or back to the page's own */
+export const followDisplay = (landscape?: boolean): Promise<void> => onMain(() => turnDisplay(landscape ?? ownLandscape));
 // system_server's realm hosts no app to hear it
 function applyConfigChange(): void { if (appHost) postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {

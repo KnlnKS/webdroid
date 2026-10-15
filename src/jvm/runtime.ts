@@ -54,7 +54,7 @@ export class Runtime {
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
-  classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; names(): string[] } | null = null;
+  classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; entrySize(name: string): number; names(): string[] } | null = null;
   /** the boot class path's own entries by name, with the jar holding each: the boot class
    *  loader answers them ahead of the apk */
   bootResources = new Map<string, { jar: string; read(): Uint8Array }>();

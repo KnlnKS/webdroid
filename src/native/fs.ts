@@ -11,7 +11,7 @@ import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
-import { readFully, writable, type FileSource } from "../shell/lazyfile";
+import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat, utf8 as codec } from "../jvm/abi";
 import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers";
@@ -503,12 +503,12 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
   const dst = anchor(p);
   return value.then((bytes) => { mem.write(dst(), bytes); return bytes.length; }, () => fail(cpu, E.IO));
 }
-/** up to `n` bytes of a file at `off`: a view of its data, or what its lazy source reads */
+/** up to `n` bytes of a file at `off`, fewer only at its end as a regular file reads: a view of its data, or what its lazy source reads */
 export function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
   vfs.sync(content);
   const k = Math.max(0, Math.min(n, content.len - off));
   if (!k) return EMPTY;
-  return content.source ? content.source.read(off, k) : content.data.subarray(off, off + k);
+  return content.source ? readAt(content.source, off, k) : content.data.subarray(off, off + k);
 }
 export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
@@ -574,25 +574,11 @@ function takePipe(pipe: Pipe, p: number, n: number): number {
   }
   return k;
 }
-async function readLoop(dst: number, n: number, read: (p: number, k: number, done: number) => number | Promise<number>): Promise<number> {
-  const target = anchor(dst);
-  let total = 0;
-  while (total < n) {
-    const r = await read(target(total), n - total, total);
-    if (r <= 0) return total || r;
-    total += r;
-  }
-  return total;
-}
-export function fdReadFully(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
-  return fds.get(fd)?.content.source ? readLoop(p, n, (q, k) => fdRead(cpu, fd, q, k)) : fdRead(cpu, fd, p, n);
-}
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
-  if (fds.get(fd)?.remote) return remoteRead(cpu,fd,dst,n,off);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  return f.content.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
+  return f.remote ? remoteRead(cpu, fd, dst, n, off) : fdReadAt(cpu, f, dst, n, off);
 }
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {

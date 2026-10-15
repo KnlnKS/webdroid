@@ -14,7 +14,7 @@ import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { intentQuery$, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
 import { grantResultUris } from "../urigrants";
-import { thisApp, userLaunched, pms, runsHere } from "./am";
+import { attached, thisApp, userLaunched, pms, runsHere } from "./am";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
@@ -123,8 +123,11 @@ export const displayHooks: { requestOrientation?: (request: number) => boolean }
  *  then each visible activity (the others when they next resume), then each window its new frames */
 export const configurationChanged = driven(function* (): Gen<void> {
   notifyDisplayChanged();
-  const { global } = yield* awaited(configurations());
-  yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
+  // a process yet to attach reads the configuration as it binds
+  if (attached()) {
+    const { global } = yield* awaited(configurations());
+    yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
+  }
   for (const r of [...stack]) {
     if (r.state === "resumed") yield* ensureConfiguration(r, [], yield resumeItem(r));
     else if (r.state === "paused") yield* ensureConfiguration(r, [], yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));

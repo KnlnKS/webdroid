@@ -47,6 +47,7 @@ export class PackedArchive implements FileSource {
   }
   has(name: string): boolean { return Object.hasOwn(this.index.entries, name); }
   names(): string[] { return Object.keys(this.index.entries); }
+  entrySize(name: string): number { return this.index.entries[name].size; }
   async entry(name: string): Promise<Uint8Array | null> {
     if (Object.hasOwn(this.zip, name)) return this.zip[name];
     const file = this.index.entries[name];

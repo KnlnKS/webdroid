@@ -50,24 +50,31 @@ export class SliceFile implements FileSource {
   }
 }
 
+/** `length` bytes at `offset`, fewer only at the end: a source may answer one read in chunks */
+export function readAt(source: FileSource, offset: number, length: number): Uint8Array | Promise<Uint8Array> {
+  const assemble = async (first: Uint8Array): Promise<Uint8Array> => {
+    const out = new Uint8Array(length);
+    out.set(first);
+    let pos = first.length;
+    while (pos < length) {
+      const chunk = await source.read(offset + pos, length - pos);
+      if (!chunk.length) break;
+      out.set(chunk.subarray(0, length - pos), pos);
+      pos += chunk.length;
+    }
+    return out.subarray(0, pos);
+  };
+  const complete = (first: Uint8Array) => first.length >= length || !first.length ? first : assemble(first);
+  const first = source.read(offset, length);
+  return first instanceof Promise ? first.then(complete) : complete(first);
+}
+
 export async function readFully(source: FileSource, offset = 0, length = source.size - offset): Promise<Uint8Array> {
-  const end = Math.min(source.size, offset + Math.max(0, length));
-  const size = Math.max(0, end - offset);
+  const size = Math.max(0, Math.min(source.size, offset + Math.max(0, length)) - offset);
   if (!size) return new Uint8Array(0);
-  const first = await source.read(offset, size);
+  const bytes = await readAt(source, offset, size);
   // Media parsers pass .buffer directly, so a returned view must own its whole buffer.
-  if (first.length >= size) return first.byteOffset === 0 && first.byteLength === first.buffer.byteLength && first.length === size
-    ? first : first.slice(0, size);
-  const out = new Uint8Array(size);
-  out.set(first);
-  let pos = first.length;
-  while (offset + pos < end) {
-    const chunk = await source.read(offset + pos, end - offset - pos);
-    if (!chunk.length) break;
-    out.set(chunk.subarray(0, end - offset - pos), pos);
-    pos += chunk.length;
-  }
-  return pos === out.length ? out : out.slice(0, pos);
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.length === size ? bytes : bytes.slice(0, size);
 }
 
 export class RangeFile implements FileSource {

@@ -116,6 +116,7 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
   activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
   activityPresentation: (translucent: boolean) => Promise<void>;
+  displayOrientation: (landscape: boolean) => Promise<void>;
   clipboardSet: (data: ParcelData | null) => Promise<void>;
   clipboardGet: () => Promise<ParcelData | null>;
   clipboardHas: () => Promise<boolean>;
@@ -126,7 +127,7 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods] as const;
+export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -134,6 +135,9 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
+  /** a Worker's display orientation: the screen it started on, then each turn it reports; the
+   *  page's process has none, as device.ts keeps the page's own */
+  landscape?: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
   launcher: { assetKey: string } | null;
@@ -249,6 +253,7 @@ export class ProcessBroker {
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
+    rotate: (entry) => void import("./device").then(({ followDisplay }) => followDisplay(entry.landscape)),
   });
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
@@ -328,6 +333,7 @@ export class ProcessBroker {
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
     if (worker) {
       entry.presented = Promise.withResolvers();
+      entry.landscape = device.width > device.height;
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.dataset.pid = String(entry.pid); canvas.dataset.pkg = pkg;
       canvas.hidden = true;
@@ -606,6 +612,7 @@ export class ProcessBroker {
       activityLaunch: async (pkg, process, component, intent, request, callingClass) => { this.entry(pid); unawaited(this.activities.launch(pid,pkg,process,component,intent,request,callingClass)); },
       activityFinish: async (id, code, data) => { this.entry(pid); unawaited(this.activities.finish(pid,id,code,data)); },
       activityPresentation: async translucent => { this.entry(pid); this.activities.presentation(pid,translucent); },
+      displayOrientation: async landscape => this.activities.orientation(pid,landscape),
       clipboardSet: async data => this.setClipboard(pid, data),
       clipboardGet: async () => this.getClipboard(pid),
       clipboardHas: async () => this.clipboardWork(async()=>this.hasClipboard(pid)),

@@ -46,7 +46,7 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   const entry = {pid:1001} as import("../src/shell/processes").Entry;
   const first = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   let calls = 0, available = true;
-  const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,
+  const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:()=>{},
     activity:async (_entry,request)=>{expect(request.kind).toBe("back");calls++;
       if(calls===1){entered.resolve();await first.promise;} else if(calls===2)throw new Error("owner back failure");}});
   stack.setForeground(entry.pid);

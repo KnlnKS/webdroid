@@ -292,4 +292,15 @@ export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (nam
     if (pending.has(name)) tree[name] = bytes;
   }));
 }
+/** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
+export function classpathFile(name: string): FileSource {
+  const resident = Object.hasOwn(rt.classpath, name);
+  return {
+    size: resident ? lazyEntries.get(rt.classpath)?.get(name)?.[1].size ?? rt.classpath[name].length : rt.classpathSource!.entrySize(name),
+    read: async (offset, length) => {
+      if (resident) await inflateTree(rt.classpath, (entry) => entry === name);
+      return (await rt.readClasspath(name))!.subarray(offset, offset + length);
+    },
+  };
+}
 
