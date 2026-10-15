@@ -124,7 +124,10 @@ export const displayHooks: { requestOrientation?: (request: number) => boolean }
 export const configurationChanged = driven(function* (): Gen<void> {
   notifyDisplayChanged();
   // a process yet to attach reads the configuration as it binds
-  if (attached()) yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, (yield* awaited(configurations())).global, 0), null);
+  if (attached()) {
+    const { global } = yield* awaited(configurations());
+    yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
+  }
   for (const r of [...stack]) {
     if (r.state === "resumed") yield* ensureConfiguration(r, [], yield resumeItem(r));
     else if (r.state === "paused") yield* ensureConfiguration(r, [], yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));
