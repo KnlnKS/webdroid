@@ -1,4 +1,4 @@
-// Register typing by live-range webs: the compiler's local allocation, and (dexstats/infer.ts) the corpus statistics, share this analysis.
+// Register typing by live-range webs, for the compiler's local allocation.
 //
 // Method: live-range webs. Every definition (parameter or instruction) is a node; at control-flow
 // joins the nodes of a LIVE register are unioned (so a web is a maximal live range, like an SSA
@@ -8,7 +8,7 @@
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
 import { parseMethodDesc } from "../../jvm/abi";
 import type { CodeItem, DexFile } from "../../jvm/dex";
-import { decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
+import type { PreparedInstruction } from "../../jvm/prepared";
 import { buildCfg } from "./cfg";
 import { NO_THROW, isInvoke, isInstanceInvoke } from "./opinfo";
 
@@ -21,13 +21,11 @@ const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0 };
 
 /** The webs of one method: nodes are definitions (parameters included), unioned at joins where the register is live. */
 interface WebAnalysis {
-  regs: number;
   pcToIdx: Int32Array;
-  ins: readonly PreparedInstruction[];
   /** per node */
   mask: number[]; vreg: number[]; used: number[];
   find(node: number): number;
-  /** the node defined by instruction i (-1: none); the nodes its operands read, aligned with the register/mask pairs of its effect */
+  /** the node defined by instruction i (-1: none) */
   defNode: Int32Array;
   /** the node each instruction reads each operand through, at `useAt[i] + slot`; -1 for none */
   useNode: Int32Array;
@@ -43,9 +41,8 @@ interface WebAnalysis {
 }
 
 /** analysis of the method, or why it was skipped */
-function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs?: readonly PreparedInstruction[]): WebAnalysis | string {
+function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, ins: readonly PreparedInstruction[]): WebAnalysis | string {
   const R_ = code.regs;
-  const ins = instrs ?? decodeInstructions(code.insns);
   if (!ins.length) return "empty";
   for (const x of ins) if (x.op >= 0xe3 && x.op <= 0xf2) return "quickened";
   const cfg = buildCfg(code, ins);
@@ -60,12 +57,10 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
 
   // handler blocks per instruction (try ranges are disjoint in dex, handlers repeat)
   const handlerOfIdx: (number[] | null)[] = new Array(n).fill(null);
-  if (code.tries.length) {
-    for (const r of code.tries) {
-      const hs: number[] = r.handlers.map(([, h]) => cfg.blockOfIdx[cfg.pcToIdx[h]]);
-      if (r.catchAllAddr >= 0) hs.push(cfg.blockOfIdx[cfg.pcToIdx[r.catchAllAddr]]);
-      for (let i = Math.max(0, cfg.pcToIdx[r.start]); i < n && ins[i].pc < r.end; i++) if (ins[i].pc >= r.start) handlerOfIdx[i] = hs;
-    }
+  for (const r of code.tries) {
+    const hs: number[] = r.handlers.map(([, h]) => cfg.blockOfIdx[cfg.pcToIdx[h]]);
+    if (r.catchAllAddr >= 0) hs.push(cfg.blockOfIdx[cfg.pcToIdx[r.catchAllAddr]]);
+    for (let i = Math.max(0, cfg.pcToIdx[r.start]); i < n && ins[i].pc < r.end; i++) if (ins[i].pc >= r.start) handlerOfIdx[i] = hs;
   }
 
   // ---- liveness (block live-in bitsets of W words), handler edges treated as successors
@@ -204,7 +199,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
       for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
     }
   };
-  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
+  return { pcToIdx: cfg.pcToIdx, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -267,6 +262,14 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   };
 }
 
+/** the operand and result kinds of the unary operations 0x7b (neg-int) to 0x8f (int-to-short) */
+const UNARY: readonly [number, number][] = [
+  [I, I], [I, I], [J, J], [J, J], [F, F], [D, D],
+  [I, J], [I, F], [I, D], [J, I], [J, F], [J, D],
+  [F, I], [F, J], [F, D], [D, I], [D, J], [D, F],
+  [I, I], [I, I], [I, I],
+];
+
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
   const { op, a, b, c } = x;
   const E = (u: number[], d = -1, dm = 0, link = 0): Eff => ({ u, d, dm, link });
@@ -293,16 +296,14 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   if (op <= 0x1c) return E([], a, R);
   if (op <= 0x1e) return E([a, R]);
   if (op === 0x1f) return E([a, R], a, R);
-  if (op === 0x20) return E([b, R], a, I);
-  if (op === 0x21) return E([b, R], a, I);
+  if (op <= 0x21) return E([b, R], a, I);
   if (op === 0x22) return E([], a, R);
   if (op === 0x23) return E([b, I], a, R);
   if (op === 0x24 || op === 0x25) {
     const el = kc(dex.type(b)[1] ?? "L");
     return E(x.regs.flatMap((r) => [r, el]));
   }
-  if (op === 0x26) return E([a, R]);
-  if (op === 0x27) return E([a, R]);
+  if (op <= 0x27) return E([a, R]);
   if (op <= 0x2a) return NOEFF;
   if (op <= 0x2c) return E([a, I]);
   if (op <= 0x2e) return E([b, F, c, F], a, I);
@@ -338,16 +339,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
     for (const t of params) { const m = kc(t[0]); if (x.regs[k] === undefined) break; u.push(x.regs[k], m); k += m & WIDE ? 2 : 1; }
     return E(u);
   }
-  if (op >= 0x7b && op <= 0x8f) {
-    const T: Record<number, [number, number]> = {
-      0x7b: [I, I], 0x7c: [I, I], 0x7d: [J, J], 0x7e: [J, J], 0x7f: [F, F], 0x80: [D, D],
-      0x81: [I, J], 0x82: [I, F], 0x83: [I, D], 0x84: [J, I], 0x85: [J, F], 0x86: [J, D],
-      0x87: [F, I], 0x88: [F, J], 0x89: [F, D], 0x8a: [D, I], 0x8b: [D, J], 0x8c: [D, F],
-      0x8d: [I, I], 0x8e: [I, I], 0x8f: [I, I],
-    };
-    const [from, to] = T[op];
-    return E([b, from], a, to);
-  }
+  if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }
   if (op >= 0x90 && op <= 0xcf) {
     const two = op >= 0xb0, base = two ? op - 0xb0 + 0x90 : op;
     let t: number, shiftTwo = false;
@@ -367,4 +359,3 @@ function retOf(dex: DexFile, x: PreparedInstruction): string | null {
     return dex.type(dex.proto(dex.method(x.b).proto).ret);
   } catch { return null; }
 }
-export { retOf };

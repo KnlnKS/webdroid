@@ -78,8 +78,7 @@ export function analyze(mc: MC): Facts[] {
       for (const ins of inss) step(mc, ins, out);
       const last = inss[inss.length - 1], fall = last.pc + last.len;
       const targets = branchTargets(mc.item, last);
-      // a null test refines the facts along its two edges
-      // if-eqz, if-nez
+      // a null test (if-eqz, if-nez) refines the facts along its two edges
       const test = last.op === 0x38 || last.op === 0x39 ? mc.typing.use(last.pc, last.a) : -1;
       const nonNullEdge = (taken: boolean) => (last.op === 0x39) === taken;
       const edge = (t: number, taken: boolean) => {
