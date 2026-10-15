@@ -95,6 +95,8 @@ export const device = {
   touchSlopDp: 8,
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
   scrollUnitDp: 64,
+  /** framework-res config_minScalingSpan: ScaleGestureDetector does not scale two fingers closer */
+  minScalingSpanMm: 27,
   battery: { level: 80, status: 2 },
   sdk: Number(DEVICE_PROPERTIES["ro.build.version.sdk"]),
   release: DEVICE_PROPERTIES["ro.build.version.release"],
@@ -120,6 +122,8 @@ export const device = {
   get navBar(): number { return Math.round(this.navBarDp * this.density); },
   get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },
   get scrollUnit(): number { return this.scrollUnitDp * this.density; },
+  /** getDimensionPixelSize of a mm dimension: xdpi, which display.ts reports as densityDpi, per inch */
+  get minScalingSpan(): number { return Math.round(this.minScalingSpanMm * this.densityDpi / 25.4); },
   get widthDp(): number { return Math.round(this.width / this.density); },
   get orientation(): DeviceOrientation { return this.width > this.height ? 2 : 1; },
   get smallestWidthDp(): number { return Math.round(Math.min(this.width, this.height) / this.density); },
