@@ -280,8 +280,6 @@ export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, re
   return into;
 }
 const lazyEntries = new WeakMap<Record<string, Uint8Array>, Map<string, [Uint8Array, ZEntry]>>();
-/** an entry's size, from the central directory while it is still compressed */
-export const treeEntrySize = (tree: Record<string, Uint8Array>, name: string): number => lazyEntries.get(tree)?.get(name)?.[1].size ?? tree[name].length;
 /** Inflate a tree's still-compressed entries that `wanted` names with the platform's native
  *  inflater, concurrently, ahead of the synchronous reads that would otherwise inflate in JS. */
 export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (name: string) => boolean): Promise<void> {
@@ -293,5 +291,16 @@ export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (nam
     const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
     if (pending.has(name)) tree[name] = bytes;
   }));
+}
+/** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
+export function classpathFile(name: string): FileSource {
+  const resident = Object.hasOwn(rt.classpath, name);
+  return {
+    size: resident ? lazyEntries.get(rt.classpath)?.get(name)?.[1].size ?? rt.classpath[name].length : rt.classpathSource!.entrySize(name),
+    read: async (offset, length) => {
+      if (resident) await inflateTree(rt.classpath, (entry) => entry === name);
+      return (await rt.readClasspath(name))!.subarray(offset, offset + length);
+    },
+  };
 }
 

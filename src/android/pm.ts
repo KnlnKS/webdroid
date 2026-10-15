@@ -30,9 +30,8 @@ import { deleteVersioned, enforceDeletePackages } from "./appdata";
 import { installerService } from "./packageinstaller";
 import { checkPermission } from "./permissions";
 import { libraryAbi } from "../jvm/natives/jlang";
-import { inflateTree, treeEntrySize } from "../jvm/natives/jzip";
+import { classpathFile } from "../jvm/natives/jzip";
 import { ABIS_64 } from "../shell/properties";
-import type { FileSource } from "../shell/lazyfile";
 
 const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
@@ -50,7 +49,8 @@ export const GL_ES_VERSION = 0x30000;
 
 // ── the booted package
 let currentPackage: PackageRecord | null = null;
-/** registers the package this process booted from its manifest, at /data/app/base.apk */
+/** registers the package this process booted from its manifest, at /data/app/base.apk, with its
+ *  native libraries where the installer leaves them */
 export function setManifest(root: XmlNode): void {
   const pkg = attrStr(root, "package") ?? "";
   if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
@@ -61,6 +61,7 @@ export function setManifest(root: XmlNode): void {
     return bytes ? cachedCertificates(bytes, host.zip) : [];
   });
   packages.set(pkg, currentPackage);
+  extractNativeLibraries(currentPackage);
 }
 
 // ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
@@ -71,21 +72,10 @@ const primaryAbi = (record: PackageRecord): string | null =>
 const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slice(0, record.path.lastIndexOf("/"))}/lib`;
 /** <codePath>/lib/<instruction set>, the device's own when the package ships no libraries */
 const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
-/** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
-const classpathFile = (name: string): FileSource => {
-  const resident = Object.hasOwn(rt.classpath, name);
-  return {
-    size: resident ? treeEntrySize(rt.classpath, name) : rt.classpathSource!.entrySize(name),
-    read: async (offset, length) => {
-      if (resident) await inflateTree(rt.classpath, (entry) => entry === name);
-      return (await rt.readClasspath(name))!.subarray(offset, offset + length);
-    },
-  };
-};
 /** The installer's copy of the booted package's primary-ABI libraries into its nativeLibraryDir,
  *  which ClassLoader.findLibrary searches; extractNativeLibs="false" leaves them in the apk. */
-export function extractNativeLibraries(): void {
-  const record = currentPackage, abi = record && primaryAbi(record);
+function extractNativeLibraries(record: PackageRecord): void {
+  const abi = primaryAbi(record);
   if (!abi || !record.flag(record.application, "extractNativeLibs", true)) return;
   const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
   for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
