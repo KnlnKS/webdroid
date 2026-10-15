@@ -1,5 +1,5 @@
-import { parseMethodDesc } from "../../jvm/abi";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
+import { parseMethodDesc } from "../../jvm/abi";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
 import { ACC, Program, kindOf, type Kind, type MethodInfo } from "./program";
@@ -460,15 +460,15 @@ export class Compiler implements Base {
   helper(name: string): number {
     const mb = this.mb, t = (p: VT[], r: VT[]) => mb.addFuncType(p, r);
     return this.memo(name, () => {
-      const [sigIdx, body] = this.helperBody(name, T.anyref, t), f = mb.reserveFunc(sigIdx, "$" + name);
+      const [sigIdx, body] = this.helperBody(name, t), f = mb.reserveFunc(sigIdx, "$" + name);
       // a helper may call itself
       this.helpers.set(name, f);
       mb.setBody(f, body());
       return f;
-    }, () => this.helperBody(name, T.anyref, t)[0]);
+    }, () => this.helperBody(name, t)[0]);
   }
-  private helperBody(name: string, L: VT, t: (p: VT[], r: VT[]) => number): [number, () => number[]] {
-    const { tVT, tObj } = this, vtR = refNull(tVT);
+  private helperBody(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] {
+    const { tVT, tObj } = this, vtR = refNull(tVT), L = T.anyref;
     const div = (wide: boolean, rem: boolean): [number, () => number[]] => {
       const W = wide ? T.i64 : T.i32;
       return [t([W, W], [W]), () => {
@@ -618,11 +618,10 @@ export class Compiler implements Base {
   // ---------- units
   /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
    *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
-   *  unit is the second tier: its methods do not count. With `install` the module puts its functions in the table itself, when it is instantiated,
-   *  instead of exporting them (a precompiled module, aot.ts). */
-  /** `ensures`: classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
-  /** `install`: the methods go straight into their table slots and call each other through them, as precompiled code (true) or code merged from first-tier units
-   *  ("merge"), which unlike precompiled code relies on the classes loaded now */
+   *  unit is the second tier: its methods do not count. With `install` the methods go straight into their table slots when the module is
+   *  instantiated, and call each other through them, as precompiled code (true, aot.ts) or code merged from first-tier units ("merge"), which
+   *  unlike precompiled code relies on the classes loaded now. `ensures`: classes whose ensure() the unit also defines, exported as the methods
+   *  are (World.ensureBody) */
   buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install: boolean | "merge" = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot;
@@ -661,11 +660,11 @@ export class Compiler implements Base {
     return this.finishModule(parts.map(part => ({ name: "$" + part.name, f: part.f, code: part.code })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
-  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m", abiParams?: VT[]): { bytes: Uint8Array; traces: FnTrace[] } {
-    const f = this.mb.reserveFunc(abiParams ? this.mb.addFuncType(abiParams, ret === "V" ? [] : [this.vtOf(ret)]) : this.sig(params, ret), "$" + name), c = new Code(params.length);
+  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {
+    const f = this.mb.reserveFunc(this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
-    this.mb.export(exportName, "func", f);
+    this.mb.export("m", "func", f);
     return this.finishModule([{ name: "$" + name, f, code: c }]);
   }
   /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy
