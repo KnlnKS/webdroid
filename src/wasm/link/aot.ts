@@ -1,4 +1,3 @@
-import type { SymbolicSite } from "../compiler/sites";
 // Ahead-of-time compilation of the platform classes: the code Compiler.buildUnit and World.classModule would produce on demand is
 // produced once, at build time, and stored as static assets; at run time the World loads them instead of compiling.
 //
@@ -12,6 +11,7 @@ import type { SymbolicSite } from "../compiler/sites";
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
 import type { ClassRt, World } from "./world";
+import type { SymbolicSite } from "../compiler/sites";
 import type { InfoRecord } from "./classes";
 import type { DexFile } from "../../jvm/dex";
 import { methodCount, type Loader, type MethodInfo } from "../compiler/program";
@@ -263,7 +263,7 @@ export class AotRuntime {
       if (!c.dex || n++ >= index.programClasses) continue;
       if (seen[seen.length - 1] !== dexSig(c.dex)) seen.push(dexSig(c.dex));
     }
-    if (n < index.programClasses || seen.length !== index.dexes.length || seen.some((d, i) => d !== index.dexes[i])) {  return undefined; }
+    if (n < index.programClasses || seen.length !== index.dexes.length || seen.some((d, i) => d !== index.dexes[i])) return undefined;
     const a = new AotRuntime(w);
     a.index = index; a.store = store; a.nSeeded = index.classes; a.programClasses = index.programClasses;
     const mine = new Set(index.aotDexes);
@@ -550,8 +550,7 @@ export class AotRuntime {
     const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, mod = this.module(file);
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
-    if (head.version !== VERSION) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    if (!head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (head.version !== VERSION || !head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
     let dataReady = true;
     for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1)) && !this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
@@ -621,11 +620,13 @@ export class AotRuntime {
   trace(name: string): FnTrace | undefined {
     const w = this.w, m = methodOf(w.prog, name);
     if (!m) return undefined;
-    const base = this.reservedBase(m.cls) ?? w.preassigned.get(m.cls), c = base === undefined ? -1 : this.cOf[w.blockOf(base)];
+    const base = this.reservedBase(m.cls) ?? w.preassigned.get(m.cls);
+    if (base === undefined) return undefined;
+    const c = this.cOf[w.blockOf(base)];
     if (c < 0) return undefined;
     // a patch of the module has the code of the methods it replaced
     for (const module of [...this.patchesOver.get(c) ?? [], c]) {
-      const t = this.cState[module] === LIVE ? this.traceIn(module, (base as number) + m.index, m, name) : undefined;
+      const t = this.cState[module] === LIVE ? this.traceIn(module, base + m.index, m, name) : undefined;
       if (t) return t;
     }
     return undefined;
