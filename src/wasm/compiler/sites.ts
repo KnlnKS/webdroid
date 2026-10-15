@@ -8,7 +8,6 @@ import { initiatedInstruction } from "../link/resolution";
 import type { World } from "../link/world";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
-export interface SiteOperands { inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; producer: boolean }
 
 export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: SymbolicSite[5]): string {
   const roles = new Map<number, number>();
@@ -33,19 +32,19 @@ export function needsSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruct
   return !w.prog.linksStatically(w.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
 }
 
-function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
-  const n = ins.name, dex = m.dex, inputs: SiteOperands["inputs"] = [], seen = new Set<number>();
+function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): { inputs: SymbolicSite[4]; output: SymbolicSite[5] } {
+  const n = ins.name, dex = m.dex, inputs: SymbolicSite[4] = [], seen = new Set<number>();
   for (const reg of registersOf(ins)) {
     const web = typing.use(ins.pc, reg);
     if (web < 0 || seen.has(web)) continue;
     seen.add(web);
     const k = typing.kind[web];
-    inputs.push({ reg, kind: k === R ? "L" : k === J || k === D ? "J" : "I" });
+    inputs.push([reg, k === R ? "L" : k === J || k === D ? "J" : "I"]);
   }
   const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
     : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)
     : /^(iput|sput)/.test(n) ? "V" : n === "instance-of" ? "I" : "L";
-  return { inputs, output: output === "V" ? "V" : kindOf(output), producer: /^invoke-|^filled-new-array/.test(n) };
+  return { inputs, output: output === "V" ? "V" : kindOf(output) };
 }
 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
@@ -53,12 +52,13 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   if (!mc.symbolic || cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
   const entry = cx.symbolicImports.get(`${mc.m.cls}:${mc.m.index}:${ins.pc}`);
   if (!entry) return false;
-  const operands = siteOperands(mc.m, ins, mc.typing);
+  // the operands declareSymbolicSites gave the site, which its linked operation takes
+  const [, , , , inputs, output] = entry.site;
   if (ins.name.startsWith("invoke-polymorphic") && mc.dex.rawType(mc.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") { mc.nonNull(ins.regs[0]); mc.code.drop(); }
-  for (const input of operands.inputs) mc.get(input.kind, input.reg);
-  mc.code.gget(entry.slot).callIndirect(cx.sig(operands.inputs.map(input => input.kind), operands.output), cx.symbolicTable!);
-  if (operands.producer) mc.finishResult(ins, operands.output);
-  else if (operands.output !== "V") mc.set(operands.output);
+  for (const [reg, kind] of inputs) mc.get(kind, reg);
+  mc.code.gget(entry.slot).callIndirect(cx.sig(inputs.map(input => input[1]), output), cx.symbolicTable!);
+  if (/^invoke-|^filled-new-array/.test(ins.name)) mc.finishResult(ins, output);
+  else if (output !== "V") mc.set(output);
   return true;
 }
 
@@ -79,8 +79,8 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const slot = cx.mb.importGlobal("symbolic", name, T.i32, false);
-      const operands = siteOperands(m, ins, typing);
-      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc, operands.inputs.map(input => [input.reg, input.kind]), operands.output] });
+      const { inputs, output } = siteOperands(m, ins, typing);
+      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc, inputs, output] });
     }
   }
 }
