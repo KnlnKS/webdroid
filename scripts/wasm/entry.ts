@@ -6,6 +6,7 @@ import { mangleField } from "../../src/jvm/abi";
 import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry";
 import { perf } from "../../src/perf";
 import { runningThread, wasmEntry } from "../../src/wasm/host/entry";
+import { UInfo } from "../../src/wasm/link/unsafe";
 import { world } from "./lib";
 import { mountPlatform, natives } from "./harness";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
@@ -46,14 +47,21 @@ if (immediate instanceof Promise) { failed++; console.log("FAIL warm synchronous
 const immediateObject = await immediate;
 if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL synchronous constructor caller"); }
 const originalCall = w.callFn;
-try {
+// newObj allocates through the suspending invoker of the class's allocator (host/entry.ts alloc); `then` runs before that allocation answers
+const ownerAlloc = w.host.info(UInfo.AllocInstance, w.idOf("E$Owner"), 0);
+let delayedAllocs = 0;
+const delayAllocation = (then: () => void) => {
   w.callFn = (key, ...a) => {
     const f = originalCall.call(w, key, ...a);
-    return key !== "e:new:E$Owner" ? f : (s, ...args) => Promise.resolve(f(s, ...args)).then(value => {
-      w.sched.idle(); resumeAs(background.root); return value;
+    return key !== "invs:>L" ? f : (s, slot, ...args) => slot !== ownerAlloc ? f(s, slot, ...args) : Promise.resolve(f(s, slot, ...args)).then(value => {
+      delayedAllocs++; then(); return value;
     });
   };
+};
+try {
+  delayAllocation(() => { w.sched.idle(); resumeAs(background.root); });
   const delayed = await entry.callOn(origin, () => entry.newObj("E$Owner"));
+  if (delayedAllocs !== 1) { failed++; console.log(`FAIL the allocation was delayed ${delayedAllocs} times, not once`); }
   if (await entry.callOn(origin, () => entry.vcall(delayed, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL asynchronous constructor lost allocating caller"); }
 } finally { w.callFn = originalCall; }
 console.log(failed === ownerFailures ? "3/3 constructor ownership checks pass" : "FAIL constructor ownership checks");
@@ -74,10 +82,7 @@ try {
     if (m.cls === "E$Owner" && m.name === "<init>") constructorParent = s.parent;
     return originalInvoke.call(this, s, m, ...a);
   };
-  w.callFn = (key, ...a) => {
-    const f = originalCall.call(w, key, ...a);
-    return key !== "e:new:E$Owner" ? f : (s, ...args) => Promise.resolve(f(s, ...args)).then(value => { activate(interposed); return value; });
-  };
+  delayAllocation(() => activate(interposed));
   for (const reentry of [true, false]) {
     activate(reentry ? parent : interposed);
     const construct = () => entry.newObj("E$Owner", "(Ljava/lang/Object;)V", facade);
@@ -87,6 +92,7 @@ try {
     const held = await entry.callOn(origin, () => entry.vcall(object, "held", "()Z"));
     if (!keptParent || !!held !== reentry) { failed++; console.log(`FAIL constructor ${reentry ? "reentry" : "thread switch"} parent/monitor ownership`); }
   }
+  if (delayedAllocs !== 3) { failed++; console.log(`FAIL the parent/monitor allocations were delayed ${delayedAllocs - 1} times, not twice`); }
 } finally {
   w.callFn = originalCall; w.bridge.invokeOn = originalInvoke;
   w.sched.monitors.exit(lock, parent); parent.end(); interposed.end(); w.sched.idle();
