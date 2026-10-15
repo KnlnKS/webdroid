@@ -162,6 +162,7 @@ async function recordDeviceOverlays() {
     for (const line of adb("shell", `for k in ${list.slice(i, i + 100).join(" ")}; do echo "$k $(cmd overlay lookup android android:$k)"; done`).split("\n")) {
       const [key, text] = line.trim().split(" "), [type, name] = key.split("/");
       const value = resValue(type, text), own = table.entry(table.names(type).get(name)!)?.value;
+      // a color the table holds as RGB8 rather than ARGB8 is the same color when its data is
       if (!value || own && own.data === value[1] && (own.type === value[0] || type === "color")) continue;
       values.push([JSON.stringify(key), `[0x${value[0].toString(16)}, ${type === "color" ? "0x" + (value[1] >>> 0).toString(16) : value[1]}]`]);
     }
