@@ -97,7 +97,10 @@ if (substrate || only?.includes("nativeCallback")) {
   try { expect("a callback token of an ended native is not reused", onNestedStrand(w, s => s.parent), null); }
   finally { resumeAs(previous); }
   for (const order of [[0, 1], [1, 0]]) {
+    ordered.length = 0;
     const waits = [w.entryAsync("Th", "orderedWait", "(I)I")(0), w.entryAsync("Th", "orderedWait", "(I)I")(1)];
+    // an entry reaches its native only once what it links first has settled
+    while (!ordered[0] || !ordered[1]) await new Promise(r => setTimeout(r, 0));
     expect("unrelated host entry does not borrow a waiting native", onNestedStrand(w, s => s.parent), null);
     ordered[order[0]](); await waits[order[0]];
     expect("first settlement keeps the second native live", w.sched.strands.filter(Boolean).length, 2);
