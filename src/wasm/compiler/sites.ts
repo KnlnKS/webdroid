@@ -51,9 +51,9 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   const cx = mc.cx;
   if (!mc.symbolic || cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
-  const operands = siteOperands(mc.m, ins, mc.typing), name = `${mc.m.cls}:${mc.m.index}:${ins.pc}`;
-  const entry = cx.symbolicImports.get(name);
+  const entry = cx.symbolicImports.get(`${mc.m.cls}:${mc.m.index}:${ins.pc}`);
   if (!entry) return false;
+  const operands = siteOperands(mc.m, ins, mc.typing);
   if (ins.name.startsWith("invoke-polymorphic") && mc.dex.rawType(mc.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") { mc.nonNull(ins.regs[0]); mc.code.drop(); }
   for (const input of operands.inputs) mc.get(input.kind, input.reg);
   mc.code.gget(entry.slot).callIndirect(cx.sig(operands.inputs.map(input => input.kind), operands.output), cx.symbolicTable!);
