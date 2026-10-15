@@ -105,7 +105,9 @@ First response frame (the gate since 2026-10-13; not comparable with the rows ab
 
 On a profiled platform build with worker answers held through input (2026-10-14, three cold runs), Komikku launched
 in 5.8–6.4 s and its taps took 36–177 ms (per-tap medians of two three-run series: `next` 48–53, `start` 92–123,
-`more` 133–135, `settings` 104–107, `appearance` 129–150). An `--ecores` pass (about 6× slower) is in the history under
+`more` 133–135, `settings` 104–107, `appearance` 129–150). The gate by its criterion (median of three matched `--gpu` runs, current code, 2026-10-14): every tap passes cold and warm;
+the highest medians are Komikku `more` 128 ms cold and Calculator M `7` 95 ms cold, and warm medians are 8–73 ms. Single runs
+still miss: warm Komikku `next` at 307 ms (the dialog-aftermath race in the history) and cold `more` at 151 ms. An `--ecores` pass (about 6× slower) is in the history under
 "A slower device on the efficiency cores".
 
 Heavy-app launches wait for live content, so they vary with the network. Komikku's cold taps sit at the gate; they compile
