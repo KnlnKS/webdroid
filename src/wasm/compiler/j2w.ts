@@ -14,7 +14,7 @@ import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
 import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc";
-import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
+import { StructStrings, stringCtor } from "../link/strings";
 import { emitStoreCheck } from "../link/classes";
 import type { NativeBinder } from "../link/hostapi";
 
@@ -125,7 +125,7 @@ export class Compiler implements Base {
   private codes = new Map<string, Code | null>();
   /** the frame weight of the methods of this unit that count no depth, with everything they call (a leaf, or a method that calls only such methods) */
   bound = new Map<string, number>();
-  str: StringRepr;
+  str: StructStrings;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
   methodAnalyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();

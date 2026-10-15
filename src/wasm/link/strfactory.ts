@@ -6,21 +6,12 @@ import { T, ref } from "../compiler/wasmbin";
 import { kindOf } from "../compiler/program";
 import { parseMethodDesc } from "../../jvm/abi";
 import type { Compiler } from "../compiler/j2w";
+import type { StructStrings } from "./strings";
 
 const CHARSET = "java/nio/charset/Charset";
 
-interface CharsTarget {
-  /** a function (count) -> a new char array, for a count no larger than an existing array's */
-  newKnown(): number;
-  /** pushes the String made of the char array in local `out` */
-  finish(c: Code, out: number): void;
-  /** a function (String, String) -> boolean */
-  equals(): number;
-  literal(c: Code, text: string): void;
-}
-
 /** the factory for constructor `desc` when it decodes bytes, or undefined for another constructor; `host` is the production factory (or undefined) */
-export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: number | undefined): number | undefined {
+export function bytesFactory(cx: Compiler, t: StructStrings, desc: string, host: number | undefined): number | undefined {
   const { params } = parseMethodDesc(desc), chars = cx.tData.i16, bytes = cx.tData.i8;
   const hibyte = desc === "([BI)V" || desc === "([BIII)V", compact = desc === "([BB)V";
   const isCharset = desc.endsWith("Charset;)V"), named = isCharset || desc.startsWith("([B") && desc.endsWith("String;)V");
@@ -30,7 +21,7 @@ export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: n
   const offAt = desc === "([BIII)V" ? 2 : 1, countAt = offAt + 1, csAt = ranged ? 3 : 1;
   const c = new Code(params.length);
   const d = c.newLocal(ref(bytes)), from = c.newLocal(T.i32), n = c.newLocal(T.i32), i = c.newLocal(T.i32), acc = c.newLocal(T.i32), b = c.newLocal(T.i32), out = c.newLocal(ref(chars)), name = c.newLocal(T.anyref);
-  const done = () => { t.finish(c, out); return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`); };
+  const done = () => { c.lget(out).call(t.mk()); return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`); };
   const viaHost = () => { params.forEach((_, k) => c.lget(k)); c.call(host!).ret(); };
   const npe = () => { c.lget(0).refIsNull().if_(); if (compact) cx.callThrower(c, "npe"); else viaHost(); c.end(); };
   const outOfRange = () => c.lget(offAt).i32(0).raw(OP.i32_lt_s).lget(countAt).i32(0).raw(OP.i32_lt_s).raw(OP.i32_or).lget(offAt).lget(n).lget(countAt).raw(OP.i32_sub).raw(OP.i32_gt_s).raw(OP.i32_or);
@@ -51,7 +42,7 @@ export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: n
   if (compact) {
     // coder 0 holds a char per byte, coder 1 two, low byte first
     c.lget(1).if_().lget(n).i32(1).raw(OP.i32_shr_s).lset(n).end();
-    c.lget(n).call(t.newKnown()).lset(out);
+    c.lget(n).call(t.newCharsKnown()).lset(out);
     const byte = (index: () => void) => { c.lget(d); index(); c.arrayGetU(bytes); };
     c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1).lget(out).lget(i);
     c.lget(1).if_(T.i32);
@@ -64,7 +55,7 @@ export function bytesFactory(cx: Compiler, t: CharsTarget, desc: string, host: n
     outOfRange().if_(); viaHost(); c.end();
     c.lget(offAt).lset(from).lget(countAt).lset(n);
   }
-  c.lget(n).call(t.newKnown()).lset(out);
+  c.lget(n).call(t.newCharsKnown()).lset(out);
   // a hibyte constructor puts its byte (as a char) under the high byte; the others reject what is not ASCII after the loop
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
     .lget(d).lget(from).lget(i).raw(OP.i32_add).arrayGetU(bytes).lset(b);

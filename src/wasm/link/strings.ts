@@ -11,25 +11,6 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { bytesFactory } from "./strfactory";
 import { rt } from "../compiler/rtfns";
 
-export interface StringRepr {
-  /** imports the string builtins; before any function of the module is defined */
-  importBuiltins(): void;
-  /** pushes the String constant `s` */
-  literal(c: Code, s: string): void;
-  isString(cls: string): boolean;
-  /** leaves the vtable of the receiver on the stack (anyref in) of a call declared on `decl` */
-  vtab(c: Code, decl: string): void;
-  /** the representation has no instance fields: reading or writing one of String's is not translated */
-  noFields(decl: string, field: string): void;
-  /** the function making a String the way constructor `desc` does (its parameters in, the String out), or undefined */
-  factory(desc: string): number | undefined;
-  /** turns the String on the stack into the JS string a native takes (null stays null), and a JS string a native answers into a String */
-  toHost(c: Code): void;
-  fromHost(c: Code): void;
-  /** a module-local helper over references (vtab, acmp, shash), see Compiler.helper */
-  helper(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] | undefined;
-}
-
 /** a String constructor is never called: each call site makes the String with `factory` */
 export const stringCtor: Intrinsic = (cx, m, c) => { c.unreachable(); };
 
@@ -37,14 +18,16 @@ const STRING = "java/lang/String";
 /** field indices of the struct after the Object header (0, 1) */
 const CHARS = 2, HASH = 3, JS = 4;
 
-export class StructStrings implements StringRepr {
+export class StructStrings {
   private b = {} as { length: number; fromCharCodeArray: number; intoCharCodeArray: number };
   constructor(private cx: Compiler) {}
 
   isString(cls: string): boolean { return cls === STRING; }
+  /** the representation has no instance fields: reading or writing one of String's is not translated */
   noFields(decl: string, field: string): void {
     if (decl === STRING) throw new Error(`String.${field}: a field of the representation`);
   }
+  /** leaves the vtable of the receiver on the stack (anyref in) of a call declared on `decl` */
   vtab(c: Code, _decl: string): void { c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0); }
   /** a constant is made on first use and kept in a global of the module that uses it: the interned String of the JS string the engine imports as a constant */
   literal(c: Code, s: string): void {
@@ -73,9 +56,11 @@ export class StructStrings implements StringRepr {
       c.lget(0).call(this.toJs()).lget(0).externConvertAny().call(this.cx.imp.intern).anyConvertExtern();
     });
   }
+  /** turns the String on the stack into the JS string a native takes (null stays null), and a JS string a native answers into a String */
   toHost(c: Code): void { c.call(this.toJs()); }
   fromHost(c: Code): void { c.call(this.fromJs()); }
 
+  /** imports the string builtins; before any function of the module is defined */
   importBuiltins(): void {
     const { mb, tData } = this.cx, E = T.externref, I = T.i32, A = refNull(tData.i16);
     this.b.length = mb.importFunc("wasm:js-string", "length", { params: [E], results: [I] });
@@ -113,8 +98,6 @@ export class StructStrings implements StringRepr {
       c.lget(0).arrayNewDefault(this.chars);
     });
   }
-  newKnown(): number { return this.newCharsKnown(); }
-  finish(c: Code, out: number): void { c.lget(out).call(this.mk()); }
   /** mk(chars) -> String */
   mk(): number {
     return this.fn("mk", [ref(this.chars)], [ref(this.st)], (c) => {
@@ -195,6 +178,7 @@ export class StructStrings implements StringRepr {
     });
   }
 
+  /** a module-local helper over references (vtab, acmp, shash), see Compiler.helper */
   helper(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] | undefined {
     const A = T.anyref;
     switch (name) {
@@ -208,6 +192,7 @@ export class StructStrings implements StringRepr {
 
   // ---------- constructors
   private factories = new Map<string, number | undefined>();
+  /** the function making a String the way constructor `desc` does (its parameters in, the String out), or undefined */
   factory(desc: string): number | undefined {
     if (!this.factories.has(desc)) this.factories.set(desc, this.makeFactory(desc));
     return this.factories.get(desc);
@@ -267,29 +252,28 @@ export class StructStrings implements StringRepr {
 export const stringIntrinsics = new Map<string, Intrinsic>();
 {
   const def = (key: string, f: Intrinsic) => stringIntrinsics.set(`${STRING}.${key}`, f);
-  const S = (cx: Compiler) => cx.str as StructStrings;
 
-  def("length()I", (cx, m, c) => { S(cx).lenOf(c, 0); });
-  def("isEmpty()Z", (cx, m, c) => { S(cx).lenOf(c, 0).raw(OP.i32_eqz); });
-  def("hashCode()I", (cx, m, c) => { c.lget(0).call(S(cx).hash()); });
+  def("length()I", (cx, m, c) => { cx.str.lenOf(c, 0); });
+  def("isEmpty()Z", (cx, m, c) => { cx.str.lenOf(c, 0).raw(OP.i32_eqz); });
+  def("hashCode()I", (cx, m, c) => { c.lget(0).call(cx.str.hash()); });
   def("toString()Ljava/lang/String;", (cx, m, c) => { c.lget(0); });
   def("intern()Ljava/lang/String;", (cx, m, c) => { c.lget(0); cx.str.toHost(c); c.lget(0).externConvertAny().call(cx.imp.intern).anyConvertExtern(); });
   def("charAt(I)C", (cx, m, c) => {
-    c.lget(1); S(cx).lenOf(c, 0); c.raw(OP.i32_lt_u).if_(T.i32); S(cx).charsOf(c, 0).lget(1).arrayGetU(cx.tData.i16); c.else_(); cx.natives.call(cx, c, m); c.end();
+    c.lget(1); cx.str.lenOf(c, 0); c.raw(OP.i32_lt_u).if_(T.i32); cx.str.charsOf(c, 0).lget(1).arrayGetU(cx.tData.i16); c.else_(); cx.natives.call(cx, c, m); c.end();
   });
-  def("equals(Ljava/lang/Object;)Z", (cx, m, c) => { c.lget(0).lget(1).call(S(cx).equals()); });
+  def("equals(Ljava/lang/Object;)Z", (cx, m, c) => { c.lget(0).lget(1).call(cx.str.equals()); });
   const compare = (check: boolean): Intrinsic => (cx, m, c) => {
-    S(cx).npe(c, 1);
+    cx.str.npe(c, 1);
     if (check) {
       c.lget(1).refTest(cx.tStr).raw(OP.i32_eqz).if_()
         .lget(1).call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(STRING)); cx.callThrower(c, "cce"); c.end();
     }
-    c.lget(0).lget(1).call(S(cx).compare());
+    c.lget(0).lget(1).call(cx.str.compare());
   };
   def("compareTo(Ljava/lang/String;)I", compare(false));
   def("compareTo(Ljava/lang/Object;)I", compare(true));
   def("concat(Ljava/lang/String;)Ljava/lang/String;", (cx, m, c) => {
-    const s = S(cx), out = c.newLocal(ref(cx.tData.i16)), n = c.newLocal(T.i32);
+    const s = cx.str, out = c.newLocal(ref(cx.tData.i16)), n = c.newLocal(T.i32);
     s.npe(c, 1);
     s.lenOf(c, 1).raw(OP.i32_eqz).if_().lget(0).ret().end();
     s.lenOf(c, 0); s.lenOf(c, 1); c.raw(OP.i32_add).lset(n);
@@ -300,7 +284,7 @@ export const stringIntrinsics = new Map<string, Intrinsic>();
   });
   // substring: in range here, otherwise the production native raises its StringIndexOutOfBoundsException
   const sub = (to: (cx: Compiler, c: Code) => void): Intrinsic => (cx, m, c) => {
-    const s = S(cx);
+    const s = cx.str;
     c.lget(1).i32(0).raw(OP.i32_ge_s); to(cx, c); s.lenOf(c, 0).raw(OP.i32_le_s).raw(OP.i32_and);
     c.lget(1); to(cx, c); c.raw(OP.i32_le_s).raw(OP.i32_and);
     c.if_(T.anyref).lget(0).lget(1); to(cx, c); c.lget(1).raw(OP.i32_sub).call(s.sub()).else_(); cx.natives.call(cx, c, m); c.end();
@@ -308,10 +292,10 @@ export const stringIntrinsics = new Map<string, Intrinsic>();
   const end = (cx: Compiler, c: Code) => { c.lget(2); };
   def("substring(II)Ljava/lang/String;", sub(end));
   def("fastSubstring(II)Ljava/lang/String;", sub(end));
-  def("substring(I)Ljava/lang/String;", sub((cx, c) => { S(cx).lenOf(c, 0); }));
+  def("substring(I)Ljava/lang/String;", sub((cx, c) => { cx.str.lenOf(c, 0); }));
   // the compact-string internals libcore's builders use: each char to a byte (coder 0) or two, low byte first (coder 1), from byte index `at`
   const fill = (width: 1 | 2): Intrinsic => (cx, m, c) => {
-    const s = S(cx), d = c.newLocal(ref(cx.tData.i8)), a = c.newLocal(ref(cx.tData.i16)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), ch = c.newLocal(T.i32);
+    const s = cx.str, d = c.newLocal(ref(cx.tData.i8)), a = c.newLocal(ref(cx.tData.i16)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), ch = c.newLocal(T.i32);
     s.npe(c, 1);
     c.lget(1).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2).lset(d);
     s.charsOf(c, 0).lset(a); c.lget(a).arrayLen().lset(n);
@@ -327,19 +311,19 @@ export const stringIntrinsics = new Map<string, Intrinsic>();
   def("fillBytesLatin1([BI)V", fill(1));
   def("fillBytesUTF16([BI)V", fill(2));
   def("getCharsNoCheck(II[CI)V", (cx, m, c) => {
-    const s = S(cx);
+    const s = cx.str;
     s.npe(c, 3);
     c.lget(3).refCast(cx.tArr.i16).structGet(cx.tArr.i16, 2).lget(4); s.charsOf(c, 0).lget(1).lget(2).lget(1).raw(OP.i32_sub).arrayCopy(cx.tData.i16, cx.tData.i16);
   });
   def("toCharArray()[C", (cx, m, c) => {
-    const s = S(cx), t = cx.tArr.i16, a = c.newLocal(ref(cx.tData.i16));
+    const s = cx.str, t = cx.tArr.i16, a = c.newLocal(ref(cx.tData.i16));
     s.lenOf(c, 0).call(s.newCharsKnown()).lset(a);
     c.lget(a).i32(0); s.charsOf(c, 0).i32(0); s.lenOf(c, 0); c.arrayCopy(cx.tData.i16, cx.tData.i16);
     c.gget(cx.vtGlobal("[C")).refAsNonNull().i64(0n).lget(a).structNew(t);
   });
   // 1 when some char does not fit a byte
   def("coder()B", (cx, m, c) => {
-    const s = S(cx), a = c.newLocal(ref(cx.tData.i16)), i = c.newLocal(T.i32), n = c.newLocal(T.i32);
+    const s = cx.str, a = c.newLocal(ref(cx.tData.i16)), i = c.newLocal(T.i32), n = c.newLocal(T.i32);
     s.charsOf(c, 0).lset(a); c.lget(a).arrayLen().lset(n);
     c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
       .lget(a).lget(i).arrayGetU(cx.tData.i16).i32(0xff).raw(OP.i32_gt_u).if_().i32(1).ret().end()
@@ -350,7 +334,7 @@ export const stringIntrinsics = new Map<string, Intrinsic>();
 // AbstractStringBuilder.putStringAt(index, str): str's chars into value at index, as one pass instead of coder() and getBytes; a char
 // that does not fit a byte makes the builder UTF-16 first (inflate), then every char of str is written as two bytes, low byte first
 stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/String;)V", (cx, m, c) => {
-  const s = cx.str as StructStrings, ASB = "java/lang/AbstractStringBuilder", st = cx.structFor(ASB), field = (name: string, desc: string) => cx.fieldIndex(ASB, { owner: ASB, name, desc });
+  const s = cx.str, ASB = "java/lang/AbstractStringBuilder", st = cx.structFor(ASB), field = (name: string, desc: string) => cx.fieldIndex(ASB, { owner: ASB, name, desc });
   const VALUE = field("value", "[B"), CODER = field("coder", "B"), inflate = cx.prog.resolve(ASB, "inflate", "()V");
   if (!inflate) { cx.gap(c, "AbstractStringBuilder.inflate"); return; }
   const a = c.newLocal(ref(cx.tData.i16)), d = c.newLocal(refNull(cx.tData.i8)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), ch = c.newLocal(T.i32);
@@ -378,7 +362,7 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
 {
   const def = (key: string, f: Intrinsic) => stringIntrinsics.set(key, f);
   const toStr = (wide: boolean): Intrinsic => (cx, m, c) => {
-    const s = cx.str as StructStrings, W = wide ? T.i64 : T.i32, u = c.newLocal(W), len = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), out = c.newLocal(ref(cx.tData.i16)), t = c.newLocal(W);
+    const s = cx.str, W = wide ? T.i64 : T.i32, u = c.newLocal(W), len = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), out = c.newLocal(ref(cx.tData.i16)), t = c.newLocal(W);
     const k = (n: number) => (wide ? c.i64(BigInt(n)) : c.i32(n));
     const op = (i32op: number, i64op: number) => c.raw(wide ? i64op : i32op);
     const divU = () => op(0x6e, 0x80), remU = () => op(0x70, 0x82);
@@ -397,7 +381,7 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
   def("java/lang/Integer.toString(I)Ljava/lang/String;", toStr(false));
   def("java/lang/Long.toString(J)Ljava/lang/String;", toStr(true));
   const parse = (wide: boolean): Intrinsic => (cx, m, c) => {
-    const s = cx.str as StructStrings, ci = cx.tData.i16, a = c.newLocal(ref(ci)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), d = c.newLocal(T.i32), acc = c.newLocal(wide ? T.i64 : T.i32);
+    const s = cx.str, ci = cx.tData.i16, a = c.newLocal(ref(ci)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), d = c.newLocal(T.i32), acc = c.newLocal(wide ? T.i64 : T.i32);
     const owner = wide ? "java/lang/Long" : "java/lang/Integer", slow = cx.prog.resolve(owner, wide ? "parseLong" : "parseInt", `(Ljava/lang/String;I)${wide ? "J" : "I"}`);
     if (!slow) { cx.gap(c, owner + ".parse"); return; }
     const max = wide ? 18 : 9, fallback = () => { c.lget(0).i32(10); cx.callMethod(c, slow); c.ret(); };
@@ -421,4 +405,4 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
 }
 
 // strLit(js): the interned String of a JS string, for the class modules, which have no code of their own to make one
-rt("strLit", ["L"], "L", (cx, c) => { const s = cx.str as StructStrings; c.lget(0).externConvertAny().call(s.fromJs()).call(s.intern()); });
+rt("strLit", ["L"], "L", (cx, c) => { const s = cx.str; c.lget(0).externConvertAny().call(s.fromJs()).call(s.intern()); });
