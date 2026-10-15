@@ -113,9 +113,8 @@ export class Cha {
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
       if (packageMethod) return [];
-      const methodKey = mkey(name, desc);
-      for (const cls of this.declaring(methodKey)) {
-        const m = declaredMethod(this.prog.get(cls), methodKey)!;
+      for (const cls of this.declaring(key)) {
+        const m = declaredMethod(this.prog.get(cls), key)!;
         const reaches = this.reaches(decl, m);
         if (reaches === "conflict") { memo.set(key, out = []); return out; }
         if (reaches && found.add(m).size >= 2) break;

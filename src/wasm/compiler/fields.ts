@@ -95,7 +95,7 @@ rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
 // fbox(letter, bits) -> the wrapper object of a primitive: valueOf of its class
 rt("fbox", ["I", "J"], "L", (cx, c) => {
   for (const l of LETTERS) {
-    const [cls, , ] = BOX[l], vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
+    const cls = BOX[l][0], vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
     c.lget(0).i32(code(l)).raw(OP.i32_eq).if_();
     if (!vo) cx.gap(c, `${cls}.valueOf`); else { cx.emitEnsure(c, cls); c.lget(1); if (kindOfLetter(l) === "I") c.raw(OP.i32_wrap_i64); cx.callMethod(c, vo); c.ret(); }
     c.end();

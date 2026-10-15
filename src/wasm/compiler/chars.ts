@@ -1,7 +1,7 @@
 // The java.lang.Character natives, as java_lang_Character.cpp answers them with ICU4C: the ASCII range of the predicates text loops call inline,
 // every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, which reads the ICU property data through its own
 // loaders. jicu.ts answers the natives this does not.
-import { OP } from "./code";
+import { OP, type Code } from "./code";
 import { T } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
 import { mid } from "./ids";
@@ -10,7 +10,7 @@ import { f64bits } from "./consts";
 export const charIntrinsics = new Map<string, Intrinsic>();
 const UCHARACTER = "android/icu/lang/UCharacter";
 {
-  type Emit = (cx: Compiler, c: import("./code").Code) => void;
+  type Emit = (cx: Compiler, c: Code) => void;
   /** `UCharacter.name`(desc) over the native's own parameters */
   const icu = (name: string, desc: string, ...extra: number[]): Intrinsic => (cx, m, c) => {
     const target = cx.prog.resolve(UCHARACTER, name, desc);
@@ -22,7 +22,7 @@ const UCHARACTER = "android/icu/lang/UCharacter";
     c.lget(0).i32(128).raw(OP.i32_lt_u).if_(ret); body(cx, c); c.else_(); icu(name, desc)(cx, m, c); c.end();
   });
   // c - base <u n
-  const within = (c: import("./code").Code, base: number, n: number) => c.lget(0).i32(base).raw(OP.i32_sub).i32(n).raw(OP.i32_lt_u);
+  const within = (c: Code, base: number, n: number) => c.lget(0).i32(base).raw(OP.i32_sub).i32(n).raw(OP.i32_lt_u);
   const digit: Emit = (cx, c) => { within(c, 48, 10); };
   const upper: Emit = (cx, c) => { within(c, 65, 26); };
   const lower: Emit = (cx, c) => { within(c, 97, 26); };

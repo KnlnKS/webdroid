@@ -23,7 +23,7 @@ const ARITH = { Add: [OP.i32_add, OP.i64_add], BitwiseAnd: [OP.i32_and, OP.i64_a
 
 /** where a handle's variable lives, as struct or array operations on locals */
 export interface Place { load(): void; store(v: number): void; /** brings the int on the stack into the range of a byte, short or char variable */ narrow?(): void }
-const narrowTo = (c: import("./code").Code, letter: string) => { if (letter === "B") c.raw(OP.i32_extend8_s); else if (letter === "S") c.raw(OP.i32_extend16_s); else if (letter === "C") c.i32(0xffff).raw(OP.i32_and); };
+const narrowTo = (c: Code, letter: string) => { if (letter === "B") c.raw(OP.i32_extend8_s); else if (letter === "S") c.raw(OP.i32_extend16_s); else if (letter === "C") c.i32(0xffff).raw(OP.i32_and); };
 
 /** Read-modify-write operations stay synchronous between their load and store. */
 export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type: string, p: Place, vals: number[]): void {
@@ -119,11 +119,11 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
 }
 
 /** Canonical storage operations shared by DEX polymorphic sites and MethodHandle VarHandle invokers. */
-export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params: string[], ret: string, handle: () => void, read: (kind: Kind, index: number) => void, onGap = (why: string) => cx.gap(c, `${VH}.${mode}: ${why}`)): Kind | null | undefined {
+export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params: string[], ret: string, handle: () => void, read: (kind: Kind, index: number) => void): Kind | null | undefined {
   const nv = varHandleValues(mode)!;
   const coords = params.slice(0, params.length - nv), valueTypes = params.slice(params.length - nv), op = opOf(mode);
   const vf = family(nv ? valueTypes[0] : ret), K = kindOf(nv ? valueTypes[0] : ret);
-  const gap = (why: string) => { onGap(why); return undefined; };
+  const gap = (why: string) => { cx.gap(c, `${VH}.${mode}: ${why}`); return undefined; };
   if ((vf === "F" || vf === "D") && op.startsWith("getAnd") && op !== "getAndSet" && op !== "getAndAdd") return gap("arithmetic on a floating-point variable");
   if (valueTypes.some((t) => family(t) !== vf) || (op === "get" || op === "cae" || op.startsWith("getAnd")) && ret !== "V" && family(ret) !== vf) return gap("value type needs boxing");
   const instance = coords.length === 1 && coords[0][0] === "L", array = coords.length === 2 && coords[0][0] === "[" && family(coords[1]) === "I", stat = coords.length === 0;
@@ -158,6 +158,11 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
   } else {
     if (!cx.prog.get(FVH)?.dex) return gap("FieldVarHandle is not in the program");
     const R = stat ? "" : descToName(coords[0]), fvh = cx.structFor(FVH);
+    /** the field id of the FieldVarHandle in local `vh`, into local `fid` */
+    const fieldId = (vh: number, fid: number) => {
+      c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
+      c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
+    };
     const cands: { cn: string; fid: number; fi: number; letter: string }[] = [];
     for (const cn of stat ? [] : cx.prog.chain(R)) {
       const jc = cx.prog.get(cn);
@@ -169,8 +174,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32);
       nonNull(handle); c.lset(vh); nonNull(() => read("L", 0)); c.lset(recv);
       const vals = readValues();
-      c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
-      c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
+      fieldId(vh, fid);
       c.block(bt);
       for (const cand of cands) {
         const st = cx.structFor(cand.cn), r = c.newLocal(refNull(st));
@@ -185,8 +189,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       nonNull(handle); c.lset(vh);
       if (!stat) { nonNull(() => read("L", 0)); c.lset(recv); }
       const vals = readValues();
-      c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
-      c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
+      fieldId(vh, fid);
       const owner = () => c.lget(fid).i32(12).raw(OP.i32_shr_u), index = () => c.lget(fid).i32(0xfff).raw(OP.i32_and);
       if (stat) { cx.info(c, Info.EnsureSlot, owner); c.callIndirect(cx.sig([], "V")); }
       else {
