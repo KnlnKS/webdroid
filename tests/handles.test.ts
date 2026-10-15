@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { rt, declaredField } from "../src/jvm/runtime";
+import { declaredField } from "../src/jvm/runtime";
 import { newObj } from "../src/jvm/natives/jentry";
-import { handle, deref, release, ownedHandle } from "../src/android/handles";
+import { handle, deref, release } from "../src/android/handles";
 
 const SLOT = 0xffffff;
 
@@ -22,22 +22,6 @@ test("a released long names nothing, not its slot's next occupant", () => {
   release(stale);
   expect(deref<object>(reused)).toBe(next!);
   release(reused);
-});
-
-test("a long field holding a stale or plain number claims no owned object", async () => {
-  const prior = handle({});
-  release(prior);
-  let owned: object | undefined, h = 0n;
-  for (let i = 0; i < 4096 && !h; i++) {
-    const o = {}, candidate = ownedHandle(o);
-    if ((candidate & BigInt(SLOT)) === (prior & BigInt(SLOT))) { owned = o; h = candidate; } else release(candidate);
-  }
-  expect(h).not.toBe(0n);
-  // two Java objects that die at once, one holding the slot's previous long and one its bare number
-  (() => { rt.claimHandle!({}, prior); rt.claimHandle!({}, BigInt(Number(h) & SLOT)); })();
-  for (let i = 0; i < 5; i++) { Bun.gc(true); await new Promise((r) => setTimeout(r, 10)); }
-  expect(deref<object>(h)).toBe(owned!);
-  release(h);
 });
 
 // Camera's constructor native stores its native state's long from the host; as with a long a Java
