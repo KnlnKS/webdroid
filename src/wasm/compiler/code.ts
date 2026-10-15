@@ -74,15 +74,12 @@ export class Code {
   throw_(tag: number): this { this.mark(); this.b.push(0x08); uleb(tag, this.b); return this; }
   throwRef(): this { this.b.push(0x0a); return this; }
   /** try_table with catch clauses [kind, tag, label] ; kind 0 catch,1 catch_ref,2 catch_all,3 catch_all_ref */
-  tryTable(bt: number | VT | null, catches: [number, number, number][]): this {
-    this.b.push(0x1f); this.bt(bt); uleb(catches.length, this.b);
-    for (const [k, tag, lab] of catches) { this.b.push(k); if (k < 2) uleb(tag, this.b); uleb(lab, this.b); }
-    return this;
-  }
+  tryTable(bt: number | VT | null, catches: [number, number, number][]): this { this.b.push(0x1f); this.bt(bt); return this.catches(catches); }
   /** a block, and a try_table, whose type is the function type index `type` (the operands it takes and the results it leaves) */
   blockType(type: number): this { this.b.push(0x02); sleb(type, this.b); return this; }
-  tryTableType(type: number, catches: [number, number, number][]): this {
-    this.b.push(0x1f); sleb(type, this.b); uleb(catches.length, this.b);
+  tryTableType(type: number, catches: [number, number, number][]): this { this.b.push(0x1f); sleb(type, this.b); return this.catches(catches); }
+  private catches(catches: [number, number, number][]): this {
+    uleb(catches.length, this.b);
     for (const [k, tag, lab] of catches) { this.b.push(k); if (k < 2) uleb(tag, this.b); uleb(lab, this.b); }
     return this;
   }
