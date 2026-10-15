@@ -48,7 +48,7 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   let calls = 0, available = true;
   const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:async()=>{},
     activity:async (_entry,request)=>{expect(request.kind).toBe("back");calls++;
-      if(calls===1){entered.resolve();await first.promise;} else if(calls===2)throw new Error("owner back failure");}});
+      if(calls===1){entered.resolve();await first.promise;} else if(calls===2)throw new Error("owner back failure");}},false);
   stack.setForeground(entry.pid);
   expect(stack.back(entry.pid)).toBeNull();
   let done=false;
@@ -74,7 +74,7 @@ test("a physical rotation reaches the process whose activity fills the display, 
     rotate:async(entry)=>{await turned.promise;followed.push(entry.landscape!);},
     activity:async(_entry,request)=>{requests.push(request);
       // the app's own display turns, and it reports that before it answers
-      if(request.kind==="rotate")stack.orientation(app.pid,request.landscape);}});
+      if(request.kind==="rotate")stack.orientation(app.pid,request.landscape);}},false);
   stack.setForeground(app.pid);
   expect(stack.rotate(app.pid,true)).toBeNull();
   let done=false;
@@ -84,4 +84,55 @@ test("a physical rotation reaches the process whose activity fills the display, 
   expect(done).toBe(false);
   turned.resolve();await rotated;
   expect(followed).toEqual([true]);
+});
+
+test("a process that comes to fill the display resolves the last physical rotation against its own request", async () => {
+  const { ActivityStack } = await import("../src/shell/activitystack");
+  type Entry = import("../src/shell/processes").Entry;
+  // the page's process, an app with an unspecified request and one fixed to portrait
+  const page = {pid:1000,translucent:false} as Entry, app = {pid:1001,translucent:false,landscape:false} as Entry,
+    fixed = {pid:1002,translucent:false,landscape:false} as Entry;
+  const entries = new Map([page,app,fixed].map(entry => [entry.pid,entry]));
+  const rotations: [number,boolean][] = [], followed: [number,boolean][] = [];
+  // the page's main loop, busy until the end: nothing in the queue may wait on it
+  const pageMain = Promise.withResolvers<void>();
+  const stack: InstanceType<typeof ActivityStack> = new ActivityStack({entry:pid=>entries.get(pid)!,alive:()=>true,entries:()=>entries.values(),
+    connect:()=>{throw new Error("no launches");},
+    rotate:async entry=>{if(entry.landscape!==undefined)followed.push([entry.pid,entry.landscape]);},
+    activity:async(entry,request)=>{
+      if(request.kind!=="rotate")return;
+      rotations.push([entry.pid,request.landscape]);
+      if(entry===page)return pageMain.promise;
+      // the unspecified request takes the sensor's rotation and reports the turn; the fixed one keeps its own
+      if(entry===app&&app.landscape!==request.landscape)stack.orientation(app.pid,request.landscape);
+    }},false);
+  stack.setForeground(app.pid);
+  await stack.bringToFront(fixed.pid);
+  expect(rotations).toEqual([[fixed.pid,false]]);
+  // rotated while the fixed activity fills the display, which keeps portrait
+  await stack.rotate(page.pid,true);
+  expect(rotations.at(-1)).toEqual([fixed.pid,true]);
+  expect(followed.at(-1)).toEqual([fixed.pid,false]);
+  // the other app comes back to the display and takes the sensor's landscape; the display follows
+  await stack.bringToFront(app.pid);
+  expect(rotations.at(-1)).toEqual([app.pid,true]);
+  expect(app.landscape).toBe(true);
+  expect(followed.at(-1)).toEqual([app.pid,true]);
+  // the fixed activity keeps portrait when it fills the display again
+  await stack.bringToFront(fixed.pid);
+  expect(rotations.at(-1)).toEqual([fixed.pid,true]);
+  expect(followed.at(-1)).toEqual([fixed.pid,false]);
+  // the page's own process resolves it too, and the queue goes on while its main loop is busy
+  await stack.bringToFront(page.pid);
+  expect(rotations.at(-1)).toEqual([page.pid,true]);
+  // a rotation of the page's own display is sensor state as well
+  expect(stack.rotate(page.pid,false)).toBeNull();
+  await stack.bringToFront(app.pid);
+  expect(rotations.at(-1)).toEqual([app.pid,false]);
+  expect(followed.at(-1)).toEqual([app.pid,false]);
+  // the same process showing again is no change of owner
+  const count = rotations.length;
+  await stack.bringToFront(app.pid);
+  expect(rotations.length).toBe(count);
+  pageMain.resolve();
 });

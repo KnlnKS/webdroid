@@ -16,7 +16,8 @@ export type StackPort = {
   entries(): Iterable<Entry>;
   connect(pkg: string, process: string): Entry;
   activity(entry: Entry, request: ActivityRequest): Promise<void>;
-  /** turns the display for the process whose activity sets its orientation */
+  /** turns the display to the orientation of the process whose activity sets it; the page's own
+   *  process turns the display itself */
   rotate(entry: Entry): Promise<void>;
 };
 
@@ -30,7 +31,10 @@ export class ActivityStack {
   private layers: number[] = [];
   /** the display turning for the last orientation the process that fills it reported */
   private following: Promise<void> = Promise.resolve();
-  constructor(private port: StackPort) {}
+  /** `sensor`: the physical rotation, landscape or not. Like the proposed rotation DisplayRotation
+   *  reads from the orientation sensor, it is device-wide state, not an event: it starts as the
+   *  screen is configured, and each rotation sets it. */
+  constructor(private port: StackPort, private sensor: boolean) {}
 
   get foreground(): number { return this.top; }
   shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
@@ -49,17 +53,21 @@ export class ActivityStack {
     if (pid === this.layers[0]) this.following = this.port.rotate(entry);
   }
   /**
-   * A physical rotation goes to the process whose activity fills the display, as DisplayRotation
-   * resolves the sensor's rotation against the orientation that activity requested; null when
-   * that is the caller's own. Its process turns or keeps its display, and the display follows the
-   * turn it reports. Like DisplayRotation, which defers a rotation while a transition runs, it
-   * waits for the activity changes before it.
+   * A physical rotation sets the sensor's state and goes to the process whose activity fills the
+   * display, as DisplayRotation resolves the sensor's rotation against the orientation that
+   * activity requested; null when that is the caller's own. Its process turns or keeps its display,
+   * and the display follows the turn it reports. Like DisplayRotation, which defers a rotation while
+   * a transition runs, it waits for the activity changes before it, and then sends the state as it
+   * is: a process that came to fill the display meanwhile resolved it as it did (show).
    */
   rotate(caller: number, landscape: boolean): Promise<void> | null {
+    this.sensor = landscape;
     const owner = this.layers[0];
     if (!owner || owner === caller || !this.port.alive(owner)) return null;
     return this.enqueue(async () => {
-      await this.port.activity(this.port.entry(this.layers[0]), { kind: "rotate", landscape });
+      const owner = this.layers[0];
+      if (owner === caller || !this.port.alive(owner)) return;
+      await this.port.activity(this.port.entry(owner), { kind: "rotate", landscape: this.sensor });
       await this.following;
     });
   }
@@ -150,6 +158,7 @@ export class ActivityStack {
   }
   private async show(pid: number): Promise<void> {
     this.top = pid;
+    const owner = this.layers[0];
     const visible = new Set<number>();
     let current = pid, index = this.activities.length;
     while (this.port.alive(current) && !visible.has(current)) {
@@ -175,7 +184,17 @@ export class ActivityStack {
       surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";
     }
     // DisplayRotation takes the orientation from the top activity that fills the display: a
-    // translucent one leaves it to the one beneath, the bottom of the shown layers
-    if (layers.length) void this.port.rotate(this.port.entry(layers[0]));
+    // translucent one leaves it to the one beneath, the bottom of the shown layers. The display
+    // follows the orientation that process has; one that comes to fill it resolves the sensor's
+    // rotation against its own request, as updateOrientation does when the orientation source
+    // changes, and the display follows the turn it reports. That is not awaited, so the queue never
+    // waits on the page's main loop, which may itself be waiting on a Worker.
+    if (!layers.length) return;
+    const entry = this.port.entry(layers[0]);
+    void this.port.rotate(entry);
+    if (layers[0] !== owner) {
+      this.port.activity(entry, { kind: "rotate", landscape: this.sensor })
+        .catch((error) => { if (!entry.dead) console.error("[activity process]", error); });
+    }
   }
 }

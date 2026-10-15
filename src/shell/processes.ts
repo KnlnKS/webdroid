@@ -137,7 +137,7 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
   /** a Worker's display orientation: the screen it started on, then each turn it reports; the
-   *  page's process has none, as device.ts keeps the page's own */
+   *  page's process has none, as its display is the page's own */
   landscape?: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
@@ -254,8 +254,8 @@ export class ProcessBroker {
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
-    rotate: (entry) => import("./device").then(({ followDisplay }) => followDisplay(entry.landscape)),
-  });
+    rotate: async (entry) => { if (entry.landscape !== undefined) await (await import("./device")).followDisplay(entry.landscape); },
+  }, device.orientation === 2);
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
       const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
