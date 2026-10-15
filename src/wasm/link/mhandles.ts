@@ -7,7 +7,8 @@
 import { T } from "../compiler/wasmbin";
 import { ACC, javaName, kindOf, type Program } from "../compiler/program";
 import { isWide, descToName, parseMethodDesc } from "../../jvm/abi";
-import { hostReflect, RInfo, BOX } from "./reflect";
+import { hostReflect, RInfo } from "./reflect";
+import { BOX } from "../compiler/fields";
 import { prettyType } from "../compiler/linkage";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";

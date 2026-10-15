@@ -7,7 +7,7 @@
 import { OP } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
 import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program";
-import { BOX } from "./reflect";
+import { BOX } from "../compiler/fields";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Code } from "../compiler/code";

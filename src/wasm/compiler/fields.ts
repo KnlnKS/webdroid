@@ -15,7 +15,7 @@ const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/Accessi
 /** the field letters a value of each type may be assigned to, which is also what a get of each may be read as */
 export const WIDEN: Record<string, string> = { Z: "Z", B: "BSIJFD", C: "CIJFD", S: "SIJFD", I: "IJFD", J: "JFD", F: "FD", D: "D" };
 const LETTERS = Object.keys(WIDEN);
-const BOX: Record<string, [string, string, string]> = {
+export const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
   S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
   F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],

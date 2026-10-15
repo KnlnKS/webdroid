@@ -10,7 +10,7 @@ import { descToName } from "../../jvm/abi";
 import { H } from "../compiler/consts";
 import { emitString, idOfClass, classMethod, typeName, vtId } from "./classes";
 import { UInfo } from "./unsafe";
-import { WIDEN } from "../compiler/fields";
+import { WIDEN, BOX } from "../compiler/fields";
 import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
@@ -21,11 +21,6 @@ const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
 export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, SerialInit, MethodSlot }
-export const BOX: Record<string, [string, string, string]> = {
-  Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
-  S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
-  F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
-};
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
 function members(jc: JClass | undefined): string[] {

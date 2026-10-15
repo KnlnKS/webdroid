@@ -1,6 +1,5 @@
 // ART interpreter_common.cc DoResolveCallSite: cache successes, allow bootstrap races, and use the first published candidate.
-import { WIDEN } from "../compiler/fields";
-import { BOX } from "./reflect";
+import { WIDEN, BOX } from "../compiler/fields";
 import type { Program } from "../compiler/program";
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";

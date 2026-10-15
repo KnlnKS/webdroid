@@ -4,7 +4,8 @@
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
 import { javaName, type JClass } from "../compiler/program";
 import { idOfClass, fieldId, typeName } from "./classes";
-import { BOX, executableSlot, methodAt } from "./reflect";
+import { executableSlot, methodAt } from "./reflect";
+import { BOX } from "../compiler/fields";
 import { VIEWS } from "../compiler/copy";
 import type { EncAnnotation, EncVal } from "../../jvm/dex";
 import type { Code } from "../compiler/code";

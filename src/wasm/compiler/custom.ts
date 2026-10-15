@@ -4,7 +4,7 @@ import { isWide, descToName } from "../../jvm/abi";
 import { kindOf } from "./program";
 import { mid } from "./ids";
 import { box, unbox, emitInvokeImport } from "../link/mhandles";
-import { BOX } from "../link/reflect";
+import { BOX } from "./fields";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import type { MC } from "./method";
 
