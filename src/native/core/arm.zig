@@ -358,20 +358,38 @@ fn neonPermute(c: *Cpu, w: u32, pc: u32) Status {
     return .next;
 }
 
+/// The three-registers-of-different-lengths operation a long form computes: its own, or for a
+/// by-scalar form (bit 6) the one it multiplies as (VMLAL, VQDMLAL, VMLSL, VQDMLSL, VMULL, VQDMULL).
+pub fn neonLongOp(w: u32) u32 {
+    return if (w & 0x40 != 0) 8 + (bits(w, 10, 2) << 1) + bits(w, 8, 1) else bits(w, 8, 4);
+}
+
+/// The by-scalar forms' Dm[x], in every lane of v18.
+fn splatScalar(c: *Cpu, w: u32, size: u32) void {
+    if (size == 1) {
+        const lane = @as([*]u16, @ptrCast(vreg(u64, c, bits(w, 0, 3))))[(bits(w, 5, 1) << 1) | bits(w, 3, 1)];
+        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(lane);
+    } else {
+        const lane = @as([*]u32, @ptrCast(vreg(u64, c, bits(w, 0, 4))))[bits(w, 5, 1)];
+        @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(lane);
+    }
+}
+
 fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
-    const op = bits(w, 8, 4);
+    const scalar = w & 0x40 != 0;
+    const op = neonLongOp(w);
     const size = bits(w, 20, 2);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const narrow = op == 4 or op == 6;
-    if (size == 3 or (if (narrow) (n | m) else d) & 1 != 0) return fault(c, .undefined, w, pc);
+    if (size == 3 or (scalar and size == 0) or (if (narrow) (n | m) else d) & 1 != 0) return fault(c, .undefined, w, pc);
     if (!narrow and op != 8 and op != 10 and op != 12) return fault(c, .unimplemented, w, pc);
     const count: usize = if (narrow) 8 else 16;
     const read_count: usize = if (narrow) 16 else 8;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
     @memcpy(c.v[17][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..read_count]);
-    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
+    if (scalar) splatScalar(c, w, size) else @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
     const result = simd.exec(c, 0x0e200000 | (bits(w, 24, 1) << 29) | (size << 22) | (op << 12) | (18 << 16) | (17 << 5) | 16);
     if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
     return result;
@@ -379,13 +397,14 @@ fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
 
 fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const scalar = w & 0xfe800050 == 0xf2800040 and bits(w, 20, 2) != 3;
+    const op = bits(w, 8, 4);
+    if (scalar and op & 2 != 0 and op < 12) return neonLong(c, w, pc);
     const size = bits(w, 20, 2);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
     const m = if (scalar) bits(w, 0, if (size == 1) @as(u32, 3) else 4) else (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = if (scalar) bits(w, 24, 1) else bits(w, 6, 1);
     if (q != 0 and (d | n | (if (scalar) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
-    const op = bits(w, 8, 4);
     const extract = w & 0xffb00010 == 0xf2b00000;
     if (extract and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
     const b = bits(w, 4, 1);
@@ -441,13 +460,7 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const count: usize = if (q != 0) 16 else 8;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
     @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) m else n)))[0..count]);
-    if (scalar and size == 1) {
-        const lane = @as([*]u16, @ptrCast(vreg(u64, c, m)))[(bits(w, 5, 1) << 1) | bits(w, 3, 1)];
-        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(lane);
-    } else if (scalar) {
-        const lane = @as([*]u32, @ptrCast(vreg(u64, c, m)))[bits(w, 5, 1)];
-        @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(lane);
-    } else @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) n else m)))[0..count]);
+    if (scalar) splatScalar(c, w, size) else @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) n else m)))[0..count]);
     if (accumulate) {
         // A32 VMLA/VMLS round the product before adding; A64 FMLA is fused.
         const multiplied = simd.exec(c, 0x2e20dc00 | (q << 30) | (18 << 16) | (17 << 5) | 19);
