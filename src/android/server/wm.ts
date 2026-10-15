@@ -2,14 +2,14 @@
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
 import { awaited, rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callOn, newObj, vcall, scall, JThread } from "../../jvm/natives/jentry";
+import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
 import { uptimeMillis } from "../../guest-clock";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
 import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
 import { javaConfiguration } from "../resources";
-import { deviceConfiguration } from "../resnative";
+import { deviceConfiguration, systemResource } from "../resnative";
 import { edges } from "../graphics";
 
 const VISIBLE = 0;
@@ -78,21 +78,25 @@ const rect = (l: number, t: number, r: number, b: number) => newObj("android/gra
 const displayRect = () => rect(0, 0, device.width, device.height);
 const insetsType = (name: string): number | Promise<number> => scall("android/view/WindowInsets$Type", name, "()I");
 
+/** SystemUI's NavigationBar: its bar suppresses the scrim behind it unless config_navBarNeedsScrim asks for one */
+let navBarFlags: number | undefined;
 /** the display's insets: the status bar (when the profile has one) and the gesture navigation bar */
 function* insetsState(): Gen<JObj> {
   const state = yield newObj("android/view/InsetsState", "()V");
   yield vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", yield displayRect());
   const { width: w, height: h, statusBar, navBar } = device;
-  const add = function* (index: number, type: number, l: number, t: number, r: number, b: number, visible = true): Gen<void> {
+  const add = function* (index: number, type: number, l: number, t: number, r: number, b: number, visible = true, flags = 0): Gen<void> {
     const id = yield scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
     const source = yield newObj("android/view/InsetsSource", "(II)V", id, type);
     yield vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
     yield vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
+    if (flags) yield vcall(source, "setFlags", "(I)Landroid/view/InsetsSource;", flags);
     yield vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
   };
   if (statusBar) yield* add(0, yield* awaited(insetsType("statusBars")), 0, 0, w, statusBar);
   if (navBar) {
-    yield* add(0, yield* awaited(insetsType("navigationBars")), 0, h - navBar, w, h);
+    navBarFlags ??= (yield systemResource("bool", "config_navBarNeedsScrim", "getBoolean", "(I)Z")) ? 0 : yield staticField("android/view/InsetsSource", "FLAG_SUPPRESS_SCRIM");
+    yield* add(0, yield* awaited(insetsType("navigationBars")), 0, h - navBar, w, h, true, navBarFlags);
     yield* add(1, yield* awaited(insetsType("mandatorySystemGestures")), 0, h - navBar, w, h);
   }
   // the input method's window: the browser keyboard, which the page lays out outside the display
