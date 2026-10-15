@@ -222,8 +222,8 @@ const BLK = 4096n;
 export const uuidDefault = once(() => uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69"));
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
 export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
-/** a path's file stat, null for a directory; ENOENT for neither */
-const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
+/** `then` once `path` exists in the realm that owns it (an app's private storage lives in the system realm), else `fn`'s ErrnoException */
+const existing = <T>(fn: string, path: string, then: (st: PathStat) => T) => after(pathReply(path), ({ errno: e, value }) => { if (!value) throw errno(fn, e); return then(value); });
 /** libcore's StructTimespec for a time in milliseconds */
 function timespec(ms: number): JObj {
   const t = rt.make("android/system/StructTimespec") as Record<string, bigint>;
@@ -389,15 +389,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       (({ domainname: _, ...fields }) => fields)(uname(is64BitProcess()))),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
-    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
-      const remote = remoteFilePath(path);
-      if (remote) return after(remote.fileStat(path), reply => {
-        if (!reply.value) throw errno("stat", reply.errno);
-        return statOf(path, reply.value.size, reply.value.directory ? 0o40000 : 0o100000, reply.value.mtime,reply.value);
-      });
-      const st = existing("stat", path);
-      return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
-    },
+    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) =>
+      existing("stat", path, (st) => statOf(path, st.size, st.directory ? 0o40000 : 0o100000, st.mtime, st)),
     "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
       return after(remoteFilePath(path)?.fileSetAttributes(path,{mode}) ?? changeFileAttributes(path,{mode}), result => { sys("chmod",result); });
@@ -409,13 +402,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
       if (path === null || name === null) rt.npe();
-      existing("setxattr", path);
-      throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP);
+      return existing("setxattr", path, () => { throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP); });
     },
-    "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
-      existing("statvfs", path);
-      return structStatVfs();
-    },
+    "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => existing("statvfs", path, () => structStatVfs()),
     [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
       if (fdInt(d) < 0) throw errno("fstatvfs", E.BADF);
       return structStatVfs();
