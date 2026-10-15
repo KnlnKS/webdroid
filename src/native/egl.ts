@@ -8,12 +8,16 @@ import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from 
 import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glsurface";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
-import { gles3Procs } from "./gles3";
+import { gles3Procs, clientWait } from "./gles3";
 import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current";
 import { noteNativeFrame } from "./cpu";
 
-const EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
+const EGL_BAD_ALLOC = 0x3003, EGL_BAD_ATTRIBUTE = 0x3004, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_DISPLAY = 0x3008, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b,
+  EGL_BAD_PARAMETER = 0x300c, EGL_BAD_SURFACE = 0x300d;
 const surfaces: (GlSurface | null)[] = [null], contexts: (EglContext | null)[] = [null];
+/** EGL_KHR_fence_sync's fences, each a GL fence in the context current where it was made */
+const syncs = new Map<number, { gl: WebGL2RenderingContext; sync: WebGLSync }>();
+let lastSync = 0;
 const procs = new Map<string, number>();
 const handle = <T>(tbl: (T | null)[], o: T): number => { const i = tbl.indexOf(o); if (i > 0) return i; tbl.push(o); return tbl.length - 1; };
 /** an EGL_NONE-terminated list of EGLint pairs */
@@ -32,7 +36,7 @@ export function eglInit(): void {
     eglBindAPI: () => 1, eglQueryAPI: () => 0x30a0,
     eglQueryString: (_c, a) => {
       a.i(); const n = a.i();
-      return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.5" : n === 0x3055 ? "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_surfaceless_context" : n === 0x308d ? "OpenGL_ES" : "");
+      return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.5" : n === 0x3055 ? "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_fence_sync EGL_KHR_surfaceless_context" : n === 0x308d ? "OpenGL_ES" : "");
     },
     eglGetConfigs: (_c, a) => { a.i(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) stp(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
     eglChooseConfig: (_c, a) => {
@@ -114,6 +118,28 @@ export function eglInit(): void {
     eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1,
     eglCopyBuffers: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
     eglBindTexImage: () => 0, eglReleaseTexImage: () => 0,
+    // a fence (EGL_SYNC_FENCE_KHR) without attributes, as EGL_KHR_fence_sync and EGL 1.5 make it
+    eglCreateSyncKHR: (cpu, a) => {
+      const display = a.i(), type = a.i(), list = a.p();
+      if (display !== 1) return eglFailure(EGL_BAD_DISPLAY, 0, cpu.jthread);
+      if (type !== 0x30f9 || list && mem.ld32(list) !== 0x3038) return eglFailure(EGL_BAD_ATTRIBUTE, 0, cpu.jthread);
+      const gl = activateEglCurrent(cpu.jthread)?.gl, sync = gl?.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!gl || !sync) return eglFailure(EGL_BAD_MATCH, 0, cpu.jthread);
+      syncs.set(++lastSync, { gl, sync });
+      return lastSync;
+    },
+    eglDestroySyncKHR: (cpu, a) => {
+      a.i(); const h = a.i(), s = syncs.get(h);
+      if (!s) return eglFailure(EGL_BAD_PARAMETER, 0, cpu.jthread);
+      s.gl.deleteSync(s.sync); syncs.delete(h);
+      return 1;
+    },
+    // EGL_CONDITION_SATISFIED or EGL_TIMEOUT_EXPIRED; the flush bit is GL's
+    eglClientWaitSyncKHR: (cpu, a) => {
+      a.i(); const s = syncs.get(a.i()), flags = a.i(), timeout = a.ul();
+      if (!s) return eglFailure(EGL_BAD_PARAMETER, 0, cpu.jthread);
+      return clientWait(s.gl, s.sync, flags & 1, timeout).then((r) => r === 0x911b ? 0x30f5 : r === 0x911d ? eglFailure(EGL_BAD_PARAMETER, 0, cpu.jthread) : 0x30f6);
+    },
     eglGetProcAddress: (_c, a) => {
       const n = a.str();
       let p = procs.get(n);
@@ -127,6 +153,7 @@ export function eglInit(): void {
       probed.add("eglGetProcAddress!" + n); return 0;
     },
   };
+  E.eglCreateSync = E.eglCreateSyncKHR; E.eglDestroySync = E.eglDestroySyncKHR; E.eglClientWaitSync = E.eglClientWaitSyncKHR;
   // a call that does not fail leaves EGL_SUCCESS, so an earlier failure is not reported against it
   for (const [name, fn] of Object.entries(E)) if (name !== "eglGetError") E[name] = (cpu, a) => { takeEglError(cpu.jthread); return fn(cpu, a); };
   hostLib("libEGL.so", E, { closed: true });

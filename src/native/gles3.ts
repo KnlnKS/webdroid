@@ -62,6 +62,13 @@ const EXT: [string, string][] = [
 // ES2 extensions that ES 3.0 core subsumes without a new entry point; an engine gating on the name sees them
 const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax";
 const extsOf = new WeakMap<GL, string[]>();
+/** glClientWaitSync's wait, which EGL's fences share: a wait longer than the fence takes is spent yielding, one macrotask per look */
+export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeoutNs: bigint): Promise<number> {
+  const until = performance.now() + Number(timeoutNs) / 1e6;
+  let r = gl.clientWaitSync(sync, flags, 0);
+  while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = gl.clientWaitSync(sync, 0, 0); }
+  return r;
+}
 export function gles3Extensions(gl: GL): string[] {
   let e = extsOf.get(gl);
   if (!e) { e = CORE.split(" "); for (const [w, n] of EXT) if (gl.getExtension(w) && n) e.push(n); extsOf.set(gl, e); }
@@ -490,15 +497,7 @@ export function gles3Init(): void {
     glIsSync: keepsClean((_c, a) => (H(T().syncs, a.i()) ? 1 : 0)),
     glDeleteSync: keepsClean((_c, a) => { const h = a.i(), s = T().syncs[h]; if (s) { g().deleteSync(s); T().syncs[h] = null; } }),
     glWaitSync: keepsClean((_c, a) => { const s = H(T().syncs, a.i()); if (s) g().waitSync(s, 0, -1); }),
-    // a wait longer than the fence takes is spent yielding, one macrotask per look
-    glClientWaitSync: async (_c, a) => {
-      const s = H(T().syncs, a.i()); const flags = a.i(), until = performance.now() + Number(a.ul()) / 1e6;
-      if (!s) return 0x911d;                                                    // WAIT_FAILED
-      const context = g();
-      let r = context.clientWaitSync(s, flags, 0);
-      while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = context.clientWaitSync(s, 0, 0); }
-      return r;
-    },
+    glClientWaitSync: (_c, a) => { const s = H(T().syncs, a.i()), flags = a.i(), timeout = a.ul(); return s ? clientWait(g(), s, flags, timeout) : 0x911d; },   // WAIT_FAILED
     glGetSynciv: (_c, a) => { const s = H(T().syncs, a.i()); const pn = a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 1); out(s && g().getSyncParameter(s, pn), a.p(), st32, 4); },
     glBindTransformFeedback: (_c, a) => g().bindTransformFeedback(a.i(), H(T().tfs, a.i())),
     glBeginTransformFeedback: (_c, a) => { contextState().feedback = true; g().beginTransformFeedback(a.i()); }, glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },
