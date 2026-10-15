@@ -3,9 +3,8 @@
 // memory instead (no array, `buffer` is null), freed when the MemoryRef is collected. Java code, natives and native code then read the same bytes.
 // An address in the first 4 GiB above the core's reserved low pages is read and written by runtime functions over that memory (guest.ts); another is
 // an external mapping or a higher plane, which the production natives answer.
-import { OP } from "../compiler/code";
+import { Code, OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import { Code } from "../compiler/code";
 import { rtfns } from "../compiler/rtfns";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
@@ -15,16 +14,14 @@ import "./guest";
 const LOW = 0x1_0000n;
 const MEMORY = "libcore/io/Memory.", MEMORY_REF = "java/nio/DirectByteBuffer$MemoryRef";
 /** External reads can page in; retain the native suspension epilogue, with no Java call target. */
-const leaf = (cx: Compiler, c: Code, m: MethodInfo) => { const n = c.targets.length; cx.natives.call(cx, c, m); c.targets.length = n; };
+export const nativeLeaf = (cx: Compiler, c: Code, m: MethodInfo): void => { const n = c.targets.length; cx.natives.call(cx, c, m); c.targets.length = n; };
 export const memoryIntrinsics = new Map<string, Intrinsic>();
 
-/** leaves 1 when the address in local `a` (a long) is one the runtime functions reach */
-const guest = (c: Code, a: number) => c.lget(a).i64(LOW).raw(OP.i64_sub).i64(0x1_0000_0000n - LOW).raw(OP.i64_lt_u);
-/** The entire range is reachable by pure guest loads/stores. */
-export const guestRange = (c: Code, address: () => void, width: number): void => {
-  address(); c.i64(LOW).raw(OP.i64_sub).i64(0x1_0000_0000n - LOW - BigInt(width) + 1n).raw(OP.i64_lt_u);
+/** leaves 1 when all `width` bytes from the address `address` pushes (a long) are ones the runtime functions reach */
+export const guestRange = (c: Code, address: () => void, width: number): Code => {
+  address(); return c.i64(LOW).raw(OP.i64_sub).i64(0x1_0000_0000n - LOW - BigInt(width) + 1n).raw(OP.i64_lt_u);
 };
-
+const guest = (c: Code, a: number) => guestRange(c, () => c.lget(a), 1);
 
 const SCALARS: [peek: string, poke: string, bits: 8 | 16 | 32 | 64][] = [["peekByte(J)B", "pokeByte(JB)V", 8], ["peekShortNative(J)S", "pokeShortNative(JS)V", 16],
   ["peekIntNative(J)I", "pokeIntNative(JI)V", 32], ["peekLongNative(J)J", "pokeLongNative(JJ)V", 64]];
@@ -45,7 +42,7 @@ export function emitMemoryScalar(cx: Compiler, c: Code, m: MethodInfo, peek: boo
   guest(c, 0).if_(peek ? bits === 64 ? T.i64 : T.i32 : undefined).lget(0).raw(OP.i32_wrap_i64);
   if (!peek) c.lget(1);
   call(`${peek ? "gld" : "gst"}${bits}`);
-  c.else_(); leaf(cx, c, m); c.end();
+  c.else_(); nativeLeaf(cx, c, m); c.end();
 }
 for (const [peek, poke, bits] of SCALARS) {
   memoryIntrinsics.set(MEMORY + peek, (cx, m, c) => emitMemoryScalar(cx, c, m, true, bits));
@@ -69,7 +66,7 @@ for (const [kind, ek, swaps] of ARRAYS) for (const peek of [true, false]) {
     c.lget(ARR).lget(INDEX).lget(COUNT).lget(0).raw(OP.i32_wrap_i64);
     if (swaps) c.lget(SWAP); else c.i32(0);
     cx.callRt(c, `${peek ? "gget" : "gput"}_${ek}`);
-    c.else_(); leaf(cx, c, m); c.end();
+    c.else_(); nativeLeaf(cx, c, m); c.end();
   });
 }
 

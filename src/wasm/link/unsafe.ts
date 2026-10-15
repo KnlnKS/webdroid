@@ -14,6 +14,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
 import { idOfClass } from "./classes";
 import { rt } from "../compiler/rtfns";
+import { nativeLeaf } from "./memory";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
@@ -151,10 +152,10 @@ const def = (key: string, f: (cx: Compiler, c: Code) => void) => {
     if (key.includes("(Ljava/lang/Object;J")) {
       // A null base is a raw address. The host owns external mappings and their suspension.
       c.lget(1).refIsNull().if_();
-      const n = c.targets.length; cx.natives.call(cx,c,m); c.targets.length = n;
+      nativeLeaf(cx, c, m);
       c.ret().end();
     }
-    f(cx,c);
+    f(cx, c);
   }); });
 };
 /** locals: 0 = this, 1 = object, 2 = offset (long), then the operation's values */
