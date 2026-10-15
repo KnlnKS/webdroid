@@ -10,16 +10,16 @@ import type { World } from "./world";
 /** the estimated size of a code module (the bytes per dex code unit and per method aot-build measured) where the next class starts another */
 const MODULE_BYTES = 1 << 20, BYTES_PER_METHOD = 150, BYTES_PER_UNIT = 14;
 /** the same for a data module: a module is loaded whole when any of its classes is first used, so these are small; the figures are aot-build's */
+const D_MODULE_BYTES = 128 << 10, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;
 /** synthetic functions to a module */
 const SYNTH_GROUP = 64;
-const D_MODULE_BYTES = 128 << 10, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;
 export interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
 
-/** the function V8 rejects in `bytes`, if it rejects the module */
-function invalidFunction(bytes: Uint8Array): { fn: number; message: string } | undefined {
+/** why V8 rejects `bytes`, if it rejects the module, and the name of the function of `cx`'s module it names ("" for none) */
+function invalidFunction(bytes: Uint8Array, cx?: Compiler): { name: string; message: string } | undefined {
   try { compileModule(bytes); } catch (e) {
     const message = (e as Error).message, m = /function #(\d+)/.exec(message);
-    return { fn: m ? +m[1] : -1, message };
+    return { name: m && cx ? cx.mb.funcNames[+m[1] - cx.mb.nImportedFuncs] ?? "" : "", message };
   }
   return undefined;
 }
@@ -33,7 +33,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
     for (;;) {
       const cx = new Compiler(w);
       w.beginTouch();
-      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes);
+      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
       if (!bad) {
         if (built.kept.length) {
           const header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };
@@ -42,7 +42,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
         }
         break;
       }
-      const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs]?.slice(1) : "";
+      const name = bad.name.slice(1);
       if (!name || !group.some((g) => g.name === name)) break;
       group = group.filter((g) => g.name !== name);
     }
@@ -51,17 +51,15 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
   return synths;
 }
 /** `methods` as a module that installs them: a method the compiler emits invalid code for (`check` says so) is left out, to the on-demand compiler, which fails the same way if it is ever called */
-function compileChecked(w: World, methods: MethodInfo[], check: (bytes: Uint8Array) => { fn: number; message: string } | undefined = invalidFunction):
-  { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
+function compileChecked(w: World, methods: MethodInfo[]): { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
   const skipped = new Map<string, string>();
   for (;;) {
     const cx = new Compiler(w);
     w.beginTouch();
-    const built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), [], false, true), touch = w.endTouch(), bad = check(built.bytes);
+    const built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), [], false, true), touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
     if (!bad) return { cx, built, touch, skipped };
-    const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
-    if (!name || skipped.has(name)) throw new Error(bad.message);
-    skipped.set(name, bad.message);
+    if (!bad.name || skipped.has(bad.name)) throw new Error(bad.message);
+    skipped.set(bad.name, bad.message);
   }
 }
 
