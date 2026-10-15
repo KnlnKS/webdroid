@@ -216,7 +216,7 @@ function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): obj
   if (binding) s.appLoader = loaderObject;
   if (loaderObject) {
     const [before, after] = librariesOf(w, loaderObject);
-    if (binding && !standardPath(w, loaderObject!)) w.dynamicRoot();
+    if (binding && !standardPath(w, loaderObject)) w.dynamicRoot();
     w.bindLibraries(loader, before, after);
     dexes = dexes.map(d => {
       const owner = w.prog.loaderOfDex(d);
