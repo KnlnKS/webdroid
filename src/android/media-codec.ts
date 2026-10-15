@@ -4,7 +4,7 @@
 import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
 import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
 import { nativePeer, postNativeEvent } from "./media-native";
@@ -403,6 +403,10 @@ export const createCodec = (name: string, nameIsType: boolean, owner: JObj | nul
 const MC = "android/media/MediaCodec";
 const peers = nativePeer<Codec>(MC, null, (c) => c.release());
 const C = peers.on;
+/** a codec buffer as JMediaCodec hands one out: a new buffer over the codec's memory each call, since MediaCodec
+ *  invalidates and frees the ones it gave the app; read-only for output, native order, over [offset, offset + size) */
+const handOut = (b: JBuffer, input: boolean, offset: number, size: number) =>
+  after(directView(b, !input), (v) => { nativeOrder(v); setLimit(v, offset + size); setPosition(v, offset); return v; });
 rt.registerJnis(MC, {
   "native_init()V": () => {},
   "native_setup(Ljava/lang/String;ZZII)V": function (this: JObj, name: string, nameIsType: number, encoder: number) {
@@ -431,16 +435,17 @@ rt.registerJnis(MC, {
   "native_dequeueOutputBuffer(Landroid/media/MediaCodec$BufferInfo;J)I": C((c, out: JObj, timeout: bigint) => after(c.running().dequeueOutput(timeout), ([index, i]) =>
     i ? after(vcall(out, "set", "(IIJI)V", i.offset, i.size, i.time, i.flags), () => index) : index)),
   "releaseOutputBuffer(IZZJ)V": C((c, index: number, render: number, updatePts: number, timeNs: bigint) => c.running().releaseOutput(index, !!render, updatePts ? timeNs : undefined)),
-  "getBuffers(Z)[Ljava/nio/ByteBuffer;": C((c, input: number) => {
+  "getBuffers(Z)[Ljava/nio/ByteBuffer;": C(driven(function* getBuffers(c: Codec, input: number): Gen<unknown> {
     // output buffers are allocated per frame, so only input buffers form a fixed array
     if (!input || c.async) throw illegalState(null);
-    return jarray(c.inputs.slice(), "Ljava/nio/ByteBuffer;");
-  }),
+    const views: JBuffer[] = [];
+    for (const b of c.inputs) views.push(yield handOut(b, true, 0, bufferCapacity(b)));
+    return jarray(views, "Ljava/nio/ByteBuffer;");
+  })),
   "getBuffer(ZI)Ljava/nio/ByteBuffer;": C((c, input: number, index: number) => {
-    if (input) { const b = c.inputs[index]; if (b) { setLimit(b, bufferCapacity(b)); setPosition(b, 0); } return b ?? null; }
-    const b = c.run?.outputBuffer(index) ?? null, i = c.run?.outputs.get(index)?.info;
-    if (b && i) { setLimit(b, i.offset + i.size); setPosition(b, i.offset); }
-    return b;
+    if (input) { const b = c.inputs[index]; return b ? handOut(b, true, 0, bufferCapacity(b)) : null; }
+    const b = c.run?.outputBuffer(index), i = c.run?.outputs.get(index)?.info;
+    return b && i ? handOut(b, false, i.offset, i.size) : null;
   }),
   "getImage(ZI)Landroid/media/Image;": () => null,
   "getFormatNative(Z)Ljava/util/Map;": C((c, input: number) => formatToJava(input ? c.format : c.outputFormat)),
