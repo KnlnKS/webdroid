@@ -8,12 +8,13 @@ import { deref } from "./jni";
 import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
-import { mainThread } from "../jvm/natives/jentry";
+import { after, mainThread } from "../jvm/natives/jentry";
 import { dispatchUncaught } from "../jvm/natives/jthrowable";
 import { nativePoll } from "./poll";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { nativeAssets } from "../android/res";
-import { HINT_RATE_NANOS, hintSessions, openHintSession } from "../android/os";
+import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os";
+import { kernelResult } from "./libc";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 class NativeWindow {
@@ -203,6 +204,8 @@ export function ndkInit(): void {
     ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : -22; },
     ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : -22; },
     ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : -22; },
+    // no buffer has a dataspace set: ADATASPACE_UNKNOWN
+    ANativeWindow_getBuffersDataSpace: (_c, a) => W(a) ? 0 : -22,
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
       const buffer = W(a), width = a.i(), height = a.i(), format = a.i();
@@ -277,6 +280,9 @@ export function ndkInit(): void {
     APerformanceHint_setThreads: (_c, a) => { const session = a.i(), tids = a.p(), n = a.i(); if (!n) return EINVAL; hintSessions.set(session, readTids(tids, n)); return 0; },
     APerformanceHint_setPreferPowerEfficiency: () => 0,
     APerformanceHint_closeSession: (_c, a) => { hintSessions.delete(a.i()); },
+    ASharedMemory_create: (cpu, a) => { a.p(); const size = a.i(); return size ? kernelResult(cpu, ashmemCreate(size)) : -EINVAL; },
+    ASharedMemory_getSize: (_c, a) => after(ashmemSize(a.i()), (n) => Math.max(0, n)),
+    ASharedMemory_setProt: (cpu, a) => kernelResult(cpu, ashmemSetProt(a.i(), a.i())),
     // there is no thermal service: no manager, and the headroom is the documented NaN
     AThermal_acquireManager: () => 0, AThermal_releaseManager: () => {},
     AThermal_getCurrentThermalStatus: () => -1,

@@ -192,18 +192,25 @@ export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => 
   openFd(fd)!.content.ashmem = { prot };
   return fd;
 }
+// libcutils' ashmem calls, which SharedMemory's natives and libandroid's ASharedMemory both make
+/** ashmem_create_region: a descriptor on a new region of zeros, or -errno */
+export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? ashmemFd(new Uint8Array(size));
+/** ashmem_get_size_region: -1 for a descriptor on anything else */
+export const ashmemSize = (fd: number): number | Promise<number> => processAshmemSize(fd) ?? (regionOf(fd) ? javaFdStat(fd)!.size : -1);
+/** ashmem_set_prot_region: 0 or -errno; a region's protection only narrows */
+export function ashmemSetProt(fd: number, prot: number): number | Promise<number> {
+  const pending = processAshmemProtect(fd, prot);
+  if (pending) return pending;
+  const region = regionOf(fd);
+  if (!region) return -E.NOTTY;
+  if (prot & ~region.prot) return -E.INVAL;
+  region.prot = prot;
+  return 0;
+}
 rt.registerJnis("android/os/SharedMemory", {
-  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => after(processAshmemCreate(size) ?? ashmemFd(new Uint8Array(size)),fd => { sys("ashmem_create_region",fd); return mkFd(fd); }),
-  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => { const fd = fdInt(d); return processAshmemSize(fd) ?? (regionOf(fd) ? javaFdStat(fd)!.size : -1); },
-  "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => {
-    const fd = fdInt(d), pending = processAshmemProtect(fd,prot);
-    if (pending) return pending.then(n => -n);
-    const region = regionOf(fd);
-    if (!region) return E.NOTTY;
-    if (prot & ~region.prot) return E.INVAL;
-    region.prot = prot;
-    return 0;
-  },
+  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); }),
+  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => ashmemSize(fdInt(d)),
+  "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => after(ashmemSetProt(fdInt(d), prot), n => -n),
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
