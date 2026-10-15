@@ -31,7 +31,8 @@ export const PRIM = Object.fromEntries(Object.entries(PRIMS).map(([k, v]) => ["#
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const isPrim = (n: string) => n in PRIM;
 export const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d.length === 1 ? "#" + d : d;
-const descOf = (name: string) => isPrim(name) ? name.slice(1) : name[0] === "[" ? name : `L${name};`;
+/** the descriptor of a class name, typeName's inverse */
+export const descOf = (name: string) => name[0] === "#" ? name[1] : name[0] === "[" ? name : `L${name};`;
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
@@ -94,7 +95,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldType: return w.idOf(typeName(fields[b].desc));
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
-    case Info.CanAccess: return +canAccess(w.nameOf(a), w.prog.get(w.nameOf(b >>> 12))!, w.prog.get(w.nameOf(b >>> 12))!.fields[b & 0xfff].flags, w);
+    case Info.CanAccess: { const decl = w.prog.get(w.nameOf(b >>> 12))!; return +canAccess(w.nameOf(a), decl, decl.fields[b & 0xfff].flags, w); }
     case Info.AllocSlot: {
       const ctor = jc?.byKey.get("<init>()V");
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
@@ -150,7 +151,7 @@ rt("classOf", ["I"], "L", (cx, c) => {
   const { tData } = cx, g = cx.ctab(), tab = c.newLocal(refNull(tData.ref)), o = c.newLocal(cx.vtOf("L")), n = c.newLocal(T.i32);
   c.gget(g).lset(tab).lget(tab).refAsNonNull().arrayLen().lset(n);
   c.lget(0).lget(n).raw(OP.i32_ge_s).if_();
-  c.lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).raw(OP.i32_gt_s).raw(0x1b).arrayNewDefault(tData.ref).lset(tab);
+  c.lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).raw(OP.i32_gt_s).select().arrayNewDefault(tData.ref).lset(tab);
   c.lget(tab).refAsNonNull().i32(0).gget(g).refAsNonNull().i32(0).lget(n).arrayCopy(tData.ref, tData.ref).lget(tab).gset(g).end();
   c.gget(g).refAsNonNull().lget(0).arrayGet(tData.ref).ltee(o).refIsNull().if_().lget(0); cx.callRt(c, "mkClass"); c.ret().end().lget(o);
 });
@@ -276,15 +277,18 @@ rt("declFields", ["I", "I"], "L", (cx, c) => {
   each(() => { keep(); c.if_().lget(data).refAsNonNull().lget(i).lget(0).lget(k); cx.callRt(c, "mkField"); c.arraySet(tData.ref).lget(i).i32(1).raw(OP.i32_add).lset(i).end(); });
   c.gget(cx.vtGlobal(FIELD_ARRAY)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(tArr.ref);
 });
-// nameEq(cid, k, name, len): the String `name` of length `len` spells the name of the k-th declared field of class cid
-rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => {
+/** the body of a function (cid, k, name, len) -> whether the String `name` of length `len` spells the name of member k of class cid, whose characters
+ *  host.info `nameChar` answers (b: k << 16 | j) */
+export function emitNameEq(cx: Compiler, c: Code, nameChar: number): void {
   const j = c.newLocal(T.i32);
   c.block().loop().lget(j).lget(3).raw(OP.i32_ge_s).brIf(1);
   c.lget(2).lget(j); classMethod(cx, c, "java/lang/String", "charAt", "(I)C");
-  cx.info(c, Info.FieldNameChar, () => c.lget(0), () => c.lget(1).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or));
+  cx.info(c, nameChar, () => c.lget(0), () => c.lget(1).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or));
   c.raw(OP.i32_ne).if_().i32(0).ret().end();
   c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().i32(1);
-});
+}
+// nameEq(cid, k, name, len): of the k-th declared field
+rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, Info.FieldNameChar));
 
 // ---------- intrinsics
 /** the intrinsics of this file, added to the table by intrinsics.ts */

@@ -8,7 +8,7 @@ import { T, refNull } from "../compiler/wasmbin";
 import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { H } from "../compiler/consts";
-import { emitString, idOfClass, classMethod, typeName, vtId } from "./classes";
+import { emitString, idOfClass, classMethod, emitNameEq, typeName, vtId } from "./classes";
 import { UInfo } from "./unsafe";
 import { WIDEN, BOX } from "../compiler/fields";
 import { rt } from "../compiler/rtfns";
@@ -164,15 +164,8 @@ rt("mkExec", ["I", "I", "I"], "L", (cx, c) => {
   }
   c.anyNull();
 });
-// mnameEq(cid, k, name, len): the String `name` of length `len` spells the name of method k of class cid
-rt("mnameEq", ["I", "I", "L", "I"], "I", (cx, c) => {
-  const j = c.newLocal(T.i32);
-  c.block().loop().lget(j).lget(3).raw(OP.i32_ge_s).brIf(1);
-  c.lget(2).lget(j); classMethod(cx, c, "java/lang/String", "charAt", "(I)C");
-  info(cx, c, RInfo.MethodNameChar, 0, () => c.lget(1).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or));
-  c.raw(OP.i32_ne).if_().i32(0).ret().end();
-  c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().i32(1);
-});
+// mnameEq(cid, k, name, len): nameEq of method k
+rt("mnameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, RInfo.MethodNameChar));
 // findMethod(cid, name, params, ctor): the index of the declared method (constructor: name null) with those parameter classes, or -1. The host lists the
 // methods whose name hashes as this one does, so a class of hundreds of methods is not scanned for every lookup
 rt("findMethod", ["I", "L", "L", "I"], "I", (cx, c) => {
