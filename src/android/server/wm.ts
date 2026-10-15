@@ -85,18 +85,19 @@ function* insetsState(): Gen<JObj> {
   const state = yield newObj("android/view/InsetsState", "()V");
   yield vcall(state, "setDisplayFrame", "(Landroid/graphics/Rect;)V", yield displayRect());
   const { width: w, height: h, statusBar, navBar } = device;
-  const add = function* (index: number, type: number, l: number, t: number, r: number, b: number, visible = true, flags = 0): Gen<void> {
+  const add = function* (index: number, type: number, l: number, t: number, r: number, b: number, visible = true): Gen<JObj> {
     const id = yield scall("android/view/InsetsSource", "createId", "(Ljava/lang/Object;II)I", null, index, type);
     const source = yield newObj("android/view/InsetsSource", "(II)V", id, type);
     yield vcall(source, "setFrame", "(IIII)Landroid/view/InsetsSource;", l, t, r, b);
     yield vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
-    if (flags) yield vcall(source, "setFlags", "(I)Landroid/view/InsetsSource;", flags);
     yield vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
+    return source;
   };
   if (statusBar) yield* add(0, yield* awaited(insetsType("statusBars")), 0, 0, w, statusBar);
   if (navBar) {
     navBarFlags ??= (yield systemResource("bool", "config_navBarNeedsScrim", "getBoolean", "(I)Z")) ? 0 : yield staticField("android/view/InsetsSource", "FLAG_SUPPRESS_SCRIM");
-    yield* add(0, yield* awaited(insetsType("navigationBars")), 0, h - navBar, w, h, true, navBarFlags);
+    const bar = yield* add(0, yield* awaited(insetsType("navigationBars")), 0, h - navBar, w, h);
+    if (navBarFlags) yield vcall(bar, "setFlags", "(I)Landroid/view/InsetsSource;", navBarFlags);
     yield* add(1, yield* awaited(insetsType("mandatorySystemGestures")), 0, h - navBar, w, h);
   }
   // the input method's window: the browser keyboard, which the page lays out outside the display
