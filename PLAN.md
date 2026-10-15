@@ -38,9 +38,14 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-At `c6249776` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors,
-required natives, draw errors, settle timeouts or wedges; 1,148 unit tests pass; the FitNotes and boot-jar sweep is
-clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass.
+At `8392a936` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 171.5 s with no new missing APIs,
+errors, required natives, draw errors, settle timeouts or wedges. Every flow upgrades methods to the second tier
+again. From `32867b8c` until `8392a936`, units could not reach the process Worker from the compile frame's agent
+cluster, so earlier gates, `c6249776` included, presumably ran without upgrades; Google Maps measured 0. 1,148 unit tests
+pass; the FitNotes and boot-jar sweep is clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass. Two
+gate runs at a host load of 19–30 from another checkout's e2e failed FitNotes (once also Calculator) with completion
+timeouts while the app kept presenting frames. FitNotes alone then passed 3 of 3 at a load of 12–16. Those failures
+were not compared with `c6249776` under the same load.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
@@ -85,10 +90,6 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
      bar arbitration; Google Maps zoom, active navigation, sign-in and backup transport. A native fault converted
      into a Java exception can still leave native locks held.
-   - *Google Maps:* the location puck draws magenta because the IBL cubemap built in `libgoogle3.so` holds NaN
-     (same without the native JIT); one Directions tap lost the user class loader in `readSerializable`
-     (`getClosestUserClassLoader` returned null) and did not reproduce; the texture-swizzle rewrite skips samplers
-     passed as function parameters.
    - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
@@ -125,6 +126,11 @@ Unranked; each needs a measurement or a check against the current code before wo
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
+- **Reloads:** a page navigated away keeps its heap: after one Google Maps launch, `about:blank` still held
+  135 MB of heap and 455 MB of ArrayBuffers, retained from `(Stack roots)` through `WasmImportData`. That is
+  consistent with `system_server`'s suspended stacks never resuming. Same-site reloads reuse the renderer, so the
+  retained heap accumulates: after about an hour, 8.1 GB and ~78% GC time during a launch. Attribute the stacks
+  before choosing a fix, such as unwinding them on `pagehide` or moving `system_server` into a Worker (item 6).
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.
 - **Platform gaps recorded before the Wasm tier:** WebView has no Safe Browsing or saveState, and cross-origin
