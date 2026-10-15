@@ -10,7 +10,6 @@ import { rt, JObj } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { javaName, kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
-import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
 import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
@@ -33,6 +32,13 @@ const ARRAY_OF: [Function, string][] = [[Int8Array, "[B"], [Uint8Array, "[Z"], [
 export const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (i32[0] = v as number, f32[0]) : desc === "D" ? (i64[0] = v as bigint, f64[0]) : v;
 export const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32[0] = v as number, i32[0]) : desc === "D" ? (f64[0] = v as number, i64[0])
   : desc === "J" ? BigInt(v as bigint) : desc === "Z" ? +(v as boolean) : v;
+
+/** the arguments of `m` as Java values in the form its Wasm function takes, and its result back */
+const bitsOf = (m: MethodInfo, args: unknown[]): unknown[] => args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
+const javaResult = (m: MethodInfo, rk: Kind | "V", r: unknown): unknown => rk === "V" ? undefined : rk === "L" ? r : fromBits(r as number | bigint, m.ret);
+
+/** a new instance of class `cls`, initialized but not constructed */
+export const newInstance = (w: World, cls: string): object => w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
 
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
@@ -59,13 +65,13 @@ export class Bridge implements HostBridge {
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
   private get op() {
     if (this.ops) return this.ops;
-    const hostFn = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: import("../compiler/code").Code) => void) => this.w.hostFn(name, params, ret, body);
-    const alen = hostFn("b:alen", ["L"], "I", (cx, c) => {
+    const w = this.w;
+    const alen = w.hostFn("b:alen", ["L"], "I", (cx, c) => {
       for (const k of KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
       c.i32(-1);
     });
     // acopy(array, pointer, toMemory, from, count): elements [from, from + count) of a primitive array to or from linear memory
-    const acopy = hostFn("b:acopy", ["L", "I", "I", "I", "I"], "V", (cx, c) => {
+    const acopy = w.hostFn("b:acopy", ["L", "I", "I", "I", "I"], "V", (cx, c) => {
       cx.scratch();
       for (const k of ["i8", "i16", "i32", "i64"] as const) {
         const t = cx.tArr[k], data = c.newLocal({ ht: cx.tData[k], nullable: true });
@@ -74,9 +80,9 @@ export class Bridge implements HostBridge {
         c.lget(2).if_(); copy(true); c.else_(); copy(false); c.end().ret().end();
       }
     });
-    const js = hostFn("b:js", ["L"], "L", (cx, c) => { c.lget(0); cx.str.toHost(c); c.anyConvertExtern(); });
-    const aget = hostFn("b:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); });
-    const aset = hostFn("b:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
+    const js = w.hostFn("b:js", ["L"], "L", (cx, c) => { c.lget(0); cx.str.toHost(c); c.anyConvertExtern(); });
+    const aget = w.hostFn("b:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); });
+    const aset = w.hostFn("b:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
     return this.ops = { alen, acopy, aget, aset, js };
   }
 
@@ -225,7 +231,7 @@ export class Bridge implements HostBridge {
     const spec = this.w.hosts.specOfHost(host);
     if (!spec || !this.w.prog.get(spec.name)) return undefined;
     const cls = this.w.hosts.javaClass(spec);
-    const java = this.w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
+    const java = newInstance(this.w, cls);
     this.w.hosts.bind(java, host);
     this.share(host, java, cls);
     return java;
@@ -288,10 +294,10 @@ export class Bridge implements HostBridge {
     const { call, rk } = this.caller(m);
     const nested = this.saved.length > 0, mark = nested ? 0 : this.begin();
     try {
-      const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i]));
+      const given = this.javaArgs(m, args);
       const r = call(...(m.isStatic ? [] : [recv]), ...given);
       this.readBackAll(args, given);
-      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r, m.ret);
+      return this.hostResult(m, rk, r);
     } finally { if (!nested) this.end(mark); }
   }
 
@@ -299,29 +305,30 @@ export class Bridge implements HostBridge {
    *  and one scope that outlived them would hand a native the copy of an array an earlier native reached */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m, true);
-    const given = this.scoped(() => args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i])));
+    const given = this.scoped(() => this.javaArgs(m, args));
     const finish = (r: unknown) => this.scoped(() => {
       this.readBackAll(args, given);
-      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r as number | bigint, m.ret);
+      return this.hostResult(m, rk, r);
     });
     const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);
     return r instanceof Promise ? r.then(finish) : finish(r);
   }
+  private javaArgs(m: MethodInfo, args: unknown[]): unknown[] { return args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i])); }
+  private hostResult(m: MethodInfo, rk: Kind | "V", r: unknown): unknown { return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r as number | bigint, m.ret); }
 
   // ---------- Java values, for native code that holds Java objects itself (JNI): nothing is copied or wrapped, so an array is the one Java has
   /** Java method `m` on `recv` with Java values (a reference as it is, a float or double as a number, a long as a bigint): a Java value */
   call(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m);
-    const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
+    const given = bitsOf(m, args);
     const r = this.w.unwound(() => call(...(m.isStatic ? [] : [recv]), ...given));
-    return rk === "V" ? undefined : rk === "L" ? r : fromBits(r, m.ret);
+    return javaResult(m, rk, r);
   }
   /** `call` on strand `s`, whose stack can wait: the Java value, or a Promise of it when the call waited */
   callOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m, true);
-    const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
-    const finish = (r: unknown) => rk === "V" ? undefined : rk === "L" ? r : fromBits(r as number | bigint, m.ret);
-    const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);
+    const finish = (r: unknown) => javaResult(m, rk, r);
+    const r = call(s, ...(m.isStatic ? [] : [recv]), ...bitsOf(m, args));
     return r instanceof Promise ? r.then(finish) : finish(r);
   }
   /** field `f` of `o`, or of its class when static, as a Java value; the class of a static field is initialized by whoever found the field */
@@ -415,7 +422,7 @@ export class Bridge implements HostBridge {
   }
   /** an object the host made with rt.make (a Struct*, a FileDescriptor), copied into the Wasm heap with its fields (not its identity): an object the host creates to keep is made with newObj */
   private copyObject(o: Record<string, unknown>, cls: string): object {
-    const j = this.w.hostFn("b:alloc:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })();
+    const j = newInstance(this.w, cls);
     this.copyFields(o, j, cls);
     return j;
   }

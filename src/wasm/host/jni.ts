@@ -1,17 +1,16 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime";
-import { refOf, type Bridge } from "./bridge";
+import { newInstance, refOf, type Bridge } from "./bridge";
 import { idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
 import { failed, symbolicImplFor } from "../compiler/linkage";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
-import { classRef, onNestedStrand, runningThread } from "./entry";
+import { ARRAY_SUPERS, classRef, onNestedStrand, runningThread } from "./entry";
 import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm";
 
 interface WasmField extends JniField { info: FieldInfo }
-const ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
 /** the storage kind of a primitive array's elements */
 const ELEMENT = { Z: "i8", B: "i8", C: "i16", S: "i16", I: "i32", F: "i32", J: "i64", D: "i64" } as Record<string, string>;
 const PRIMITIVE = new Set(Object.keys(ELEMENT));
@@ -58,7 +57,6 @@ export function wasmJni(w: World): JniVm {
     return m ?? noSuchMethod(name, desc);
   };
   const call = (o: object, name: string, desc: string, ...args: unknown[]): unknown => bridge.call(virtual(o, name, desc), o, args);
-  const alloc = (name: string) => w.hostFn("e:new:" + name, [], "L", (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); })() as object;
   const copy = (to: boolean, type: string) => {
     const kind = ELEMENT[type];
     return w.hostFn(`j:g${to ? "put" : "get"}_${kind}`, ["L", "I", "I", "I", "I"], "V", (cx, c) => { c.lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, `g${to ? "put" : "get"}_${kind}`); });
@@ -83,7 +81,7 @@ export function wasmJni(w: World): JniVm {
     },
     // a class key carries the namespace of its loader (program.ts), which is no part of its name
     binaryName: javaName,
-    mirror: (c) => mirror(c),
+    mirror,
     classOf,
     objectClass: (o) => mirror(cls(w.classNameOf(o as object))),
     superClass(c) {
@@ -134,10 +132,10 @@ export function wasmJni(w: World): JniVm {
       }
       const ctor = prog.get(c.name)?.byKey.get("<init>" + view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);
-      const o = alloc(c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
+      const o = newInstance(w, c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
       return done instanceof Promise ? done.then(() => o) : o;
     },
-    allocate: (c) => alloc(c.name),
+    allocate: (c) => newInstance(w, c.name),
     reflect(c, name, desc) {
       const own = view(c, desc), params = own.slice(1, own.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
       params.forEach((p, i) => bridge.setElement(types, i, mirror(cls(typeName(p)))));
@@ -193,7 +191,7 @@ export function wasmJni(w: World): JniVm {
       if (done !== 0) fail("java/lang/IllegalMonitorStateException", "object not locked by thread before unlock");
     },
     newBuffer(address, capacity) {
-      const b = alloc("java/nio/DirectByteBuffer");
+      const b = newInstance(w, "java/nio/DirectByteBuffer");
       bridge.call(prog.get("java/nio/DirectByteBuffer")!.byKey.get("<init>(JI)V")!, b, [BigInt(address), capacity]);
       return b;
     },

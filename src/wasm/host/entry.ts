@@ -4,19 +4,17 @@
 // strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime";
-import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit } from "../../jvm/natives/jentry";
+import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit, type Entry } from "../../jvm/natives/jentry";
 import { Strand as HostStrand } from "../../jvm/suspend";
 import { processExited, never } from "../../process-exit";
 import { mangleField } from "../../jvm/abi";
 import { JThrowable } from "../../jvm/natives/jthrowable";
-import type { Entry } from "../../jvm/natives/jentry";
 import type { JavaClass } from "../../jvm/tier";
-import { kindOf, type FieldInfo, type MethodInfo } from "../compiler/program";
+import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
 import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import { OP, type Code } from "../compiler/code";
-import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits, type Bridge } from "./bridge";
 import { failed } from "../compiler/linkage";
 import { UInfo } from "../link/unsafe";
@@ -27,7 +25,9 @@ import { note, Ev } from "../../timeline";
 import { procTasks, processTid } from "../../shell/procfs";
 import { cpus, nameThread } from "../../native/cpu";
 
-const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
+const OBJECT = "Ljava/lang/Object;";
+/** the classes and interfaces every array class is a subtype of */
+export const ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
 
 /** `f` as a call into Java made by whatever is running (a native, a JNI callback of a native's guest code), on a new strand of its thread: the result, or a Promise of it when it waited */
 const nested = new WeakMap<World, { onStrand<T>(f: (s: Strand) => T): T; thread(): ThreadRec }>();
