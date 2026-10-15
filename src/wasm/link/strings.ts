@@ -11,8 +11,6 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { bytesFactory } from "./strfactory";
 import { rt } from "../compiler/rtfns";
 
-/** abstract heap types as ref.test/ref.cast immediates */
-
 export interface StringRepr {
   /** imports the string builtins; before any function of the module is defined */
   importBuiltins(): void;
@@ -146,8 +144,7 @@ export class StructStrings implements StringRepr {
     });
   }
   /** fromJs(e) -> String: the chars of a JS string, which the String keeps as its own JS string */
-  fromJsFn(): number { return this.fromJs(); }
-  private fromJs(): number {
+  fromJs(): number {
     return this.fn("fromJs", [T.externref], [T.anyref], (c) => {
       const chars = c.newLocal(ref(this.chars)), s = c.newLocal(ref(this.st));
       c.lget(0).refIsNull().if_().anyNull().ret().end();
@@ -384,15 +381,16 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
     const s = cx.str as StructStrings, W = wide ? T.i64 : T.i32, u = c.newLocal(W), len = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), out = c.newLocal(ref(cx.tData.i16)), t = c.newLocal(W);
     const k = (n: number) => (wide ? c.i64(BigInt(n)) : c.i32(n));
     const op = (i32op: number, i64op: number) => c.raw(wide ? i64op : i32op);
+    const divU = () => op(0x6e, 0x80), remU = () => op(0x70, 0x82);
     // the magnitude as an unsigned number: negating MIN_VALUE wraps to itself, which unsigned division reads right
     c.lget(0); k(0); op(OP.i32_lt_s, OP.i64_lt_s); c.lset(neg);
     c.lget(neg).if_(W); k(0); c.lget(0); op(OP.i32_sub, OP.i64_sub); c.else_().lget(0).end().lset(u);
     c.lget(neg).lset(len).lget(u).lset(t);
-    c.block().loop().lget(len).i32(1).raw(OP.i32_add).lset(len).lget(t); k(10); op(0x6e, 0x80); c.ltee(t); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
+    c.block().loop().lget(len).i32(1).raw(OP.i32_add).lset(len).lget(t); k(10); divU(); c.ltee(t); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
     c.lget(len).call(s.newCharsKnown()).lset(out).lget(len).lset(i);
     c.block().loop().lget(i).i32(1).raw(OP.i32_sub).lset(i)
-      .lget(out).lget(i).lget(u); k(10); op(0x70, 0x82); if (wide) c.raw(OP.i32_wrap_i64); c.i32(48).raw(OP.i32_add).arraySet(cx.tData.i16);
-    c.lget(u); k(10); op(0x6e, 0x80); c.ltee(u); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
+      .lget(out).lget(i).lget(u); k(10); remU(); if (wide) c.raw(OP.i32_wrap_i64); c.i32(48).raw(OP.i32_add).arraySet(cx.tData.i16);
+    c.lget(u); k(10); divU(); c.ltee(u); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
     c.lget(neg).if_().lget(out).i32(0).i32(45).arraySet(cx.tData.i16).end();
     c.lget(out).call(s.mk());
   };
@@ -423,4 +421,4 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
 }
 
 // strLit(js): the interned String of a JS string, for the class modules, which have no code of their own to make one
-rt("strLit", ["L"], "L", (cx, c) => { const s = cx.str as StructStrings; c.lget(0).externConvertAny().call(s.fromJsFn()).call(s.intern()); });
+rt("strLit", ["L"], "L", (cx, c) => { const s = cx.str as StructStrings; c.lget(0).externConvertAny().call(s.fromJs()).call(s.intern()); });
