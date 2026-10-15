@@ -3,7 +3,7 @@
 import { rt, declaredField } from "../jvm/runtime";
 import { classNameOf } from "../jvm/natives/jentry";
 import type { NativeBitmap } from "./bitmap";
-import { transformOf, type Ctx2D } from "./recording";
+import { isRecording, recordOrRun, transformOf, type Ctx2D } from "./recording";
 import { localBounds, type Affine } from "./matrix";
 
 const cssCache = new Map<number, string>();
@@ -84,7 +84,9 @@ export class NativeBitmapShader extends NativeShader {
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
   constructor(local: Affine | null, readonly bitmap: NativeBitmap, readonly tileX: number, readonly tileY: number) { super(local); }
-  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
+  draw(ctx: Ctx2D): void {
+    // it covers what the target shows, which a recording (a 1px mirror) learns only when replayed
+    if (isRecording(ctx)) return recordOrRun(ctx, (target) => this.draw(target));
     const bitmap = this.bitmap;
     let cache = bitmapShaderTiles.get(bitmap);
     if (!cache || cache.generation !== bitmap.genId) {
