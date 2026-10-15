@@ -29,16 +29,18 @@ import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
 // support, a 1 ms preferred rate). A hint only advises the scheduler, so a session keeps its
-// threads and nothing else.
-const hintSessions = new Map<bigint, Int32Array>();
-let nextHintSession = 1n;
+// threads and nothing else. libandroid's APerformanceHint (native/libandroid.ts) shares the sessions.
+export const HINT_RATE_NANOS = 1_000_000n;
+export const hintSessions = new Map<number, Int32Array>();
+let nextHintSession = 1;
+export function openHintSession(tids: Int32Array): number { hintSessions.set(nextHintSession, tids.slice()); return nextHintSession++; }
 rt.registerJnis("android/os/PerformanceHintManager", {
   "nativeAcquireManager()J": () => 1n,
-  "nativeGetPreferredUpdateRateNanos(J)J": () => 1_000_000n,
-  "nativeCreateSession(J[IJ)J": (_manager: bigint, tids: Int32Array) => { hintSessions.set(nextHintSession, tids.slice()); return nextHintSession++; },
-  "nativeGetThreadIds(J)[I": (session: bigint) => hintSessions.get(session)?.slice() ?? new Int32Array(0),
-  "nativeSetThreads(J[I)V": (session: bigint, tids: Int32Array) => { hintSessions.set(session, tids.slice()); },
-  "nativeCloseSession(J)V": (session: bigint) => { hintSessions.delete(session); },
+  "nativeGetPreferredUpdateRateNanos(J)J": () => HINT_RATE_NANOS,
+  "nativeCreateSession(J[IJ)J": (_manager: bigint, tids: Int32Array) => BigInt(openHintSession(tids)),
+  "nativeGetThreadIds(J)[I": (session: bigint) => hintSessions.get(Number(session))?.slice() ?? new Int32Array(0),
+  "nativeSetThreads(J[I)V": (session: bigint, tids: Int32Array) => { hintSessions.set(Number(session), tids.slice()); },
+  "nativeCloseSession(J)V": (session: bigint) => { hintSessions.delete(Number(session)); },
   ...noops("nativeUpdateTargetWorkDuration(JJ)V", "nativeReportActualWorkDuration(JJ)V", "nativeReportActualWorkDuration(JJJJJ)V",
     "nativeSendHint(JI)V", "nativeSetPreferPowerEfficiency(JZ)V"),
 });

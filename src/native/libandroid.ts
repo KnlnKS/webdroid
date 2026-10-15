@@ -13,6 +13,7 @@ import { dispatchUncaught } from "../jvm/natives/jthrowable";
 import { nativePoll } from "./poll";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { nativeAssets } from "../android/res";
+import { HINT_RATE_NANOS, hintSessions, openHintSession } from "../android/os";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 class NativeWindow {
@@ -178,6 +179,9 @@ const seek = (s: Asset, off: number, whence: number): number => {
   return p < 0 || p > s.source.size ? -1 : (s.pos = p);
 };
 
+const readTids = (p: number, n: number) => Int32Array.from({ length: n }, (_, i) => mem.ld32(p + 4 * i));
+const EINVAL = 22;
+
 export function ndkInit(): void {
   hostLib("libandroid.so", {
     ATrace_isEnabled: () => 0,
@@ -264,6 +268,15 @@ export function ndkInit(): void {
     },
     AAssetDir_rewind: (_c, a) => { const d = assetDirs[a.i()]; if (d) d.next = 0; },
     AAssetDir_close: (_c, a) => { const h = a.i(), d = assetDirs[h]; if (d) { mem.free(d.name); assetDirs[h] = null; } },
+    APerformanceHint_getManager: () => 1,
+    APerformanceHint_getPreferredUpdateRateNanos: () => HINT_RATE_NANOS,
+    // HintManagerService refuses a session without threads, which the NDK answers with NULL
+    APerformanceHint_createSession: (_c, a) => { a.p(); const tids = a.p(), n = a.i(); return n ? openHintSession(readTids(tids, n)) : 0; },
+    APerformanceHint_updateTargetWorkDuration: (_c, a) => { a.p(); return a.l() > 0n ? 0 : EINVAL; },
+    APerformanceHint_reportActualWorkDuration: (_c, a) => { a.p(); return a.l() > 0n ? 0 : EINVAL; },
+    APerformanceHint_setThreads: (_c, a) => { const session = a.i(), tids = a.p(), n = a.i(); if (!n) return EINVAL; hintSessions.set(session, readTids(tids, n)); return 0; },
+    APerformanceHint_setPreferPowerEfficiency: () => 0,
+    APerformanceHint_closeSession: (_c, a) => { hintSessions.delete(a.i()); },
     // there is no thermal service: no manager, and the headroom is the documented NaN
     AThermal_acquireManager: () => 0, AThermal_releaseManager: () => {},
     AThermal_getCurrentThermalStatus: () => -1,
