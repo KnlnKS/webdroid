@@ -34,8 +34,13 @@ onmessage = ({data: {seq, op, id, at, size, bytes}}) => { queue = queue.then(asy
       return postMessage({seq});
     }
     if (op === "flush") { for (const h of handles.values()) await h.then(x => x.flush(), () => {}); return postMessage({seq}); }
+    if (op === "holds") {
+      // a file another page holds open is kept; one the origin's storage lost or cut short is not
+      try { return postMessage({seq, value: (await open(id, false)).read(new Uint8Array(1), {at: size - 1}) === 1}); }
+      catch (e) { return postMessage({seq, value: e.name !== "NotFoundError"}); }
+    }
     const h = await open(id, op !== "read");
-    if (op === "read") { const out = new Uint8Array(size); const n = h.read(out, {at}); return postMessage({seq, bytes: out.subarray(0, n)}, [out.buffer]); }
+    if (op === "read") { const out = new Uint8Array(size); const n = h.read(out, {at}); return postMessage({seq, value: out.subarray(0, n)}, [out.buffer]); }
     if (op === "write") h.write(bytes, {at});
     else if (op === "truncate") h.truncate(size);
     postMessage({seq});
@@ -43,19 +48,21 @@ onmessage = ({data: {seq, op, id, at, size, bytes}}) => { queue = queue.then(asy
 }); };`;
 
 const CHUNK = 1 << 20, CACHE_CHUNKS = 64;
+/** what each of the worker's operations answers */
+type Results = { read: Uint8Array; holds: boolean; write: void; truncate: void; remove: void; clear: void; flush: void };
 
 export class DiskStore {
   private worker: Worker | null = null;
   private seq = 0;
-  private readonly pending = new Map<number, { resolve: (bytes?: Uint8Array) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<number, { resolve: (value: never) => void; reject: (error: Error) => void }>();
   private readonly files = new Map<string, DiskFile>();
   /** recently read chunks of every file, least recently used first */
   readonly cache = new Map<string, Uint8Array>();
 
-  call(op: string, id: string, at = 0, size = 0, bytes?: Uint8Array): Promise<Uint8Array | undefined> {
+  call<Op extends keyof Results>(op: Op, id: string, at = 0, size = 0, bytes?: Uint8Array): Promise<Results[Op]> {
     const worker = this.worker ??= this.start();
     const seq = ++this.seq;
-    return new Promise((resolve, reject) => {
+    return new Promise<Results[Op]>((resolve, reject) => {
       this.pending.set(seq, { resolve, reject });
       worker.postMessage({ seq, op, id, at, size, bytes }, bytes ? [bytes.buffer] : []);
     });
@@ -64,10 +71,11 @@ export class DiskStore {
     // best-effort storage may be evicted under disk pressure, which would lose downloaded data
     void navigator.storage.persist().catch(() => {});
     const worker = new Worker(URL.createObjectURL(new Blob([WORKER], { type: "text/javascript" })));
-    worker.onmessage = ({ data }: MessageEvent<{ seq: number; bytes?: Uint8Array; error?: string }>) => {
+    worker.onmessage = ({ data }: MessageEvent<{ seq: number; value?: unknown; error?: string }>) => {
       const request = this.pending.get(data.seq);
       this.pending.delete(data.seq);
-      if (data.error) request?.reject(new Error(data.error)); else request?.resolve(data.bytes);
+      // the answer of the operation this sequence number asked for
+      if (data.error) request?.reject(new Error(data.error)); else request?.resolve(data.value as never);
     };
     return worker;
   }
@@ -88,11 +96,9 @@ export class DiskStore {
     return this.call("clear", "");
   }
   flush(): Promise<unknown> { return this.worker ? this.call("flush", "") : Promise.resolve(); }
-  /** whether file `id` still holds `size` bytes: not once the origin's storage lost it or cut it
-   *  short. A file another page holds open is kept. */
+  /** whether file `id` still holds `size` bytes */
   holds(id: string, size: number): Promise<boolean> {
-    if (!size) return Promise.resolve(true);
-    return this.call("read", id, size - 1, 1).then((bytes) => bytes?.length === 1, (error) => !String(error).includes("NotFoundError"));
+    return size ? this.call("holds", id, 0, size) : Promise.resolve(true);
   }
 }
 
@@ -107,7 +113,7 @@ export class DiskFile implements WritableSource {
   private async chunk(index: number): Promise<Uint8Array> {
     const key = this.id + ":" + index, cache = this.store.cache, cached = cache.get(key);
     if (cached) { cache.delete(key); cache.set(key, cached); return cached; }
-    const bytes = (await this.store.call("read", this.id, index * CHUNK, CHUNK)) ?? new Uint8Array(0);
+    const bytes = await this.store.call("read", this.id, index * CHUNK, CHUNK);
     cache.set(key, bytes);
     if (cache.size > CACHE_CHUNKS) cache.delete(cache.keys().next().value!);
     return bytes;
