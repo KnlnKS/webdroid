@@ -4,7 +4,7 @@
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
 import { rt, JObj, declaredField } from "../runtime";
-import { after, scall, newObj, iof, classNameOf } from "./jentry";
+import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
 import { jarray } from "../abi";
@@ -116,6 +116,10 @@ export function directAddress(b: JBuffer): number | bigint | Promise<number | bi
 
 /** ByteBuffer.allocateDirect(n): guest memory, owned by the buffer */
 export const allocateDirect = (n: number): JBuffer | Promise<JBuffer> => scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", n);
+/** NewDirectByteBuffer over a direct buffer's memory, as a native hands out memory it owns: freeing the view frees
+ *  only its own MemoryRef. Read-only as asReadOnlyBuffer() makes it. */
+export const directView = (b: JBuffer, readOnly = false): JBuffer | Promise<JBuffer> =>
+  after(newObj("java/nio/DirectByteBuffer", "(JI)V", addressOf(b), capacity(b)), (v: JBuffer) => readOnly ? vcall(v, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;") : v);
 /** ByteBuffer.order(nativeOrder()) */
 export function nativeOrder(b: JBuffer): JBuffer {
   const o = b as Fields;

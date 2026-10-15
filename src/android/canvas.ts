@@ -13,7 +13,7 @@ import { NativeBitmap, bitmapAt } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
+import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, PLANE, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
 import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
@@ -210,7 +210,7 @@ export class NativeCanvas {
       clip(ctx);
       ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
       if (bitmap) bitmap.draw(ctx);
-      else ctx.fillRect(-1e5, -1e5, 2e5, 2e5);
+      else ctx.fillRect(-PLANE, -PLANE, 2 * PLANE, 2 * PLANE);
       ctx.restore();
     };
     if (!this.shaderCtx || this.shaderBaseCtx !== ctx || this.shaderCtxLm !== lm || this.bitmapShader !== bitmap) {

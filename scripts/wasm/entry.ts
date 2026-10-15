@@ -29,11 +29,11 @@ const counted = perf.wasmFacadeMisses - missesBefore === 1 && rt.missing.has("fa
 let failed = 0;
 for (const failure of unlike(expected, wasm)) { failed++; console.log("FAIL " + failure); }
 if (!counted) { failed++; console.log("FAIL a read no field backs is not counted in perf and the missing entries"); }
-// a facade read outside any native's scope (a looper callback reading vsync data) copies the array in a scope of its own and leaves nothing to undo
-const scope = w.bridge as unknown as { undo: unknown[]; live: Map<object, unknown> };
+// a facade read outside any native's scope (a looper callback reading vsync data) copies the array in a scope of its own and leaves no scope open
+const scope = w.bridge as unknown as { scopes: unknown[]; live: Map<object, unknown> };
 let copies = 0;
 for (let i = 0; i < 1000; i++) copies += +((facade[mangleField("E", "slots")] as Int32Array)[2] === 3);
-if (copies !== 1000 || scope.undo.length || scope.live.size) { failed++; console.log(`FAIL unscoped facade reads: ${copies} copies, ${scope.undo.length} undo entries, ${scope.live.size} live`); }
+if (copies !== 1000 || scope.scopes.length || scope.live.size) { failed++; console.log(`FAIL unscoped facade reads: ${copies} copies, ${scope.scopes.length} open scopes, ${scope.live.size} live`); }
 // An allocation may wait before newObj enters its constructor. Another completion owns the
 // host turn then; the constructor still belongs to the allocating caller, including a non-main caller.
 const ownerFailures = failed;
