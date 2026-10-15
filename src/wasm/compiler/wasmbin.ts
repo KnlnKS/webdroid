@@ -152,8 +152,8 @@ export class ModuleBuilder {
   build(compactImports = false): Uint8Array {
     let imports = this.imports, imported = this.nImportedFuncs;
     let index = (f: number) => f;
-    // Raw bodies or global initializers can contain untracked function references.
-    if (compactImports && !this.globals.length && this.bodies.every(b => b.functionRefs) && this.elems.every(b => b.functionRefs)) {
+    // Raw bodies or global initializers (ref.func) can contain untracked function references.
+    if (compactImports && !this.globals.some(g => g.includes(0xd2)) && this.bodies.every(b => b.functionRefs) && this.elems.every(b => b.functionRefs)) {
       const used = new Set<number>();
       for (const group of [this.bodies, this.elems]) for (const b of group) for (const at of b.functionRefs!) { const f = readIndex(b, at); if (f < this.nImportedFuncs) used.add(f); }
       for (const e of this.exports) if (e.kind === 0) used.add(e.idx);

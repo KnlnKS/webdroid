@@ -687,9 +687,13 @@ export class Compiler implements Base {
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
   outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
+  private finishing: (() => void)[] = [];
+  /** `f` runs once the module's code is complete, before it is encoded */
+  atFinish(f: () => void): void { this.finishing.push(f); }
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
     const roots = fns.length;
     fns = fns.concat(this.outlines);
+    for (const f of this.finishing.splice(0)) f();
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), new Code(0).finish(), "$start");
