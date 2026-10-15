@@ -12,7 +12,7 @@ import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
-import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
+import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 import { handleViews } from "../../android/handles";
 import { count } from "./stats";
@@ -46,6 +46,14 @@ export const refOf = (v: unknown): object | undefined => typeof v === "object" &
 const PROBES = new Set(["then", "toJSON", "message", "stack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
+/** a native call's scope: the arrays it copied, each stored back when it ends, and the scratch it reserved ([sp, top), sp -1 until it reserves any) */
+class Scope implements BridgeScope {
+  sp = -1;
+  top = 0;
+  copies: { java: object; host: object; store: () => void }[] = [];
+  held = false;
+}
+
 export class Bridge implements HostBridge {
   /** the host form of each Java object a native has seen, so its identity is stable across calls */
   private facades = new WeakMap<object, object>();
@@ -53,14 +61,8 @@ export class Bridge implements HostBridge {
   private live = new Map<object, object>();
   private owners = new WeakMap<object, object>();
   private bases = new WeakMap<object, number>();
-  private undo: (() => void)[] = [];
-  /** the array each `undo` entry stores back */
-  private undone: object[] = [];
-  /** where each open scope's entries start in `undo` */
-  private marks: number[] = [];
-  private saved: number[] = [];
-  /** where each scope's scratch ends: a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
-  private tops: number[] = [];
+  /** the open scopes, innermost last; a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
+  private scopes: Scope[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
   private accessors = { get: new WeakMap<FieldInfo, Fn>(), set: new WeakMap<FieldInfo, Fn>(), gets: new WeakMap<FieldInfo, Fn>(), sets: new WeakMap<FieldInfo, Fn>() };
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
@@ -91,32 +93,31 @@ export class Bridge implements HostBridge {
   }
 
   // ---------- the scope of a native call
-  begin(): void { this.saved.push(-1); this.tops.push(0); this.marks.push(this.undo.length); }
-  /** ends the innermost scope: stores back what its call wrote to the arrays it reached, and releases the scratch it used */
-  end(): void {
-    const mark = this.marks.pop()!;
-    try { if (this.undo.length > mark) { this.undone.length = mark; for (const u of this.undo.splice(mark).reverse()) u(); } } finally {
-      const sp = this.saved.pop()!, top = this.tops.pop()!;
-      if (sp >= 0 && (this.w.sp.value as number) <= top) this.w.sp.value = sp;
-      if (!this.saved.length && this.live.size) this.live.clear();
+  /** whether a native call is in progress */
+  get open(): boolean { return this.scopes.length > 0; }
+  begin(): Scope { const s = new Scope(); this.scopes.push(s); return s; }
+  /** stores back what the call wrote to the arrays it reached, and releases the scratch it used; a held scope ends once it resumes */
+  end(s: Scope): void {
+    if (s.held) return;
+    try { for (let i = s.copies.length - 1; i >= 0; i--) { this.live.delete(s.copies[i].java); s.copies[i].store(); } } finally {
+      this.scopes.pop();
+      if (s.sp >= 0 && (this.w.sp.value as number) <= s.top) this.w.sp.value = s.sp;
+      if (!this.scopes.length && this.live.size) this.live.clear();
     }
   }
-  /** the innermost scope, the call in progress, is its strand's while it waits: it is set aside, and the returned function opens it again over
-   *  whatever scopes are open then. The scopes under it belong to the calls that entered Java on its way, which go on before it resumes. */
-  hold(): () => void {
-    const mark = this.marks.pop()!, undo = this.undo.splice(mark), arrays = this.undone.splice(mark), sp = this.saved.pop()!, top = this.tops.pop()!;
-    const hosts = arrays.map((o) => { const h = this.live.get(o)!; this.live.delete(o); return h; });
-    return () => {
-      this.marks.push(this.undo.length); this.saved.push(sp); this.tops.push(top);
-      for (let i = 0; i < undo.length; i++) { this.undo.push(undo[i]); this.undone.push(arrays[i]); this.live.set(arrays[i], hosts[i]); }
-    };
-  }
+  /** `s`, the innermost scope, is its strand's while it waits. The scopes under it belong to the calls that entered Java on its way, which go on
+   *  before it resumes over whatever scopes are open then. */
+  hold(s: Scope): void { this.scopes.pop(); s.held = true; for (const c of s.copies) this.live.delete(c.java); }
+  resume(s: Scope): void { s.held = false; this.scopes.push(s); for (const c of s.copies) this.live.set(c.java, c.host); }
+  /** `host`, the copy of `java` the innermost call made, which `store` writes back when that call ends */
+  private copied(java: object, host: object, store: () => void): void { this.scopes.at(-1)?.copies.push({ java, host, store }); }
   private region(bytes: number): number {
-    const top = this.saved.length - 1, sp = this.w.sp.value as number;
-    if (this.saved[top] < 0) this.saved[top] = sp;
+    const s = this.scopes.at(-1), sp = this.w.sp.value as number;
+    if (s && s.sp < 0) s.sp = sp;
     const at = ((sp + 7) & -8), need = at + bytes, have = this.w.mem.buffer.byteLength;
     if (need > have) this.w.mem.grow(Math.ceil((need - have) / 65536));
-    this.w.sp.value = this.tops[top] = need;
+    this.w.sp.value = need;
+    if (s) s.top = need;
     return at;
   }
 
@@ -152,8 +153,7 @@ export class Bridge implements HostBridge {
     const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer), lo = from * size, n = count * size;
     bytes.set(new Uint8Array(this.w.mem.buffer, at + lo, n));
     this.live.set(o, host); this.owners.set(host, o); this.bases.set(host, from);
-    this.undone.push(o);
-    this.undo.push(() => { this.live.delete(o); new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
+    this.copied(o, host, () => { new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
     return host;
   }
   /** `offset`, an index into the whole array, as an index into `host`, which holds the elements from a range's start */
@@ -164,8 +164,7 @@ export class Bridge implements HostBridge {
     for (let i = 0; i < len; i++) host[i] = this.toHost(this.op.aget(o, i), elem);
     host.$t = elem;
     const seen = host.slice();
-    this.undone.push(o);
-    this.undo.push(() => { this.live.delete(o); for (let i = 0; i < len; i++) if (host[i] !== seen[i]) this.op.aset(o, i, this.toJava(host[i], elem)); });
+    this.copied(o, host, () => { for (let i = 0; i < len; i++) if (host[i] !== seen[i]) this.op.aset(o, i, this.toJava(host[i], elem)); });
     return host;
   }
   private fieldsOf(name: string): Map<string, FieldInfo> {
@@ -208,7 +207,7 @@ export class Bridge implements HostBridge {
         }
         const raw = bridge.accessor("get", f)(o);
         // outside a native's scope (a callback after its call waited) the read opens its own, which nothing else would close
-        return f.kind !== "L" ? fromBits(raw, f.desc) : bridge.saved.length ? bridge.toHost(raw, f.desc) : bridge.scoped(() => bridge.toHost(raw, f.desc));
+        return f.kind !== "L" ? fromBits(raw, f.desc) : bridge.open ? bridge.toHost(raw, f.desc) : bridge.scoped(() => bridge.toHost(raw, f.desc));
       },
       set(_t, p, v) {
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
@@ -276,7 +275,7 @@ export class Bridge implements HostBridge {
     }
   }
   private written(raw: unknown, f: FieldInfo): boolean { return f.kind === "L" ? raw !== null : f.kind === "J" ? raw !== 0n : raw !== 0; }
-  private scoped<T>(f: () => T): T { this.begin(); try { return f(); } finally { this.end(); } }
+  private scoped<T>(f: () => T): T { const s = this.begin(); try { return f(); } finally { this.end(s); } }
 
   /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
   private method(o: object, cls: string, mangled: string): Fn | undefined {
@@ -303,14 +302,13 @@ export class Bridge implements HostBridge {
    *  method's class is initialized first. An array passed is copied for the call, and what the method wrote to it is read back. */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m);
-    const nested = this.saved.length > 0;
-    if (!nested) this.begin();
+    const scope = this.open ? null : this.begin();
     try {
       const given = this.javaArgs(m, args);
       const r = call(...(m.isStatic ? [] : [recv]), ...given);
       this.readBackAll(args, given);
       return this.hostResult(m, rk, r);
-    } finally { if (!nested) this.end(); }
+    } finally { if (scope) this.end(scope); }
   }
 
   /** `invoke` on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited. The call itself has no scope: the natives it reaches open their own,

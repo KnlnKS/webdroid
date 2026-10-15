@@ -58,10 +58,13 @@ export interface GuestMemory {
   free(address: bigint): void;
 }
 
+/** what a native call reaches of Java: the arrays it copied and the scratch it reserved, until `end` releases it */
+export interface BridgeScope { readonly held: boolean }
+
 /** how Java objects cross to a native and back */
 export interface HostBridge {
-  begin(): void;
-  end(): void;
+  begin(): BridgeScope;
+  end(s: BridgeScope): void;
   initialize(cls: string, run: () => unknown): void;
   toHost(v: unknown, desc?: string, range?: [number, number]): unknown;
   offsetIn(host: unknown, offset: number): number;
@@ -70,8 +73,9 @@ export interface HostBridge {
   element(a: object, i: number): unknown;
   readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array>;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
-  /** sets the scope of the call in progress aside while its strand waits, and answers the function that takes it up again */
-  hold(): () => void;
+  /** sets `s`, the scope of the call in progress, aside while its strand waits (`end` leaves it open), until `resume` takes it up again */
+  hold(s: BridgeScope): void;
+  resume(s: BridgeScope): void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
   /** `invoke` on strand `s`, whose stack can wait: a Promise of the host value when the call waited */

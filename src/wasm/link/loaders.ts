@@ -141,7 +141,7 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;
-  w.bridge.begin();
+  const mark = w.bridge.begin();
   try {
     const read = (name: string): Loader[] => {
       const array = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", name, "[Ljava/lang/ClassLoader;")(object);
@@ -151,7 +151,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
     const graph: [Loader[], Loader[]] = [read("sharedLibraryLoaders"), read("sharedLibraryLoadersAfter")];
     s.libraries.set(object, graph);
     return graph;
-  } finally { w.bridge.end(); }
+  } finally { w.bridge.end(mark); }
 }
 
 /** host.classByName(name, scope, mode): the id of the class a binary name ("a.B$C", "[La.B;") stands for in the scope, or 0 */
@@ -226,18 +226,17 @@ function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): obj
   }
   const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
   if (fresh.length) w.addDexes(fresh, loader);
-  w.bridge.begin();
+  const mark = w.bridge.begin();
   try {
     // ART's long[] starts with the OAT handle; this VM uses opaque DEX handles.
     const cookie = w.bridge.toJava(BigInt64Array.from([0n, ...dexes.map(() => s.nextDexHandle++)]), "[J") as object;
     s.cookies.set(cookie, { loader, dexes });
     return cookie;
-  } finally { w.bridge.end(); }
+  } finally { w.bridge.end(mark); }
 }
 
 export function dexOpenMemory(w: World, buffers: object, arrays: object, starts: object, ends: object, loader: object | null): object | Promise<object> {
-  w.bridge.begin();
-  const bytes: (Uint8Array | Promise<Uint8Array>)[] = [];
+  const mark = w.bridge.begin(), bytes: (Uint8Array | Promise<Uint8Array>)[] = [];
   try {
     const from = w.bridge.toHost(starts, "[I") as Int32Array, to = w.bridge.toHost(ends, "[I") as Int32Array;
     for (let i = 0; i < w.bridge.arrayLength(buffers); i++) {
@@ -253,7 +252,7 @@ export function dexOpenMemory(w: World, buffers: object, arrays: object, starts:
         bytes.push(w.bridge.readBuffer(buffer, start, n));
       }
     }
-  } finally { w.bridge.end(); }
+  } finally { w.bridge.end(mark); }
   const open = (copies: Uint8Array[]) => {
     let dexes: DexFile[];
     try { dexes = copies.flatMap((bytes, i) => dexesIn(bytes, `memory:${i}`)); }
