@@ -110,6 +110,25 @@ the highest medians are Komikku `more` 128 ms cold and Calculator M `7` 95 ms co
 still miss: warm Komikku `next` at 307 ms (the dialog-aftermath race in the history) and cold `more` at 151 ms. An `--ecores` pass (about 6× slower) is in the history under
 "A slower device on the efficiency cores".
 
+Scroll pacing (`lat` fps steps) times each presentation by the display frame that shows it since 2026-10-14
+(`fc0fa6a9f`); earlier p95s used the composite time and run about 1 ms higher (18.2–19.5 ms). Over five `--gpu`
+runs each, FitNotes `scroll-legs` p95 is 17.3–17.8 ms and Komikku `scroll-appearance` 17.6–17.8 ms, with no missed vsyncs.
+
+Repeating a tap bounds what a second tier could save (Komikku, back and then Appearance ten times in one session,
+2026-10-14). `appearance` took 167, 93 and 52 ms on its first, second and tenth visits cold, and 82, 64 and 50 ms
+warm. Its compiling fell from 33 ms to 0–6 ms after the first cold visit.
+
+The Wasm tier against ART (`bun scripts/wasm/g1art.ts --ref <g1.json>`, the reference AVD, 2026-10-14), steady state:
+
+| Kotlin-shaped G1 workload | Chrome ÷ ART |
+|---|---|
+| final getter chain (`ktGetters`) | 9.3× |
+| field updaters (`ktUpdaters`) | 7.5× |
+| parameter null checks / slot tables / lone interface impl | 5.2× / 4.8× / 4.4× |
+| generic lambdas / state machine / cancellation | 2.4× / 2.3× / 1.6× |
+| try/finally | 0.5× |
+| geometric mean of the nine | 3.2× |
+
 Heavy-app launches wait for live content, so they vary with the network. Komikku's cold taps sit at the gate; they compile
 on demand. Warm YouTube taps compile almost nothing (21 methods in `you`) but run ~90 ms of first-tier Java in input dispatch.
 
@@ -141,7 +160,9 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
   most of the rest is `addDexes` and `linkSlot`. FitNotes' warm app thread is busy about 1.3 s (JS 0.7 s, Java
   0.38 s).
 - **Process contention:** the broker answers app IPC on the page thread, so slow page work starves app queries
-  (the probe's synchronous readbacks once starved Komikku's chapter list).
+  (the probe's synchronous readbacks once starved Komikku's chapter list). In the trio's gated windows the page
+  starts serving a call within 0.3 ms, and the main thread waits at most 7.5 ms a window on broker calls
+  (`scripts/lat/census.ts`); SQLite runs on background threads.
 - **Not levers:** frame production (record, replay, composite) and text measurement and shaping were each under a
-  few percent of profiled windows; guest↔host crossings cost tens of nanoseconds; idle apps use about 2% of the
+  few percent of profiled windows (scrolling, `doFrame` p95 is 2.5–3.6 ms, draw ≤ 0.9 ms and composite ≤ 0.5 ms); guest↔host crossings cost tens of nanoseconds; idle apps use about 2% of the
   thread.

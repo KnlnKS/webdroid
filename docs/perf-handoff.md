@@ -178,7 +178,50 @@ These analyses were done with scratch scripts that are not in the repo; each is 
 3. **Done: a slower-device pass.** `lat --ecores` runs Chrome under `taskpolicy -c background` (about 6× slower in every thread); results are in the history ("A slower device on the efficiency cores").
 4. **Done: docs committed** (the reorganization landed in `959469a3`).
 
-Plan 1.6 (pointer pipelining) has nothing to recover: UP reaches the Worker 0–6 ms after the page event. Plan 1.3 (the vsync `fill()` undo) is unverified. Looper callbacks run inside `nativePollOnce`'s Bridge scope, so measure before changing it.
+## Plan status (2026-10-14)
+
+Every item of the appended plan, with the history entry (or commit) that holds its evidence. "Not a lever" means
+it was measured and found to have nothing on the tap or frame path to recover.
+
+| Item | Status | Evidence |
+|---|---|---|
+| 0.1 `lat` v2 | Done | first-response metric, crops, intervals |
+| 0.2 `--throttle` | Replaced by `--ecores` | CDP throttling slows only the page ("A slower device on the efficiency cores") |
+| 0.3 Worker timeline | Done | `src/timeline.ts` |
+| 0.4 IPC census | Done | `scripts/lat/census.ts`; the page's Serve marks time the start of service, so no ping sampler; bytes are not counted |
+| 0.5 Codegen census | Done as far as Stage 3 needed | static call-site census (plan 3.2 entry), trivial-body shares (3.3), repeat taps ("Repeat taps bound a shipped second tier"); no per-tier Java self time |
+| 0.6 Kotlin workloads, ART ratio | Done | "Kotlin-shaped workloads against ART": 3.2× geomean |
+| 0.7 Scenarios and counter gates | Done | `scroll-appearance`, heavy-app reports, `wasmAotLoaded`/browser-error gates |
+| 0.8 Baselines | Done | performance.md |
+| 1.1 Turn clock, vsync awareness | Rejected | "Rejected: a turn clock from the task's start" |
+| 1.2 Composite at latch | Not a lever | "Composite and frame close wait for nothing" |
+| 1.3 Vsync `fill()` scope | Done (`4fca56a56`) | "Vsync data reads are scoped"; the 1,000-vsync unit test was left out to keep tests to core behavior |
+| 1.4 Synchronous frame close | Not a lever | "Composite and frame close wait for nothing" |
+| 1.5 Shader prewarm | Not a lever | "RuntimeShader surface": 8.1–8.7 ms once per process with `--gpu` |
+| 1.6 Pipelined pointer events | Not a lever | "Pointer pipelining is not a lever" |
+| 1.7 Deferred upgrades | Done | "Worker answers wait out input" |
+| 1.8 APEX jars in the build | Not pursued | "Boot jars outside the platform build": 40–50 ms of a first launch for 29% more dex |
+| 2.1 Deterministic numbering | Rejected | "Rejected: seeded app numbering to attach the first build mid-session" |
+| 2.2 Streamed app images | Not pursued | needs 2.1's numbering; the same entry measured a late code module costing the next tap 140–263 ms |
+| 2.3 Second tier in builds | Not pursued | repeat taps bound it at about 25–30 ms of a warm first visit, nothing cold |
+| 2.4 Second tier in Workers | Not pursued | "Rejected: compiling ahead in a Worker"; adoption needs the page's numbering (2.1) |
+| 2.5 Front-end throughput | Done | "Compiler front-end throughput" |
+| 3.1 Merged prologue | Rejected | "Rejected: one prologue call" |
+| 3.2 Final-target calls | Rejected | "Rejected: final targets called through their slot" |
+| 3.3 Inlined trivial bodies | Not pursued | "Not pursued: inlining trivial bodies" |
+| 3.4 Small items | Rejected or not a lever | array length: "Rejected: one array supertype"; the data reference is an immutable field of a final struct, which V8 can already reuse; literal globals and `acmp` were not tried |
+| 3.5 Typed catches, constant-offset Unsafe | Not a lever | ART ratios: try/finally 0.5×, cancellation 1.6×; updater offsets are runtime values |
+| 3.6 Direct calls, precise types | Direct calls not a lever; precise types open | V8 already inlines `ktGetters`' getters in the second tier ("Kotlin-shaped workloads against ART"); the 9.3× left is casts, guards and fuel |
+| 4.1 Time-bounded preemption | Not a lever | "Background slices are short" |
+| 4.2 Background task priority | Not pursued | conditional on 4.1 |
+| 5.1 Flat statics | Not a lever | "Flat statics are not a tap lever" |
+| 5.2 One stub per signature | Not pursued | all modules a cold tap creates take 3–17 ms (5.1 entry); its heap motive (TikTok) is unmeasured |
+| 6.1 Batched input | Rejected | "Batched MOVEs (`?input=batched`)" |
+| 6.2 Batched SQLite | Not a lever | "App IPC is off the tap path": SQLite runs on background threads |
+| 6.3 Settings cache, PIC, binder pool | Not a lever | same entry: at most 5.4 ms in one window, no binder calls |
+| 6.4 system_server Worker | Condition unmet | same entry: service starts within 0.3 ms |
+| 7.1–7.3 Redraw less | Not a lever | "Composite and frame close wait for nothing": draw ≤ 0.9 ms, composite ≤ 0.5 ms at p95 |
+| 7.4 WebGL filters | Not pursued | only for apps that hit them; the gate apps' draws stay under 1 ms |
 
 ---
 
