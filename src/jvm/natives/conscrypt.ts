@@ -307,30 +307,27 @@ function aeadFor(h: bigint, key: Int8Array | null, tagLen: number, nonce: Int8Ar
   return d.make(u8(key).slice());
 }
 const tagOr16 = (n: number) => n === 0 ? 16 : n;
-nc("EVP_AEAD_CTX_seal(J[BI[BI[B[BII[B)I", (h: bigint, key: Int8Array, tagLen: number, out: Int8Array, outOff: number, nonce: Int8Array, input: Int8Array, inOff: number, inLen: number, aad: Int8Array | null) => {
-  const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce);
-  const r = a.seal(u8(nonce), region(input, inOff, inLen), aad ? u8(aad) : new Uint8Array(0), tagLen);
-  if (r.length > out.length - outOff) throw sslError("javax/crypto/ShortBufferException", CIPHER, 103, "BUFFER_TOO_SMALL");
-  region(out, outOff, r.length).set(r);
-  return r.length;
-});
-nc("EVP_AEAD_CTX_open(J[BI[BI[B[BII[B)I", (h: bigint, key: Int8Array, tagLen: number, out: Int8Array, outOff: number, nonce: Int8Array, input: Int8Array, inOff: number, inLen: number, aad: Int8Array | null) => {
-  const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce);
-  const r = a.open(u8(nonce), region(input, inOff, inLen), aad ? u8(aad) : new Uint8Array(0), tagLen);
+/** `data` sealed or opened into at most `room` bytes */
+function aead(seal: boolean, h: bigint, key: Int8Array, tagLen: number, nonce: Int8Array, data: Uint8Array, aad: Int8Array | null, room: number): Uint8Array {
+  const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce), extra = aad ? u8(aad) : new Uint8Array(0);
+  const r = seal ? a.seal(u8(nonce), data, extra, tagLen) : a.open(u8(nonce), data, extra, tagLen);
   if (!r) throw badDecrypt("javax/crypto/AEADBadTagException");
-  if (r.length > out.length - outOff) throw sslError("javax/crypto/ShortBufferException", CIPHER, 103, "BUFFER_TOO_SMALL");
+  if (r.length > room) throw sslError("javax/crypto/ShortBufferException", CIPHER, 103, "BUFFER_TOO_SMALL");
+  return r;
+}
+const aeadArray = (seal: boolean) => (h: bigint, key: Int8Array, tagLen: number, out: Int8Array, outOff: number, nonce: Int8Array, input: Int8Array, inOff: number, inLen: number, aad: Int8Array | null) => {
+  const r = aead(seal, h, key, tagLen, nonce, region(input, inOff, inLen), aad, out.length - outOff);
   region(out, outOff, r.length).set(r);
   return r.length;
-});
+};
+nc("EVP_AEAD_CTX_seal(J[BI[BI[B[BII[B)I", aeadArray(true));
+nc("EVP_AEAD_CTX_open(J[BI[BI[B[BII[B)I", aeadArray(false));
 // the direct-buffer forms: input from position to limit, output written at position; the caller moves both
 function aeadBuf(seal: boolean, h: bigint, key: Int8Array, tagLen: number, out: JBuffer | null, nonce: Int8Array, input: JBuffer | null, aad: Int8Array | null) {
   if (!out || !input) throw rt.mkThrowable("java/lang/NullPointerException", null);
   if (!addressOf(out) || !addressOf(input)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Non-direct ByteBuffer");
   return after(readRemainingBytes(input), bytes => {
-    const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce), data = bytes.slice();
-    const r = seal ? a.seal(u8(nonce), data, aad ? u8(aad) : new Uint8Array(0), tagLen) : a.open(u8(nonce), data, aad ? u8(aad) : new Uint8Array(0), tagLen);
-    if (!r) throw badDecrypt("javax/crypto/AEADBadTagException");
-    if (r.length > limit(out) - position(out)) throw sslError("javax/crypto/ShortBufferException", CIPHER, 103, "BUFFER_TOO_SMALL");
+    const r = aead(seal, h, key, tagLen, nonce, bytes.slice(), aad, limit(out) - position(out));
     return after(writeRemainingBytes(out,r), () => r.length);
   });
 }
