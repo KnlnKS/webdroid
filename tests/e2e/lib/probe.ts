@@ -284,6 +284,8 @@ function installProbe(cfg: ProbeConfig): void {
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
+  /** busy reasons for work whose result is not drawn yet, besides a main-thread job ("job:…") */
+  const WORKING = new Set(["queued", "transition", "starting"]);
   const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
@@ -396,7 +398,7 @@ function installProbe(cfg: ProbeConfig): void {
       // clock has already run through the window, and a loop that keeps going without changing
       // the screen (a paused game) is still.
       activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
-      const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition" || k === "starting") ||
+      const working = b.some((k) => k.startsWith("job:") || WORKING.has(k)) ||
         (!controlled && activeSince > 0 && now - activeSince < 1500);
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
