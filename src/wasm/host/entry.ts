@@ -12,6 +12,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable";
 import type { JavaClass } from "../../jvm/tier";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
+import { waitsEnded } from "../link/module";
 import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import { OP, type Code } from "../compiler/code";
@@ -249,7 +250,7 @@ function makeEntry(w: World): Entry {
       return name[0] === "[" ? name === cls || ARRAY_SUPERS.has(cls) : prog.isSubclass(name, cls);
     },
     classNameOf,
-    callOn: (thread, run) => processExited() ? never() as never : asThread(recOf(thread), run),
+    callOn: (thread, run) => processExited() || waitsEnded() ? never() as never : asThread(recOf(thread), run),
     after: chain,
   };
 }

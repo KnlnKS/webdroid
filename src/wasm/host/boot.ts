@@ -20,6 +20,7 @@ import type { HostLoop } from "../link/sched";
 import type { Numbering } from "../link/aot";
 import { externs, intrinsics } from "../link/intrinsics";
 import { objectOfLoader } from "../link/loaders";
+import { endWaits } from "../link/module";
 import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
 import { wasmJni } from "./jni";
@@ -93,7 +94,8 @@ export async function bootWasmTier(): Promise<TierBackend> {
   };
   onProcessExit(close);
   if (processExited()) close();
-  if (typeof window !== "undefined") window.addEventListener("pagehide", close, { once: true });
+  // the page's end ends its waits as well, which the engine would otherwise keep, with all they reach, past the page
+  if (typeof window !== "undefined") window.addEventListener("pagehide", () => { close(); endWaits(new Error("the page closed")); }, { once: true });
   const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>();
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {

@@ -14,5 +14,25 @@ type Jspi = { Suspending: new (fn: (...a: never[]) => unknown) => Function; prom
 const jspiApi = (): Jspi | undefined => (WebAssembly as unknown as Partial<Jspi>).Suspending ? (WebAssembly as unknown as Jspi) : undefined;
 /** whether the engine has JSPI (node needs --experimental-wasm-jspi; Bun's JavaScriptCore has none) */
 export const hasJspi = (): boolean => !!jspiApi();
-export const suspending = <F extends Function>(fn: F): F => new (jspiApi()!.Suspending)(fn as never) as unknown as F;
+// The engine keeps a suspended stack, and all its frames reach, until its Promise settles, even after its page is gone (a reload keeps the
+// renderer), so each pending wait stays settleable by endWaits.
+const waits = new Set<(reason: unknown) => void>();
+let ended: Error | undefined;
+export const suspending = <F extends Function>(fn: F): F => new (jspiApi()!.Suspending)(((...a: never[]) => {
+  if (ended) throw ended;
+  const r = (fn as unknown as (...a: never[]) => unknown)(...a);
+  if (!(r instanceof Promise)) return r;
+  return new Promise((resolve, reject) => {
+    waits.add(reject);
+    r.then((v) => { waits.delete(reject); resolve(v); }, (e) => { waits.delete(reject); reject(e); });
+  });
+}) as never) as unknown as F;
+/** the page is gone: every waiting stack resumes by throwing `reason`, as does any later wait. Java catches only its own tag and natives pass
+ *  `reason` on unconverted, so the stacks unwind without running Java handlers */
+export function endWaits(reason: Error): void {
+  ended ??= reason;
+  for (const reject of waits) reject(ended);
+  waits.clear();
+}
+export const waitsEnded = (): boolean => ended !== undefined;
 export const promising = (f: Function): Function => jspiApi()!.promising(f);
