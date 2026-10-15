@@ -114,9 +114,8 @@ export function hostFrames(frame: (time: number) => void): void {
 }
 export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
 let vsyncHooks: { fn: () => void; after: number }[] = [];
-/** run `fn` at the next vsync later than the latest: a renderer drawing on its own cadence, whose
- *  draw steps only its animators, which hwui's CanvasContext::prepareTree declines at the same vsync
- *  (canDrawThisFrame) */
+/** run `fn` at a vsync later than the latest: a renderer drawing on its own cadence only steps its
+ *  animators, a draw hwui declines twice at one vsync (CanvasContext::canDrawThisFrame) */
 export function onNextVsync(fn: () => void): void { vsyncHooks.push({ fn, after: latest.at }); }
 let frameStart: number | null = null;
 /** the renderer drew the main thread's frame */

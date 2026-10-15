@@ -284,7 +284,6 @@ function installProbe(cfg: ProbeConfig): void {
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
-  /** busy reasons for work whose result is not drawn yet, besides a main-thread job ("job:…") */
   const WORKING = new Set(["queued", "transition", "starting"]);
   const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen): Promise<Settled> => {
     const t0 = performance.now();
@@ -392,11 +391,11 @@ function installProbe(cfg: ProbeConfig): void {
         await g.wd.testFrame();
       }
       // a still screen settles past timers and network, not past work under way: a main-thread job
-      // or its queue (its result is not drawn yet), an activity start or finish or a process start, nor on a real
-      // clock during the first 1.5 s of frames scheduled or threads running (a fling's overscroll
-      // stretch changes no pixels; a background thread's result is not shown yet). A controlled
-      // clock has already run through the window, and a loop that keeps going without changing
-      // the screen (a paused game) is still.
+      // or its queue (its result is not drawn yet), an activity start or finish or a process start,
+      // nor on a real clock during the first 1.5 s of frames scheduled or threads running (a fling's
+      // overscroll stretch changes no pixels; a background thread's result is not shown yet). A
+      // controlled clock has already run through the window, and a loop that keeps going without
+      // changing the screen (a paused game) is still.
       activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
       const working = b.some((k) => k.startsWith("job:") || WORKING.has(k)) ||
         (!controlled && activeSince > 0 && now - activeSince < 1500);
