@@ -62,7 +62,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const program = new Program(appDexes, platform);
     // an app build follows the loaders once its World has started, below
     if (!req.build) {
-      if (req.loaders) { program.followLoaderParents(req.loaders.parents); program.dynamicRoot = !!req.loaders.dynamicRoot; }
+      if (req.loaders) { program.followLoaderParents(req.loaders.parents, req.loaders.ownFirst); program.dynamicRoot = !!req.loaders.dynamicRoot; }
       for (const [id, dexes] of req.scopes ?? []) program.add(open(dexes), program.loaderAt(id));
       if (req.loaders) {
         for (const [id, before, after] of req.loaders.libraries) program.libraries(program.loaderAt(id), before.map(id => program.loaderAt(id)), after.map(id => program.loaderAt(id)));
@@ -80,7 +80,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     roots = req.build;
     if (roots && req.prefix && !w.adopt(req.prefix)) throw new Error("the app's prefix does not follow the platform build");
     if (roots && req.loaders) {
-      w.prog.followLoaderParents(req.loaders.parents);
+      w.prog.followLoaderParents(req.loaders.parents, req.loaders.ownFirst);
       for (const [id, dexes] of req.scopes ?? []) w.addDexes(open(dexes), w.prog.loaderAt(id));
       followLoaders(w, req.loaders);
     }
