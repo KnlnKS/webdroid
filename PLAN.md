@@ -38,14 +38,13 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-At `8392a936` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 171.5 s with no new missing APIs,
-errors, required natives, draw errors, settle timeouts or wedges. Every flow upgrades methods to the second tier
-again. From `32867b8c` until `8392a936`, units could not reach the process Worker from the compile frame's agent
-cluster, so earlier gates, `c6249776` included, presumably ran without upgrades; Google Maps measured 0. 1,148 unit tests
-pass; the FitNotes and boot-jar sweep is clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass. Two
-gate runs at a host load of 19–30 from another checkout's e2e failed FitNotes (once also Calculator) with completion
-timeouts while the app kept presenting frames. FitNotes alone then passed 3 of 3 at a load of 12–16. Those failures
-were not compared with `c6249776` under the same load.
+At `01e96bf7` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 170.9 s with no new missing APIs,
+errors, required natives, draw errors, settle timeouts or wedges, with diagnostics from the page and every Worker, and
+every flow upgrades methods to the second tier (31-483 per flow). 1,148 unit tests pass; the FitNotes and boot-jar
+sweep is clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass. With 24 busy loops beside the gate (load
+about 45) FitNotes failed 11 steps on this branch and 14 at `89868cac`, all completion timeouts: its off-screen spinners
+keep vsync requested, as on the reference AVD, and the pixel rule's readbacks stretch past the bound (history, "FitNotes
+under host load").
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
