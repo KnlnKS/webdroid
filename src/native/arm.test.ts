@@ -629,15 +629,17 @@ describe("arm decoder", () => {
       expect(Array.from(new Int16Array(c.si.buffer, c.si.byteOffset + 32, 8))).toEqual([-2048, 16, -16, 2032, -16, 0, 32, -32]);
       expect(Array.from(c.si.slice(16, 20))).toEqual([-2147483648, -1, 2147483647, 0]);
     }
-    // vmlal.u32 q6, d28, d0[1]; vmull.s16 q7, d1, d2[3]
+    // vmlal.u32 q6, d28, d0[1]; vmull.s16 q7, d1, d2[3]; vmull.p8 q8, d16, d6
     const byScalar = (cpu: Cpu) => {
       cpu.si.set([3, -1, 0x0003fffe, 0x80007fff, 0, 0xfffd0000], 0);
+      cpu.si[12] = 0x7ff; cpu.si[32] = 0x3ff;
       cpu.si.set([1, 0, 2, 0], 24);
       cpu.si.set([0x80000000, 7], 56);
     };
-    for (const c of both([0xf3acc2e0, 0xf291ea6a, BXLR], [0xffac, 0xc2e0, 0xef91, 0xea6a, 0x4770], byScalar)) {
+    for (const c of both([0xf3acc2e0, 0xf291ea6a, 0xf2c00e86, BXLR], [0xffac, 0xc2e0, 0xef91, 0xea6a, 0xefc0, 0x0e86, 0x4770], byScalar)) {
       expect(Array.from(c.si.slice(24, 28))).toEqual([-2147483647, 2147483647, -5, 6]);
       expect(Array.from(c.si.slice(28, 32))).toEqual([6, -9, -98301, 98304]);
+      expect(Array.from(c.si.slice(32, 36))).toEqual([0x95555, 0, 0, 0]);
     }
   });
   test("rsb/adc/sbc", () => {
