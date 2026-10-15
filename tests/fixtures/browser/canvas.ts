@@ -9,7 +9,7 @@ import { NativeShader, NativeGradient, NativeBitmapShader, NativeComposeShader }
  *  densities, for comparison with values recorded on the reference AVD */
 async function probe() {
   await bootWithFonts();
-  const S = "Ljava/lang/String;", R = "Landroid/graphics/Rect;", P = "Landroid/graphics/Paint;";
+  const S = "Ljava/lang/String;", R = "Landroid/graphics/Rect;", P = "Landroid/graphics/Paint;", TILE = "Landroid/graphics/Shader$TileMode;";
   const argb = await scall("android/graphics/Bitmap$Config", "valueOf", `(${S})Landroid/graphics/Bitmap$Config;`, "ARGB_8888");
   const bitmap = (w: number, h: number) => scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", w, h, argb);
   const px = async (b: unknown, x: number, y: number) => ((await vcall(b, "getPixel", "(II)I", x, y)) >>> 0).toString(16);
@@ -169,6 +169,20 @@ async function probe() {
   const recomposed = String((await native(compose) as NativeComposeShader).dst.local);
   out.shaders = { gradient: first instanceof NativeGradient && !first.local, replaced: second !== first && String(second.local),
     bitmap: await native(bitmapShader) instanceof NativeBitmapShader, composed: composed.dst === second && composed.op, recomposed };
+
+  // a bitmap shader's fill and drawPaint, recorded, reach the whole target they replay on, not the recorder's one-pixel mirror
+  const red = await bitmap(2, 2), shaded = await newObj("android/graphics/Paint", "()V"), blue = await newObj("android/graphics/Paint", "()V");
+  await vcall(red, "eraseColor", "(I)V", 0xffff0000 | 0);
+  await vcall(shaded, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", await newObj("android/graphics/BitmapShader", `(Landroid/graphics/Bitmap;${TILE}${TILE})V`, red, clamp, clamp));
+  await vcall(blue, "setColor", "(I)V", 0xff0000ff | 0);
+  const shot = await newObj("android/graphics/Picture", "()V"), sc = await vcall(shot, "beginRecording", "(II)Landroid/graphics/Canvas;", 20, 20);
+  await vcall(sc, "drawRect", `(FFFF${P})V`, 0, 0, 20, 10, shaded);
+  await vcall(sc, "clipRect", "(FFFF)Z", 0, 10, 20, 20);
+  await vcall(sc, "drawPaint", `(${P})V`, blue);
+  await vcall(shot, "endRecording", "()V");
+  const sb = await bitmap(20, 20);
+  await vcall(await newObj("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", sb), "drawPicture", "(Landroid/graphics/Picture;)V", shot);
+  out.recordedFills = [await px(sb, 18, 5), await px(sb, 18, 18)];
   return out;
 }
 export default probe;

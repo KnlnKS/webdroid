@@ -117,12 +117,12 @@ export function deviceBounds(m: Mat2D, l: number, t: number, r: number, b: numbe
 }
 const inverse = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 /** a w x h target in the local coordinates of `m` (deviceBounds of the inverse), null when `m` is singular */
-export function localBounds(m: Mat2D, w: number, h: number): Float64Array | null {
+export function localBounds(m: Mat2D, w: number, h: number, x = 0, y = 0): Float64Array | null {
   const det = m.a * m.d - m.b * m.c;
   if (!det || !Number.isFinite(det)) return null;
   inverse.a = m.d / det; inverse.b = -m.b / det; inverse.c = -m.c / det; inverse.d = m.a / det;
   inverse.e = (m.c * m.f - m.d * m.e) / det; inverse.f = (m.b * m.e - m.a * m.f) / det;
-  const out = deviceBounds(inverse, 0, 0, w, h);
+  const out = deviceBounds(inverse, x, y, x + w, y + h);
   return out.every(Number.isFinite) ? out : null;
 }
 /** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */

@@ -3,7 +3,7 @@
 import { rt, declaredField } from "../jvm/runtime";
 import { classNameOf } from "../jvm/natives/jentry";
 import type { NativeBitmap } from "./bitmap";
-import { transformOf, type Ctx2D } from "./recording";
+import { isRecording, transformOf, type Ctx2D } from "./recording";
 import { localBounds, type Affine } from "./matrix";
 
 const cssCache = new Map<number, string>();
@@ -84,6 +84,8 @@ export class NativeBitmapShader extends NativeShader {
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
   constructor(local: Affine | null, readonly bitmap: NativeBitmap, readonly tileX: number, readonly tileY: number) { super(local); }
+  // its pattern() covers the target's canvas
+  override get atReplay(): boolean { return true; }
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
     const bitmap = this.bitmap;
     let cache = bitmapShaderTiles.get(bitmap);
@@ -195,8 +197,13 @@ export function gradient(local: Affine | null, g: CanvasGradient, colors: Int32A
   return new NativeGradient(local, g);
 }
 
-/** the target's whole area in the context's local coordinates, null under a singular transform; valid until the next bounds call */
-export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null { return localBounds(transformOf(ctx), ctx.canvas.width, ctx.canvas.height); }
+/** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
+export const PLANE = 1e5;
+/** the target's whole area in the context's local coordinates (a recording's, whose mirror is one pixel, is the plane),
+ *  null under a singular transform; valid until the next bounds call */
+export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null {
+  return isRecording(ctx) ? localBounds(transformOf(ctx), 2 * PLANE, 2 * PLANE, -PLANE, -PLANE) : localBounds(transformOf(ctx), ctx.canvas.width, ctx.canvas.height);
+}
 const tintCache = new WeakMap<NativeBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a colour filter — `tint` blended by the BlendMode named `mode`, or every pixel through
  *  a 4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
