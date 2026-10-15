@@ -4,6 +4,7 @@ import { Code, OP } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 import { HEAP_LIMIT, oomMessage } from "../../jvm/abi";
+import { prettyType } from "../compiler/linkage";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
@@ -70,9 +71,8 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
 };
 
 const dotted = (n: string) => n.replace(/\//g, ".");
-const PRETTY: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double" };
 /** a class name as java.lang.Class.getTypeName prints it */
-const pretty = (n: string): string => n[0] === "#" ? PRETTY[n[1]] : n[0] !== "[" ? dotted(n) : pretty(n[1] === "[" ? n.slice(1) : n[1] === "L" ? n.slice(2, -1) : PRETTY[n[1]]) + "[]";
+const pretty = (n: string): string => prettyType(n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n};`);
 /** The message ART gives the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
 export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string, linkMessage: (id: number) => string): string | null {
   switch (kind) {
@@ -117,7 +117,7 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
   const ctor = cx.prog.resolve(cls, "<init>", "()V");
   if (ctor?.codeOff) { c.lget(exn); cx.callMethod(c, ctor); }
   c.i32(SLOT[name]);
-  if (params[0] === "J") c.lget(0).raw(0xa7).lget(0).i64(32n).raw(0x88, 0xa7).i32(0).i32(0).i32(0);       // wrap(l), wrap(l >>> 32)
+  if (params[0] === "J") c.lget(0).raw(OP.i32_wrap_i64).lget(0).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64).i32(0).i32(0).i32(0);
   else for (let i = 0; i < 5; i++) i < n ? c.lget(i) : c.i32(0);
   c.call(cx.imp.excMessage).lset(msg);
   const detail = cx.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;"), st = cx.structFor("java/lang/Throwable");
