@@ -23,7 +23,7 @@ import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceSt
 import { ActivityStack } from "./activitystack";
 import type { FileSource } from "./lazyfile";
 import { vfs } from "./vfs";
-import { device, formatScreen } from "./config";
+import { device, formatScreen, naturalLandscape } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
 import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
@@ -79,7 +79,8 @@ export function* receivers(intent: JObj): Gen<Receiver[]> {
 export type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
 export type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
-  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
+  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" }
+  | { kind: "rotate"; landscape: boolean };
 export type ProcessEndpoint = {
   processDied: (token: number) => Promise<void>;
   activity: (request: ActivityRequest) => Promise<void>;
@@ -136,7 +137,7 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
   /** a Worker's display orientation: the screen it started on, then each turn it reports; the
-   *  page's process has none, as device.ts keeps the page's own */
+   *  page's process has none, as its display is the page's own */
   landscape?: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
@@ -253,8 +254,8 @@ export class ProcessBroker {
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
-    rotate: (entry) => void import("./device").then(({ followDisplay }) => followDisplay(entry.landscape)),
-  });
+    rotate: async (entry) => { if (entry.landscape !== undefined) await (await import("./device")).followDisplay(entry.landscape); },
+  }, naturalLandscape);
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
       const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
@@ -408,7 +409,8 @@ export class ProcessBroker {
       ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
         registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker.port,
-        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry) };
+        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry),
+        rotation: this.activities.rotation };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       entry.ime = ime; entry.display = frames;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.

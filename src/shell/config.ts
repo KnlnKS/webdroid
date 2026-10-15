@@ -21,6 +21,18 @@ export function orientationForRequest(request: number): DeviceOrientation | null
   return null;
 }
 
+/** What DisplayRotation resolves a request against, each landscape or not: the orientation
+ *  sensor's proposed rotation (the last physical one) and the natural rotation (ROTATION_0). */
+export type Rotation = { sensor: boolean; natural: boolean };
+/** DisplayRotation.rotationForOrientation, landscape or not: a fixed request keeps its own,
+ *  nosensor takes the natural rotation and any other the sensor's, as no rotation lock is set.
+ *  Locked (14) keeps the display as it is, as does null: no activity that sets it. */
+export function rotationForRequest(request: number | null, rotation: Rotation): boolean | null {
+  if (request === null || request === 14) return null;
+  const fixed = orientationForRequest(request);
+  return fixed ? fixed === 2 : request === 5 ? rotation.natural : rotation.sensor;
+}
+
 /** Rotate a configured framebuffer while preserving its exact two dimensions and density. */
 function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
   const landscape = screen.width > screen.height;
@@ -118,6 +130,9 @@ export const device = {
   /** unrounded: stroke widths and glyph offsets are legitimately fractional */
   dp(n: number): number { return n * this.density; },
 };
+
+/** whether the configured screen, the display's natural rotation (ROTATION_0), is landscape */
+export const naturalLandscape = screen.width > screen.height;
 
 /** Apply an Activity orientation to the live display. Returns whether its geometry changed. */
 export function setDeviceOrientation(orientation: DeviceOrientation): boolean {

@@ -3,6 +3,7 @@
 // visibility changes, made one at a time. The shown processes' canvases are layered to match.
 import type { ParcelData } from "../android/binder";
 import { guestSleep } from "../guest-clock";
+import type { Rotation } from "./config";
 import type { ActivityRequest, Entry } from "./processes";
 
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
@@ -16,8 +17,9 @@ export type StackPort = {
   entries(): Iterable<Entry>;
   connect(pkg: string, process: string): Entry;
   activity(entry: Entry, request: ActivityRequest): Promise<void>;
-  /** turns the display for the process whose activity sets its orientation */
-  rotate(entry: Entry): void;
+  /** turns the display to the orientation of the process whose activity sets it; the page's own
+   *  process turns the display itself */
+  rotate(entry: Entry): Promise<void>;
 };
 
 export class ActivityStack {
@@ -28,7 +30,16 @@ export class ActivityStack {
   private shownPids = new Set<number>();
   /** the shown processes as show() last layered them, bottom to top */
   private layers: number[] = [];
-  constructor(private port: StackPort) {}
+  /** the display turning for the last orientation the process that fills it reported */
+  private following: Promise<void> = Promise.resolve();
+  /** the physical rotation, landscape or not. Like the proposed rotation DisplayRotation reads from
+   *  the orientation sensor, it is device-wide state, not an event: each rotation sets it. */
+  private sensor: boolean;
+  /** `natural`: the display's natural rotation (ROTATION_0), landscape or not, as the screen is
+   *  configured; the sensor starts there */
+  constructor(private port: StackPort, private natural: boolean) { this.sensor = natural; }
+  /** the rotation state a process starts with */
+  get rotation(): Rotation { return { sensor: this.sensor, natural: this.natural }; }
 
   get foreground(): number { return this.top; }
   shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
@@ -44,7 +55,31 @@ export class ActivityStack {
   orientation(pid: number, landscape: boolean): void {
     const entry = this.port.entry(pid);
     entry.landscape = landscape;
-    if (pid === this.layers[0]) this.port.rotate(entry);
+    if (pid === this.layers[0]) this.following = this.port.rotate(entry);
+  }
+  /**
+   * A physical rotation sets the sensor's state and goes to the process whose activity fills the
+   * display, as DisplayRotation resolves the sensor's rotation against the orientation that
+   * activity requested; null when that is the caller's own. Its process turns or keeps its display,
+   * and the display follows the turn it reports. Like DisplayRotation, which defers a rotation while
+   * a transition runs, it waits for the activity changes before it, and then sends the state as it
+   * is: a process that came to fill the display meanwhile resolved it as it did (show).
+   * Every other process records the state at once, so that an activity it later launches or
+   * resumes starts in that rotation; a visible one there that sets its own orientation turns now.
+   */
+  rotate(caller: number, landscape: boolean): Promise<void> | null {
+    this.sensor = landscape;
+    const owner = this.layers[0], routed = !!owner && owner !== caller && this.port.alive(owner);
+    for (const entry of this.port.entries()) {
+      if (entry.pid !== owner && (routed || entry.pid !== caller) && this.port.alive(entry.pid)) this.notify(entry, { kind: "rotate", landscape });
+    }
+    if (!routed) return null;
+    return this.enqueue(async () => {
+      const owner = this.layers[0];
+      if (owner === caller || !this.port.alive(owner)) return;
+      await this.port.activity(this.port.entry(owner), { kind: "rotate", landscape: this.sensor });
+      await this.following;
+    });
   }
   launch(caller: number, pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null = null): Promise<void> {
     const source = this.port.entry(caller);
@@ -133,6 +168,7 @@ export class ActivityStack {
   }
   private async show(pid: number): Promise<void> {
     this.top = pid;
+    const owner = this.layers[0];
     const visible = new Set<number>();
     let current = pid, index = this.activities.length;
     while (this.port.alive(current) && !visible.has(current)) {
@@ -158,7 +194,18 @@ export class ActivityStack {
       surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";
     }
     // DisplayRotation takes the orientation from the top activity that fills the display: a
-    // translucent one leaves it to the one beneath, the bottom of the shown layers
-    if (layers.length) this.port.rotate(this.port.entry(layers[0]));
+    // translucent one leaves it to the one beneath, the bottom of the shown layers. The display
+    // follows the orientation that process has; one that comes to fill it resolves the sensor's
+    // rotation against its own request, as updateOrientation does when the orientation source
+    // changes, and the display follows the turn it reports. That is not awaited, so the queue never
+    // waits on the page's main loop, which may itself be waiting on a Worker.
+    if (!layers.length) return;
+    const entry = this.port.entry(layers[0]);
+    void this.port.rotate(entry);
+    if (layers[0] !== owner) this.notify(entry, { kind: "rotate", landscape: this.sensor });
+  }
+  /** a request no activity change waits on */
+  private notify(entry: Entry, request: ActivityRequest): void {
+    this.port.activity(entry, request).catch((error) => { if (!entry.dead) console.error("[activity process]", error); });
   }
 }

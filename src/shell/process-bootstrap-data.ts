@@ -1,5 +1,6 @@
 import type { PackedArchiveIndex } from "./packedarchive";
 import type { RemoteFileData } from "./remote-file";
+import type { Rotation } from "./config";
 
 /** Installed config/feature splits are loaded only by their owning package. */
 type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;
@@ -8,7 +9,9 @@ type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;
 export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid: number; registry: PackageSnapshot[];
   launcher: { assetKey: string } | null; refreshRate: number; broker: MessagePort; display: MessagePort; screen: OffscreenCanvas; ime: MessagePort; web: MessagePort; media: MessagePort;
   /** a replica of the device storage its package reads (device-storage.ts) */
-  storage: [string, string][] };
+  storage: [string, string][];
+  /** the display's rotation state its activities' requests resolve against */
+  rotation: Rotation };
 
 /** Use at every bootstrap hop: structuredClone and the subsequent Worker postMessage. */
 export const bootstrapTransfers = (data: ProcessBootstrap): Transferable[] => [...bootstrapPorts(data), data.screen];

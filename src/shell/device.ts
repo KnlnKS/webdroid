@@ -29,14 +29,14 @@ import { after, mainThread } from "../jvm/natives/jentry";
 import { deliverVsync } from "../android/vsync";
 import { mark, perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
-import { device, orientationForRequest, setDeviceOrientation } from "./config";
+import { device, naturalLandscape, rotationForRequest, setDeviceOrientation, type Rotation } from "./config";
 import { restoreRoots } from "./hostfs";
 import { notePresent } from "../native/cpu";
 import { noteInput } from "../jvm/yield";
 import { appArchives } from "../jvm/natives/jdex";
 import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm";
 import { startActivityThread } from "../android/server/am";
-import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
+import { configurationChanged, displayHooks, orientationRequest } from "../android/server/atm";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
 import { toThread } from "../jvm/natives/jthrowable";
 import { note, Ev } from "../timeline";
@@ -66,10 +66,19 @@ function present(): void {
   notePresent();
 }
 
-/** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
-function applyOrientationRequest(request: number): boolean {
-  const orientation = orientationForRequest(request);
-  if (!orientation || !setDeviceOrientation(orientation)) return false;
+/** This process's rotation state: the page's start as its screen is configured, and a Worker's
+ *  come with its bootstrap and with each rotation (ActivityStack.rotate). */
+const rotation: Rotation = { sensor: naturalLandscape, natural: naturalLandscape };
+export function setRotation(state: Rotation): void { Object.assign(rotation, state); }
+/** The display turns for the request of the activity that sets its orientation (orientationRequest),
+ *  answering whether its geometry changed. */
+function applyOrientationRequest(request: number | null): boolean {
+  const landscape = rotationForRequest(request, rotation);
+  return landscape !== null && turnTo(landscape);
+}
+/** the display's axes turn to landscape or portrait, answering whether its geometry changed */
+function turnTo(landscape: boolean): boolean {
+  if (!setDeviceOrientation(landscape ? 2 : 1)) return false;
   SCREEN_W = device.width;
   SCREEN_H = device.height;
   fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
@@ -145,8 +154,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setDeviceNight(applicationNightOverride ?? device.night);
   await deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
-  // same -land/-port entries the Activity will see through Configuration.
-  applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
+  // same -land/-port entries the Activity will see through Configuration. Another process of the
+  // package keeps the display it started with until the activity started in it sets one.
+  if (!processName && launcher) applyOrientationRequest(launcherOrientation(appNode, launcher, pkg));
   await restoreRoots();
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
@@ -194,29 +204,24 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
 
   hostWindowManager();
   setDisplayTarget(frame, present);
-  displayHooks.requestOrientation = applyOrientationRequest;
+  useDisplayRotation();
   mark("resourcesReady"); onStatus("Starting app…");
   await onMain(() => startActivityThread(!processName));
   return label;
 }
 
-const turnDisplay = async (landscape: boolean) => { if (applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged(); };
-/** the page's own orientation, which the user's rotations set: the display leaves it to follow
- *  another process's activity and returns to it when the page's own fills the display again */
-let ownLandscape = device.orientation === 2;
-/** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
- *  manager keeps the display in that orientation for it. */
+/** this process's activities turn the display as they launch, resume and ask for an orientation */
+export function useDisplayRotation(): void { displayHooks.requestOrientation = applyOrientationRequest; }
+const turnDisplay = async (landscape: boolean) => { if (turnTo(landscape)) await configurationChanged(); };
+/** The sensor's rotation, which every process records (ActivityStack.rotate). The activity here
+ *  that sets the display's orientation resolves it, as DisplayRotation does: one that fixed or
+ *  locked its orientation keeps it, and a stopped or translucent one leaves it to another. */
 export function rotateDevice(landscape: boolean): Promise<void> {
-  return onMain(async () => {
-    const request = topOrientation();
-    if (orientationForRequest(request) !== null || request === 5 || request === 14) return;
-    ownLandscape = landscape;
-    await turnDisplay(landscape);
-  });
+  rotation.sensor = landscape;
+  return onMain(async () => { if (applyOrientationRequest(orientationRequest())) await configurationChanged(); });
 }
-/** the display turns for the process whose activity sets its orientation: to a Worker's display,
- *  or back to the page's own */
-export const followDisplay = (landscape?: boolean): Promise<void> => onMain(() => turnDisplay(landscape ?? ownLandscape));
+/** the page's display turns to the orientation of the Worker whose activity fills it */
+export const followDisplay = (landscape: boolean): Promise<void> => onMain(() => turnDisplay(landscape));
 function applyConfigChange(): void { postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();

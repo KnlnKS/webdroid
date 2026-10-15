@@ -7,7 +7,7 @@ import { initDeviceLocales } from "../android/resnative";
 import { scall } from "../jvm/natives/jentry";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime";
 import { loadAppCode, loadTier } from "../jvm/tier";
-import { startZygote, setSystemDisplayTarget } from "./device";
+import { startZygote, setSystemDisplayTarget, useDisplayRotation } from "./device";
 import { connectProcess } from "./process-endpoint";
 import { processBroker } from "./processes";
 import { hostWindowManager } from "../android/server/wm";
@@ -30,6 +30,7 @@ export function bootSystemOwner(): Promise<void> {
     await loadAppCode({ launch: [] });
     hostWindowManager();
     setSystemDisplayTarget();
+    useDisplayRotation();
     await startZygote();
     await onMain(() => rt.drive(loadSystemFontMap()));
     await onMain(initDeviceLocales);

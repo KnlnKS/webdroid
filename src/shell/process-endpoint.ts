@@ -251,6 +251,7 @@ export function createProcessEndpoint(requests = workerActivityResults): Process
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();
+      if (request.kind === "rotate") return (await import("./device")).rotateDevice(request.landscape);
       return asBroker(function* (): Gen<void> {
         if (request.kind === "visibility") {
           yield taskVisibility(request.phase);
