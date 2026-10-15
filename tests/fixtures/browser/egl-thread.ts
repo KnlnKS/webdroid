@@ -301,7 +301,7 @@ async function nativeWindow() {
   await invoke("ANativeWindow_release", [handle]);
   const released = await invoke("ANativeWindow_lock", [handle, out, 0]);
   const fresh = nativeWindowFor(surface);
-  const reset = fresh !== handle && await invoke("ANativeWindow_getFormat", [fresh]) === 1;
+  const reset = await invoke("ANativeWindow_getFormat", [fresh]) === 1;
   await invoke("ANativeWindow_release", [fresh]);
   surface.present?.close(); mem.free(out);
   return { locked, dimensions, duplicate, posted, pixels, yv12, released, sameHandle, reset, frames: surface.frames };
