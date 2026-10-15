@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-13
+# Webdroid status — 2026-10-15
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -31,16 +31,16 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before
-  the Wasm tier, and need re-verification.
+  the Wasm tier, and need re-verification. Google Maps (2026-10-15) draws its vector map, searches, and shows
+  places and driving routes.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
-At `de7ba895`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
-natives, draw errors, settle timeouts or wedges; 1,147 unit tests pass (the browser tests' "End Of Central
-Directory" flake recurred once); FitNotes `smoke` is clean; all 17 `wasm all` suites and 31 of 31 `fwtest`
-exercises pass.
+At `c6249776` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors,
+required natives, draw errors, settle timeouts or wedges; 1,148 unit tests pass; the FitNotes and boot-jar sweep is
+clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
@@ -83,8 +83,12 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      `?attestation=1` but gets HTTP 500 (`DF-DFERH-01`): DroidGuard supplied zero bytes and microG had no auth token.
      A licensed Play Store oracle is needed before attributing that to webdroid.
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
-     bar arbitration; Google Maps zoom, active navigation and backup transport. A native fault converted into a
-     Java exception can still leave native locks held.
+     bar arbitration; Google Maps zoom, active navigation, sign-in and backup transport. A native fault converted
+     into a Java exception can still leave native locks held.
+   - *Google Maps:* the location puck draws magenta because the IBL cubemap built in `libgoogle3.so` holds NaN
+     (same without the native JIT); one Directions tap lost the user class loader in `readSerializable`
+     (`getClosestUserClassLoader` returned null) and did not reproduce; the texture-swizzle rewrite skips samplers
+     passed as function parameters.
    - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
