@@ -389,7 +389,6 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
       if (r) args[r[0]] = `B.offsetIn(h${i},a${at[r[0]]})`;
     });
     const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
-    // a native that waits holds its scope and resumes it once it settles, so the call it returns from does not end it
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""], hold = bridged ? "B.hold(s);" : "", resume = bridged ? "B.resume(s);" : "";
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
