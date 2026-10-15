@@ -1,16 +1,16 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
 // MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { mountPlatform, natives, startProcess } from "./harness";
 import { loadDexes, program, world } from "./lib";
 import { ACC, Program } from "../../src/wasm/compiler/program";
-import { compare, genCases } from "./cases";
+import type { World } from "../../src/wasm/link/world";
+import { caseLine, compare, genCases } from "./cases";
 import { Pool, u2, u4 } from "./classfile";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { shellIn } from "./tools";
+import { CORE_PATHS, JAVA, ROOT } from "./paths";
+import { filesIn, onJdk, shellIn } from "./tools";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
 import { bootstrapReferences } from "../../src/wasm/link/callsites";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory";
@@ -39,7 +39,7 @@ function handClasses(): Record<string, Uint8Array> {
   // interface Ig { String name(); }
   { const p = new Pool(); build("Ig", 0x601, "java/lang/Object", [], p, [], [method(p, 0x401, "name", "()Ljava/lang/String;", null)], []); }
   // class Pq implements Ig { int x; String s; ... }
-  const pq = (name: string, sup: string, indy: boolean) => {
+  const pq = (name: string, sup: string) => {
     const p = new Pool(), self = `L${name};`, field = (n: string, d: string) => [...u2(0), ...u2(p.utf8(n)), ...u2(p.utf8(d)), ...u2(0)];
     const fx = p.member(9, "Pq", "x", "I"), fs = p.member(9, "Pq", "s", "Ljava/lang/String;"), superInit = p.member(10, sup, "<init>", sup === "Pq" ? "(ILjava/lang/String;)V" : "()V");
     const methods: number[][] = [];
@@ -52,14 +52,14 @@ function handClasses(): Record<string, Uint8Array> {
       methods.push(method(p, 1, "toString", "()Ljava/lang/String;", [0x2a, 0xba, ...u2(site("toString", `(${self})Ljava/lang/String;`)), 0, 0, 0xb0]));
       methods.push(method(p, 1, "hashCode", "()I", [0x2a, 0xba, ...u2(site("hashCode", `(${self})I`)), 0, 0, 0xac]));
       methods.push(method(p, 1, "equals", "(Ljava/lang/Object;)Z", [0x2a, 0x2b, 0xba, ...u2(site("equals", `(${self}Ljava/lang/Object;)Z`)), 0, 0, 0xac]));
-      const bootstrap = [...u2(p.utf8("BootstrapMethods")), ...u4(2 + 2 + 2 + 2 * args.length + 0), ...u2(1), ...u2(p.methodHandle(6, bsm)), ...u2(args.length), ...args.flatMap(u2)];
+      const bootstrap = [...u2(p.utf8("BootstrapMethods")), ...u4(2 + 2 + 2 + 2 * args.length), ...u2(1), ...u2(p.methodHandle(6, bsm)), ...u2(args.length), ...args.flatMap(u2)];
       build(name, 0x21, "java/lang/Object", ["Ig"], p, [field("x", "I"), field("s", "Ljava/lang/String;")], methods, [bootstrap]);
     } else {
       methods.push(method(p, 1, "x", "()I", [0x2a, 0xb7, ...u2(p.member(10, "Pq", "x", "()I")), 0x10, 10, 0x68, 0xac]));
       build(name, 0x21, sup, [], p, [], methods, []);
     }
   };
-  pq("Pq", "java/lang/Object", true); pq("Pq2", "Pq", false);
+  pq("Pq", "java/lang/Object"); pq("Pq2", "Pq");
   // ldc handles/types become DEX 039 const-method-*; javac cannot express these constants directly.
   {
     const p = new Pool(), methods: number[][] = [];
@@ -145,14 +145,18 @@ function handClasses(): Record<string, Uint8Array> {
   }
   return out;
 }
+/** `e` as an Error naming the Java exception it carries and the World's last message */
+const javaError = (w: World, what: string, e: unknown) => {
+  const t = w.throwable(e);
+  return new Error(`${what}: ${t ? w.classNameOf(t) : String(e)} (${w.lastMessage})`, { cause: e });
+};
 const out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
 const sh = shellIn(out);
 for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, n + ".class"), bytes);
 sh(["javac", "--release", "17", "-cp", `${out}:${androidPlatform(35)}/android.jar`, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
-const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
+sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...filesIn(out, /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/)]);
+const dex = join(out, "classes.dex"), jars = CORE_PATHS;
 await mountPlatform(ROOT);
-if (process.argv.includes("--signature-loader")) { await checkDeferredSignatures(); process.exit(0); }
 
 let forceAdmission = false, admissionTurns = 0;
 const loop = { ...defaultLoop, due: () => (forceAdmission && admissionTurns < 32) || defaultLoop.due(), yield: (soon: boolean) => {
@@ -224,7 +228,7 @@ const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
   ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], tCustomRangeNull: [0, 3], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
-const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
+const jdk = onJdk(sh, out, cases.map(caseLine));
 // ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; JDKs before 21.0.12 narrow Object.clone's
 // protected receiver to Mc and throw, so those rows take ART's receiver rule and array clone semantics.
 cases.forEach((c, i) => { if (c.m.name === "tConstClone" && jdk[i] === "throw") jdk[i] = String(Number(c.args[0]) + 1); });
@@ -265,10 +269,9 @@ await checkDeferredSignatures();
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
   forceAdmission = name === "tInvokerConcurrent";
-  const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `${cls}.${name} ${a}`).join("\n") + "\n").trim().split("\n");
+  const waiting = [-1, 7], reference = onJdk(sh, out, waiting.map(a => `${cls}.${name} ${a}`));
   for (const [i, a] of waiting.entries()) {
-    const tier = w;
-    const value = await tier.entryAsync(cls, name, "(I)I")(a);
+    const value = await w.entryAsync(cls, name, "(I)I")(a);
     if (String(value) !== reference[i]) throw new Error(`suspended ${name}(${a}): ${value} != ${reference[i]}`);
     suspendedCases++;
   }
@@ -278,49 +281,46 @@ if (!admissionTurns) throw new Error("VarHandle concurrency fixture must force l
 console.log(`${admissionTurns} forced admission turns retain eager field accessors`);
 console.log(`${suspendedCases} suspended handle cases preserve thread, monitor ownership and exceptions`);
 {
-  const tier = w;
   try {
-    const buffer = await tier.entryAsync("Vh", "artViewAllocate", "()Ljava/nio/ByteBuffer;")();
-    const setAddress = tier.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
+    const buffer = await w.entryAsync("Vh", "artViewAllocate", "()Ljava/nio/ByteBuffer;")();
+    const setAddress = w.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
       const owner = "java/nio/Buffer", f = cx.prog.resolveField(owner, "address", "J")!;
       c.lget(0).refCast(cx.structFor(owner)).lget(1).structSet(cx.structFor(owner), cx.fieldIndex(owner, f));
     });
     const address = BigInt(mem.va(mem.malloc(8))), view = () => new DataView(memorySync(address, 8).slice().buffer);
     memorySync(address, 8).set([0, 0, 0, 41]);
     setAddress(buffer, address);
-    if (await tier.entryAsync("Vh", "artViewUpdate", "(Ljava/nio/ByteBuffer;I)I")(buffer, 7) !== 41 || view().getInt32(0) !== 48) throw new Error("mutable external view update must stay atomic");
+    if (await w.entryAsync("Vh", "artViewUpdate", "(Ljava/nio/ByteBuffer;I)I")(buffer, 7) !== 41 || view().getInt32(0) !== 48) throw new Error("mutable external view update must stay atomic");
     let faults = 0;
     const mapped = mapExternal({ size: 8, read: async (at, n) => { faults++; return memorySync(address, 8).slice(at, at + n); } }, 0, 8);
     try {
       setAddress(buffer, mapped);
-      if (await tier.entryAsync("Vh", "artViewRead", "(Ljava/nio/ByteBuffer;)I")(buffer) !== 48 || faults !== 1) throw new Error("immutable mapped view must retain paged whole-width reads");
+      if (await w.entryAsync("Vh", "artViewRead", "(Ljava/nio/ByteBuffer;)I")(buffer) !== 48 || faults !== 1) throw new Error("immutable mapped view must retain paged whole-width reads");
     } finally { unmapExternal(mapped); }
-  } catch (e) { const throwable = tier.throwable(e); throw new Error(`external view: ${throwable ? tier.classNameOf(throwable) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+  } catch (e) { throw javaError(w, "external view", e); }
 }
 console.log("2 external view cases preserve synchronous mutable updates and asynchronous immutable reads");
 // ART retries failed linkage (the JDK caches failures), and requires exact collector component types (the JDK adapts them).
 {
-  const tier = w;
-  if (await tier.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");
-  if (await tier.entryAsync("Bootstrap", "tCustomRetry", "(I)I")(0) !== 2) throw new Error("ART bootstrap failures must be retried");
-  if (await tier.entryAsync("Bootstrap", "artRaceFailure", "(I)I")(0) !== 1) throw new Error("failed bootstrap contender must preserve its error and leave the successful winner installed");
-  if (await tier.entryAsync("Bootstrap", "tCustomRace", "(I)I")(0) !== 1) throw new Error("racing bootstrap contenders must invoke the installed winner");
+  if (await w.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");
+  if (await w.entryAsync("Bootstrap", "tCustomRetry", "(I)I")(0) !== 2) throw new Error("ART bootstrap failures must be retried");
+  if (await w.entryAsync("Bootstrap", "artRaceFailure", "(I)I")(0) !== 1) throw new Error("failed bootstrap contender must preserve its error and leave the successful winner installed");
+  if (await w.entryAsync("Bootstrap", "tCustomRace", "(I)I")(0) !== 1) throw new Error("racing bootstrap contenders must invoke the installed winner");
 }
 console.log("4 ART collector/retry/racing cases match");
 // A plain callback with a captured async owner cannot create a child stack that outlives its caller.
 {
-  const tier = w;
-  const owner = tier.sched.strand(), before = tier.rtImports().depth.value;
-  const call = handleThunk(tier, "mh:syncCallbackTest", [], "I", (cx, c) => {
+  const owner = w.sched.strand(), before = w.rtImports().depth.value;
+  const call = handleThunk(w, "mh:syncCallbackTest", [], "I", (cx, c) => {
     c.i64(1n); cx.callMethod(c, cx.prog.resolve("java/lang/Thread", "sleep", "(J)V")!); c.i32(7);
   }, owner);
   try {
-    tier.synchronous(() => call());
+    w.synchronous(() => call());
     throw new Error("plain handle callback must reject blocking");
   } catch (e) {
-    const t = tier.throwable(e);
-    if (!t || tier.classNameOf(t) !== "java/lang/IllegalStateException") throw e;
-    if (tier.rtImports().depth.value !== before || tier.sched.strands.some(s => s?.parent === owner)) throw new Error("plain handle callback leaked depth or a nested strand");
+    const t = w.throwable(e);
+    if (!t || w.classNameOf(t) !== "java/lang/IllegalStateException") throw e;
+    if (w.rtImports().depth.value !== before || w.sched.strands.some(s => s?.parent === owner)) throw new Error("plain handle callback leaked depth or a nested strand");
   } finally { owner.end(); }
 }
 console.log("2 synchronous handle callbacks reject blocking without orphan strands");
@@ -342,14 +342,14 @@ async function checkDeferredSignatures(): Promise<void> {
       loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
     } });
     try { await startProcess(tier); }
-    catch (e) { const t = tier.throwable(e); throw new Error(`signature bootstrap: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    catch (e) { throw javaError(tier, "signature bootstrap", e); }
     let object: object;
     try { object = await tier.entryAsync("Mh", "signatureLoader", "(Ljava/lang/String;)Ljava/lang/ClassLoader;")(signaturePath) as object; }
-    catch (e) { const throwable = tier.throwable(e); throw new Error(`signature loader creation: ${throwable ? tier.classNameOf(throwable) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    catch (e) { throw javaError(tier, "signature loader creation", e); }
     const strand = tier.sched.strand();
     let name: string;
     try { name = await tier.resolveClass(definingLoader(tier, object), "Mt", strand); }
-    catch (e) { const t = tier.throwable(e); throw new Error(`signature child resolution: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    catch (e) { throw javaError(tier, "signature child resolution", e); }
     finally { strand.end(); }
     if (name === "Mt" || loads !== 1) throw new Error("signature fixture did not load deferred child DEX");
     const ownerLoader = definingLoader(tier, object), ownerStrand = tier.sched.strand();
@@ -359,13 +359,13 @@ async function checkDeferredSignatures(): Promise<void> {
         const key = tier.prog.initiatedBy(ownerLoader, cls);
         if (!key || !definitionReady(tier, key)) throw new Error("polymorphic owner fixture is not initiated and definition ready");
       }
-    } catch (e) { const t = tier.throwable(e); throw new Error(`polymorphic owner initiation: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    } catch (e) { throw javaError(tier, "polymorphic owner initiation", e); }
     finally { ownerStrand.end(); }
     let parentHandle: unknown, parentArrayHandle: unknown;
     try {
       parentHandle = await tier.entryAsync("Mt", "handle", "()Ljava/lang/invoke/MethodHandle;")();
       parentArrayHandle = await tier.entryAsync("Mt", "arrayHandle", "()Ljava/lang/invoke/VarHandle;")();
-    } catch (e) { const t = tier.throwable(e); throw new Error(`parent polymorphic handles: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    } catch (e) { throw javaError(tier, "parent polymorphic handles", e); }
     const prototypeFailures: string[] = [];
     for (const [method, desc, handle] of [["poly", tier.prog.viewOf(name, "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;"), parentHandle], ["vh", "(Ljava/lang/invoke/VarHandle;)Ljava/lang/Object;", parentArrayHandle]] as const) {
       try { await tier.entryAsync(name, method, desc)(handle); throw new Error(`${method} initiated owner bypassed denied prototype`); }
@@ -379,7 +379,7 @@ async function checkDeferredSignatures(): Promise<void> {
     await tier.entryAsync("Mh", "allowSignature", "(Ljava/lang/ClassLoader;)V")(object);
     let result: unknown;
     try { result = await tier.entryAsync(name, "type", "()Ljava/lang/invoke/MethodType;")(); }
-    catch (e) { const t = tier.throwable(e); throw new Error(`signature constant execution: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    catch (e) { throw javaError(tier, "signature constant execution", e); }
     const returnType = await handleThunk(tier, "fixture:signatureReturn", ["L"], "L", (cx, c, arg) => {
       arg(0); cx.callMethod(c, cx.prog.resolve("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;")!);
     }, tier.sched.current())(result as object);

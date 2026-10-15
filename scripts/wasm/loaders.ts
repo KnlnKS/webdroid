@@ -5,7 +5,6 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { zipSync } from "fflate";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive";
@@ -37,8 +36,8 @@ import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
 import { wasmEntry } from "../../src/wasm/host/entry";
 import { mountPlatform, natives } from "./harness";
-import { AOSP, JAVA, ROOT } from "./paths";
-import { shellIn } from "./tools";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
+import { filesIn, shellIn } from "./tools";
 
 import { androidPlatform, androidTool } from "../android-sdk";
 
@@ -62,13 +61,12 @@ const build = (dir: string, sources: string[], classpath?: string) => {
 };
 if (process.argv.includes("--abstract-default")) { await abstractDefaultControl(); process.exit(0); }
 if (process.argv.includes("--hot-refresh")) { await hotRefreshControl(); process.exit(0); }
-if (process.argv.includes("--super")) { await interfaceSuperControl(); await abstractDefaultControl(); process.exit(0); }
 const app = build("app", ["Ldr.java", "Tag.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
 const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
-const ordered = world([apk, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives });
+const ordered = world([apk, ...PLATFORM_PATHS], { natives });
 if (ordered.entry("Shared", "tag", "()I")(ordered.entry("Shared", "make", "()LShared;")()) !== 1) throw new Error("APK secondary DEX precedence changed");
 
 const ownPath = "/data/app/loader-own/base.apk", otherPath = "/data/app/loader-other/base.apk", ownDexes = loadDexes(a);
@@ -108,7 +106,7 @@ try {
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 await mountPlatform(ROOT);
-const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_PATHS], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -137,40 +135,36 @@ const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tm
 const memberResult = await w.entryAsync("Ldr", "memberResolution", desc)(...paths);
 if (memberResult !== 31) throw new Error(`binary member descriptors: wasm=${memberResult}, expected=31`);
 console.log(`binary member descriptors: wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
-if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
-  for (const method of ["memberConstraints", "memberInterfaceConstraints", "memberIndirectConstraints", "memberReentrantConstraints"]) {
-    const result = await w.entryAsync("Ldr", method, desc)(...paths);
-    console.log(`${method}: wasm=${result}, expected=255`);
-    if (result !== 255) throw new Error(`${method}: ${result}`);
-  }
+for (const method of ["memberConstraints", "memberInterfaceConstraints", "memberIndirectConstraints", "memberReentrantConstraints"]) {
+  const result = await w.entryAsync("Ldr", method, desc)(...paths);
+  console.log(`${method}: wasm=${result}, expected=255`);
+  if (result !== 255) throw new Error(`${method}: ${result}`);
 }
-if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
-  for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
-    const original = w.javaString, hostFn = w.hostFn, failure = new Error("constraint host failure");
-    let injected = false;
-    if (method === "memberHostRetry") w.javaString = function(value: string) {
-      if (!injected && value === "MemberType") { injected = true; throw failure; }
-      return original.call(this, value);
+for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
+  const original = w.javaString, hostFn = w.hostFn, failure = new Error("constraint host failure");
+  let injected = false;
+  if (method === "memberHostRetry") w.javaString = function(value: string) {
+    if (!injected && value === "MemberType") { injected = true; throw failure; }
+    return original.call(this, value);
+  };
+  else w.hostFn = function(...args: Parameters<typeof hostFn>) {
+    const fn = hostFn.apply(this, args);
+    return args[0] !== "resolve:classId" ? fn : (...values: unknown[]) => {
+      const id = fn(...values);
+      if (!injected && javaName(w.nameOf(id)) === "MemberType") { injected = true; throw failure; }
+      return id;
     };
-    else w.hostFn = function(...args: Parameters<typeof hostFn>) {
-      const fn = hostFn.apply(this, args);
-      return args[0] !== "resolve:classId" ? fn : (...values: unknown[]) => {
-        const id = fn(...values);
-        if (!injected && javaName(w.nameOf(id)) === "MemberType") { injected = true; throw failure; }
-        return id;
-      };
-    };
-    try {
-      let caught: unknown;
-      try { await w.entryAsync("Ldr", method, desc)(...paths); } catch (error) { caught = error; }
-      if (caught !== failure || !injected) throw new Error(`${method}: signature host failure changed kind`);
-    } finally { w.javaString = original; w.hostFn = hostFn; }
-    const retry = await w.entryAsync("Ldr", method, desc)(...paths);
-    if (retry !== 7) throw new Error(`${method}: signature host failure prevented retry: ${retry}`);
-    console.log(`${method}: original host error propagated, same class retries successfully`);
-  }
+  };
+  try {
+    let caught: unknown;
+    try { await w.entryAsync("Ldr", method, desc)(...paths); } catch (error) { caught = error; }
+    if (caught !== failure || !injected) throw new Error(`${method}: signature host failure changed kind`);
+  } finally { w.javaString = original; w.hostFn = hostFn; }
+  const retry = await w.entryAsync("Ldr", method, desc)(...paths);
+  if (retry !== 7) throw new Error(`${method}: signature host failure prevented retry: ${retry}`);
+  console.log(`${method}: original host error propagated, same class retries successfully`);
 }
-if (!process.argv.includes("--member-only") || process.argv.includes("--package")) {
+{
   sh(["mkdir", "-p", "witness"]);
   sh(["javac", "--release", "11", "-d", join(out, "witness"), join(JAVA, "PackageLoaderControl.java")]);
   const control = sh(["java", "-cp", join(out, "witness"), "PackageLoaderControl", join(out, "a"), join(out, "b")]).trim();
@@ -210,19 +204,17 @@ if (!process.argv.includes("--member-only") || process.argv.includes("--package"
   }
   console.log("nonpublic IMT miss: package/private/protected rejected with IllegalAccessError");
 }
-if (process.argv.includes("--member-only")) process.exit(0);
-if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {
+{
   const result = await w.entryAsync("Ldr", "hierarchyDelegateLast", desc)(...paths);
   if (result !== 7) throw new Error(`defining hierarchy mirrors: wasm=${result}, expected=7`);
   console.log(`defining hierarchy mirrors: wasm=${result}`);
-  if (process.argv.includes("--hierarchy")) process.exit(0);
 }
-if (!process.argv.includes("--hierarchy")) {
+{
   const caught = await w.entryAsync("Ldr", "catchResolution", "(Ljava/lang/String;)I")(paths[1]);
   if (caught !== 31) throw new Error(`executed catch loader: wasm=${caught}, expected=31`);
   console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
   {
-    const boot = world(new Program([], program([...PLATFORM_JARS.map(j => join(AOSP, j)), common, b])), { natives });
+    const boot = world(new Program([], program([...PLATFORM_PATHS, common, b])), { natives });
     if (boot.prog.loaderOf("Shared") !== boot.prog.boot) throw new Error("catch fixture is not boot-defined");
     const select = boot.entry("Shared", "catchOnly", "(Z)I");
     if (select(0) !== 7 || boot.prog.initiatedBy(boot.prog.boot, "CatchOnly")) throw new Error("untaken boot catch resolved its type");
@@ -231,7 +223,6 @@ if (!process.argv.includes("--hierarchy")) {
     if (!boot.stats.methods) throw new Error("boot catch fixture did not run compiled code");
     console.log("compiled boot catch: plain and strand select RuntimeException after missing/nonmatching catch types");
   }
-  if (process.argv.includes("--catch-only")) process.exit(0);
   const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
   if (actualType !== 7) throw new Error(`executed method-type loader: wasm=${actualType}, expected=7`);
   console.log("executed method-type loader: wasm=7; unused optional signature stays lazy");
@@ -365,7 +356,6 @@ if (!process.argv.includes("--hierarchy")) {
   try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }
   catch (e) { const t = w.throwable(e); if (!t || w.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
   console.log(`uninitiated symbolic class reference: wasm=${result}; warm site resolutions=0; optional reference lazy`);
-  if (process.argv.includes("--symbolic")) process.exit(0);
 }
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
 if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: wasm=${wasmCustom}, expected=121`); }
@@ -377,7 +367,7 @@ const wasmDelegate = await w.entryAsync("Ldr", "delegateLast", desc)(...paths);
 if (wasmDelegate !== 31) { failed++; console.log(`FAIL actual delegate-last initiation and ordinary parent-first control: wasm=${wasmDelegate}, expected=31`); }
 
 {
-  const p = new Program(loadDexes(a), program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]));
+  const p = new Program(loadDexes(a), program([...PLATFORM_PATHS, app]));
   const cache = world(p, { natives }), child = p.newLoader(p.root, null);
   cache.addDexes(loadDexes(b), child);
   const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
@@ -400,7 +390,7 @@ if (wasmDelegate !== 31) { failed++; console.log(`FAIL actual delegate-last init
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
 }
 for (const asynchronous of [false, true]) {
-  const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
+  const appDexes = loadDexes(a), base = program([...PLATFORM_PATHS, common]);
   const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { natives, dexes: path => {
     const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
@@ -473,7 +463,7 @@ for (const asynchronous of [false, true]) {
   if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") throw new Error("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
-  const resolver = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  const resolver = world([app, ...PLATFORM_PATHS], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {
@@ -553,7 +543,7 @@ process.exit(failed ? 1 : 0);
 async function interfaceSuperControl(): Promise<void> {
   const dex = build("interfaceSuper", ["InterfaceSuper.java"]);
   {
-    const p = new Program(loadDexes(dex), program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)))), target = world(p), loader = p.newLoader(p.root, null);
+    const p = new Program(loadDexes(dex), program(PLATFORM_PATHS.slice(0, 2))), target = world(p), loader = p.newLoader(p.root, null);
     target.addDexes(loadDexes(dex), loader);
     const face = p.definedBy(loader, "InterfaceSuper$C")!, replacement = p.definedBy(loader, "InterfaceSuper$B")!;
     p.addClass({ name: "Outside", sup: "java/lang/Object", ifaces: [face], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, p.root);
@@ -567,7 +557,7 @@ async function interfaceSuperControl(): Promise<void> {
   const names = ["selected", "reversed", "declared", "inherited", "classSuper", "virtualDefault", "interfaceDefault", "unusedAbstract"];
   const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
   if (jdk.slice(0, names.length).join(",") !== "22,22,33,11,44,22,22,55") throw new Error("interface-super JDK control changed");
-  const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  const base = program(PLATFORM_PATHS.slice(0, 2));
   let checks = 0;
   {
     const p = new Program(loadDexes(dex), base), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
@@ -609,7 +599,7 @@ async function hotRefreshControl(): Promise<void> {
   const dex = build("refresh", ["HotRefresh.java"]), late = build("refresh-late", ["HotRefreshLate.java"], join(out, "refresh"));
   const expected = sh(["java", "-cp", [join(out, "refresh"), join(out, "refresh-late")].join(":"), "HotRefresh"]).trim().split("\n").map(Number);
   if (expected.join(",") !== "896,1536,2048") throw new Error("hot refresh JDK control changed");
-  const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  const base = program(PLATFORM_PATHS.slice(0, 2));
   let checks = 0;
   const check = (name: string, got: unknown, want: unknown) => { if (got !== want) throw new Error(`${name}: ${got} != ${want}`); checks++; };
   for (const custom of [false, true]) {
@@ -654,7 +644,7 @@ async function hotRefreshControl(): Promise<void> {
     check("late override dispatch", await run(1), expected[2]);
   }
   // The worker's snapshot precedes successful resolution in the executing World.
-  const files = [dex, ...PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j))];
+  const files = [dex, ...PLATFORM_PATHS.slice(0, 2)];
   const page = world(files, { natives, holdUpgrades: () => true }), worker = world(files, { compileOnly: true }), uc = new UnitCompiler(worker);
   const run = page.entryAsync("HotRefresh", "run", "(Z)I"), slot = page.slotOf(page.prog.resolve("HotRefresh", "run", "(Z)I")!);
   check("worker seed", await run(0), expected[0]);
@@ -802,11 +792,11 @@ async function abstractDefaultControl(): Promise<void> {
   writeFileSync(join(old, "InterfaceSuper.java"), readFileSync(join(JAVA, "InterfaceSuper.java"), "utf8").replace("interface Reabstracted extends C { int f(); }", "interface Reabstracted extends C {}").replace("interface OtherReabstracted extends C { int f(); }", "interface OtherReabstracted extends C {}"));
   writeFileSync(join(old, "ClassReabstract.java"), readFileSync(join(JAVA, "ClassReabstract.java"), "utf8").replace("  public abstract int f();", ""));
   sh(["javac", "--release", "11", "-d", old, join(old, "InterfaceSuper.java"), join(old, "ClassReabstract.java"), join(JAVA, "AbstractDefaultUse.java")]);
-  for (const file of readdirSync(old).filter(p => /^AbstractDefaultUse.*\.class$/.test(p))) sh(["cp", join(old, file), join(out, "abstractDefault")]);
-  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, "abstractDefault"), "--lib", androidJar, ...readdirSync(join(out, "abstractDefault")).filter(p => p.endsWith(".class")).map(p => join(out, "abstractDefault", p))]);
+  for (const file of filesIn(old, /^AbstractDefaultUse.*\.class$/)) sh(["cp", file, join(out, "abstractDefault")]);
+  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, "abstractDefault"), "--lib", androidJar, ...filesIn(join(out, "abstractDefault"), /\.class$/)]);
   const expected = sh(["java", "-cp", join(out, "abstractDefault"), "AbstractDefaultUse"]).trim();
   if (expected !== "42\n1\n42\n1") throw new Error("binary-evolution JDK control changed: " + expected);
-  const failures: string[] = [], base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  const failures: string[] = [], base = program(PLATFORM_PATHS.slice(0, 2));
   {
     const p = new Program(loadDexes(dex), base), w = world(p);
     for (let index = 0; index < 3; index++) {
@@ -832,7 +822,7 @@ async function nativePathControl(): Promise<void> {
   const appPath = "/data/local/tmp/native-path-app.dex";
   vfs.mount(appPath, new BytesFile(new Uint8Array(readFileSync(app))));
   {
-    const base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
+    const base = program([...PLATFORM_PATHS, common]);
     const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
     let managed = 0;
     const callFn = target.callFn;
