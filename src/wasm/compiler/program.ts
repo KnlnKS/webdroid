@@ -77,11 +77,12 @@ const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
  *  little for the thousands of platform classes a process never uses. */
 class DexClass implements JClass {
   readonly name: string; readonly dex: DexFile; readonly idx: number;
-  private header_?: { flags: number; sup: string | null; ifaces: string[] };
-  private def_?: ClassDef;
-  private members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
-  private fields_?: FieldInfo[];
-  private methodInfos?: Map<number, MethodInfo>;
+  // declared, not defined: an object of a class nothing asks about holds only its name, dex and index
+  private declare header_?: { flags: number; sup: string | null; ifaces: string[] };
+  private declare def_?: ClassDef;
+  private declare members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
+  private declare fields_?: FieldInfo[];
+  private declare methodInfos?: Map<number, MethodInfo>;
   constructor(name: string, dex: DexFile, idx: number) { this.name = name; this.dex = dex; this.idx = idx; }
   refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
     if (!changedTypes) this.header_ = undefined;
@@ -111,13 +112,13 @@ class DexClass implements JClass {
       }
     }
   }
-  private get header() {
-    if (!this.header_) {
-      const h = this.dex.classHeader(this.idx), dex = this.dex;
-      this.header_ = { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : dex.typeName(h.superIdx), ifaces: h.interfaces.map((t) => dex.typeName(t)) };
-    }
-    return this.header_;
+  private get header() { return this.header_ ??= this.readHeader(); }
+  private readHeader() {
+    const h = this.dex.classHeader(this.idx), dex = this.dex;
+    return { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : dex.typeName(h.superIdx), ifaces: h.interfaces.map((t) => dex.typeName(t)) };
   }
+  /** its superclass, if any, then its interfaces, without keeping a header for a class nothing else asks about */
+  supertypes(): string[] { const { sup, ifaces } = this.header_ ?? this.readHeader(); return sup ? [sup, ...ifaces] : ifaces; }
   get flags() { return this.header.flags; }
   get sup() { return this.header.sup; }
   get ifaces() { return this.header.ifaces; }
@@ -136,7 +137,7 @@ class DexClass implements JClass {
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
   /** what `method` found in the dex's ids, by key (a raw key after a NUL), null for none: the same questions come back for a class */
-  private looked?: Map<string, ReturnType<DexFile["declaredAt"]> | null>;
+  private declare looked?: Map<string, ReturnType<DexFile["declaredAt"]> | null>;
   /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
   method(key: string, raw = false): MethodInfo | undefined {
     if (this.members_ && !raw) return this.members_.byKey.get(key);
@@ -183,6 +184,7 @@ class DexClass implements JClass {
     return { methods, byKey: new Map(methods.map((m) => [m.key, m])) };
   }
 }
+export const supertypes = (c: JClass): string[] => (c instanceof DexClass ? c.supertypes() : c.sup ? [c.sup, ...c.ifaces] : c.ifaces);
 /** how many methods (and so table slots) a class has */
 export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMethods : c.methods.length);
 /** the method a class declares at `index` (its table slot's offset), without materializing the others */

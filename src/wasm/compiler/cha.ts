@@ -1,6 +1,6 @@
 import { failed, symbolicOverride } from "./linkage.ts";
 import type { DexFile } from "../../jvm/dex.ts";
-import { ACC, classDefIdx, declaredMethod, mkey, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { ACC, classDefIdx, declaredMethod, mkey, supertypes, type JClass, type MethodInfo, type Program } from "./program.ts";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
@@ -14,7 +14,7 @@ class Index {
   add(c: JClass): void {
     this.classes.push(c);
     if (this.byType) this.note(c);
-    for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
+    for (const s of supertypes(c)) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
   }
   declaring(key: string): Iterable<string> {
     let found = this.implementors.get(key);
