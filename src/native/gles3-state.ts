@@ -104,7 +104,7 @@ const externalSamplers = new WeakMap<WebGLShader, Set<string>>();
  *  sampler2D; the #extension line is blanked in place to keep compile errors' line numbers, in
  *  every stage that requires it (Unity's video blit requires it in its vertex shader too). */
 export function externalSamplersAs2D(shader: WebGLShader, source: string): string {
-  if (!source.includes("_image_external")) { externalSamplers.delete(shader); return source; }
+  if (!source.includes("GL_OES_EGL_image_external")) { externalSamplers.delete(shader); return source; }
   externalSamplers.set(shader, new Set(Array.from(source.matchAll(/\bsamplerExternalOES\s+(\w+)/g), (m) => m[1])));
   return source.replace(/^[ \t]*#extension[ \t]+GL_OES_EGL_image_external(?:_essl3)?[ \t]*:.*$/gm, "").replace(/\bsamplerExternalOES\b/g, "sampler2D");
 }
