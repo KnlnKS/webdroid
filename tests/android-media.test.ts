@@ -1,6 +1,7 @@
 import { expect, test, describe, beforeAll } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { loadFrameworkJar, bootApp, packageRecord, thrown } from "./java.ts";
+import { bootApp, packageRecord, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
 import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
 import { newObj, scall, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
@@ -13,7 +14,7 @@ import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-
 import { NativeFormat } from "../src/android/media-format.ts";
 
 // framework.jar and a running main looper, as a booted page has them
-beforeAll(loadFrameworkJar);
+beforeAll(startMainLooper);
 // one app process for the file
 const app = async () => bootApp(await packageRecord("org.webdroid.test.media"));
 

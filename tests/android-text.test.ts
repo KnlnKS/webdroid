@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { loadLibcore, loadSystemFonts, fakeStyles, scall, thrown } from "./java.ts";
+import { loadSystemFonts, fakeStyles, scall, thrown } from "./java.ts";
 import "../src/natives.ts";
 import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
@@ -16,7 +16,6 @@ const textPaintField = (p: object, name: string) => (p as Record<string, number>
 
 describe("locale-span", () => {
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
-    await loadLibcore();
     const locales = await scall("android/os/LocaleList", "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
     const span = await newObj("android/text/style/LocaleSpan", "(Landroid/os/LocaleList;)V", locales);
     expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
@@ -224,7 +223,6 @@ describe("minikin", () => {
     await same("de-LI-1901", "de-CH-1901"); await same("no", "nb"); await same("ti", "und-Ethi"); await same("sa-Deva", "hi");
   });
   test("line breaking over the reference device's advances breaks where the device does", async () => {
-    await loadLibcore();
     const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin.ts");
     const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => {
@@ -258,7 +256,6 @@ describe("minikin", () => {
   });
 
   test("Paint's advances are the reference device's", async () => {
-    await loadLibcore();
     const { styleOf, advances } = await import("../src/android/minikin.ts");
     const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));

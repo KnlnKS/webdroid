@@ -3,13 +3,14 @@ import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { dialName, syntheticAddress } from "../src/shell/relay.ts";
-import { scall, mountApexData, loadFrameworkJar, thrown } from "./java.ts";
+import { scall, mountApexData, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { serve } from "../scripts/serve.ts";
 
 // framework.jar and a running main looper, as a booted page has them
-beforeAll(loadFrameworkJar);
+beforeAll(startMainLooper);
 
 
 describe("ssl-relay-peer", () => {

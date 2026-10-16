@@ -1,9 +1,8 @@
 import { expect, test } from "vite-plus/test";
 import "../src/natives.ts";
 import { vcall } from "../src/jvm/natives/jentry.ts";
-import { scall, loadLibcore } from "./java.ts";
+import { scall } from "./java.ts";
 
-await loadLibcore();
 
 test("a trace names each frame's source file and line from the DEX's debug info", async () => {
   let thrown: unknown;

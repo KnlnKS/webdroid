@@ -7,10 +7,9 @@ import { DexFile } from "../src/jvm/dex.ts";
 import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry.ts";
 import { JObj, rt } from "../src/jvm/runtime.ts";
 import { loadDex } from "../src/jvm/tier.ts";
-import { scall, thrown, loadLibcore, mountApexData } from "./java.ts";
+import { scall, thrown, mountApexData } from "./java.ts";
 import { detached } from "../src/jvm/natives/jthrowable.ts";
 
-await loadLibcore();
 await mountApexData();
 
 describe("strict-math", () => {

@@ -14,7 +14,8 @@ import { Transform } from "../src/android/recording.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import { newObj, linkInit, vcall, iof, staticField } from "../src/jvm/natives/jentry.ts";
 import { parsePackageArchive } from "../src/android/packagearchive.ts";
-import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java.ts";
+import { appResources, loadSystemFonts, scall, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
 
 beforeAll(loadSystemFonts);
 
@@ -22,7 +23,7 @@ describe("egl14-query-context", () => {
 
   const originalOffscreenCanvas = Object.getOwnPropertyDescriptor(globalThis, "OffscreenCanvas");
   beforeAll(async () => {
-    await loadFrameworkJar();
+    await startMainLooper();
     if (originalOffscreenCanvas) return;
     Object.defineProperty(globalThis, "OffscreenCanvas", {
       configurable: true,
@@ -92,7 +93,7 @@ describe("egl10", () => {
 });
 
 describe("canvas-state", () => {
-  beforeAll(loadFrameworkJar);
+  beforeAll(startMainLooper);
 
   test("canvas root state rejects unmatched restores", async () => {
     let restores = 0;

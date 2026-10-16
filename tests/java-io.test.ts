@@ -19,7 +19,7 @@ import { mem, guestAt } from "../src/native/mem.ts";
 import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
-import { scall, loadLibcore } from "./java.ts";
+import { scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { descriptorTransport, isRemoteFd, stageBinderFd, takeBinderFd } from "../src/native/process-fd.ts";
@@ -470,7 +470,6 @@ describe("file-descriptor", () => {
   });
 
   test("a file stream's and an archive entry's descriptors duplicate onto open native files", async () => {
-    await loadLibcore();
     vfs.write("/data/data/test/fd/in.bin", new Uint8Array([5, 6, 7]));
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");
     const pfd = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(input, "getFD", FD));
@@ -587,7 +586,6 @@ describe("file-input-descriptor", () => {
 
 describe("file-relative", () => {
   test("a relative directory lists relative children and reports a plain File parent", async () => {
-    await loadLibcore();
     vfs.write("/relative-list/child", new Uint8Array(0));
     const dir = await newObj("java/io/File", "(Ljava/lang/String;)V", "relative-list");
     const [child] = await vcall(dir, "listFiles", "()[Ljava/io/File;") as JObj[];
@@ -612,7 +610,6 @@ describe("parcel-file", () => {
     javaCloseFd(copyFd);
   });
   test("an imported writable descriptor writes back once its reader closes", async () => {
-    await loadLibcore();
     const path = "/data/local/tmp/pfd-write-back-test";
     vfs.write(path, Uint8Array.of(1, 2, 3), false);
     try {
@@ -628,7 +625,6 @@ describe("parcel-file", () => {
     } finally { vfs.delete(path); }
   });
   test("FD wire serialization owns its buffers independently of the source storage", async () => {
-    await loadLibcore();
     const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
     try {
       const wire = await parcelled(pfd);
@@ -645,7 +641,6 @@ describe("parcel-file", () => {
     } finally { await vcall(pfd, "close", "()V"); }
   });
   test("read-only file opens load lazy bytes and AutoCloseInputStream owns the descriptor", async () => {
-    await loadLibcore();
     const path = "/data/local/tmp/pfd-lazy-test";
     vfs.mount(path, { size: 3, read: async (offset, length) => Uint8Array.of(7, 8, 9).slice(offset, offset + length) });
     try {
@@ -659,7 +654,6 @@ describe("parcel-file", () => {
   });
 
   test("Os.mmap exposes file bytes to native code and munmap releases the address", async () => {
-    await loadLibcore();
     const pfd = await mkPfd(Uint8Array.of(9, 8, 7));
     const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
     const address = await scall("android/system/Os", "mmap", "(JJIILjava/io/FileDescriptor;J)J", 0n, 3n, 1, 2, fd, 0n) as bigint;
@@ -692,7 +686,6 @@ describe("rename", () => {
     });
 
     test("Java and native renames carry directory entries", async () => {
-      await loadLibcore();
       vfs.write("/data/t/old/sub/x", new Uint8Array([4]));
       vfs.mkdir("/data/t/old/empty");
       expect(await vcall(await newFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", await newFile("/data/t/new"))).toBe(1);

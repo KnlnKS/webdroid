@@ -37,10 +37,11 @@ import { descriptorTransport } from "../src/native/process-fd.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore.ts";
 import { mkUri } from "../src/android/net.ts";
-import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from "./java.ts";
+import { bootApp, packageRecord, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
 
 // framework.jar and a running main looper, as a booted page has them
-beforeAll(loadFrameworkJar);
+beforeAll(startMainLooper);
 
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
@@ -318,7 +319,6 @@ describe("cursorwindow", () => {
 describe("sax", () => {
   // libcore's ExpatParser over our expat natives: namespaces, entities, CDATA and well-formedness
   test("libcore's SAX parser reports what expat reports", async () => {
-    await loadLibcore();
     const events: string[] = [];
     rt.register({ name: "test/SaxEvents", ctor: class extends JObj {}, ifaces: ["org/xml/sax/ContentHandler"], methods: {
       ...Object.fromEntries(["setDocumentLocator(Lorg/xml/sax/Locator;)V", "startDocument()V", "endDocument()V", "endPrefixMapping(Ljava/lang/String;)V",

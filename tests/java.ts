@@ -25,17 +25,6 @@ export function fixtureDeadline(ms = 90_000): void {
 export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
   ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
-/** framework.jar on the platform class path and the main looper running, as a booted page has them */
-let framework: Promise<void> | null = null;
-export async function loadFrameworkJar(): Promise<void> {
-  await (framework ??= (async () => {
-    await loadLibcore();
-    const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework.ts"), import("../src/jvm/provenance.ts")]);
-    loadPlatformJar(new Uint8Array(readFileSync(new URL("../vendor/aosp/framework.jar", import.meta.url))), PLATFORM_JARS.indexOf("framework.jar"));
-  })());
-  await (await import("../src/android/mainloop.ts")).startMainLooper();
-}
-
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */
 export function mountApexData(): Promise<void> {
@@ -60,15 +49,6 @@ export async function preloadTextPaint(): Promise<void> {
   await (await import("../src/android/paint.ts")).preloadPaint();
 }
 
-/** libcore's own jars (core-oj, core-libart, core-icu4j), for platform classes that forward to natives */
-let libcore: Promise<void> | null = null;
-export function loadLibcore(): Promise<void> {
-  return libcore ??= (async () => {
-    const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework.ts"), import("../src/jvm/provenance.ts")]);
-    for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"])
-      loadPlatformJar(new Uint8Array(readFileSync(new URL(`../vendor/aosp/${jar}`, import.meta.url))), PLATFORM_JARS.indexOf(jar));
-  })();
-}
 
 /** Styles in a Resources with no table behind it: each entry is (attribute, type, data), a
  *  TYPE_STRING's data indexing `strings`, which stand in for the package's value pool. */
@@ -88,7 +68,7 @@ export async function fakeStyles(strings: string[], styles: Record<number, [numb
 /** framework.jar, the main looper, framework-res as the system package and the device's locales, as a booted page has them */
 export async function loadPlatform(): Promise<void> {
   const { loadFramework } = await import("../src/android/framework.ts");
-  await loadFrameworkJar();
+  await (await import("../src/android/mainloop.ts")).startMainLooper();
   const fetch = globalThis.fetch;
   globalThis.fetch = (async (url: string) => url === "/vendor/aosp/framework-res.apk"
     ? new Response(readFileSync(new URL("../vendor/aosp/framework-res.apk", import.meta.url))) : fetch(url)) as typeof fetch;

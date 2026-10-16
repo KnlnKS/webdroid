@@ -3,10 +3,9 @@ import "../src/natives.ts";
 import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { scall, loadLibcore } from "./java.ts";
+import { scall } from "./java.ts";
 import { decodeString, encodeString } from "../src/jvm/charset.ts";
 
-await loadLibcore();
 
 describe("charset", () => {
   test("UTF-16 and UTF-32 match the reference device's byte orders, marks and replacements", async () => {

@@ -32,7 +32,7 @@ import { alarmTransport } from "../src/android/alarm.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fs.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, loadLibcore, bootApp, packageRecord } from "./java.ts";
+import { scall, bootApp, packageRecord } from "./java.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -452,7 +452,6 @@ describe("pending-intents", () => {
 
 describe("resolver-file", () => {
   test("resolver file opens decode paths and reject missing files without creating them", async () => {
-    await loadLibcore();
     const resolver = await vcall(await app(), "getContentResolver", "()Landroid/content/ContentResolver;");
     const path = "/resolver file?x=1", uri = await mkUri("file:///resolver%20file%3Fx%3D1?ignored=2#fragment");
     vfs.write(path, Uint8Array.of(7, 8));
