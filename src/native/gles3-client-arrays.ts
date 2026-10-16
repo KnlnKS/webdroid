@@ -5,7 +5,7 @@ import { mem } from "./mem.ts";
 import { raise } from "../android/gl.ts";
 import { g, contextState, type ContextState, type ClientArray } from "./gles3-state.ts";
 import { view, u32, u8 } from "./gles3-pixels.ts";
-import { recAt, boundStorage, ARRAY, ELEM } from "./gles3-buffers.ts";
+import { recAt, boundStorage, contents, ARRAY, ELEM } from "./gles3-buffers.ts";
 
 /** bytes per vertex attribute component */
 export const vertexTypeBytes = (type: number): number =>
@@ -89,7 +89,7 @@ export function drawClientArrays(state: ContextState, first: number, count: numb
 /**
  * An indexed draw in the default vertex array. Client indices are streamed into a reused element
  * buffer. The vertex range comes from client indices, else from glDrawRangeElements' own range,
- * else from reading the bound element buffer back, since the host does not keep its data.
+ * else from the bound element buffer's contents, read back once and then kept by its writes.
  */
 export function drawClientElements(state: ContextState, count: number, type: number, p: number, instances: number,
   range: readonly [number, number] | null, drawAt: (offset: number) => void): void {
@@ -103,8 +103,9 @@ export function drawClientElements(state: ContextState, count: number, type: num
       if (indices) bounds = indexBounds(indices);
       else if (range) bounds = [range[0], range[1] + 1];
       else {
-        const read = new (type === 0x1405 ? Uint32Array : type === 0x1403 ? Uint16Array : Uint8Array)(count);
-        if (p + read.byteLength <= (gl.getBufferParameter(ELEM, 0x8764) as number)) { gl.getBufferSubData(ELEM, p, read); bounds = indexBounds(read); }
+        const data = contents(ELEM, elements!), K = type === 0x1405 ? Uint32Array : type === 0x1403 ? Uint16Array : Uint8Array;
+        // WebGL refuses an offset that is not a multiple of the index size
+        if (p % K.BYTES_PER_ELEMENT === 0 && p + count * K.BYTES_PER_ELEMENT <= data.length) bounds = indexBounds(new K(data.buffer as ArrayBuffer, data.byteOffset + p, count));
       }
     }
     streamClientArrays(state, bounds[0], bounds[1], instances);
