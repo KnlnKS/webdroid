@@ -31,8 +31,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before
-  the Wasm tier, and need re-verification. Google Maps (2026-10-15) draws its vector map, searches, and shows
-  places and driving routes.
+  the Wasm tier, and need re-verification. Google Maps (2026-10-15) draws its vector map and layers, searches, and
+  shows places, driving routes, active navigation, Street View and Immersive View.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
@@ -129,6 +129,8 @@ Unranked; each needs a measurement or a check against the current code before wo
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
 - **Input:** the shell dispatches a single pointer (`src/shell/pointer-input.ts`, `MotionEvent.obtain(JJIFFI)` in
   `wm.ts`), so multi-touch gestures such as pinch zoom cannot be made.
+- **Hidden API:** no hidden-API policy is enforced, so reflection reaches `@hide` members that ART denies apps, and an
+  app that relies on the denial takes another path (Compose's `findViewByAccessibilityIdTraversal` override recurses).
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.
