@@ -21,7 +21,6 @@ const Meta = {
   CTRL: 0x1000, CTRL_LEFT: 0x2000, CTRL_RIGHT: 0x4000, META: 0x10000, META_LEFT: 0x20000, META_RIGHT: 0x40000,
   CAPS_LOCK: 0x100000, NUM_LOCK: 0x200000, SCROLL_LOCK: 0x400000,
 } as const;
-type Meta = (typeof Meta)[keyof typeof Meta];
 const MODIFIERS: Record<string, number> = {
   shift: Meta.SHIFT, lshift: Meta.SHIFT_LEFT, rshift: Meta.SHIFT_RIGHT, alt: Meta.ALT, lalt: Meta.ALT_LEFT, ralt: Meta.ALT_RIGHT,
   ctrl: Meta.CTRL, lctrl: Meta.CTRL_LEFT, rctrl: Meta.CTRL_RIGHT, meta: Meta.META, lmeta: Meta.META_LEFT, rmeta: Meta.META_RIGHT,

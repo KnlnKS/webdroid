@@ -235,8 +235,8 @@ export class ThreadRec {
 const NESTED_LIMIT = 200;
 
 export class Strand {
-  /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   readonly id: number; readonly thread: ThreadRec; readonly root: boolean; private sched: Sched;
+  /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   waitsOn: Strand | null = null;
   /** the strand whose native entered Java on this one: the same thread, so it holds what that strand holds */
   parent: Strand | null = null;
@@ -408,9 +408,9 @@ export class Sched {
   }
 
   // ---------- host.sync
-  sync(op: Sync, obj: object | null, a: number): number {
+  sync(op: number, obj: object | null, a: number): number {
     const s = this.current();
-    switch (op) {
+    switch (op as Sync) {
       case Sync.Try: return this.plain(this.monitors.tryEnter(obj!, s));
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
@@ -452,9 +452,9 @@ export class Sched {
   }
 
   // ---------- host.block
-  block(op: Block, obj: object | null, a: number, b: number): Promise<number> | number {
+  block(op: number, obj: object | null, a: number, b: number): Promise<number> | number {
     const s = this.current();
-    switch (op) {
+    switch (op as Block) {
       case Block.Enter: return this.monitors.enter(obj!, s).then(() => St.Ok);
       case Block.Wait: return a < 0 || b < 0 ? St.Neg : b > 999999 ? St.Nanos : this.monitors.wait(obj!, s, a, false);
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);

@@ -103,8 +103,8 @@ interface Plan {
 }
 
 export class Natives implements NativeBinder {
-  /** the plans of the natives by id, for the imports; and of every method, since what a method binds to depends on the Program it is in (a host class changes it) */
   readonly source: NativeSource | undefined;
+  /** the plans of the natives by id, for the imports; and of every method, since what a method binds to depends on the Program it is in (a host class changes it) */
   private plans = new Map<string, Plan | string>();
   private byMethod = new WeakMap<MethodInfo, Plan | string>();
   constructor(source: NativeSource | undefined = undefined) { this.source = source; }

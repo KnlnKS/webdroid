@@ -108,8 +108,8 @@ const INVALID = -1, NEED_MORE = -2, MARK = -3;
  *  [sp, sEnd) into [dp, dEnd) as ucnv_toUnicode/ucnv_fromUnicode do, and report the positions
  *  they reached and ICU's error code; `invalid` counts the units of the last error. */
 export class Converter {
-  /** a sequence's bytes read so far (ICU's toUBytes) */
   readonly cs: CharsetInfo;
+  /** a sequence's bytes read so far (ICU's toUBytes) */
   private partial: number[] = [];
   private endian: boolean | null = null;
   /** output that did not fit (ICU's error buffers), written first by the next call */

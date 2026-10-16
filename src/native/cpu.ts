@@ -23,7 +23,6 @@ import { backtrace } from "./dl.ts";
 const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
 type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
 const CoreExit = { Budget: 0, Host: 1, Ret: 2, Fault: 3, Syscall: 4 } as const;
-type CoreExit = (typeof CoreExit)[keyof typeof CoreExit];
 const ILL_ILLOPC = 1, TRAP_BRKPT = 1, BUS_ADRALN = 1, SEGV_MAPERR = 1, SEGV_ACCERR = 2;
 /** a nested call() on this register file: what it is for (wd.native.regs) and, for a signal handler,
  *  the stack range it runs on, the state a siglongjmp out of it leaves for the interrupted code, and
@@ -61,7 +60,6 @@ const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), O
 /** the architectural state a nested call saves and restores: registers, pc, V file, flags, monitor */
 const ARCH_SIZE = L(16);
 const Fault = { Undefined: 1, BadAddress: 2, MisalignedPc: 3, Brk: 5, UnsupportedSyscall: 6, NullPage: 8, Extension: 9 } as const;
-type Fault = (typeof Fault)[keyof typeof Fault];
 const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page", "optional extension"];
 
 export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };

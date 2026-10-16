@@ -38,7 +38,7 @@ export type RGBA = Uint8ClampedArray<ArrayBuffer>;
 interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
 export class NativeBitmap {
-  w: number; h: number; config;
+  w: number; h: number; config: number;
   rowBytes: number;
   /** bytes the pixels were allocated with, which reconfigure and inBitmap reuse may not exceed */
   allocation: number;

@@ -42,7 +42,7 @@ type Value = null | number | bigint | string | Int8Array;
 const SLOT = 16, INLINE = 8;
 
 export class NativeWindow {
-  readonly name: string; readonly size: number; readonly readOnly;
+  readonly name: string; readonly size: number; readonly readOnly: boolean;
   rows = 0;
   cols = 0;
   used = 0;

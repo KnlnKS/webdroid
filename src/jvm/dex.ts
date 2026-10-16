@@ -98,7 +98,7 @@ class PagedCache<T> {
 }
 
 export class DexFile {
-  bytes: Uint8Array; name;
+  bytes: Uint8Array; name: string;
   view: DataView;
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
   private fieldIdsOff: number; private methodIdsOff: number;

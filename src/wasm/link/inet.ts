@@ -11,7 +11,6 @@ const STRUCT = "android/system/StructAddrinfo", INET = "java/net/InetAddress", G
 /** the answer of op 0 for a lookup that cannot finish synchronously */
 export const ASYNC = -0x80000000;
 export const NetOp = { Resolve: 0, Byte: 1 } as const;
-export type NetOp = (typeof NetOp)[keyof typeof NetOp];
 
 export const inetIntrinsics = new Map<string, Intrinsic>();
 inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;", (cx, m, c) => {

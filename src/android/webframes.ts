@@ -33,8 +33,8 @@ export function setWebLayer(el: HTMLElement) {
 /** a document a WebView's page shows on a renderer origin: its main frame, or a subframe the page
  *  routed there, which talks to the app over `port` */
 export class RendererFrame {
-  /** the document.cookie last sent, and the page's last write it answers */
   readonly sub: boolean; url: string; readonly win: FrameIdentity; readonly port: MessagePort;
+  /** the document.cookie last sent, and the page's last write it answers */
   cookies = { ack: 0, sent: "" };
   constructor(sub: boolean, url: string, win: FrameIdentity, port: MessagePort) { this.sub = sub; this.url = url; this.win = win; this.port = port; }
 }

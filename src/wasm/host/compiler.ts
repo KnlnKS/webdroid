@@ -77,7 +77,7 @@ export function dexesByLoader(prog: Program, keep?: (loader: Loader) => boolean)
 }
 
 export class CompileClient implements CompileService {
-  private source: WorkerPort | (() => WorkerPort); private holdMerges;
+  private source: WorkerPort | (() => WorkerPort); private holdMerges: () => boolean;
   readonly stats = { jobs: 0, adopted: 0, stale: 0, failed: 0, workerMs: 0, adoptMs: 0, startMs: 0 };
   private state: "idle" | "starting" | "ready" | "retired" = "idle";
   private w?: World;

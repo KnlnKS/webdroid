@@ -84,17 +84,12 @@ export async function readFully(source: FileSource, offset = 0, length = source.
 }
 
 export class RangeFile implements FileSource {
-  readonly url: string; readonly size: number; private readonly chunkSize; private readonly maxChunks;
+  readonly url: string; readonly size: number; private readonly chunkSize: number; private readonly maxChunks: number;
   private readonly chunks = new Map<number, Uint8Array>();
   private readonly inflight = new Map<number, Promise<Uint8Array>>();
   private lastEnd = -1;
 
-  constructor(
-    url: string,
-    size: number,
-    chunkSize = 1 << 20,
-    maxChunks = 32,
-  ) { this.url = url; this.size = size; this.chunkSize = chunkSize; this.maxChunks = maxChunks; }
+  constructor(url: string, size: number, chunkSize = 1 << 20, maxChunks = 32) { this.url = url; this.size = size; this.chunkSize = chunkSize; this.maxChunks = maxChunks; }
 
   static async open(url: string): Promise<FileSource> {
     const response = await fetch(url, { method: "HEAD" });

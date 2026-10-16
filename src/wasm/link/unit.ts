@@ -38,8 +38,8 @@ export interface UnitResult {
 }
 
 export class UnitCompiler {
-  /** the numbering the World compiled for had when the last job arrived */
   private w: World;
+  /** the numbering the World compiled for had when the last job arrived */
   private known: Marks;
   constructor(w: World) { this.w = w; this.known = w.numbering(); }
   /** follows the World compiled for: `keep` says it took the numbering of the previous unit (otherwise that is forgotten first), and `sync` is what it numbered since; false if the two do not line up */

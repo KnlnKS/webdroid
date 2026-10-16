@@ -17,7 +17,7 @@ const LIMITS = { entry: 256 << 20, total: 1024 << 20 };
 interface Meta { clock: number; entries: Record<string, { files: Record<string, number>; used: number }> }
 
 export class Persist {
-  private fs: FileBackend; private limits;
+  private fs: FileBackend; private limits: typeof LIMITS;
   constructor(fs: FileBackend, limits = LIMITS) { this.fs = fs; this.limits = limits; }
   private async meta(): Promise<Meta> {
     const raw = await this.fs.read("meta.json");

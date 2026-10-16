@@ -198,8 +198,8 @@ export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx
 export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
 
 export class Program {
-  /** the classes this Program adds to its base's, by key */
   readonly base?: Program;
+  /** the classes this Program adds to its base's, by key */
   private classes = new Map<string, JClass>();
   private syntheticLoaders = new Map<string, Loader>();
   private initiated = new WeakMap<Loader, Map<string, string>>();

@@ -55,8 +55,8 @@ class Scope implements BridgeScope {
 }
 
 export class Bridge implements HostBridge {
-  /** the host form of each Java object a native has seen, so its identity is stable across calls */
   private w: World; private src?: NativeSource;
+  /** the host form of each Java object a native has seen, so its identity is stable across calls */
   private facades = new WeakMap<object, object>();
   /** the host form of each array the calls in progress reached (a call that is passed one an enclosing call has copied shares the copy, which that call stores back); an array leaves it when the call that copied it ends */
   private live = new Map<object, object>();

@@ -366,8 +366,8 @@ class Run {
 }
 /** a codec's configuration; a Run holds what it does once started */
 export class Codec {
-  /** owner: the Java MediaCodec events go to, absent for an AMediaCodec */
   readonly def: Definition; readonly owner: JObj | null;
+  /** owner: the Java MediaCodec events go to, absent for an AMediaCodec */
   constructor(def: Definition, owner: JObj | null = null) { this.def = def; this.owner = owner; }
   format = new NativeFormat();
   /** a Java Surface, or a native ANativeWindow's GlSurface */

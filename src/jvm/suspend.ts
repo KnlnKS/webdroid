@@ -16,7 +16,7 @@ type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
  *  that no entry gave a chain (host tools, tests): it shares its thread's locks and class
  *  initializations with every chain of that thread. */
 export class Strand {
-  readonly thread: unknown; readonly root;
+  readonly thread: unknown; readonly root: boolean;
   constructor(thread: unknown, root = false) { this.thread = thread; this.root = root; }
 }
 

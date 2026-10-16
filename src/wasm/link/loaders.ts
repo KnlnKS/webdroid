@@ -20,7 +20,6 @@ export function emitClassAnswer(cx: Compiler, c: Code, id: number): void {
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
 export const Lookup = { Visible: 0, Defined: 1, Cookie: 2, ForName: 3 } as const;
-export type Lookup = (typeof Lookup)[keyof typeof Lookup];
 /** the kind of host.obj that answers the ClassLoader object of a class id */
 export const LOADER_OF_CLASS = 100;
 
@@ -156,7 +155,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
 }
 
 /** host.classByName(name, scope, mode): the id of the class a binary name ("a.B$C", "[La.B;") stands for in the scope, or 0 */
-export function classByName(w: World, name: string, scope: unknown, mode: Lookup): number | Promise<object> {
+export function classByName(w: World, name: string, scope: unknown, mode: number): number | Promise<object> {
   const n = name.replace(/\./g, "/");
   if (n === "" || n.includes("@")) return 0;
   const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(scope as object) : undefined;

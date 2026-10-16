@@ -3,7 +3,7 @@ import { attachPointerInput, drainPointers } from "./pointer-input.ts";
 
 // the DOM pieces the input reads, which node lacks
 class Rect {
-  readonly left; readonly top; readonly width; readonly height;
+  readonly left: number; readonly top: number; readonly width: number; readonly height: number;
   constructor(left = 0, top = 0, width = 0, height = 0) { this.left = left; this.top = top; this.width = width; this.height = height; }
   get right() { return this.left + this.width; }
   get bottom() { return this.top + this.height; }

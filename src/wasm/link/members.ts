@@ -20,7 +20,6 @@ const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 export const MInfo = { ExecCount: 300, ExecAt: 301, ClassAnn: 302, ExecAnn: 303, FieldAnn: 304, IsRecord: 305, DeclaringClass: 306, EnclosingClass: 307, EnclosingIndex: 308, CompareParams: 309, ThrowsCount: 310, ThrowsAt: 311, EnclosingOwner: 312, IsAnonymous: 313 } as const;
 export type MInfo = (typeof MInfo)[keyof typeof MInfo];
 const TextKind = { SimpleName: 0 } as const;
-type TextKind = (typeof TextKind)[keyof typeof TextKind];
 
 const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
@@ -30,9 +29,9 @@ const present = (set: EncAnnotation[] | undefined, type: string) => visible(set)
 /** the executables of a class the host last counted for `ExecAt` */
 let listed: number[] = [];
 
-export function hostMembers(w: World, kind: MInfo, a: number, b: number): number {
+export function hostMembers(w: World, kind: number, a: number, b: number): number {
   const cls = (id: number) => w.prog.get(w.nameOf(id));
-  switch (kind) {
+  switch (kind as MInfo) {
     case MInfo.ExecCount: {
       const ctor = b & 1, publicOnly = b & 2;
       listed = [];

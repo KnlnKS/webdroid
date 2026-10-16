@@ -65,7 +65,7 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
  * The Lighting and ColorMatrix setters update `matrix` in place, and a paint holding it sees them.
  */
 export class NativeColorFilter {
-  readonly matrix: Float32Array | null; readonly color; readonly mode;
+  readonly matrix: Float32Array | null; readonly color: number; readonly mode: string;
   constructor(matrix: Float32Array | null, color = 0, mode = "DST") { this.matrix = matrix; this.color = color; this.mode = mode; }
 }
 /**

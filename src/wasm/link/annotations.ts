@@ -23,7 +23,7 @@ const Ann = { Class: 0, Executable: 1, Field: 2, ExecutableParams: 3, DefaultVal
 type Ann = (typeof Ann)[keyof typeof Ann];
 
 /** the annotations of the element whose object the host was given */
-function elementOf(w: World, kind: Ann, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
+function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
   const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
   // an array or primitive class has no definition, so no annotations
   if (kind === Ann.Class || kind === Ann.SignatureOfClass) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
@@ -123,7 +123,7 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
 
 /** host.annotation(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is */
 export function hostObject(w: World, kind: number, a: number, b: number, filter: object | null): object | null | Promise<object | null> {
-  const strand = w.sched.current(), materialize = objects(w, strand, kind as Ann, a, b, filter);
+  const strand = w.sched.current(), materialize = objects(w, strand, kind, a, b, filter);
   // Keep immediate reflection immediate; only an actual Java wait switches stacks.
   const advance = (value?: unknown, failed = false): object | null | Promise<object | null> => {
     let step = failed ? materialize.throw(value) : materialize.next(value);
@@ -135,7 +135,7 @@ export function hostObject(w: World, kind: number, a: number, b: number, filter:
   };
   return advance();
 }
-function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, filter: object | null): Generator<unknown, object | null, any> {
+function* objects(w: World, strand: Strand, kind: number, a: number, b: number, filter: object | null): Generator<unknown, object | null, any> {
   let s = states.get(w);
   if (!s) states.set(w, s = make(w));
   if (kind === Ann.SignatureOfClass || kind === Ann.SignatureOfExecutable || kind === Ann.SignatureOfField) {

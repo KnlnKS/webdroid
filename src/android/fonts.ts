@@ -38,7 +38,7 @@ export function fontNatives<T extends Record<string, (...args: never[]) => unkno
 /** one font file: its bytes in memory, or a reference-build font file (isPlatformFont) read whole on
  *  first use. A platform file is the tab's: its realms share its bytes, and so HarfBuzz's face of it. */
 class FontFile {
-  private data: Uint8Array | null; readonly path;
+  private data: Uint8Array | null; readonly path: string;
   private loading?: Promise<void>;
   constructor(data: Uint8Array | null, path = "") { this.data = data; this.path = path; }
   get bytes(): Uint8Array { return this.data ?? pending(this.load()); }
@@ -112,7 +112,7 @@ let sourceIds = 0;
 /** minikin::Font over its MinikinFontSkia: one face of a font file, the style it is selected by,
  *  and the axes, path and locales it was built with. A clone shares the source id and file. */
 export class NativeFont {
-  readonly file: FontFile; readonly ttcIndex: number; readonly weight: number; readonly italic: boolean; readonly axes: readonly Axis[]; readonly locales; readonly sourceId;
+  readonly file: FontFile; readonly ttcIndex: number; readonly weight: number; readonly italic: boolean; readonly axes: readonly Axis[]; readonly locales: string; readonly sourceId: number;
   private face?: FaceInfo;
   constructor(file: FontFile, ttcIndex: number, weight: number, italic: boolean,
     axes: readonly Axis[] = [], locales = "", sourceId = sourceIds++) { this.file = file; this.ttcIndex = ttcIndex; this.weight = weight; this.italic = italic; this.axes = axes; this.locales = locales; this.sourceId = sourceId; }
@@ -168,7 +168,7 @@ export class FakedFont {
 
 /** minikin's FontFamily: its fonts, their language tags and variant */
 export class NativeFamily {
-  readonly fonts: readonly NativeFont[]; readonly langTags; readonly variant;
+  readonly fonts: readonly NativeFont[]; readonly langTags: string; readonly variant: number;
   private axisTags?: readonly number[];
   constructor(fonts: readonly NativeFont[], langTags = "", variant = 0) { this.fonts = fonts; this.langTags = langTags; this.variant = variant; }
   /** getClosestMatch: the first member scoring lowest, a point per grade of weight and two for the slant */

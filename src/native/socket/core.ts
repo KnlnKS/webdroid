@@ -37,7 +37,7 @@ const CONSUMED: Chunk = { bytes: new Uint8Array(0), rights: null };
 /** One end of an in-process connection, reading what its peer writes: a byte stream, or with
  *  `messages` one that keeps each write whole. A peerless end is a datagram socket's queue. */
 export class Loopback implements Stream {
-  readonly messages;
+  readonly messages: boolean;
   private chunks: Chunk[] = [];
   private head = 0;
   private bytes = 0;

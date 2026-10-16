@@ -8,7 +8,6 @@ import { motionOf, AXIS_X, AXIS_Y, type NativeMotionEvent } from "./motionevent.
 
 const AXIS_SCROLL = 26;
 const S = { DEFAULT: -1, IMPULSE: 0, LSQ1: 1, LSQ2: 2, LSQ3: 3, WLSQ2_DELTA: 4, WLSQ2_CENTRAL: 5, WLSQ2_RECENT: 6, INT1: 7, INT2: 8, LEGACY: 9 } as const;
-type S = (typeof S)[keyof typeof S];
 const W = { NONE: 0, DELTA: 1, CENTRAL: 2, RECENT: 3 } as const;
 type W = (typeof W)[keyof typeof W];
 const DEFAULT_BY_AXIS = new Map([[AXIS_X, S.LSQ2], [AXIS_Y, S.LSQ2], [AXIS_SCROLL, S.IMPULSE]]);

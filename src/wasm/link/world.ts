@@ -14,7 +14,7 @@ import { Cha } from "../compiler/cha.ts";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
 import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
-import { emitRestored, Sched, Sync, defaultLoop, type Block, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
+import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
 import { rtfns, type Synth } from "../compiler/rtfns.ts";
 import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes.ts";
 import { HostClasses } from "./hostclass.ts";
@@ -216,9 +216,9 @@ export class World {
       stubSlot: (at: number) => this.stubSlots[at],
       linkDue: (slot: number) => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
       linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))) : (slot: number) => this.linkSlot(slot),
-      sync: (op: Sync, obj: object | null, a: number) => this.sched.sync(op, obj, a),
+      sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
       // without JSPI nothing can wait, which the first attempt says
-      block: hasJspi() ? suspending((op: Block, obj: object | null, a: number, b: number) => {
+      block: hasJspi() ? suspending((op: number, obj: object | null, a: number, b: number) => {
         try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
@@ -247,7 +247,7 @@ export class World {
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => {
         const text = this.hostString(name) as string;
-        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode as Lookup), 0);
+        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode), 0);
       },
       dexOpen: (path: unknown, loader: object | null) => park(dexOpen(this, path, loader), null),
       dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(this, buffers, arrays, starts, ends, loader), null),
