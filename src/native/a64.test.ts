@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import { mem } from "./mem.ts";
 import { setA64 } from "./cpu.ts";
 import { run, RET } from "./a64.testkit.ts";

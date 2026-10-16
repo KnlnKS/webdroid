@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { vfs } from "./vfs.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 

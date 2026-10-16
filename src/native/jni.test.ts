@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
+import { expect, test } from "vite-plus/test";
 import "../natives.ts";
 import { rt } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
@@ -12,7 +14,7 @@ import { mem } from "./mem.ts";
 import { handle, deref } from "../android/handles.ts";
 
 // The members and natives under test are tests/fixtures/JniProbe.java.
-loadDex(new DexFile(new Uint8Array(await Bun.file(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)).arrayBuffer())));
+loadDex(new DexFile(new Uint8Array(readFileSync(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)))));
 
 const TYPES = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
 /** slots of the JNIEnv function table (jni.h) */
@@ -339,8 +341,8 @@ for (const a64 of abis) test(`${abi(a64)} references: local frames, global and w
   expect(await j.call(S.NewWeakGlobalRef, 0)).toBe(0);
   let collected = false;
   for (let i = 0; i < 100 && !collected; i++) {
-    await Bun.sleep(5);
-    Bun.gc(true);
+    await sleep(5);
+    globalThis.gc?.();
     collected = (await j.call(S.IsSameObject, loose, 0)) === 1;
   }
   expect(collected).toBe(true);

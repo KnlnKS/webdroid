@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { expect, test } from "vite-plus/test";
 import "../natives.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
@@ -9,7 +10,7 @@ import { mediaInit } from "./media.ts";
 
 // 0.3 seconds of 32x32 red H.264 (10 fps, key interval 2, no B frames) and 8 kHz AAC.
 test("NDK extraction owns its descriptor and preserves samples, timestamps and sync seeking", async () => {
-  const clip = new Uint8Array(await Bun.file(new URL("../../tests/fixtures/media.mp4", import.meta.url)).arrayBuffer());
+  const clip = readFileSync(new URL("../../tests/fixtures/media.mp4", import.meta.url));
   const wrapped = new Uint8Array(clip.length + 17); wrapped.set(clip, 17);
   for (const wide of [false, true]) {
     setA64(wide); mediaInit();

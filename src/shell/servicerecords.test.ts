@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { ServiceRecords, type ServiceBinding, type StartItem } from "./servicerecords.ts";
 import { uptimeMillis } from "../guest-clock.ts";
 

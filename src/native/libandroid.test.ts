@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import "../natives.ts";
 import { NativeLooper } from "../android/mainloop.ts";
 import { JThread } from "../jvm/natives/jentry.ts";

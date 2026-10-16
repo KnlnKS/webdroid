@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { expect, test } from "vite-plus/test";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, cpus, setA64 } from "./cpu.ts";
 import { core, CORE_LIBC } from "./core.ts";
@@ -37,7 +38,7 @@ test("joinable pthread handles remain distinct after their routines exit", async
   mem.u32.set([0xe3a00007, 0xe12fff1e], routine >>> 2);
   try {
     const first = startThread(parent, routine, 0n, false);
-    for (let i = 0; cpus.has(first) && i < 5000; i++) await Bun.sleep(1);
+    for (let i = 0; cpus.has(first) && i < 5000; i++) await sleep(1);
     expect(cpus.has(first)).toBe(false);
     const second = startThread(parent, routine, 0n, false);
     expect(second.pthreadSelf).not.toBe(first.pthreadSelf);

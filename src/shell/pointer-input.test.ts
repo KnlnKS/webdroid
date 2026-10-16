@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { attachPointerInput, drainPointers } from "./pointer-input.ts";
 
 // the DOM pieces the input reads, which node lacks

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { charsToString, decodeModifiedUtf8, demangle, mangleField, mangleMethod, mangleStaticField } from "./abi.ts";
 
 test("Unicode Java members and literal escape-like names retain distinct JS properties", () => {
