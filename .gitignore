@@ -27,5 +27,4 @@ src/shell/webpage.gen.ts
 dist/
 .wrangler/
 worker-configuration.d.ts
-tests/.node-*.mjs
 vendor/wasm-aot/
