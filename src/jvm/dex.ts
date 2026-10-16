@@ -92,9 +92,10 @@ class PagedCache<T> {
   private pages: (T[] | undefined)[];
   constructor(length: number) { this.length = length; this.pages = new Array(Math.ceil(length / CACHE_PAGE_SIZE)); }
   get(i: number): T | undefined { return this.pages[i >>> CACHE_PAGE_SHIFT]?.[i & CACHE_PAGE_MASK]; }
-  set(i: number, value: T): void {
-    (this.pages[i >>> CACHE_PAGE_SHIFT] ??= new Array<T>(CACHE_PAGE_SIZE))[i & CACHE_PAGE_MASK] = value;
+  set(i: number, value: T): T {
+    return (this.pages[i >>> CACHE_PAGE_SHIFT] ??= new Array<T>(CACHE_PAGE_SIZE))[i & CACHE_PAGE_MASK] = value;
   }
+  clear(): void { this.pages.fill(undefined); }
 }
 
 export class DexFile {
@@ -109,12 +110,12 @@ export class DexFile {
   stringCount: number; typeCount: number;
   version: number; fileSize: number; containerSize: number;
 
-  private stringCache: (string | undefined)[];
-  private typeCache: (string | undefined)[];
-  private typeNames: (string | undefined)[];
-  private rawTypeNames: (string | undefined)[];
+  private stringCache: PagedCache<string>;
+  private typeCache: PagedCache<string>;
+  private typeNames: PagedCache<string>;
+  private rawTypeNames: PagedCache<string>;
   private classDefCache?: Map<string, number>;
-  private protoCache: (ProtoRef | undefined)[];
+  private protoCache: PagedCache<ProtoRef>;
   private fieldCache: PagedCache<FieldRef>;
   private methodCache: PagedCache<MethodRef>;
 
@@ -144,11 +145,11 @@ export class DexFile {
     this.classDefCount = v.getUint32(h + 96, true); this.classDefsOff = v.getUint32(h + 100, true);
     this.mapOff = v.getUint32(h + 52, true);
     const protoCount = v.getUint32(h + 72, true), fieldCount = v.getUint32(h + 80, true), methodCount = v.getUint32(h + 88, true);
-    this.stringCache = new Array(this.stringCount);
-    this.typeCache = new Array(this.typeCount);
-    this.typeNames = new Array(this.typeCount);
-    this.rawTypeNames = new Array(this.typeCount);
-    this.protoCache = new Array(protoCount);
+    this.stringCache = new PagedCache(this.stringCount);
+    this.typeCache = new PagedCache(this.typeCount);
+    this.typeNames = new PagedCache(this.typeCount);
+    this.rawTypeNames = new PagedCache(this.typeCount);
+    this.protoCache = new PagedCache(protoCount);
     this.fieldCache = new PagedCache(fieldCount);
     this.methodCache = new PagedCache(methodCount);
 
@@ -176,7 +177,9 @@ export class DexFile {
   stringLen(i: number): number {
     return new Reader(this.bytes, this.view.getUint32(this.stringIdsOff + i * 4, true)).uleb();
   }
-  string(i: number): string { return this.stringCache[i] ??= this.decodeString(i); }
+  string(i: number): string { return this.stringCache.get(i) ?? this.stringCache.set(i, this.decodeString(i)); }
+  /** string `i`, not kept if it was not already */
+  private peekString(i: number): string { return this.stringCache.get(i) ?? this.decodeString(i); }
   private decodeString(i: number): string {
     const r = new Reader(this.bytes, this.view.getUint32(this.stringIdsOff + i * 4, true)), len = r.uleb();
     return decodeModifiedUtf8(this.bytes, r.pos, this.bytes.length, len);
@@ -186,7 +189,7 @@ export class DexFile {
     const out = new Set<string>(), seen = new Set<number>();
     for (let i = 0; i < this.protoCache.length; i++) {
       const s = this.view.getUint32(this.protoIdsOff + i * 12, true);
-      if (!seen.has(s)) { seen.add(s); out.add(this.stringCache[s] ?? this.decodeString(s)); }
+      if (!seen.has(s)) { seen.add(s); out.add(this.peekString(s)); }
     }
     return out;
   }
@@ -228,25 +231,19 @@ export class DexFile {
   set resolveType(resolve: ((descriptor: string) => string) | undefined) {
     if (this.typeResolver === resolve) return;
     this.typeResolver = resolve;
-    this.typeCache.fill(undefined); this.typeNames.fill(undefined);
+    this.typeCache.clear(); this.typeNames.clear();
     this.descCache.length = this.paramTypeCache.length = this.typesCache.length = 0;
   }
   /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
-  type(i: number): string {
-    let s = this.typeCache[i];
-    if (s === undefined) {
-      s = this.typeCache[i] = this.resolveType ? this.resolveType(this.rawType(i)) : this.rawType(i);
-    }
-    return s;
-  }
+  type(i: number): string { return this.typeCache.get(i) ?? this.typeCache.set(i, this.resolveType ? this.resolveType(this.rawType(i)) : this.rawType(i)); }
   /** the descriptor as the file spells it */
   rawType(i: number): string { return this.string(this.view.getUint32(this.typeIdsOff + i * 4, true)); }
   /** binary names of `type(i)` and `rawType(i)`, kept so lookups by them hash each name once */
-  typeName(i: number): string { return this.typeNames[i] ??= this.resolveType ? descToName(this.type(i)) : this.rawTypeName(i); }
-  rawTypeName(i: number): string { return this.rawTypeNames[i] ??= descToName(this.rawType(i)); }
+  typeName(i: number): string { return this.typeNames.get(i) ?? this.typeNames.set(i, this.resolveType ? descToName(this.type(i)) : this.rawTypeName(i)); }
+  rawTypeName(i: number): string { return this.rawTypeNames.get(i) ?? this.rawTypeNames.set(i, descToName(this.peekString(this.view.getUint32(this.typeIdsOff + i * 4, true)))); }
 
   proto(i: number): ProtoRef {
-    let p = this.protoCache[i];
+    let p = this.protoCache.get(i);
     if (p === undefined) {
       const off = this.protoIdsOff + i * 12;
       const shorty = this.string(this.view.getUint32(off, true));
@@ -257,7 +254,7 @@ export class DexFile {
         const n = this.view.getUint32(paramsOff, true);
         for (let j = 0; j < n; j++) params.push(this.view.getUint16(paramsOff + 4 + j * 2, true));
       }
-      p = this.protoCache[i] = { shorty, ret, params };
+      p = this.protoCache.set(i, { shorty, ret, params });
     }
     return p;
   }
