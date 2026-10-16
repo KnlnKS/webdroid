@@ -16,16 +16,19 @@ import { HT, T } from "../compiler/wasmbin";
 import type { Kind } from "../compiler/program";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
-const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature";
+const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";
 const RUNTIME = 1, SYSTEM = 2;
 
-const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField }
+const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField, PermittedSubclasses }
+/** the system annotation whose `value` each kind answers, and that value's type */
+const SYSTEM_VALUES = new Map<Ann, [string, string]>([[Ann.SignatureOfClass, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.SignatureOfExecutable, [SIGNATURE, "[Ljava/lang/String;"]],
+  [Ann.SignatureOfField, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.PermittedSubclasses, [PERMITTED, "[Ljava/lang/Class;"]]]);
 
 /** the annotations of the element whose object the host was given */
 function elementOf(w: World, kind: Ann, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
   const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
   // an array or primitive class has no definition, so no annotations
-  if (kind === Ann.Class || kind === Ann.SignatureOfClass) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
+  if (kind === Ann.Class || kind === Ann.SignatureOfClass || kind === Ann.PermittedSubclasses) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
   if (kind === Ann.Field || kind === Ann.SignatureOfField) {
     const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
     return { set: jc.def ? jc.dex!.classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
@@ -137,9 +140,10 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, filter: ob
 function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, filter: object | null): Generator<unknown, object | null, any> {
   let s = states.get(w);
   if (!s) states.set(w, s = make(w));
-  if (kind === Ann.SignatureOfClass || kind === Ann.SignatureOfExecutable || kind === Ann.SignatureOfField) {
-    const { set } = elementOf(w, kind, a), sig = ofKind(set, SYSTEM).find((x) => x.type === SIGNATURE)?.elements.value;
-    return Array.isArray(sig) ? arrayOf(s, "Ljava/lang/String;", (sig as string[]).map((x) => w.javaString(x))) : null;
+  const system = SYSTEM_VALUES.get(kind);
+  if (system) {
+    const hit = ofKind(elementOf(w, kind, a).set, SYSTEM).find((x) => x.type === system[0]), v = hit?.elements.value;
+    return Array.isArray(v) ? (yield* valueOf(w, s, strand, hit!.dex, v, system[1])) as object : null;
   }
   if (kind === Ann.DefaultValue) {
     // the AnnotationDefault of the method's annotation class holds a nested annotation whose elements are the defaults
@@ -193,3 +197,4 @@ def("java/lang/reflect/Method.getDefaultValue()Ljava/lang/Object;", (cx, c) => a
 def("java/lang/Class.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfClass, () => classId(cx, c), false));
 def("java/lang/reflect/Executable.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfExecutable, () => executableSlot(cx, c), false));
 def("java/lang/reflect/Field.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfField, () => field(cx, c), false));
+def("java/lang/Class.getPermittedSubclassesFromAnnotation()[Ljava/lang/Class;", (cx, c) => ask(cx, c, Ann.PermittedSubclasses, () => classId(cx, c), false));
