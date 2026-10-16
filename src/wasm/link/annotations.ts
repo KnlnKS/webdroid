@@ -17,9 +17,10 @@ import type { Kind } from "../compiler/program";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";
+const METHOD_PARAMETERS = "dalvik/annotation/MethodParameters";
 const RUNTIME = 1, SYSTEM = 2;
 
-const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField, PermittedSubclasses }
+const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField, PermittedSubclasses, Parameters }
 /** the system annotation whose `value` each kind answers, and that value's type */
 const SYSTEM_VALUES = new Map<Ann, [string, string]>([[Ann.SignatureOfClass, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.SignatureOfExecutable, [SIGNATURE, "[Ljava/lang/String;"]],
   [Ann.SignatureOfField, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.PermittedSubclasses, [PERMITTED, "[Ljava/lang/Class;"]]]);
@@ -70,6 +71,7 @@ function make(w: World) {
     typeNotPresent: construct("java/lang/TypeNotPresentException", "(Ljava/lang/String;Ljava/lang/Throwable;)V", ["L", "L"]),
     enumNotPresent: construct("java/lang/EnumConstantNotPresentException", "(Ljava/lang/Class;Ljava/lang/String;)V", ["L", "L"]),
     enumConstant,
+    parameter: construct("java/lang/reflect/Parameter", "(Ljava/lang/String;ILjava/lang/reflect/Executable;I)V", ["L", "I", "L", "I"]),
   };
 }
 
@@ -123,7 +125,8 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
   return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(s, `L${MEMBER};`, members));
 }
 
-/** host.annotation(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is */
+/** host.annotation(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is,
+ *  or the Executable whose Parameters are asked for */
 export function hostObject(w: World, kind: Ann, a: number, b: number, filter: object | null): object | null | Promise<object | null> {
   const strand = w.sched.current(), materialize = objects(w, strand, kind, a, b, filter);
   // Keep immediate reflection immediate; only an actual Java wait switches stacks.
@@ -153,6 +156,14 @@ function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, fil
     return v === undefined ? null : (yield* valueOf(w, s, strand, jc.dex!, v, m.ret)) as object;
   }
   const { set, params } = elementOf(w, kind, a);
+  if (kind === Ann.Parameters) {
+    // Executable.getParameters0: the MethodParameters names and flags; Java checks their count
+    const hit = ofKind(set, SYSTEM).find((x) => x.type === METHOD_PARAMETERS), names = hit?.elements.names, flags = hit?.elements.accessFlags;
+    if (!Array.isArray(names) || !Array.isArray(flags)) return null;
+    const parameters: object[] = [];
+    for (const [i, name] of names.entries()) parameters.push(yield s.parameter(strand, typeof name === "string" ? w.javaString(name) : null, Number(flags[i] ?? 0), filter, i));
+    return arrayOf(s, "Ljava/lang/reflect/Parameter;", parameters);
+  }
   if (kind === Ann.ExecutableParams) {
     if (!params) return null;
     const groups: object[] = [];
@@ -175,26 +186,27 @@ function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, fil
 
 export const annotationIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => annotationIntrinsics.set(key, (cx, m, c) => f(cx, c));
-/** host.annotation over the element in local 0 (kind `kind`), with the annotation Class in local 1 when `filtered` */
-function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filtered: boolean): void {
+/** host.annotation over the element in local 0 (kind `kind`), with the object in local `filter` (the annotation Class) */
+function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filter: number | null): void {
   emitRestored(cx, c, [], [T.anyref], () => {
     c.i32(kind); element(); c.i32(0);
-    if (filtered) c.lget(1).externConvertAny(); else c.refNull(HT.extern);
+    if (filter !== null) c.lget(filter).externConvertAny(); else c.refNull(HT.extern);
     c.call(cx.imp.annotation);
     emitSettled(cx, c);
   });
 }
 const classId = (cx: Compiler, c: Code) => { c.lget(0); idOfClass(cx, c); };
 const field = (cx: Compiler, c: Code) => { c.lget(0); fieldId(cx, c); };
-def("java/lang/Class.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), false));
-def("java/lang/Class.getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), true));
-def("java/lang/reflect/Executable.getDeclaredAnnotationsNative()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), false));
-def("java/lang/reflect/Executable.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), true));
-def("java/lang/reflect/Executable.getParameterAnnotationsNative()[[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.ExecutableParams, () => executableSlot(cx, c), false));
-def("java/lang/reflect/Field.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), false));
-def("java/lang/reflect/Field.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), true));
-def("java/lang/reflect/Method.getDefaultValue()Ljava/lang/Object;", (cx, c) => ask(cx, c, Ann.DefaultValue, () => executableSlot(cx, c), false));
-def("java/lang/Class.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfClass, () => classId(cx, c), false));
-def("java/lang/reflect/Executable.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfExecutable, () => executableSlot(cx, c), false));
-def("java/lang/reflect/Field.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfField, () => field(cx, c), false));
-def("java/lang/Class.getPermittedSubclassesFromAnnotation()[Ljava/lang/Class;", (cx, c) => ask(cx, c, Ann.PermittedSubclasses, () => classId(cx, c), false));
+def("java/lang/Class.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), null));
+def("java/lang/Class.getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), 1));
+def("java/lang/reflect/Executable.getDeclaredAnnotationsNative()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), null));
+def("java/lang/reflect/Executable.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), 1));
+def("java/lang/reflect/Executable.getParameterAnnotationsNative()[[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.ExecutableParams, () => executableSlot(cx, c), null));
+def("java/lang/reflect/Field.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), null));
+def("java/lang/reflect/Field.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), 1));
+def("java/lang/reflect/Method.getDefaultValue()Ljava/lang/Object;", (cx, c) => ask(cx, c, Ann.DefaultValue, () => executableSlot(cx, c), null));
+def("java/lang/Class.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfClass, () => classId(cx, c), null));
+def("java/lang/reflect/Executable.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfExecutable, () => executableSlot(cx, c), null));
+def("java/lang/reflect/Field.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfField, () => field(cx, c), null));
+def("java/lang/Class.getPermittedSubclassesFromAnnotation()[Ljava/lang/Class;", (cx, c) => ask(cx, c, Ann.PermittedSubclasses, () => classId(cx, c), null));
+def("java/lang/reflect/Executable.getParameters0()[Ljava/lang/reflect/Parameter;", (cx, c) => ask(cx, c, Ann.Parameters, () => executableSlot(cx, c), 0));
