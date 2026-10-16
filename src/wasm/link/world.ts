@@ -2149,17 +2149,11 @@ export class World {
       return call(...args);
     };
   }
-  /** runs the Cleaner of a native allocation once its referent has been collected (sun.misc.Cleaner.create), as ART's reference queue daemon does: on a strand of
-   *  its own, since a thunk may wait (FileChannelImpl's Unmapper unmaps a file mapping) */
+  /** runs the Cleaner of a native allocation once its referent has been collected (sun.misc.Cleaner.create), as ART's reference queue daemon does: as a call
+   *  that may block, since a thunk may wait (FileChannelImpl's Unmapper unmaps a file mapping). The Cleaner reports a failing thunk itself. */
+  private clean?: (cleaner: object) => Promise<unknown>;
   private cleaners = new FinalizationRegistry<object>((cleaner) => {
-    const clean = this.prog.resolve("sun/misc/Cleaner", "clean", "()V");
-    if (!clean) return;
-    const s = this.sched.strand(), end = () => s.end();
-    // the Cleaner reports a failing thunk itself
-    try {
-      const r = this.callFn("cleaner:clean", ["L"], "V", (cx, c, arg) => { arg(0); cx.callMethod(c, clean); })(s, cleaner);
-      if (r instanceof Promise) r.then(end, end); else end();
-    } catch { end(); }
+    (this.clean ??= this.entryAsync("sun/misc/Cleaner", "clean", "()V"))(cleaner).catch(() => {});
   });
   /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {
