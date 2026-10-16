@@ -52,7 +52,6 @@ export class PermissionStore {
     globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
   }
 }
-let permissionStore = new PermissionStore();
 export interface PermissionAccess {
   permissionCheck(pkg: string, names: string[]): boolean[] | Promise<boolean[]>;
   permissionGrant(pkg: string, names: string[]): void | Promise<void>;
@@ -66,36 +65,39 @@ export function canonicalPermissionCommands(store: PermissionStore, authorize: (
     permissionGrant: (pkg, names) => { authorize(pkg); store.grant(pkg, names); },
   };
 }
-let permissionAccess = canonicalPermissionCommands(permissionStore, () => {});
-export function usePermissionStore(store: PermissionStore) {
-  permissionStore = store;
-  permissionAccess = canonicalPermissionCommands(store, () => {});
-}
+// only the canonical commands read the store: a process without it asks the broker's
+let permissionAccess = canonicalPermissionCommands(new PermissionStore(), () => {});
+export function usePermissionStore(store: PermissionStore) { permissionAccess = canonicalPermissionCommands(store, () => {}); }
 export function usePermissionAccess(access: PermissionCalls): void { permissionAccess = access; }
-/** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
- *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
+/** signature|appop|pre23 permissions, the special access a user grants in Settings */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
 export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
+/** special access held without its screen: by a requesting app targeting below 23 or a system one */
+const specialAtInstall = (record: PackageRecord | undefined, name: string): boolean =>
+  !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
 function permissionHeld(store: PermissionStore, pkg: string, name: string): boolean {
   const record = packages.get(pkg);
-  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.permissions.has(name) && store.get(pkg).has(name);
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
 export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
+/** a permission a user grants (runtime, or special access) is read from the store; any other is held */
 export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
-  RUNTIME_PERMISSIONS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : permissionHeld(permissionStore, pkg, name);
+  RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : true;
 /** whether a package holds a platform permission no third-party app is granted at install: it is a
- *  system package that requests it (privileged or preinstalled), or the special access above */
+ *  system package that requests it (privileged or preinstalled), or special access held without its screen */
 export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
   const record = packages.get(pkg);
-  if (SPECIAL_ACCESS.has(name)) return permissionHeld(permissionStore, pkg, name);
+  if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name);
   return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
 };
 export function grantPermissions(names: string[]): Int32Array | Promise<Int32Array> {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
-  // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
-  const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
+  // only runtime permissions are asked for; any other name answers as it is held. An app targeting below
+  // Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
+  const below33 = !!record && usesSdk(record.root).target < 33;
+  const asked = names.filter((name) => RUNTIME_PERMISSIONS.has(name) && !(below33 && name === "android.permission.POST_NOTIFICATIONS"));
   return after(permissionAccess.permissionGrant(pkg, asked), () =>
     after(permissionsGranted(pkg, names), values => Int32Array.from(values, value => value ? 0 : -1)));
 }
@@ -111,9 +113,16 @@ registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(f
   yield putExtra(result, PERMISSIONS + "RESULTS", yield* awaited(grantPermissions([...names])), "[I");
   return result;
 }));
+// Settings' "Display over other apps" list, which the app asking for it opens (the package an
+// intent names is not preselected since Android 11), answered by the same policy for that app
+registerSystemActivity("android.settings.action.MANAGE_OVERLAY_PERMISSION", () => {
+  const pkg = appHost?.pkg ?? "", name = "android.permission.SYSTEM_ALERT_WINDOW";
+  return packages.get(pkg)?.permissions.has(name) ? after(grantPrompted(pkg, name), () => null) : null;
+});
+const declaration = (owner: PackageRecord, name: string) => owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   for (const owner of packages.values()) {
-    const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
+    const node = declaration(owner, name);
     if (node) return [owner, node];
   }
   return null;
@@ -130,7 +139,7 @@ export function checkPermission(permission: string, pkg: string): number | Promi
 async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
   const certificates = await record.certificates();
   for (const owner of packages.values()) {
-    if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
+    if (!declaration(owner, permission)) continue;
     const signers = await owner.certificates();
     if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
   }

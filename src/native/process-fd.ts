@@ -1,5 +1,5 @@
 import { E } from "./abi";
-import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd,
+import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
   javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
 import { isMutablePath } from "../shell/file-path";
 import { vfs } from "../shell/vfs";
@@ -114,10 +114,20 @@ export function processFdStat(fd: number): ReturnType<typeof javaFdStat> | Promi
   const remote = openFd(fd)?.remote;
   return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null) : javaFdStat(fd);
 }
+const remoteRest = (fd: number) => Promise.all([processFdStat(fd),processSeekFd(fd,0,1)])
+  .then(([stat,position]) => !stat || position < 0 ? null : {position,length:Math.max(0,stat.size-position)});
+/** the bytes from `fd`'s position to its end, which stays where it was */
+export async function processFdBytes(fd: number): Promise<Uint8Array | null> {
+  if (!isRemoteFd(fd)) return javaFdBytes(fd);
+  const rest = await remoteRest(fd);
+  if (!rest) return null;
+  const bytes = new Uint8Array(rest.length), n = await processPreadFd(fd,bytes,rest.position);
+  return n < 0 ? null : bytes.subarray(0,n);
+}
 export function processIoctlIntFd(fd: number, command: number): number | Promise<number> {
   if (!isRemoteFd(fd)) return javaIoctlIntFd(fd,command);
   if (command !== 0x541b) return -E.NOTTY;
-  return Promise.all([processFdStat(fd),processSeekFd(fd,0,1)]).then(([stat,position]) => !stat || position < 0 ? -E.BADF : Math.max(0,stat.size-position));
+  return remoteRest(fd).then(rest => rest ? rest.length : -E.BADF);
 }
 
 /** A live owner lease; a mapping outlives the descriptor that acquired it. */

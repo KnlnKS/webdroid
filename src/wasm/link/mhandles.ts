@@ -21,6 +21,7 @@ import type { DexFile } from "../../jvm/dex";
 import { emitVarHandleAccess } from "../compiler/poly";
 import { invokeVarHandleView } from "./vhandleviews";
 import { invokeCustom } from "./callsites";
+import { mid } from "../compiler/ids";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** leaves the element array of the Object[] (anyref) on the stack */
@@ -175,18 +176,25 @@ export function unbox(cx: Compiler, c: Code, desc: string): void {
 
 /** Box a DEX polymorphic site for the canonical MethodHandle or VarHandle dispatcher. */
 export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: string): void {
-  const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret);
-  const handle = c.newLocal(T.anyref), arr = c.newLocal(T.anyref);
+  const c = mc.code, handle = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
-  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
+  emitBoxedInvoke(mc, ins, ins.c, 1, () => c.lget(handle), (accessMode ? accessMode + "@" : "") + mc.dex.protoDesc(ins.c), accessMode ? VAR_HANDLE_INVOKE : exact ? 1 : 0);
+}
+/** invoke-custom: the site's arguments, boxed, for the target of the CallSite its own bootstrap links (callsites.ts) */
+export function emitCustom(mc: MC, ins: Ins): void {
+  emitBoxedInvoke(mc, ins, mc.dex.callSiteProto(ins.b), 0, () => mc.code.anyNull(), `${mid(mc.m)}#${ins.b}`, CUSTOM_INVOKE);
+}
+/** a dispatcher import invoked with the arguments of `proto` from register `firstReg` boxed into an
+ *  Object[], its Object result dropped, unboxed or cast to the proto's return type */
+function emitBoxedInvoke(mc: MC, ins: Ins, proto: number, firstReg: number, handle: () => void, site: string, mode: number): void {
+  const { cx, code: c } = mc, { params, ret } = mc.dex.protoTypes(proto), arr = c.newLocal(T.anyref);
   cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
-  params.forEach((p, i) => {
+  for (let i = 0, ri = firstReg; i < params.length; ri += isWide(params[i++]) ? 2 : 1) {
+    const p = params[i];
     c.lget(arr); objects(cx, c).i32(i);
-    mc.get(kindOf(p), regs[i]);
-    if (BOX[p]) box(cx, c, p);
-    c.arraySet(cx.tData.ref);
-  });
-  emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(arr), `${accessMode ? accessMode + "@" : ""}(${params.join("")})${ret}`, accessMode ? VAR_HANDLE_INVOKE : exact ? 1 : 0);
+    mc.get(kindOf(p), ins.regs[ri]); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
+  }
+  emitInvokeImport(cx, c, handle, () => c.lget(arr), site, mode);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
@@ -199,8 +207,8 @@ export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args
   });
 }
 
-/** the modes of host.mhInvoke besides 0 (invoke) and 1 (invokeExact): an EmulatedStackFrame, an invoke-custom site (compiler/custom.ts), a VarHandle accessor */
-export const CUSTOM_INVOKE = 3;
+/** the modes of host.mhInvoke besides 0 (invoke) and 1 (invokeExact): an EmulatedStackFrame, an invoke-custom site, a VarHandle accessor */
+const CUSTOM_INVOKE = 3;
 const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2, VAR_HANDLE_INVOKE = 4;
 export const handleIntrinsics = new Map<string, Intrinsic>([
   [`${MH}.invokeExactWithFrame(L${FRAME};)V`, (cx, _m, c) => {

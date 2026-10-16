@@ -12,7 +12,7 @@ import { configurations, resizeWindows, setClientVisible } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
-import { intentQuery$, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
+import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
 import { grantResultUris } from "../urigrants";
 import { attached, thisApp, userLaunched, pms, runsHere } from "./am";
 
@@ -79,13 +79,14 @@ function pause(r: ActivityRecord): Promise<void> {
   const reported = Promise.withResolvers<void>();
   // every pause of `r` waits on it
   const done = shareable(rt.drive(function* (): Gen<void> {
-    yield* schedule(r.app, yield topResumedItem(r, false), yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
+    yield* schedule(r.app, yield topResumedItem(r, false), yield pauseItem(r, r.finishing));
     yield reported.promise;
   }()));
   r.pausing = { done, settle: reported.resolve };
   return done;
 }
 const settlePause = (r: ActivityRecord) => { r.pausing?.settle(); r.pausing = null; };
+const pauseItem = (r: ActivityRecord, finishing = false) => item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +finishing, 0, 0, 0);
 const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/os/IBinder;ZZ", r.token, 1, 0);
 function* resume(r: ActivityRecord): Gen<void> {
   const results = r.results.splice(0);
@@ -130,7 +131,7 @@ export const configurationChanged = driven(function* (): Gen<void> {
   }
   for (const r of [...stack]) {
     if (r.state === "resumed") yield* ensureConfiguration(r, [], yield resumeItem(r));
-    else if (r.state === "paused") yield* ensureConfiguration(r, [], yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, 0, 0, 0, 0));
+    else if (r.state === "paused") yield* ensureConfiguration(r, [], yield pauseItem(r));
   }
   yield resizeWindows();
 });
@@ -291,6 +292,7 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
 });
 
 const AI = "android/content/pm/ActivityInfo";
+const isActivity = (info: JObj, ref: ComponentRef) => getDeclared<string>(info, AI, "packageName") === ref.pkg && getDeclared<string>(info, AI, "name") === ref.cls;
 /** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
@@ -299,11 +301,10 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = yield* intentQuery$(intent), system = systemActivity(q, false) ??
-      (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
+      (info && isActivity(info, { pkg: "android", cls: SYSTEM_ACTIVITY }) ? systemActivity(q) : null);
     if (system) { detached(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode)), logUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
-    const copy = yield newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-    yield vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+    const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
     const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
@@ -386,17 +387,12 @@ function* finish(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<
   } finally { transitions--; }
 }
 
-function* isComponent(r: ActivityRecord, component: JObj | null): Gen<boolean> {
-  return !!component && getDeclared<string>(r.info, AI, "packageName") === (yield vcall(component, "getPackageName", "()Ljava/lang/String;")) &&
-    getDeclared<string>(r.info, AI, "name") === (yield vcall(component, "getClassName", "()Ljava/lang/String;"));
-}
 /** ActivityRecord.navigateUpTo: finish up to the nearest instance of the destination below, which
  *  gets the intent as a new one, or, a standard activity not asked to clear top, is replaced by a
  *  new instance; with none, only `r` finishes. Returns whether the destination was in the task. */
 function* navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, resultData: JObj | null): Gen<boolean> {
-  const component: JObj | null = yield vcall(dest, "getComponent", "()Landroid/content/ComponentName;");
-  let parent: ActivityRecord | null = null;
-  for (let i = stack.indexOf(r) - 1; i >= 0 && !parent; i--) if (yield* isComponent(stack[i], component)) parent = stack[i];
+  const target = yield* componentParts$(yield vcall(dest, "getComponent", "()Landroid/content/ComponentName;"));
+  const parent = target ? stack.slice(0, stack.indexOf(r)).reverse().find((p) => isActivity(p.info, target)) ?? null : null;
   const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
   const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
     ((yield vcall(dest, "getFlags", "()I")) & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
@@ -501,12 +497,15 @@ function* callingActivity(token: JObj): Gen<JObj | null> {
 // IAppTask: this process's one task
 const TASK_ID = 1;
 const component = (r: ActivityRecord | undefined) => r ? vcall(r.info, "getComponentName", "()Landroid/content/ComponentName;") : null;
+// Task.RemoteToken: every TaskInfo carries it, and TaskInfo.writeToParcel writes it unchecked
+rt.register({ name: "webdroid/TaskToken", ctor: class extends JObj {}, sup: "android/window/IWindowContainerToken$Stub", methods: {} });
+const taskToken = once(() => after(newObj("webdroid/TaskToken"), (token) => newObj("android/window/WindowContainerToken", "(Landroid/window/IWindowContainerToken;)V", token)));
 rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "android/app/IAppTask$Stub", methods: {
   "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* () {
-    const info = yield newObj("android/app/ActivityManager$RecentTaskInfo");
+    const info = yield newObj("android/app/ActivityManager$RecentTaskInfo"), base = yield component(stack[0]);
     return setDeclared(info, "android/app/ActivityManager$RecentTaskInfo", {
-      id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
-      baseIntent: stack[0]?.intent ?? null, baseActivity: yield component(stack[0]), topActivity: yield component(stack.at(-1)) });
+      id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0), token: yield taskToken(),
+      baseIntent: stack[0]?.intent ?? null, baseActivity: base, realActivity: base, topActivity: yield component(stack.at(-1)) });
   }),
   "finishAndRemoveTask()V": () => detached(() => rt.drive(clearAbove(null)), logUncaught),
   // one task is shown at a time, and there are no recents to exclude it from

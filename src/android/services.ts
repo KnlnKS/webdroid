@@ -35,6 +35,7 @@ function fillProc(info: JObj): JObj {
 }
 
 // IActivityManager: this process's view of the activity manager
+const checkPidPermission = (name: string, _pid: number, uid: number) => checkUidPermission(name, uid);
 const activityManager: NativeSpec["methods"] = {
   "getRunningAppProcesses()Ljava/util/List;": () => after(newObj(PROCESS_INFO), (info) => newArrayList([fillProc(info)])),
   "getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JObj) => { fillProc(info); },
@@ -57,8 +58,8 @@ const activityManager: NativeSpec["methods"] = {
   "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
-  "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
-  "checkPermissionForDevice(Ljava/lang/String;III)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
+  "checkPermission(Ljava/lang/String;II)I": checkPidPermission,
+  "checkPermissionForDevice(Ljava/lang/String;III)I": checkPidPermission,
   "isUserAMonkey()Z": () => 0,
   // the render thread's tid, for scheduling: everything here shares the page's one thread
   "setRenderThread(I)V": () => {},
@@ -350,9 +351,10 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
 const AOM = "android/app/AppOpsManager", MODE_ALLOWED = 0, MODE_IGNORED = 1, MODE_ERRORED = 2;
 const owns = (uid: number, pkg: string | null) => pkg !== null && packages.get(pkg)?.uid === uid;
 const defaultMode = (code: number): Promise<number> => scall(AOM, "opToDefaultMode", "(I)I", code);
+const opPermission = (code: number) => scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
 function* opMode(code: number, pkg: string): Gen<number> {
   const op: number = yield scall(AOM, "opToSwitch", "(I)I", code);
-  const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
+  const permission: string | null = yield opPermission(op);
   if (permission !== null && isRuntimePermission(permission)) return (yield* awaited(permissionGranted(pkg, permission))) ? MODE_ALLOWED : MODE_IGNORED;
   return yield* awaited(defaultMode(op));
 }
@@ -362,6 +364,7 @@ const checkOp = driven(function* (code: number, uid: number, pkg: string | null)
 const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
   return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
 });
+const startOp = (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag);
 const sourceField = <T>(state: JObj, name: string) => getDeclared<T>(state, "android/content/AttributionSourceState", name);
 const noteFor = (code: number, state: JObj) =>
   noteOp(code, sourceField(state, "uid"), sourceField(state, "packageName"), sourceField(state, "attributionTag"));
@@ -379,10 +382,8 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
   "checkPackage(ILjava/lang/String;)I": (uid: number, pkg: string | null) => owns(uid, pkg) ? MODE_ALLOWED : MODE_ERRORED,
   "noteOperation(IILjava/lang/String;Ljava/lang/String;ZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
   "noteOperationForDevice(IILjava/lang/String;Ljava/lang/String;IZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
-  "startOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;ZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;":
-    (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag),
-  "startOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;IZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;":
-    (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag),
+  "startOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;ZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;": startOp,
+  "startOperationForDevice(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;IZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;": startOp,
   "noteProxyOperationWithState(ILandroid/content/AttributionSourceState;ZLjava/lang/String;ZZ)Landroid/app/SyncNotedAppOp;": noteProxyOp,
   "startProxyOperationWithState(Landroid/os/IBinder;ILandroid/content/AttributionSourceState;ZZLjava/lang/String;ZZIII)Landroid/app/SyncNotedAppOp;":
     (_token: unknown, code: number, state: JObj) => noteProxyOp(code, state),
@@ -390,7 +391,7 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
   // an app's own notes are collected for ops a dangerous or appop permission guards
   "shouldCollectNotes(I)Z": driven(function* (code: number) {
     if (yield scall(AOM, "shouldForceCollectNoteForOp", "(I)Z", code)) return 1;
-    const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
+    const permission: string | null = yield opPermission(code);
     if (permission === null) return 0;
     // PermissionInfo's PROTECTION_DANGEROUS, or PROTECTION_FLAG_APPOP; an undeclared permission is neither
     const level = protectionLevel(permission) ?? 0;

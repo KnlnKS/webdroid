@@ -131,6 +131,11 @@ const opened = (p: Peer, source: FileSource | null) => {
   return p.extractor.open(source).then(() => { p.source = source; }, () => { throw failed(); });
 };
 const E = peers.on;
+function trackAt(p: Peer, i: number) {
+  const track = p.extractor.tracks[i];
+  if (!track) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+  return track;
+}
 rt.registerJnis("android/media/MediaExtractor", {
   "native_init()V": () => {},
   "native_setup()V": function (this: JObj) { peers.attach(this, { extractor: new MediaExtractor(), source: null }); },
@@ -144,14 +149,10 @@ rt.registerJnis("android/media/MediaExtractor", {
   "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": E((p, _http: unknown, path: string) =>
     opened(p, vfs.source(path.startsWith("file://") ? decodeURI(path.slice(7)) : path))),
   "getTrackCount()I": E((p) => p.extractor.tracks.length),
-  "getTrackFormatNative(I)Ljava/util/Map;": E((p, i: number) => {
-    const track = p.extractor.tracks[i];
-    if (!track) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    return formatToJava(track.format);
-  }),
+  "getTrackFormatNative(I)Ljava/util/Map;": E((p, i: number) => formatToJava(trackAt(p, i).format)),
   "getFileFormatNative()Ljava/util/Map;": E((p) => formatToJava(new NativeFormat().set("mime", TYPE_STRING, p.extractor.tracks.some((t) => t.format.string("mime").startsWith("video/")) ? "video/mp4" : "audio/mp4"))),
-  "selectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = true; }),
-  "unselectTrack(I)V": E((p, i: number) => { const t = p.extractor.tracks[i]; if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", null); t.selected = false; }),
+  "selectTrack(I)V": E((p, i: number) => { trackAt(p, i).selected = true; }),
+  "unselectTrack(I)V": E((p, i: number) => { trackAt(p, i).selected = false; }),
   "seekTo(JI)V": E((p, time: bigint, mode: number) => p.extractor.seek(Number(time), mode)),
   "advance()Z": E((p) => +p.extractor.advance()),
   "readSampleData(Ljava/nio/ByteBuffer;I)I": E((p, buffer: JBuffer, offset: number) => {

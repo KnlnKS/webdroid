@@ -15,7 +15,7 @@ import { PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
-import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent } from "../intent";
+import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
@@ -73,11 +73,6 @@ function* denial(t: Target, callingPackage: string): Gen<string | null> {
   const permission = getDeclared<string | null>(t.info, SI, "permission");
   return permission && (yield* awaited(checkPermission(permission, callingPackage))) !== 0 ? permission : null;
 }
-function* withComponent(intent: JObj, name: JObj): Gen<JObj> {
-  const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
-  yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, name);
-  return copy;
-}
 function remoteOwner(t: Target) {
   const owner = packages.get(t.pkg);
   if (!owner) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package: " + t.pkg);
@@ -108,6 +103,10 @@ function requestBind(s: ServiceRecord, b: Binding, rebind: boolean): Promise<voi
   if (!rebind) b.requested = true;
   b.hasBound = true; b.doRebind = false;
   return scheduleOnApp("scheduleBindService", `(${BINDER}${INTENT}ZIJ)V`, s.token, b.intent, +rebind, processState(PROCESS_STATE_SERVICE), 0n);
+}
+function unbindApp(s: ServiceRecord, b: Binding): Promise<void> {
+  b.hasBound = false;
+  return scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
 }
 /** Service.START_FLAG_REDELIVERY and START_FLAG_RETRY */
 const START_FLAG_REDELIVERY = 1, START_FLAG_RETRY = 2;
@@ -146,10 +145,7 @@ function* bringDownIfNeeded(s: ServiceRecord): Gen<void> {
   services.delete(s.key);
   for (const b of s.bindings) for (const c of b.connections.splice(0)) c.connected(null, true);
   yield* awaited(starts().destroyed(s.cls));
-  if (s.created) yield Promise.all([...s.bindings.filter((b) => b.hasBound).map((b) => {
-    b.hasBound = false;
-    return scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
-  }), scheduleOnApp("scheduleStopService", `(${BINDER})V`, s.token)]);
+  if (s.created) yield Promise.all([...s.bindings.filter((b) => b.hasBound).map((b) => unbindApp(s, b)), scheduleOnApp("scheduleStopService", `(${BINDER})V`, s.token)]);
   if (s.foregroundId) yield stopForegroundNotification(s.foregroundId, true);
 }
 /** queue starts and deliver them, bringing the service up if it is not */
@@ -185,8 +181,8 @@ function* unbindLocal(id: JObj | string): Gen<boolean> {
     const [c] = b.connections.splice(i, 1);
     found = true;
     if (!b.connections.length && s.created && b.hasBound) {
-      b.hasBound = false; b.doRebind = false;
-      yield scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
+      b.doRebind = false;
+      yield unbindApp(s, b);
     }
     if (c.autoCreate) yield* bringDownIfNeeded(s);
   }
@@ -264,7 +260,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
   if (denied) return yield* awaited(mkComponentName("!", denied));
-  const bound = yield* withComponent(intent, t.name);
+  const bound = yield* withComponent$(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else detached(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground), logUncaught);
   return t.name;
@@ -283,7 +279,7 @@ export const activeServiceMethods = {
     if (!t) return 0;
     if (yield* denial(t, appHost!.pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
-    else { const bound = yield* withComponent(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
+    else { const bound = yield* withComponent$(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
     return 1;
   }),
   "stopServiceToken(Landroid/content/ComponentName;Landroid/os/IBinder;I)Z": driven(function* (_name: JObj, token: JObj, startId: number) {
@@ -297,7 +293,7 @@ export const activeServiceMethods = {
       const t = yield* resolve(intent, resolvedType);
       if (!t) return 0;
       if (yield* denial(t, callingPackage)) return -1;
-      const bound = yield* withComponent(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
+      const bound = yield* withComponent$(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
       const connected = (binder: JObj | null, dead: boolean) => detached(() => vcall(conn, "connected", CONNECTED, t.name, binder, +dead), binderEscape());
       if (isLocal(t)) {
         yield* bindLocal(t, bound, { id: conn, autoCreate: !!(bits & BIND_AUTO_CREATE), connected });
@@ -340,7 +336,7 @@ export const activeServiceMethods = {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return null;
     if (yield* denial(t, callingPackage)) throw rt.mkThrowable("java/lang/SecurityException", "Permission Denial: Accessing service " + t.pkg);
-    return isLocal(t) ? yield* peekLocal(t) : yield serviceTransport.peek(remoteOwner(t), t.process, yield* withComponent(intent, t.name));
+    return isLocal(t) ? yield* peekLocal(t) : yield serviceTransport.peek(remoteOwner(t), t.process, yield* withComponent$(intent, t.name));
   }),
   // Service.startForeground (id) and stopForeground (its STOP_FOREGROUND_* flags): the service's notification
   "setServiceForeground(Landroid/content/ComponentName;Landroid/os/IBinder;ILandroid/app/Notification;II)V":

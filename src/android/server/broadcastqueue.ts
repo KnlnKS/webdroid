@@ -9,7 +9,7 @@ import { notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
-import { mkComponentName, type JIntent } from "../intent";
+import { mkComponentName, withComponent$, type JIntent } from "../intent";
 import { scheduleOnApp, compatInfo, thisApp, pms, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
@@ -64,8 +64,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
     const name = yield* awaited(mkComponentName(appHost!.pkg, component));
     const info = yield vcall(yield* awaited(pms()), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
-    const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
-    yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, name);
+    const copy = yield* withComponent$(intent, name);
     const done = finished(thisApp());
     yield scheduleOnApp("scheduleReceiver", RECEIVER, copy, info, compatInfo(), result.code, result.data, result.extras, +ordered, 0, 0,
       processState(PROCESS_STATE_RECEIVER), from.uid, from.pkg);
