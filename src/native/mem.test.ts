@@ -41,6 +41,20 @@ test("core copies preserve overlap and invalidate executed pages across the copi
   }
 });
 
+test("core softfp math reads only the low word of each ARM32 register", () => {
+  const cp = core.cpu_alloc(1, 1001, 1000, 0);
+  const x = new BigUint64Array(mem.buf, cp, 4);
+  const words = (v: number) => Array.from(new Uint32Array(Float64Array.of(v).buffer), BigInt);
+  // compiled ARM32 code spills only the low words, so the upper ones can hold anything
+  x.set([...words(2), ...words(10)].map((w) => 0xdeadbeef_00000000n | w));
+  try {
+    expect(core.libc_call(cp, CORE_LIBC.pow)).toBe(0);
+    expect(new Float64Array(BigUint64Array.of(x[0] | x[1] << 32n).buffer)[0]).toBe(1024);
+  } finally {
+    core.cpu_free(cp);
+  }
+});
+
 test("core zlib checksums preserve incremental state", () => {
   const p = mem.malloc(9), cp = core.cpu_alloc(1, 1001, 1000, 1);
   const args = new BigUint64Array(mem.buf, cp, 3);
