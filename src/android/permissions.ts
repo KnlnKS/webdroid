@@ -94,8 +94,10 @@ export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
 };
 export function grantPermissions(names: string[]): Int32Array | Promise<Int32Array> {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
-  // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
-  const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
+  // only runtime permissions are asked for; any other name answers as it is held. An app targeting below
+  // Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
+  const below33 = !!record && usesSdk(record.root).target < 33;
+  const asked = names.filter((name) => RUNTIME_PERMISSIONS.has(name) && !(below33 && name === "android.permission.POST_NOTIFICATIONS"));
   return after(permissionAccess.permissionGrant(pkg, asked), () =>
     after(permissionsGranted(pkg, names), values => Int32Array.from(values, value => value ? 0 : -1)));
 }
