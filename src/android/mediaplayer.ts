@@ -10,6 +10,7 @@ import { newAudioSessionId, setSounding } from "./audio-output";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native";
 import { guestEndpoint } from "../native/net-address";
 import { deviceFetch } from "../shell/devicefetch";
+import { nativeParcel, writeInt } from "./parcel";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
@@ -206,6 +207,14 @@ rt.registerJnis(MP, {
   }),
   "getVideoWidth()I": M((p) => { p.require(~IDLE); return p.media?.videoWidth ?? 0; }),
   "getVideoHeight()I": M((p) => { p.require(~IDLE); return p.media?.videoHeight ?? 0; }),
+  // MediaPlayerService's header over NuPlayerDriver's records: pause, then backward, forward and any seek, as BOOLEAN_VAL records
+  "native_getMetadata(ZZLandroid/os/Parcel;)Z": M((p, _updateOnly: number, _filter: number, reply: JObj) => {
+    const parcel = nativeParcel(reply), start = parcel.pos, seekable = Number.isFinite(p.media?.duration) ? 1 : 0;
+    writeInt(parcel, 8 + 4 * 16); writeInt(parcel, 0x4d455441);
+    for (const [key, on] of [[1, 1], [2, seekable], [3, seekable], [4, seekable]]) { writeInt(parcel, 16); writeInt(parcel, key); writeInt(parcel, 3); writeInt(parcel, on); }
+    parcel.pos = start;
+    return 1;
+  }),
   // MediaPlayer::setPlaybackSettings: no player before a source or once stopped; a negative rate is
   // BAD_VALUE; speed 0 pauses a started player, and any other speed starts a prepared, paused or
   // completed one
