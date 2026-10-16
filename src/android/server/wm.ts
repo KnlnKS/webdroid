@@ -14,6 +14,7 @@ import { edges } from "../graphics";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
+let touchMode = true;
 const RELAYOUT_RES_FIRST_TIME = 1, RELAYOUT_RES_SURFACE_CHANGED = 2;
 const WINDOWING_MODE_FULLSCREEN = 1, ACTIVITY_TYPE_STANDARD = 1;
 
@@ -160,7 +161,7 @@ function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: J
   if (outFrame) yield vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
   if (outScale) outScale[0] = 1;
   const app = appToken(ws);
-  return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | (app && hiddenTokens.has(app) ? 0 : ADD_FLAG_APP_VISIBLE);
+  return ADD_OKAY | (touchMode ? ADD_FLAG_IN_TOUCH_MODE : 0) | (app && hiddenTokens.has(app) ? 0 : ADD_FLAG_APP_VISIBLE);
 }
 
 function* relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: JObj): Gen<number> {
@@ -355,7 +356,10 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   "getDefaultDisplayRotation()I": () => device.width > device.height ? 1 : 0,
   "watchRotation(Landroid/view/IRotationWatcher;I)I": () => device.width > device.height ? 1 : 0,
   "removeRotationWatcher(Landroid/view/IRotationWatcher;)V": () => {},
-  "isInTouchMode(I)Z": () => 1,
+  // the one display's touch mode, which a window's ViewRootImpl leaves and re-enters with its input
+  "isInTouchMode(I)Z": () => +touchMode,
+  "setInTouchMode(ZI)V": (on: number) => { touchMode = !!on; },
+  "setInTouchModeOnAllDisplays(Z)V": (on: number) => { touchMode = !!on; },
   // the keyguard is never shown and has no secure lock, as on the reference AVD, so an exit succeeds at once
   ...stubs(0, "isKeyguardLocked()Z", "isKeyguardSecure(I)Z"),
   ...noops("addKeyguardLockedStateListener(Lcom/android/internal/policy/IKeyguardLockedStateListener;)V",
