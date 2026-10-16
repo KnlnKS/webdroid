@@ -31,6 +31,19 @@ function nalUnits(data: Uint8Array): Uint8Array[] {
   if (start >= 0) units.push(data.subarray(start));
   return units;
 }
+/** An access unit in the MP4 framing (ISO/IEC 14496-15: each NAL unit after its 4-byte length) as Annex B,
+ *  or null when such lengths do not frame it exactly. A player that configures its decoder before its
+ *  demuxer has read the sample entry can queue samples still framed so. */
+function lengthPrefixedAsAnnexB(data: Uint8Array): Uint8Array | null {
+  const length = (at: number) => (data[at] << 24 | data[at + 1] << 16 | data[at + 2] << 8 | data[at + 3]) >>> 0;
+  let at = 0;
+  for (let n; at + 4 < data.length; at += 4 + n) if (!(n = length(at)) || data[at + 4] & 0x80) return null;
+  if (at !== data.length) return null;
+  const out = data.slice();
+  for (at = 0; at < out.length; at += 4 + length(at)) out.set(START_CODE, at);
+  return out;
+}
+const START_CODE = Uint8Array.of(0, 0, 0, 1);
 /** the RBSP of a NAL unit's first bytes, without emulation prevention */
 function rbsp(unit: Uint8Array, length: number): number[] {
   const out: number[] = [];
@@ -311,6 +324,7 @@ class Run {
     const def = this.codec.def;
     if (def.kind === "audio") { this.inFlight++; (this.decoder as AudioDecoder).decode(new EncodedAudioChunk({ type: "key", timestamp, data })); return; }
     const decoder = this.decoder as VideoDecoder;
+    if (def.bitstream.spsCodec) data = lengthPrefixedAsAnnexB(data) ?? data;
     if (this.parameterSets.length) data = concat([...this.parameterSets, data]);
     key ||= videoKeyFrame(def, data);
     // a decoder starts at a key frame: what precedes it decodes to nothing, as on a device
