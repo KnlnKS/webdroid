@@ -1,10 +1,10 @@
 // Actual pass — drives webdroid through the probe and replays the recorded steps.
 // No Android/adb dependency: this must run with the emulator off and no SDK installed.
 // The entry point is run.ts; this module only captures.
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid.ts";
-import { E2E_DIR } from "./lib/util.ts";
+import { E2E_DIR, readJson } from "./lib/util.ts";
 import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types.ts";
 import { parseScreen } from "../../src/shell/config.ts";
 import type { Act, Hang, Settled, StepResult } from "./lib/probe.ts";
@@ -69,7 +69,7 @@ export async function prepareShots(dir: string): Promise<void> {
 /** The recorded goldens, or undefined for a flow that has none (a smoke run: not scored). */
 export async function loadManifest(app: string): Promise<Manifest | undefined> {
   const path = `${E2E_DIR}golden/${app}/manifest.json`;
-  return existsSync(path) ? Bun.file(path).json() : undefined;
+  return existsSync(path) ? readJson(path) : undefined;
 }
 
 /**
@@ -155,7 +155,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
   const runs: StepRun[] = [];
   const persist = (hostFiles?: FlowRun["hostFiles"], aborted?: FlowRun["aborted"]) => {
     const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles, aborted };
-    return Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
+    return writeFile(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   };
   await persist();
   let executing = "";
@@ -178,13 +178,13 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
       const writeAt = performance.now();
       if (r.png) {
-        await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
+        await writeFile(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
       }
-      await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
+      await writeFile(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
       if (shots && r.frames.length) {
         const dir = `${shots}/${flow.app}/${String(i).padStart(2, "0")}-${step.id}`;
         await mkdir(dir, { recursive: true });
-        await Promise.all(r.frames.map((f, n) => Bun.write(`${dir}/f${String(n).padStart(3, "0")}.png`, Buffer.from(f, "base64"))));
+        await Promise.all(r.frames.map((f, n) => writeFile(`${dir}/f${String(n).padStart(3, "0")}.png`, Buffer.from(f, "base64"))));
       }
       const hostWriteMs = performance.now() - writeAt;
       const frames = r.frames.length || undefined;
@@ -224,8 +224,8 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       for (const n of r.nativeRequired) log(`       native code required: ${n}`);
       for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
     }
-    // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
-    // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
+    // Persist the per-step run flags next to the frames so `pnpm e2e --diff` can apply the same
+    // scoring rules as `pnpm e2e --full` — without this, a standalone diff has no idea the app hung
     // and would quietly report a better number for the same pixels.
     const hostFiles = flow.privateStorage ? await drv.page.evaluate(async () => {
       const scan = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<{ path: string; size: number }[]> => {

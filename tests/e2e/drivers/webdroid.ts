@@ -1,10 +1,11 @@
 // webdroid driver — Playwright over the dev server. Every action, settle and capture happens in
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
-// Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
+// Deliberately free of any Android/adb dependency: `pnpm e2e` must run with no SDK present.
+import { readFile } from "node:fs/promises";
 import { chromium, type Browser, type BrowserServer, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
 import { BASE_URL, webdroidUrl } from "../lib/util.ts";
-import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe.ts";
+import { DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe.ts";
 
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
@@ -116,7 +117,7 @@ export class WebdroidDriver {
       await drv.open(!!opts.controlled);
       if (opts.privateStorage) {
         const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({
-          path, bytes: Array.from(new Uint8Array(await Bun.file(new URL(`../fixtures/${fixture}`, import.meta.url)).arrayBuffer())),
+          path, bytes: Array.from(await readFile(new URL(`../fixtures/${fixture}`, import.meta.url))),
         })));
         await page.evaluate(async (items) => {
           const root = await navigator.storage.getDirectory();
@@ -141,15 +142,9 @@ export class WebdroidDriver {
 
   private async open(controlled = false): Promise<void> {
     const resp = await this.page.goto(pageUrl(this.screen, controlled), { waitUntil: "domcontentloaded", timeout: 30_000 });
-    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
+    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`pnpm dev\``);
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await this.page.evaluate(() => document.fonts.ready);
-  }
-
-  /** A fresh install — wd.reset() is the one definition of what that wipes. */
-  async reset(): Promise<void> {
-    await this.page.evaluate(() => (globalThis as any).wd.reset());
-    await this.open();
   }
 
   /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
@@ -175,13 +170,6 @@ export class WebdroidDriver {
       throw error;
     });
   }
-
-  /** An action on its own, awaited to completion under the settle timeout. */
-  act(act: Act): Promise<boolean | undefined> {
-    return this.page.evaluate(([a, s, ms]) => globalThis.__wd.act(a, s, ms), [act, this.screen, DEFAULT_ACTION_TIMEOUT_MS] as const);
-  }
-
-  boot(apk: string): Promise<unknown> { return this.act({ type: "boot", apk }); }
 
   /**
    * Is webdroid's serialized main-looper queue still draining? A wedged queue stops input,

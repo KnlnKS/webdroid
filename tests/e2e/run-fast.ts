@@ -1,12 +1,13 @@
 import { diagnostics, browserFailures } from "./lib/diagnostics.ts";
-import { rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { captureFlow, launchFor, loadManifest, CaptureAborted, type StepRun } from "./capture-webdroid.ts";
 import { defaultJobs, parseArgs } from "./lib/args.ts";
 import { FLOWS } from "./flows/index.ts";
 import type { Flow } from "./types.ts";
 import { loadPng } from "./lib/png.ts";
 import { diffImages } from "./lib/diff.ts";
-import { E2E_DIR, runQueue } from "./lib/util.ts";
+import { E2E_DIR, readJson, runQueue } from "./lib/util.ts";
 import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types.ts";
 
 // Live flows depend on upstream content and networks, so they join the lane only when named or
@@ -14,7 +15,7 @@ import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type C
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const live = process.argv.includes("--live");
 const args = process.argv.slice(2).filter((arg) => arg !== "--live");
-const { flows, jobs } = parseArgs(args, "bun run e2e", { defaultJobs: defaultJobs(5, 2), unnamed: live ? FLOWS : deterministic });
+const { flows, jobs } = parseArgs(args, "pnpm e2e", { defaultJobs: defaultJobs(5, 2), unnamed: live ? FLOWS : deterministic });
 
 type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: number; androidSdk: string };
 type Checked = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[] };
@@ -36,8 +37,8 @@ async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen
     if (!recorded) { errors.push(`${step.id}: golden manifest has no matching step`); continue; }
     const goldenPath = `${E2E_DIR}golden/${flow.app}/${recorded.file}`;
     const actualPath = `${E2E_DIR}actual-fast/${flow.app}/${recorded.file}`;
-    if (!await Bun.file(goldenPath).exists()) { errors.push(`${step.id}: golden image is missing`); continue; }
-    if (!await Bun.file(actualPath).exists()) { errors.push(`${step.id}: fast capture is missing`); continue; }
+    if (!existsSync(goldenPath)) { errors.push(`${step.id}: golden image is missing`); continue; }
+    if (!existsSync(actualPath)) { errors.push(`${step.id}: fast capture is missing`); continue; }
     const golden = await loadPng(goldenPath);
     const actual = await loadPng(actualPath);
     const diff = diffImages(golden, actual, manifest.crop, step.maskRects ?? []).contentDiffPct;
@@ -85,7 +86,7 @@ console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at
 const summaryPath = `${E2E_DIR}actual-fast/summary.json`;
 const previous = new Map<string, number>();
 try {
-  const data: unknown = await Bun.file(summaryPath).json();
+  const data: unknown = await readJson(summaryPath);
   if (data && typeof data === "object" && "flows" in data && Array.isArray(data.flows))
     for (const row of data.flows)
       if (row && typeof row.app === "string" && typeof row.durationMs === "number" && row.durationMs > 0)
@@ -103,7 +104,8 @@ for (const outcome of outcomes.filter((item) => item.errors.length)) {
 }
 
 const failed = outcomes.filter((item) => item.errors.length).length;
-await Bun.write(`${E2E_DIR}actual-fast/summary.json`, JSON.stringify({
+await mkdir(`${E2E_DIR}actual-fast`, { recursive: true });
+await writeFile(summaryPath, JSON.stringify({
   generatedAt: new Date().toISOString(),
   durationMs: Math.round(performance.now() - started),
   flows: FLOWS.map((flow) => {

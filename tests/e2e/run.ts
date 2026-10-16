@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import { nodeCommand } from "../../scripts/node.ts";
+
 const modes = ["--full", "--record", "--diff"] as const;
 const args = process.argv.slice(2);
 const selected = modes.filter((mode) => args.includes(mode));
@@ -13,7 +16,5 @@ const script = mode === "--full" ? "run-full.ts"
   : mode === "--diff" ? "score.ts"
   : "run-fast.ts";
 const forwarded = args.filter((arg) => arg !== "--full" && arg !== "--record" && arg !== "--diff");
-const child = Bun.spawn(["bun", new URL(script, import.meta.url).pathname, ...forwarded], {
-  stdin: "inherit", stdout: "inherit", stderr: "inherit",
-});
-process.exit(await child.exited);
+spawn(...nodeCommand(`${import.meta.dirname}/${script}`, ...forwarded), { stdio: "inherit" })
+  .on("close", (code) => process.exit(code ?? 1));

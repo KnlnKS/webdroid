@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { device, type Screen } from "../../src/shell/config.ts";
 export type { Screen } from "../../src/shell/config.ts";
 import type { perf } from "../../src/perf.ts";
@@ -285,5 +286,5 @@ function canonical(value: unknown): string {
 /** Identifies the steps a capture ran, so rescoring rejects captures from since-edited flows. */
 export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" | "full" | "fast" = "all"): string {
   const resolved = mode === "all" ? flows : flows.map((flow) => executionFlow(flow, mode));
-  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(resolved))).digest("hex");
+  return createHash("sha256").update(canonical(resolved)).digest("hex");
 }

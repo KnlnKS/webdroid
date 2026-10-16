@@ -6,9 +6,9 @@ is scored against it step by step. The scores are a target: they should fall as 
 ## Running
 
 ```bash
-PORT=4090 bun run server.ts
-WEBDROID_URL=http://localhost:4090 bun run e2e
-WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
+PORT=4090 pnpm dev
+WEBDROID_URL=http://localhost:4090 pnpm e2e
+WEBDROID_URL=http://localhost:4090 pnpm e2e --full --jobs 1
 ```
 
 Use a private port and set `WEBDROID_URL` (default port 4080) on every capture; run captures
@@ -25,11 +25,11 @@ Only `--record` needs the SDK, `adb` or an emulator; it rejects `--jobs`. `--job
 bounds concurrent flows (one headless Chromium each).
 
 ```bash
-bun run e2e --test fitnotes  # or -t; an exact name, else a prefix (mihon selects both Mihon flows)
-bun run e2e --test fitnotes,mihon-app  # a comma list; --test repeats
-bun run e2e --live  # the quick gate plus the live flows
-bun run e2e --list  # flow names (--help for usage)
-bun run e2e --full --shots [dir]  # --full only; default ./webdroid-shots
+pnpm e2e --test fitnotes  # or -t; an exact name, else a prefix (mihon selects both Mihon flows)
+pnpm e2e --test fitnotes,mihon-app  # a comma list; --test repeats
+pnpm e2e --live  # the quick gate plus the live flows
+pnpm e2e --list  # flow names (--help for usage)
+pnpm e2e --full --shots [dir]  # --full only; default ./webdroid-shots
 ```
 
 Named flows run even if live; unknown flags error. `--shots` keeps each distinct frame presented
@@ -81,7 +81,7 @@ captures, and changed `flowSchemaHash` (covers browser overrides), geometry, ins
 Motion steps (sample waits in full, `motion` evidence in quick) record `fps` (shell ticks/s),
 `glFps` (GL callbacks/swaps) and `presentFps` (framebuffer transfers, if exposed), sampled with
 elapsed time before PNG encoding; windows include settling. Below `Flow.minFps`, a non-launch step
-is `SLOW` only under `--jobs 1`; rates never fail a run. Measure performance with `bun run lat`
+is `SLOW` only under `--jobs 1`; rates never fail a run. Measure performance with `pnpm lat`
 (`--gpu`: Metal), alternating revisions serially.
 
 ## Steps
@@ -162,10 +162,10 @@ Output: `report/index.html`, `report/report.json`, `report/<flow>.json`, `report
 ## Re-recording goldens
 
 ```bash
-bun run e2e:setup  # create the API 35 AVD
-bun run e2e:boot  # boot, make deterministic
-bun run e2e --record  # all, or --test flows -> golden/<flow>/
-bun run e2e --record --startup --test resy  # launch-only, one live flow
+pnpm e2e:setup  # create the API 35 AVD
+pnpm e2e:boot  # boot, make deterministic
+pnpm e2e --record  # all, or --test flows -> golden/<flow>/
+pnpm e2e --record --startup --test resy  # launch-only, one live flow
 ```
 
 `setup-avd.sh` (idempotent) creates `webdroid_api35_ref` from

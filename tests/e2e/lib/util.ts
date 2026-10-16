@@ -1,4 +1,7 @@
 // Helpers every harness entry point was re-declaring.
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { stableFrame } from "./settle.ts";
 export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
@@ -8,6 +11,7 @@ export function webdroidUrl(): URL {
   return url;
 }
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+export const readJson = async (path: string | URL) => JSON.parse(await readFile(path, "utf8"));
 
 /** `run` over items, `jobs` at a time and heaviest first; results keep the items' order. */
 export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T) => number, run: (item: T) => Promise<R>): Promise<R[]> {
@@ -18,7 +22,18 @@ export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T)
   }));
   return results;
 }
-export const sha1 = (buf: Uint8Array) => new Bun.CryptoHasher("sha1").update(buf).digest("hex");
+export const sha1 = (buf: Uint8Array) => createHash("sha1").update(buf).digest("hex");
+
+/** `cmd args` run to completion: its exit code (signalled: 1) and collected output */
+export function runProcess(cmd: string, args: string[]): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const out: Buffer[] = [], err: Buffer[] = [];
+    p.stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    p.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    p.on("error", reject).on("close", (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString() }));
+  });
+}
 
 /**
  * Wait until `capture` stops returning new frames, on the contract lib/settle.ts defines over

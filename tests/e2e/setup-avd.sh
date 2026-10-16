@@ -15,7 +15,7 @@ AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 
 # The profile is the only place the geometry is written down; ask it rather than restate it.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-read -r LCD_W LCD_H LCD_DPI <<<"$(cd "$HERE" && bun -e \
+read -r LCD_W LCD_H LCD_DPI <<<"$(cd "$HERE" && node --input-type=module -e \
   'import {device as d} from "./src/shell/config.ts"; console.log(d.width, d.height, d.densityDpi)' | tail -n 1)"
 
 command -v avdmanager >/dev/null || { echo "avdmanager not on PATH"; exit 1; }

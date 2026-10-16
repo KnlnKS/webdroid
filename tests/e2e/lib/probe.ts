@@ -75,7 +75,6 @@ export type StepResult = {
 };
 
 export const DEFAULT_QUIESCENCE: Quiescence = { stableMs: 150, intervalMs: 250, stableFrames: 4 };
-export const DEFAULT_ACTION_TIMEOUT_MS = 20_000;
 export const PHASE_BOUND_MS = 30_000;
 
 /** Includes real live dwell even when the virtual clock is controlled. */
@@ -112,7 +111,6 @@ declare global {
   var wd: any;
   var __wd: {
     step(spec: StepSpec): Promise<StepResult>;
-    act(a: Act, screen: Screen, deadlineMs: number): Promise<boolean | undefined>;
     /** the shown display as a base64 PNG: every shown canvas, from its latest mirrored frame */
     screen(): Promise<string>;
   };
@@ -488,7 +486,7 @@ function installProbe(cfg: ProbeConfig): void {
     return { ...result, ms: performance.now() - t0,
       phases: { actionMs, settleMs: settled.ms, livenessMs, captureMs, telemetryMs } };
   };
-  g.__wd = { step, act, screen: screenPng };
+  g.__wd = { step, screen: screenPng };
 }
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */

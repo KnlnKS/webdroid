@@ -1,5 +1,5 @@
 import { diagnostics, browserFailures } from "./lib/diagnostics.ts";
-// `bun run e2e --full` — capture webdroid, diff against the committed goldens, report.
+// `pnpm e2e --full` — capture webdroid, diff against the committed goldens, report.
 // Never starts, queries, or requires an Android emulator. Every flow runs in its own browser;
 // `--jobs` bounds how many at once, and each is scored as soon as it has captured.
 import { cpus } from "node:os";
@@ -13,7 +13,7 @@ import { parseArgs } from "./lib/args.ts";
 import { FLOWS } from "./flows/index.ts";
 import { runQueue } from "./lib/util.ts";
 
-const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "bun run e2e --full");
+const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "pnpm e2e --full");
 const pinned = parseScreen(ENV_SCREEN);
 console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
 if (shots) await prepareShots(shots);

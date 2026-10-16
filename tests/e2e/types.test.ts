@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { deviceScreen, executionFlow, flowSchemaHash, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types.ts";
 
 import { DEFAULT_QUIESCENCE, stepDeadlineMs, waitBudget, type StepSpec } from "./lib/probe.ts";
