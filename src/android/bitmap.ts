@@ -33,7 +33,7 @@ let generation = 0;
 /** SkNextID: generation ids are unique across bitmaps, as caches keyed on them assume */
 const nextGeneration = () => (generation = (generation + 1) | 0) || (generation = 1);
 
-type RGBA = Uint8ClampedArray<ArrayBuffer>;
+export type RGBA = Uint8ClampedArray<ArrayBuffer>;
 /** a ColorSpace.Rgb's native instance (delegates.ts): skcms' a..g and the D50 matrix, column-major */
 interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
@@ -91,8 +91,12 @@ export class NativeBitmap {
     this.px = null;
     this.genId = nextGeneration();
   }
-  /** a decoded image as the whole contents */
-  setImage(img: ImageBitmap): void { this.dropPixels(); this.img = img; this.genId = nextGeneration(); }
+  /** decoded pixels as the whole contents: an image to draw, or straight RGBA */
+  setImage(img: ImageBitmap | RGBA): void {
+    this.dropPixels();
+    if (ArrayBuffer.isView(img)) this.px = img; else this.img = img;
+    this.genId = nextGeneration();
+  }
   private dropPixels(): void {
     this.img?.close();
     this.cv = this.cx = this.px = this.img = null;

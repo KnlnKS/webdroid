@@ -199,11 +199,18 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
       }));
       return null;
     }),
-  // no GNSS hardware reports satellites, measurements or NMEA, so registrations never hear anything
+  // no GNSS hardware reports satellites, measurements, navigation messages, antenna info or NMEA, so
+  // registrations never hear anything
   ...noops("registerGnssStatusCallback(Landroid/location/IGnssStatusListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
     "unregisterGnssStatusCallback(Landroid/location/IGnssStatusListener;)V",
     "registerGnssNmeaCallback(Landroid/location/IGnssNmeaListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-    "unregisterGnssNmeaCallback(Landroid/location/IGnssNmeaListener;)V"),
+    "unregisterGnssNmeaCallback(Landroid/location/IGnssNmeaListener;)V",
+    "addGnssMeasurementsListener(Landroid/location/GnssMeasurementRequest;Landroid/location/IGnssMeasurementsListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "removeGnssMeasurementsListener(Landroid/location/IGnssMeasurementsListener;)V",
+    "addGnssNavigationMessageListener(Landroid/location/IGnssNavigationMessageListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "removeGnssNavigationMessageListener(Landroid/location/IGnssNavigationMessageListener;)V",
+    "addGnssAntennaInfoListener(Landroid/location/IGnssAntennaInfoListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "removeGnssAntennaInfoListener(Landroid/location/IGnssAntennaInfoListener;)V"),
   "getGnssCapabilities()Landroid/location/GnssCapabilities;": driven(function* () {
     return yield vcall(yield newObj("android/location/GnssCapabilities$Builder"), "build", "()Landroid/location/GnssCapabilities;");
   }),

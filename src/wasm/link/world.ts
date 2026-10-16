@@ -239,6 +239,7 @@ export class World {
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       gwrote: (address: number, length: number) => opts.guest!.wrote(address >>> 0, length >>> 0),
+      gblock: (address: number) => this.blockSizes.get(address >>> 0) ?? 0,
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
@@ -1909,14 +1910,15 @@ export class World {
     }
     return i;
   }
-  /** the native blocks of the direct buffers, freed when the object that owns each is collected */
-  private blocks = new FinalizationRegistry<bigint>((address) => this.opts.guest!.free(address));
+  /** the native blocks of the direct buffers, freed when the object that owns each is collected, and their sizes by address */
+  private blocks = new FinalizationRegistry<bigint>((address) => { this.blockSizes.delete(Number(address)); this.opts.guest!.free(address); });
+  private blockSizes = new Map<number, number>();
   /** a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0 */
   private allocGuest(owner: object, n: number): bigint {
     const guest = this.opts.guest;
     if (!guest) throw new Error("this World has no guest memory");
     const address = guest.alloc(n);
-    if (address) this.blocks.register(owner, address);
+    if (address) { this.blocks.register(owner, address); this.blockSizes.set(Number(address), n); }
     return address;
   }
   /** whether the guest memory is shared, which a module that imports it must declare */

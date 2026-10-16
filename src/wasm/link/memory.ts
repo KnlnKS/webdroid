@@ -78,3 +78,23 @@ memoryIntrinsics.set(`${MEMORY_REF}.<init>(I)V`, (cx, m, c) => {
   c.lget(0).refCast(st).lget(address).structSet(st, field("allocatedAddress", "J"));
   c.lget(0).refCast(st).i32(1).structSet(st, field("isAccessible", "Z"));
 });
+
+// ART backs the direct buffers it allocates with a byte[], through which Cronet's Java side reads what native code wrote. Here array() answers a
+// copy of the buffer's block made at the call; writes to it do not reach the block, so hasArray() stays false and code that checks it uses get and
+// put. A buffer over other memory (JNI's) has no array, as in ART.
+const BUFFER = "java/nio/ByteBuffer";
+for (const array of [true, false]) memoryIntrinsics.set(`${BUFFER}.${array ? "array()[B" : "arrayOffset()I"}`, (cx, m, c) => {
+  const get = (owner: string, name: string, desc: string) => { const st = cx.structFor(owner); c.refCast(st).structGet(st, cx.fieldIndex(owner, cx.prog.resolveField(owner, name, desc)!)); };
+  const hb = c.newLocal(T.anyref), address = c.newLocal(T.i32), size = c.newLocal(T.i32), direct = "java/nio/DirectByteBuffer";
+  c.lget(0); get(BUFFER, "hb", "[B"); c.ltee(hb).refIsNull().if_();
+  c.lget(0).call(cx.instanceOfFn(direct)).if_();
+  c.lget(0); get(direct, "memoryRef", `L${MEMORY_REF};`); get(MEMORY_REF, "allocatedAddress", "J"); c.raw(OP.i32_wrap_i64).ltee(address).call(cx.imp.gblock).lset(size);
+  c.end();
+  c.lget(size).raw(OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/UnsupportedOperationException"); c.end();
+  c.end();
+  c.lget(0); get(BUFFER, "isReadOnly", "Z"); c.if_(); cx.throwNew(c, "java/nio/ReadOnlyBufferException"); c.end();
+  if (!array) { c.lget(0); get(BUFFER, "offset", "I"); return; }
+  c.lget(hb).refIsNull().if_();
+  cx.emitNewArray(c, "[B", () => c.lget(size)); c.ltee(hb).i32(0).lget(size).lget(address).i32(0); cx.callRt(c, "gget_i8");
+  c.end().lget(hb);
+});

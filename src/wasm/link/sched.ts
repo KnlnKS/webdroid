@@ -11,7 +11,7 @@ import { rt } from "../compiler/rtfns";
 import { OP } from "../compiler/code";
 import { HT, T, type VT } from "../compiler/wasmbin";
 import { Monitors, St, type Header } from "./monitor";
-import { promising, suspending } from "./module";
+import { promising, suspending, waitsEnded } from "./module";
 import type { World } from "./world";
 
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
@@ -23,7 +23,7 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend, Rename }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend, Rename, Ended }
 /** operations that may wait (`host.block`, Suspending) */
 export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
@@ -96,12 +96,15 @@ rt("menterSlow", ["L"], "V", (cx, c) => {
 }, true);
 rt("mexitSlow", ["L"], "V", (cx, c) => { emitSync(cx, c, Sync.Exit, () => c.lget(0)); check(cx, c); }, true);
 // yieldNow(): a chance for other strands and the event loop. A stack with JS frames on it cannot suspend (the engine says so by throwing), and
-// a yield that cannot happen is not an error
+// a yield that cannot happen is not an error, unless the realm has ended its waits (endWaits), which must unwind a loop that only yields
 rt("yieldNow", [], "V", (cx, c) => {
+  const thrown = c.newLocal(T.exnref);
   c.gget(sidOf(cx)).i32(ROOT).raw(OP.i32_ne).if_();
-  c.block().tryTable(null, [[2, 0, 0]]);
+  c.block().block(T.exnref).tryTable(null, [[3, 0, 0]]);
   emitBlock(cx, c, Block.Yield); c.drop();
-  c.end().end().end();
+  c.end().br(1).end();
+  c.lset(thrown); emitSync(cx, c, Sync.Ended); c.if_().lget(thrown).throwRef().end();
+  c.end().end();
 }, true);
 // initWait(class id): 1 when the request proceeds with the statics as they are (a cycle), 0 once the initialization it waited for is over
 rt("initWait", ["I"], "I", (cx, c) => {
@@ -429,6 +432,7 @@ export class Sched {
       case Sync.Resume: this.onThread?.(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
       case Sync.Rename: { const r = this.rec(obj!); if (r) this.onNamed?.(r); return 0; }
+      case Sync.Ended: return +waitsEnded();
     }
   }
   private plain(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }

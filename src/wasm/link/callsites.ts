@@ -41,11 +41,6 @@ function convertible(prog: Program, from: string, to: string): boolean {
   const unboxed = Object.keys(BOX).find(k => typeName(from) === BOX[k][0]);
   return !!unboxed && WIDEN[unboxed].includes(to);
 }
-function error(cx: Compiler, c: Code, cls: string, message: string): void {
-  const local = c.newLocal(T.anyref);
-  cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, message);
-  cx.callMethod(c, cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;)V")!); c.lget(local).throw_(cx.tag);
-}
 function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, value: EncVal): boolean {
   const dex = referrer.dex;
   switch (type) {
@@ -64,7 +59,7 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
     }
     case 0x15: return emitTypeValue(cx, c, dex, (value as { idx: number }).idx);
     case 0x16: return emitHandleValue(cx, c, referrer, (value as { idx: number }).idx);
-    default: error(cx, c, "java/lang/ClassCastException", "Unsupported bootstrap argument type"); return false;
+    default: cx.throwNew(c, "java/lang/ClassCastException", "Unsupported bootstrap argument type"); return false;
   }
 }
 function bootstrapFailure(prog: Program, target: MethodInfo, values: ReturnType<DexFile["callSiteValues"]>): { cls: string; message: string } | undefined {
@@ -105,8 +100,8 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
     const emit = () => handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
       const handle = c.newLocal(T.anyref), args = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref);
       if (!emitHandleValue(cx, c, referrer, first.idx)) return; c.lset(handle);
-      if (h.type !== 4) { error(cx, c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
-      if (invalid) { error(cx, c, invalid.cls, invalid.message); return; }
+      if (h.type !== 4) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
+      if (invalid) { cx.throwNew(c, invalid.cls, invalid.message); return; }
       if (target && target.flags & 0x80) {
         c.lget(handle); constClass(cx, c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
       }
@@ -145,15 +140,15 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   const validate = (candidate: object | null): object | Promise<object> => {
     const sig = signature();
     return handleThunk(w, `custom:validate:${sig}:${w.epoch}`, ["L"], "L", (cx, c, arg) => {
-      arg(0); c.refIsNull().if_(); error(cx, c, "java/lang/ClassCastException", "Bootstrap method returned null"); c.end();
+      arg(0); c.refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned null"); c.end();
       arg(0); c.call(cx.castFn(CS)); const local = c.newLocal(T.anyref); c.lset(local);
       const field = cx.prog.resolveField(CS, "target", `L${MH};`)!, st = cx.structFor(CS);
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(CS, field));
-      const target = c.newLocal(T.anyref); c.lset(target).lget(target).refIsNull().if_(); error(cx, c, "java/lang/ClassCastException", "Bootstrap method returned a CallSite with a null target"); c.end();
+      const target = c.newLocal(T.anyref); c.lset(target).lget(target).refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned a CallSite with a null target"); c.end();
       c.lget(target); cx.callMethod(c, cx.prog.resolve(MH, "type", `()L${MT};`)!);
       if (!emitTypeValue(cx, c, referrer.dex, referrer.dex.callSiteProto(index))) return;
       cx.callMethod(c, cx.prog.resolve(MT, "equals", "(Ljava/lang/Object;)Z")!);
-      c.raw(OP.i32_eqz).if_(); error(cx, c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap target is not of the requested type"); c.end().lget(local);
+      c.raw(OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap target is not of the requested type"); c.end().lget(local);
     }, parent)(candidate) as object | Promise<object>;
   };
   let resolved: object | Promise<object>;

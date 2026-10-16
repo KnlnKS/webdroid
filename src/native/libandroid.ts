@@ -3,18 +3,22 @@
 // A name they lack is NULL from dlsym, as on a device without it.
 
 import { mem, anchor } from "./mem";
-import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
+import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
+import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface";
+import { activateEglCurrent } from "./egl-current";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
-import { mainThread } from "../jvm/natives/jentry";
+import { after, mainThread } from "../jvm/natives/jentry";
 import { dispatchUncaught } from "../jvm/natives/jthrowable";
 import { nativePoll } from "./poll";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { nativeAssets } from "../android/res";
+import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os";
+import { kernelResult } from "./libc";
 
-// ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
+// ── ANativeWindow: window.h's struct per surface, as a library built against <system/window.h> calls its function pointers
+// (Filament's perform(NATIVE_WINDOW_GET_NEXT_FRAME_ID)). The window has no buffers to dequeue: its frames come from EGL or lock/unlockAndPost.
 class NativeWindow {
   refs = 1;
   format = 1;
@@ -24,26 +28,75 @@ class NativeWindow {
   pixels = new Uint8ClampedArray(0);
   constructor(readonly surface: GlSurface, readonly handle: number) {}
 }
-const windows: (NativeWindow | null)[] = [null];
+const windows = new Map<number, NativeWindow>();
 const windowBySurface = new WeakMap<GlSurface, NativeWindow>();
+const W = (a: ArgReader) => windows.get(a.p());
+const BAD_VALUE = -22, NAME_NOT_FOUND = -2, INVALID_OPERATION = -38;
+const QUERIES: Record<number, (w: NativeWindow) => number> = {
+  0: (w) => bufferWidth(w.surface), 1: (w) => bufferHeight(w.surface), 2: (w) => w.format,
+  4: () => 1, 5: () => 1 /* NATIVE_WINDOW_SURFACE */, 6: (w) => w.surface.width, 7: (w) => w.surface.height, 8: () => 0, 17: () => 1,
+};
+/** setSwapInterval, the deprecated buffer calls, query, perform, cancelBuffer_DEPRECATED, then dequeueBuffer, queueBuffer and cancelBuffer */
+let windowFns: number[] | null = null;
+const windowFunctions = () => windowFns ??= (() => {
+  const noBuffers = defineHost("ANativeWindow:buffers", () => INVALID_OPERATION);
+  return [
+    defineHost("ANativeWindow:setSwapInterval", (_c, a) => { const w = W(a); if (!w) return BAD_VALUE; w.surface.swapInterval = Math.max(0, Math.min(1, a.i())); return 0; }),
+    noBuffers, noBuffers, noBuffers,
+    defineHost("ANativeWindow:query", (_c, a) => {
+      const w = W(a), what = a.i(), out = a.p(), answer = w && QUERIES[what];
+      if (!answer || !out) return BAD_VALUE;
+      mem.st32(out, answer(w));
+      return 0;
+    }),
+    defineHost("ANativeWindow:perform", (_c, a) => {
+      const w = W(a), op = a.i();
+      if (!w) return BAD_VALUE;
+      // NATIVE_WINDOW_GET_NEXT_FRAME_ID: the frame number the next queued buffer takes, counting from 1
+      if (op === 24) { mem.st64(a.p(), BigInt(w.surface.frames + 1)); return 0; }
+      return NAME_NOT_FOUND;
+    }),
+    noBuffers, noBuffers, noBuffers, noBuffers,
+  ];
+})();
 export function nativeWindowFor(surface: GlSurface): number {
   const existing = windowBySurface.get(surface);
   if (existing) { existing.refs++; return existing.handle; }
-  const window = new NativeWindow(surface, windows.length);
-  windows.push(window); windowBySurface.set(surface, window);
-  return window.handle;
+  // window.h: android_native_base_t (magic, version, reserved[4], incRef, decRef), then flags, min and maxSwapInterval,
+  // xdpi and ydpi, oem[4] at pointer alignment, and the window's ten functions
+  const common = 8 + 6 * PTR, oem = common + 20 + PTR - 1 & -PTR, size = oem + 14 * PTR, at = mem.malloc(size);
+  if (!at) return 0;
+  mem.memset(at, 0, size);
+  mem.st32(at, 0x5f776e64); mem.st32(at + 4, size);   // ANDROID_NATIVE_WINDOW_MAGIC '_wnd', the struct's size
+  stp(at + 8 + 4 * PTR, lookupHost("ANativeWindow_acquire", "libandroid.so")!); stp(at + 8 + 5 * PTR, lookupHost("ANativeWindow_release", "libandroid.so")!);
+  mem.st32(at + common + 8, 1);   // maxSwapInterval
+  windowFunctions().forEach((fn, i) => stp(at + oem + (4 + i) * PTR, fn));
+  const window = new NativeWindow(surface, at);
+  windows.set(at, window); windowBySurface.set(surface, window);
+  return at;
 }
-export function windowOf(h: number): GlSurface | null { return windows[h]?.surface ?? null; }
-const W = (a: ArgReader) => windows[a.i()];
+export function windowOf(h: number): GlSurface | null { return windows.get(h)?.surface ?? null; }
 const YV12 = 0x32315659;
+
+// ── ASurfaceTexture (surface_texture.cpp): a handle on a Java SurfaceTexture's consumer, whose release frees the handle only.
+// GL calls act in the calling thread's context.
+const surfaceTextures = new Map<number, NativeSurfaceTexture>();
+let nextSurfaceTexture = 1;
+const inContext = <T>(cpu: Cpu, a: ArgReader, op: (st: NativeSurfaceTexture) => T): T | number => {
+  const st = surfaceTextures.get(a.i());
+  if (!st) return BAD_VALUE;
+  activateEglCurrent(cpu.jthread);
+  return op(st);
+};
+
 function lockWindow(_cpu: Cpu, args: ArgReader): number {
   const buffer = W(args), out = args.p(), dirty = args.p();
-  if (!buffer || !out) return -22;
+  if (!buffer || !out) return BAD_VALUE;
   if (buffer.locked) return -16;
   const width = bufferWidth(buffer.surface), height = bufferHeight(buffer.surface);
   const stride = buffer.format === YV12 ? Math.ceil(width / 16) * 16 : width;
   const size = buffer.format === YV12 ? (stride + Math.ceil(stride / 32) * 16) * height : width * height * (buffer.format === 4 ? 2 : 4);
-  if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
+  if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return BAD_VALUE;
   if (size !== buffer.size) {
     if (buffer.bits) mem.free(buffer.bits);
     buffer.bits = mem.malloc(size); buffer.size = buffer.bits ? size : 0;
@@ -60,7 +113,7 @@ function lockWindow(_cpu: Cpu, args: ArgReader): number {
 }
 async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
   const buffer = W(args);
-  if (!buffer?.locked) return -22;
+  if (!buffer?.locked) return BAD_VALUE;
   const width = buffer.lockedWidth, height = buffer.lockedHeight;
   if (buffer.format === YV12) {
     const stride = Math.ceil(width / 16) * 16, chromaStride = Math.ceil(stride / 32) * 16;
@@ -178,6 +231,9 @@ const seek = (s: Asset, off: number, whence: number): number => {
   return p < 0 || p > s.source.size ? -1 : (s.pos = p);
 };
 
+const readTids = (p: number, n: number) => Int32Array.from({ length: n }, (_, i) => mem.ld32(p + 4 * i));
+const EINVAL = 22;
+
 export function ndkInit(): void {
   hostLib("libandroid.so", {
     ATrace_isEnabled: () => 0,
@@ -190,25 +246,44 @@ export function ndkInit(): void {
     },
     ANativeWindow_acquire: (_c, a) => { const window = W(a); if (window) window.refs++; },
     ANativeWindow_release: (_c, a) => {
-      const h = a.i(), window = windows[h];
+      const window = W(a);
       if (!window || --window.refs > 0) return;
       if (window.bits) mem.free(window.bits);
-      windowBySurface.delete(window.surface); windows[h] = null;
+      windowBySurface.delete(window.surface); windows.delete(window.handle); mem.free(window.handle);
     },
     // the consumer's default size (NATIVE_WINDOW_WIDTH); setBuffersGeometry sizes only the buffers
-    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : -22; },
-    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : -22; },
-    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : -22; },
+    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : BAD_VALUE; },
+    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : BAD_VALUE; },
+    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : BAD_VALUE; },
+    // no buffer has a dataspace set: ADATASPACE_UNKNOWN
+    ANativeWindow_getBuffersDataSpace: (_c, a) => W(a) ? 0 : BAD_VALUE,
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
       const buffer = W(a), width = a.i(), height = a.i(), format = a.i();
       if (!buffer || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
-        || format === YV12 && ((width | height) & 1)) return -22;
+        || format === YV12 && ((width | height) & 1)) return BAD_VALUE;
       if (buffer.locked) return -16;
       buffer.surface.userWidth = width; buffer.surface.userHeight = height; buffer.format = format || 1;
       return 0;
     },
     ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
+
+    ASurfaceTexture_fromSurfaceTexture: (cpu, a) => {
+      a.p(); const st = surfaceTextureOf(deref(a.i(), cpu));
+      if (!st) return 0;
+      surfaceTextures.set(nextSurfaceTexture, st);
+      return nextSurfaceTexture++;
+    },
+    ASurfaceTexture_release: (_c, a) => { surfaceTextures.delete(a.i()); },
+    ASurfaceTexture_acquireANativeWindow: (_c, a) => { const st = surfaceTextures.get(a.i()); return st && !st.abandoned ? nativeWindowFor(st.surface) : 0; },
+    ASurfaceTexture_attachToGLContext: (cpu, a) => inContext(cpu, a, (st) => st.attach(a.u())),
+    ASurfaceTexture_detachFromGLContext: (cpu, a) => inContext(cpu, a, (st) => st.detach()),
+    ASurfaceTexture_updateTexImage: (cpu, a) => inContext(cpu, a, (st) => st.update()),
+    ASurfaceTexture_getTransformMatrix: (_c, a) => {
+      const st = surfaceTextures.get(a.i()), out = a.p();
+      if (st) st.matrix.forEach((v, i) => mem.stf32(out + 4 * i, v));
+    },
+    ASurfaceTexture_getTimestamp: (_c, a) => surfaceTextures.get(a.i())?.timestamp ?? 0n,
 
     ALooper_prepare: (cpu, a) => prepareLooper(cpu, !!(a.i() & 1)),
     ALooper_forThread: (cpu) => looperOf.get(cpu) ?? (cpu.jthread.looper ? prepareLooper(cpu, false) : 0),
@@ -264,6 +339,18 @@ export function ndkInit(): void {
     },
     AAssetDir_rewind: (_c, a) => { const d = assetDirs[a.i()]; if (d) d.next = 0; },
     AAssetDir_close: (_c, a) => { const h = a.i(), d = assetDirs[h]; if (d) { mem.free(d.name); assetDirs[h] = null; } },
+    APerformanceHint_getManager: () => 1,
+    APerformanceHint_getPreferredUpdateRateNanos: () => HINT_RATE_NANOS,
+    // HintManagerService refuses a session without threads, which the NDK answers with NULL
+    APerformanceHint_createSession: (_c, a) => { a.p(); const tids = a.p(), n = a.i(); return n ? openHintSession(readTids(tids, n)) : 0; },
+    APerformanceHint_updateTargetWorkDuration: (_c, a) => { a.p(); return a.l() > 0n ? 0 : EINVAL; },
+    APerformanceHint_reportActualWorkDuration: (_c, a) => { a.p(); return a.l() > 0n ? 0 : EINVAL; },
+    APerformanceHint_setThreads: (_c, a) => { const session = a.i(), tids = a.p(), n = a.i(); if (!n) return EINVAL; hintSessions.set(session, readTids(tids, n)); return 0; },
+    APerformanceHint_setPreferPowerEfficiency: () => 0,
+    APerformanceHint_closeSession: (_c, a) => { hintSessions.delete(a.i()); },
+    ASharedMemory_create: (cpu, a) => { a.p(); const size = a.i(); return size ? kernelResult(cpu, ashmemCreate(size)) : -EINVAL; },
+    ASharedMemory_getSize: (_c, a) => after(ashmemSize(a.i()), (n) => Math.max(0, n)),
+    ASharedMemory_setProt: (cpu, a) => kernelResult(cpu, ashmemSetProt(a.i(), a.i())),
     // there is no thermal service: no manager, and the headroom is the documented NaN
     AThermal_acquireManager: () => 0, AThermal_releaseManager: () => {},
     AThermal_getCurrentThermalStatus: () => -1,

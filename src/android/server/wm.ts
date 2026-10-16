@@ -1,7 +1,8 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { awaited, rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, type Gen } from "../../jvm/runtime";
+import { jarray } from "../../jvm/abi";
 import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
@@ -298,15 +299,31 @@ export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(fun
     yield publish(ws.channel, event);
   }
 }());
-/** a touchscreen event at display (x, y): the window touched at DOWN gets the gesture, in its own
- *  coordinates. Resolves whether it handled the event. */
-export const dispatchTouch = (action: number, x: number, y: number, downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
-  if (action === ACTION_DOWN) touchTarget = touchedWindow(x, y);
+const PP = "android/view/MotionEvent$PointerProperties", PC = "android/view/MotionEvent$PointerCoords", TOOL_TYPE_FINGER = 1;
+let pointerFields: Record<"id" | "toolType" | "x" | "y" | "pressure" | "size", string> | null = null;
+/** a touchscreen event with `pointers` at display coordinates, built as InputDispatcher delivers one:
+ *  every pointer down, a finger each, in id order. The window touched at DOWN gets the whole
+ *  gesture (a split touch across windows is not modeled), in its own coordinates. Resolves whether
+ *  it handled the event. */
+export const dispatchTouch = (action: number, pointers: readonly { id: number; x: number; y: number }[], downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
+  const masked = action & 0xff;
+  if (masked === ACTION_DOWN) touchTarget = touchedWindow(pointers[0].x, pointers[0].y);
   const ws = touchTarget;
-  if (action === ACTION_UP || action === ACTION_CANCEL) touchTarget = null;
+  if (masked === ACTION_UP || masked === ACTION_CANCEL) touchTarget = null;
   if (!ws?.channel) return false;
-  const event = yield scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
-  yield vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
+  const f = pointerFields ??= { id: declaredField(PP, "id"), toolType: declaredField(PP, "toolType"), x: declaredField(PC, "x"),
+    y: declaredField(PC, "y"), pressure: declaredField(PC, "pressure"), size: declaredField(PC, "size") };
+  // fresh ones each event: another dispatch can run while this one waits on a construction
+  const props: JObj[] = [], coords: JObj[] = [];
+  for (const { id, x, y } of pointers) {
+    const pp: Record<string, number> = yield newObj(PP), pc: Record<string, number> = yield newObj(PC);
+    pp[f.id] = id; pp[f.toolType] = TOOL_TYPE_FINGER;
+    // obtain(JJIFFI)'s pressure and size, which a single-pointer dispatch delivered before
+    pc[f.x] = Math.fround(x); pc[f.y] = Math.fround(y); pc[f.pressure] = 1; pc[f.size] = 1;
+    props.push(pp as unknown as JObj); coords.push(pc as unknown as JObj);
+  }
+  const event = yield scall("android/view/MotionEvent", "obtain", `(JJII[L${PP};[L${PC};IIFFIIII)Landroid/view/MotionEvent;`,
+    downTime, eventTime, action, pointers.length, jarray(props, `L${PP};`), jarray(coords, `L${PC};`), 0, 0, 1, 1, 0, 0, SOURCE_TOUCHSCREEN, 0);
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
   return yield* awaited(publish(ws.channel, event));
 }());

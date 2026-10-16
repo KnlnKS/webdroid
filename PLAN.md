@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-15
+# Webdroid status — 2026-10-16
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -23,6 +23,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   (medians 45–128), mostly first-tier Java and on-demand compiling; single runs still exceed 150 ms by up to 27 ms. Compile
   Worker answers wait out the input window. `lat --ecores` measures an about 6× slower device. The 80–170 ms stalls that failed
   earlier runs were the engine freeing merged-away units in one pause, now released in batches (`World.retire`).
+  With second-tier units adopted again (`8392a936`), Komikku's cold `settings` and `appearance` taps ran 30–40 ms
+  slower than without them on a loaded host (history, "Restored units cost Komikku's taps"); unresolved.
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
   bursts of up to 30 ms. Heavy apps are reports (`"gate": false`). Scroll p95 is 17.3–17.8 ms with no missed vsyncs.
   Every re-architecture plan item is done, rejected, or measured with nothing to recover
@@ -30,18 +32,30 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   slower than on ART in Kotlin-shaped workloads; skipping every Wasm cast left warm taps unchanged. See [performance.md](docs/performance.md).
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
-  setup. NewPipe, outside the corpus, was exercised end to end on 2026-10-15. The `apks/new` XAPKs (Snapseed,
-  Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before the Wasm tier, and need re-verification.
+  setup. Outside the corpus, NewPipe was exercised end to end on 2026-10-15, and Google Maps (2026-10-15) draws its
+  vector map and layers, searches, and shows places, driving routes, active navigation, Street View and Immersive
+  View. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before the
+  Wasm tier, and need re-verification.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
-At `4de1c0a9`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
-natives, draw errors, settle timeouts or wedges; 1,153 unit tests pass (the browser tests' "End Of Central
-Directory" flake recurred once); FitNotes `smoke` is clean; all 16 `wasm all` suites and 31 of 31 `fwtest`
-exercises pass. The default five-at-a-time run missed four flows on worker-diagnostic and completion timeouts
-while another checkout's sweep held the host at a load of about 14; it was not repeated on an idle host.
+At the merge of `knlnks/maps-wasm` (2026-10-16): typecheck passes; 1,158 unit tests pass (the "End Of Central
+Directory" flake failed four browser tests once, and they pass on a rerun); all 16 `wasm all` suites pass. The `--jobs 1`
+quick e2e gate reaches 6 of 7 flows with no missing APIs, errors, required natives, draw errors, settle timeouts or
+wedges. Doodle Jump's idle Play services Worker (pid 1003) missed the 5 s diagnostic read in one step, and again on a
+rerun; `6fb77b0a`, the tip before the merge, fails the same way twice, with other checkouts' browsers holding the host at
+a load of 9-14.
+
+Before the merge, each side's quick gate passed 7 of 7 flows. At `knlnks/maps-wasm` (2026-10-15) every flow upgraded
+methods to the second tier (35-485 per flow); 31 of 31 `fwtest` exercises and the Google Maps sweep (351,903 methods)
+passed. `lat` fails on a loaded host: Mihon's launch is unavailable, as at `cae91309`, and Komikku's cold taps reach
+155-177 ms (see Latency). At `01e96bf7`, with 24 busy loops beside the gate (load about 45), FitNotes failed 11 steps, and
+14 at `89868cac`, all completion timeouts: its off-screen spinners keep vsync requested, as on the reference AVD, and the
+pixel rule's readbacks stretch past the bound (history, "FitNotes under host load"). At `4de1c0a9`, FitNotes `smoke` was
+clean and 31 of 31 `fwtest` exercises passed; the default five-at-a-time run missed four flows on worker-diagnostic and
+completion timeouts while another checkout's sweep held the host at a load of about 14.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
@@ -91,8 +105,8 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      `?attestation=1` but gets HTTP 500 (`DF-DFERH-01`): DroidGuard supplied zero bytes and microG had no auth token.
      A licensed Play Store oracle is needed before attributing that to webdroid.
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
-     bar arbitration; Google Maps zoom, active navigation and backup transport. A native fault converted into a
-     Java exception can still leave native locks held.
+     bar arbitration; Google Maps sign-in and backup transport. A native fault converted into a Java exception can
+     still leave native locks held.
    - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
@@ -128,6 +142,8 @@ Unranked; each needs a measurement or a check against the current code before wo
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
+- **Hidden API:** no hidden-API policy is enforced, so reflection reaches `@hide` members that ART denies apps, and an
+  app that relies on the denial takes another path (Compose's `findViewByAccessibilityIdTraversal` override recurses).
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.

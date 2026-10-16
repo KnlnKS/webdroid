@@ -3,6 +3,7 @@
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
 import { note, Ev } from "../../timeline";
 import { answeringFor } from "../../jvm/yield";
+import { compileBytes } from "../link/module";
 import type { CompileService } from "../link/hostapi";
 import type { AppIndex, Marks } from "../link/aot";
 import type { UpgradeJob } from "../link/unit";
@@ -44,6 +45,7 @@ export function spawnCompileWorker(host: MessagePort | undefined, url: string): 
     terminate: () => { ctl.port1.postMessage(0); data.port1.close(); fetcher.port1.close(); },
   };
   data.port1.onmessage = (e) => worker.onmessage?.(e);
+  data.port1.onmessageerror = () => worker.onerror?.({ message: "a message from the compile worker could not be read" } as ErrorEvent);
   ctl.port1.onmessage = ({ data: message }) => worker.onerror?.({ message } as ErrorEvent);
   return worker;
 }
@@ -177,6 +179,7 @@ export class CompileClient implements CompileService {
     if (m.type === "built") return;
     const busy = this.busy;
     if (!busy || m.id !== busy.id) return;
+    if (m.type === "unit" && m.result.module instanceof Uint8Array) { this.compile(m); return; }
     if (m.type === "unit" && this.holding(m)) return;
     this.busy = undefined;
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
@@ -199,6 +202,12 @@ export class CompileClient implements CompileService {
       if (numbered) { this.keep = true; this.marks = w.numbering(); }
     } else this.stats.stale++;
     this.pump();
+  }
+  /** A unit's bytes compile off the main thread before it is taken: compiled in the handler, they kept a busy app from its frames for seconds.
+   *  Bytes that do not compile fail the job. */
+  private compile(m: Extract<CompileResponse, { type: "unit" }>): void {
+    compileBytes(m.result.module as Uint8Array).then((module) => { m.result.module = module; this.receive(m); },
+      (e) => this.receive({ type: "failed", id: m.id, message: `${this.busy?.job.installed[0]}: ${(e as Error).message}` }));
   }
   private held?: { timer: ReturnType<typeof setTimeout>; unit?: CompileResponse };
   /** Planning a job and taking a unit (`unit`) wait while the app answers input: either would spend main-thread time in the response, and a unit replaces

@@ -1,3 +1,6 @@
+/** a swizzle map: the source channel of R, G, B and A in three bits each (0-3 a channel, 4 zero, 5 one); this one keeps them */
+export const IDENTITY_SWIZZLE = 0x688;
+
 interface SwizzleMap {
   sampler: string;
   mapUniform: string;
@@ -149,9 +152,10 @@ function stripParens(tokens: Token[], start: number, end: number): [number, numb
   return [start, end];
 }
 
-function samplerArg(source: string, tokens: Token[], start: number, end: number, samplers: Map<string, Sampler>): { sampler: Sampler; map: string } | null {
+type Lookup = (name: string) => Sampler | undefined;
+function samplerArg(source: string, tokens: Token[], start: number, end: number, lookup: Lookup): { sampler: Sampler; map: string } | null {
   [start, end] = stripParens(tokens, start, end);
-  const sampler = samplers.get(tokens[start]?.text ?? "");
+  const sampler = lookup(tokens[start]?.text ?? "");
   if (!sampler || sampler.shadow) return null;
   if (start + 1 === end && !sampler.array) return { sampler, map: sampler.mapUniform };
   if (!sampler.array || tokens[start + 1]?.text !== "[") return null;
@@ -196,9 +200,70 @@ function helpers(prefix: string, samplers: readonly Sampler[], kinds: ReadonlySe
     const one = kind === "float" ? "1.0" : kind === "int" ? "1" : "1u";
     const zero = kind === "float" ? "0.0" : kind === "int" ? "0" : "0u";
     return `highp ${scalar} ${prefix}p(highp ${vector} v, highp int s){return s<4?v[s]:(s==5?${one}:${zero});}\n`
-      + `highp ${vector} ${prefix}f(highp ${vector} v, highp int m){if(m==1672)return v;return ${vector}(${prefix}p(v,m&7),${prefix}p(v,(m>>3)&7),${prefix}p(v,(m>>6)&7),${prefix}p(v,(m>>9)&7));}`;
+      + `highp ${vector} ${prefix}f(highp ${vector} v, highp int m){if(m==${IDENTITY_SWIZZLE})return v;return ${vector}(${prefix}p(v,m&7),${prefix}p(v,(m>>3)&7),${prefix}p(v,(m>>6)&7),${prefix}p(v,(m>>9)&7));}`;
   };
   return `\n${declarations}\n${[...kinds].map(pick).join("\n")}\n`;
+}
+
+/** the top-level items of the parenthesized list from `open` to `close` (parameters or arguments), as token ranges */
+function split(tokens: Token[], open: number, close: number): [number, number][] {
+  if (close === open + 1) return [];
+  const out: [number, number][] = [];
+  let from = open + 1, depth = 0;
+  for (let p = from; p < close; p++) {
+    const text = tokens[p].text;
+    if (text === "(" || text === "[") depth++; else if (text === ")" || text === "]") depth--;
+    else if (text === "," && depth === 0) { out.push([from, p]); from = p + 1; }
+  }
+  out.push([from, close]);
+  return out;
+}
+
+const IDENT = /^[A-Za-z_]\w*$/, SAMPLER_TYPE = /^[iu]?sampler(?:[123]D|Cube|Buffer|External)\w*$/;
+interface SamplerFunction {
+  /** the token of its name */
+  name: number;
+  key: string;
+  /** the positions of the sampler parameters that take a map, the token each one ends at, and its map parameter */
+  params: { index: number; end: number; map: string }[];
+  /** its body's braces, and the samplers among its parameters */
+  body: [number, number] | null;
+  scope: Map<string, Sampler>;
+}
+/** Functions that take samplers: each sampler parameter is followed by an int parameter carrying its map, which calls pass. A key (name and arity) whose
+ *  declarations disagree on where the samplers are is not rewritten: its calls cannot be told apart here. */
+function samplerFunctions(tokens: Token[], prefix: string, unsupported: string[]): { fns: SamplerFunction[]; keys: Map<string, number[]> } {
+  const fns: SamplerFunction[] = [], keys = new Map<string, number[] | null>();
+  let depth = 0, next = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const text = tokens[i].text;
+    if (text === "{") depth++; else if (text === "}") depth--;
+    const before = tokens[i - 1]?.text ?? "";
+    if (depth || tokens[i + 1]?.text !== "(" || !IDENT.test(text) || !IDENT.test(before) && before !== "]") continue;
+    const close = matching(tokens, i + 1, "(", ")");
+    if (close < 0) continue;
+    const list = split(tokens, i + 1, close), params: SamplerFunction["params"] = [], scope = new Map<string, Sampler>();
+    list.forEach(([from, to], index) => {
+      // [qualifiers] type [name [size]]
+      let end = from;
+      while (end < to && tokens[end].text !== "[") end++;
+      const type = end - 2 >= from && SAMPLER_TYPE.test(tokens[end - 2].text) ? end - 2 : end - 1;
+      if (type < from || !SAMPLER_TYPE.test(tokens[type].text)) return;
+      const name = type === end - 2 ? tokens[end - 1].text : null, shadow = tokens[type].text.endsWith("Shadow");
+      if (end < to) { unsupported.push(`sampler-array-param:${text}`); return; }
+      const map = `${prefix}a${next++}`;
+      if (name) scope.set(name, { sampler: name, mapUniform: map, size: 1, array: false, kind: samplerKind(tokens[type].text), shadow, used: false });
+      if (!shadow) params.push({ index, end: tokens[to - 1].end, map });
+    });
+    if (!scope.size && !params.length) continue;
+    const key = `${text}/${list.length}`, indices = params.map((p) => p.index), prior = keys.get(key);
+    if (prior === undefined) keys.set(key, indices);
+    else if (prior && prior.join() !== indices.join()) { keys.set(key, null); unsupported.push(`sampler-overload:${text}`); }
+    const open = tokens[close + 1]?.text === "{" ? close + 1 : -1, end = open < 0 ? -1 : matching(tokens, open, "{", "}");
+    fns.push({ name: i, key, params, body: end < 0 ? null : [open, end], scope });
+  }
+  const agreed = new Map([...keys].filter((e): e is [string, number[]] => !!e[1]?.length));
+  return { fns: fns.filter((f) => keys.get(f.key)), keys: agreed };
 }
 
 export function rewriteTextureSwizzles(source: string, shaderKey: string | number): SwizzleRewrite {
@@ -207,27 +272,39 @@ export function rewriteTextureSwizzles(source: string, shaderKey: string | numbe
   for (let n = 0; source.includes(prefix); n++) prefix = `_wdSwz${hashKey(`${shaderKey}:${n}`)}_`;
   const tokens = scan(source, unsupported);
   const samplers = parseSamplers(tokens, prefix, unsupported);
+  const { fns, keys } = samplerFunctions(tokens, prefix, unsupported);
   const insertions = new Map<number, string[]>();
   const kinds = new Set<Sampler["kind"]>();
   const add = (at: number, text: string): void => { const list = insertions.get(at); if (list) list.push(text); else insertions.set(at, [text]); };
+  const declared = new Set(fns.map((f) => f.name)), callees = new Set([...keys.keys()].map((key) => key.slice(0, key.lastIndexOf("/"))));
+  for (const f of fns) for (const p of f.params) add(p.end, `, highp int ${p.map}`);
+  const bodies = fns.filter((f) => f.body).sort((a, b) => a.body![0] - b.body![0]);
+  let inside = 0, scope: Map<string, Sampler> | undefined;
+  const lookup: Lookup = (name) => scope?.get(name) ?? samplers.get(name);
+  const argText = (from: number, to: number) => source.slice(tokens[from]?.start ?? 0, tokens[to - 1]?.end ?? 0).trim();
 
   for (let i = 0; i < tokens.length - 1; i++) {
+    while (inside < bodies.length && bodies[inside].body![1] < i) inside++;
+    scope = inside < bodies.length && bodies[inside].body![0] < i ? bodies[inside].scope : undefined;
     const fn = tokens[i].text;
-    if (!sampleFns.has(fn) || tokens[i + 1].text !== "(") continue;
+    if (tokens[i + 1].text !== "(") continue;
+    if (!sampleFns.has(fn)) {
+      if (!callees.has(fn) || declared.has(i)) continue;
+      const close = matching(tokens, i + 1, "(", ")"), args = close < 0 ? [] : split(tokens, i + 1, close), indices = keys.get(`${fn}/${args.length}`);
+      for (const index of indices ?? []) {
+        const [from, to] = args[index], arg = samplerArg(source, tokens, from, to, lookup);
+        if (arg) arg.sampler.used = true; else unsupported.push(`${fn}:${argText(from, to)}`);
+        add(tokens[to - 1].end, `,${arg?.map ?? IDENTITY_SWIZZLE}`);
+      }
+      continue;
+    }
     const close = matching(tokens, i + 1, "(", ")");
     if (close < 0) { unsupported.push(`${fn}:unclosed`); continue; }
-    let comma = -1, parens = 0, brackets = 0;
-    for (let p = i + 2; p < close; p++) {
-      const text = tokens[p].text;
-      if (text === "(") parens++; else if (text === ")") parens--;
-      else if (text === "[") brackets++; else if (text === "]") brackets--;
-      else if (text === "," && parens === 0 && brackets === 0) { comma = p; break; }
-    }
-    const arg = comma > 0 ? samplerArg(source, tokens, i + 2, comma, samplers) : null;
+    const [first] = split(tokens, i + 1, close), comma = first && first[1] < close ? first[1] : -1;
+    const arg = comma > 0 ? samplerArg(source, tokens, i + 2, comma, lookup) : null;
     if (!arg) {
-      const argText = comma > 0 ? source.slice(tokens[i + 2]?.start ?? tokens[i + 1].end, tokens[comma].start).trim() : "?";
-      const shadow = samplers.get(argText)?.shadow;
-      if (!shadow) unsupported.push(`${fn}:${argText}`);
+      const text = comma > 0 ? argText(i + 2, comma) : "?";
+      if (!lookup(text)?.shadow) unsupported.push(`${fn}:${text}`);
       continue;
     }
     arg.sampler.used = true;
@@ -236,8 +313,8 @@ export function rewriteTextureSwizzles(source: string, shaderKey: string | numbe
     add(tokens[close].end, `,${arg.map})`);
   }
 
+  if (!insertions.size) return { source, maps: [], hidden: new Set(), unsupported: [...new Set(unsupported)] };
   const used = [...samplers.values()].filter((s) => s.used);
-  if (!used.length) return { source, maps: [], hidden: new Set(), unsupported: [...new Set(unsupported)] };
   const at = preambleEnd(source);
   const line = source.slice(0, at).split("\n").length;
   add(at, `${helpers(prefix, used, kinds)}#line ${line}\n`);

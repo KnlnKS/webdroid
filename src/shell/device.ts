@@ -16,7 +16,7 @@ import { qualify as componentClass } from "../jvm/roots";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative";
-import { setAppHost } from "../android/apphost";
+import { appHost, setAppHost } from "../android/apphost";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
@@ -40,6 +40,7 @@ import { configurationChanged, displayHooks, orientationRequest } from "../andro
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
 import { toThread } from "../jvm/natives/jthrowable";
 import { note, Ev } from "../timeline";
+import type { TouchPointer } from "./pointer-queue";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 let displayChanged = () => {};
@@ -126,8 +127,8 @@ export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promi
   })();
 }
 
-/** boots the app, resolving to its label */
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<string> {
+/** boots the app */
+export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<void> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   mark("bootApk"); onStatus("Reading package…"); booting = true;
@@ -174,7 +175,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await vfs.prepare(pkg);
   // a Worker's files live with the broker, whose prepare created its app data
   if (!filePathTransport.calls) await createAppData(pkg);
-  const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
   mark("dataReady"); onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
@@ -187,7 +187,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await onMain(applyDeviceConfiguration);
   const res = nativeRes(jres);
-  const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
   setAppHost({
     res, pkg, assetKey, zip,
@@ -207,7 +206,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   useDisplayRotation();
   mark("resourcesReady"); onStatus("Starting app…");
   await onMain(() => startActivityThread(!processName));
-  return label;
 }
 
 /** this process's activities turn the display as they launch, resume and ask for an orientation */
@@ -222,7 +220,8 @@ export function rotateDevice(landscape: boolean): Promise<void> {
 }
 /** the page's display turns to the orientation of the Worker whose activity fills it */
 export const followDisplay = (landscape: boolean): Promise<void> => onMain(() => turnDisplay(landscape));
-function applyConfigChange(): void { postMain(configurationChanged); }
+// system_server's realm hosts no app to hear it
+function applyConfigChange(): void { if (appHost) postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
@@ -263,12 +262,15 @@ export async function testFrame(): Promise<void> {
 export function redraw(): void { scheduleComposite(); }
 
 let touchDown = 0n;
-/** a pointer event to the window under it, as InputDispatcher delivers it; charged to
+/** a touch event to the window under its first pointer, as InputDispatcher delivers it; charged to
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
-export function dispatchPointer(action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> {
+export function dispatchTouches(action: number, pointers: readonly TouchPointer[], eventTime = uptimeMillis()): Promise<void> {
   const t0 = performance.now();
   noteInput(); note(Ev.InputIn, action);
   const now = BigInt(Math.floor(eventTime));
   if (action === 0) touchDown = now;
-  return dispatchTouch(action, x, y, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
+  return dispatchTouch(action, pointers, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
+/** a one-finger touch event */
+export const dispatchPointer = (action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> =>
+  dispatchTouches(action, [{ id: 0, x, y }], eventTime);

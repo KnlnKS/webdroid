@@ -18,7 +18,7 @@ import {
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, pbo, type GL, type ContextState,
 } from "./gles3-state";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels";
-import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers";
+import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers";
 import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays";
 import {
   keepsClean, keptClean, forgetImages, untrust, texParamAccepted, storageAccepted, imageAccepted, recordImage, subImageAccepted, pixelStoreAccepted,
@@ -60,12 +60,37 @@ const EXT: [string, string][] = [
   ["EXT_texture_filter_anisotropic", "GL_EXT_texture_filter_anisotropic"], ["EXT_texture_norm16", "GL_EXT_texture_norm16"], ["EXT_float_blend", "GL_EXT_float_blend"],
 ];
 // ES2 extensions that ES 3.0 core subsumes without a new entry point; an engine gating on the name sees them
-const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax";
+// and SurfaceTexture's external textures, which shaders' samplerExternalOES read as 2D storage (gles3-state.ts); EGL makes no EGLImage
+const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3";
 const extsOf = new WeakMap<GL, string[]>();
+/** glClientWaitSync's wait, which EGL's fences share: a wait longer than the fence takes is spent yielding, one macrotask per look */
+export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeoutNs: bigint): Promise<number> {
+  const until = performance.now() + Number(timeoutNs) / 1e6;
+  let r = gl.clientWaitSync(sync, flags, 0);
+  while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = gl.clientWaitSync(sync, 0, 0); }
+  return r;
+}
 export function gles3Extensions(gl: GL): string[] {
   let e = extsOf.get(gl);
-  if (!e) { e = CORE.split(" "); for (const [w, n] of EXT) if (gl.getExtension(w) && n) e.push(n); extsOf.set(gl, e); }
+  if (!e) {
+    e = CORE.split(" ");
+    for (const [w, n] of EXT) if (gl.getExtension(w) && n && (n !== "GL_EXT_color_buffer_half_float" || rendersRgb16f(gl))) e.push(n);
+    extsOf.set(gl, e);
+  }
   return e;
+}
+/** GL_EXT_color_buffer_half_float makes RGB16F color-renderable, which WebGL 2's EXT_color_buffer_half_float need not: an engine that renders
+ *  to RGB16F where it is advertised (Filament's HDR targets) draws nothing into an incomplete framebuffer */
+function rendersRgb16f(gl: GL): boolean {
+  if (!("texStorage2D" in gl)) return false;
+  const texture = gl.getParameter(gl.TEXTURE_BINDING_2D), draw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING), read = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+  const t = gl.createTexture(), f = gl.createFramebuffer();
+  gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGB16F, 1, 1);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, draw); gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read); gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.deleteFramebuffer(f); gl.deleteTexture(t);
+  return complete;
 }
 function str(name: number): string {
   switch (name) {
@@ -263,7 +288,7 @@ export function gles3Init(): void {
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
 
     // ── buffers
-    glGenBuffers: keepsClean((_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4, size: 0 }); return o; }); }),
+    glGenBuffers: keepsClean((_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, mirror: null, usage: 0x88e4, size: 0 }); return o; }); }),
     glDeleteBuffers: keepsClean((_c, a) => {
       const n = a.i(), state = contextState();
       del(T().buffers, n, a.p(), (o) => {
@@ -291,7 +316,7 @@ export function gles3Init(): void {
       const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t), bound = recAt(t), data = p ? u8(p, n) : null;
       const accepted = BUFFER_TARGETS.has(t) && !!bound && n >= 0 && USAGES.has(usage) && !contextState().feedback;
       if (!accepted) unsure();
-      if (bound) bound.size = accepted ? data?.length ?? n : -1;
+      if (bound) { bound.size = accepted ? data?.length ?? n : -1; if (bound.mirror) bound.mirror = data ? data.slice() : new Uint8Array(n); }
       if (r) { r.shadow = new Uint8Array(n); if (data) r.shadow.set(data); r.usage = usage; }
       else { if (bound) bound.usage = usage; writeBuffers(t, (tt) => { if (data) g().bufferData(tt, data, usage); else g().bufferData(tt, n, usage); }); }
     }),
@@ -309,8 +334,9 @@ export function gles3Init(): void {
     glMapBufferRange: (_c, a) => {
       const t = a.i(), off = a.i(), len = a.i(), access = a.i(), b = recAt(t);
       if (!b) { raise(0x502); return 0; }
-      const ptr = mem.malloc(len), r = shadowed(t);
-      if (access & 1) { if (r) u8(ptr, len).set(r.shadow!.subarray(off, off + len)); else withTarget(t, (tt) => g().getBufferSubData(tt, off, u8(ptr, len))); }
+      const ptr = mem.malloc(len);
+      // a range read, or written without MAP_INVALIDATE_{RANGE,BUFFER}_BIT, holds the contents the guest leaves unwritten
+      if (access & 1 || !(access & 0xc)) u8(ptr, len).set(contents(t, b).subarray(off, off + len));
       mapped.set(b, { ptr, off, len, access });
       return ptr;
     },
@@ -489,15 +515,7 @@ export function gles3Init(): void {
     glIsSync: keepsClean((_c, a) => (H(T().syncs, a.i()) ? 1 : 0)),
     glDeleteSync: keepsClean((_c, a) => { const h = a.i(), s = T().syncs[h]; if (s) { g().deleteSync(s); T().syncs[h] = null; } }),
     glWaitSync: keepsClean((_c, a) => { const s = H(T().syncs, a.i()); if (s) g().waitSync(s, 0, -1); }),
-    // a wait longer than the fence takes is spent yielding, one macrotask per look
-    glClientWaitSync: async (_c, a) => {
-      const s = H(T().syncs, a.i()); const flags = a.i(), until = performance.now() + Number(a.ul()) / 1e6;
-      if (!s) return 0x911d;                                                    // WAIT_FAILED
-      const context = g();
-      let r = context.clientWaitSync(s, flags, 0);
-      while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = context.clientWaitSync(s, 0, 0); }
-      return r;
-    },
+    glClientWaitSync: (_c, a) => { const s = H(T().syncs, a.i()), flags = a.i(), timeout = a.ul(); return s ? clientWait(g(), s, flags, timeout) : 0x911d; },   // WAIT_FAILED
     glGetSynciv: (_c, a) => { const s = H(T().syncs, a.i()); const pn = a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 1); out(s && g().getSyncParameter(s, pn), a.p(), st32, 4); },
     glBindTransformFeedback: (_c, a) => g().bindTransformFeedback(a.i(), H(T().tfs, a.i())),
     glBeginTransformFeedback: (_c, a) => { contextState().feedback = true; g().beginTransformFeedback(a.i()); }, glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },

@@ -12,6 +12,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable";
 import type { JavaClass } from "../../jvm/tier";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
+import { waitsEnded } from "../link/module";
 import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import { OP, type Code } from "../compiler/code";
@@ -89,7 +90,8 @@ function makeEntry(w: World): Entry {
   };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
-    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s;
+    // the globals name the strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own
+    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : hostStrands.get(s) === rt.cur ? s : null;
     if (running) return running;
     const captured = javaStrands.get(rt.cur);
     return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
@@ -248,7 +250,7 @@ function makeEntry(w: World): Entry {
       return name[0] === "[" ? name === cls || ARRAY_SUPERS.has(cls) : prog.isSubclass(name, cls);
     },
     classNameOf,
-    callOn: (thread, run) => processExited() ? never() as never : asThread(recOf(thread), run),
+    callOn: (thread, run) => processExited() || waitsEnded() ? never() as never : asThread(recOf(thread), run),
     after: chain,
   };
 }
