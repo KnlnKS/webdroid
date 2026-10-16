@@ -98,9 +98,9 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   // it, and the pointers last dispatched. A pinch burst drives two, either side of the origin.
   let ox = 0, oy = 0, ax = 0, ay = 0, last: TouchPointer[] = [];
   let live = false, armed = false, pinch = false, lastWheel = 0, pending = 0;
-  /** a pinch's scale, the scale its fingers last moved to (0 before they have), and half their
+  /** a pinch's scale, the scale its fingers last moved to (1 where they went down), and half their
    *  starting span */
-  let scale = 1, shown = 0, half = 0;
+  let scale = 1, shown = 1, half = 0;
   // The fingers go down level, on the cursor's row: a phone's layout stacks full-width bands (bars,
   // chips, sheets, the content between), and a level pair stays in the band the cursor is over
   // where a pair across the rows lands one finger on a neighbour, which split touch then gives it.
@@ -113,14 +113,15 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   const startHalf = (spread: boolean) => (spread ? minSpan() : Math.min(2 * minSpan(), device.width - 2 * device.edgeSlop)) / 2;
   /** the least scale: the fingers one minimum span apart */
   const floor = () => minSpan() / 2 / (armed ? half : startHalf(false));
-  /** The scale of the pinch's next MOVE. The fingers travel rather than jump: a scale detector
-   *  begins on the MOVE that crosses its slop and measures from that span, so the first MOVE only
-   *  crosses the slop, and each later one covers half the remaining ratio. A wheel notch is 2.7×,
-   *  and Google Maps scaled nothing when it came as one or two MOVEs. */
+  /** The scale of the pinch's next MOVE. The fingers ease in and out as a hand's do: a detector
+   *  scales by each MOVE's span ratio only once it has taken the gesture, ScaleGestureDetector on
+   *  the MOVE that crosses its slop and Google Maps on its third sample, so the first steps must be
+   *  short. A MOVE carries a finger as far as it has come, or half the way left if that is less, but
+   *  at least the touch slop and a pixel, so the first just crosses it. */
   function pinchStep(): number {
-    const k = !shown ? 1 + Math.sign(scale - 1) * Math.min((device.touchSlop + 1) / half, Math.abs(scale - 1))
-      : Math.sqrt(shown * scale);
-    return Math.abs(scale - k) * half < 1 ? scale : k;
+    const rest = Math.abs(scale - shown) * half;
+    const step = Math.max(device.touchSlop + 1, Math.min(Math.abs(shown - 1) * half, rest / 2));
+    return rest <= step ? scale : shown + Math.sign(scale - shown) * step / half;
   }
 
   /** A wheel stream — the fingers, and the momentum macOS sends after they lift — never gaps this
@@ -210,8 +211,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
         live = true;
         armed = false;
         pinch = e.ctrlKey;
-        scale = 1;
-        shown = 0;
+        scale = shown = 1;
       }
       if (pinch) {
         // the scale Chrome's pinch deltas encode: deltaY = -100 ln(scale). Lines (Firefox's mouse

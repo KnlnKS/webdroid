@@ -78,32 +78,29 @@ test("Ctrl+wheel (a trackpad pinch) drives two level fingers about the cursor an
   await frames(1);
   expect(sent).toEqual([]);
   // a squeeze: the fingers go down two minimum scaling spans (49) apart, a pixel over, on the
-  // cursor's row, slid right so the first stays out of the edge slop; they stop one span apart, and
-  // the first MOVE crosses the touch slop by a pixel
+  // cursor's row, slid right so the first stays out of the edge slop, and stop one span apart
   wheel(10, 100, 1000, pinch);
-  await frames(12);
-  const squeezed = sent.length;
+  await frames(4);
   // spreading carries them past the display's edge
   wheel(10, 100, -100 * Math.log(4), pinch);
-  await frames(12);
+  await frames(6);
   await settle(130);
   await frames(1);
   close();
-  const round = (e: number[]) => e.map(v => Math.round(v * 1e6) / 1e6);
-  expect(sent.slice(0, 3).map(round)).toEqual([[0, 0, 10, 200], [5 | 1 << 8, 0, 10, 200, 1, 110, 200], [2, 0, 27, 200, 1, 93, 200]]);
-  expect(sent.slice(-2).map(round)).toEqual([[6, 0, -40, 200, 1, 160, 200], [1, 1, 160, 200]]);
-  // then MOVEs cover half the remaining ratio each frame, so the scale reaches the app as a stream
-  const spans = (moves: number[][]) => moves.map(e => {
-    expect([e[0], e[3], e[6]]).toEqual([2, 200, 200]);
-    expect((e[2] + e[5]) / 2).toBeCloseTo(60);
-    return e[5] - e[2];
-  });
-  const inward = spans(sent.slice(2, squeezed)), out = spans(sent.slice(squeezed, -2));
-  for (const [steps, target, sign] of [[out, 200, 1], [inward, 50, -1]] as const) {
-    expect(steps.length).toBeGreaterThan(3);
-    expect(steps.at(-1)).toBeCloseTo(target);
-    steps.slice(1).forEach((span, i) => expect(Math.sign(span - steps[i])).toBe(sign));
-  }
+  expect(sent.map(e => e.map(v => Math.round(v * 1e6) / 1e6))).toEqual([
+    [0, 0, 10, 200],
+    [5 | 1 << 8, 0, 10, 200, 1, 110, 200],
+    // a MOVE carries a finger as far as it has come from where it went down, or half the way left if
+    // that is less, but at least the touch slop and a pixel (16 + 1)
+    [2, 0, 27, 200, 1, 93, 200],
+    [2, 0, 35, 200, 1, 85, 200],
+    [2, 0, 10, 200, 1, 110, 200],
+    [2, 0, -7, 200, 1, 127, 200],
+    [2, 0, -24, 200, 1, 144, 200],
+    [2, 0, -40, 200, 1, 160, 200],
+    [6, 0, -40, 200, 1, 160, 200],
+    [1, 1, 160, 200],
+  ]);
 });
 
 test("a wheel burst that gains or drops Ctrl lifts the gesture it was driving", async () => {
