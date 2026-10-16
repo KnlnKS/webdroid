@@ -62,11 +62,15 @@ function* resolveActivity(intent: JObj, resolvedType: string | null, flags: bigi
 }
 const activityClientController = once(() => newObj("webdroid/ActivityClientController"));
 
-function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
+function* transaction(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<JObj> {
   const tx = yield scall(CT + "ClientTransaction", "obtain", `(Landroid/app/IApplicationThread;)L${CT}ClientTransaction;`, app);
   for (const callback of [callbacks].flat()) if (callback) yield vcall(tx, "addCallback", `(L${CT}ClientTransactionItem;)V`, callback);
   if (lifecycle) yield vcall(tx, "setLifecycleStateRequest", `(L${CT}ActivityLifecycleItem;)V`, lifecycle);
-  yield vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
+  return tx;
+}
+const send = (app: JObj, tx: JObj) => vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
+function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
+  yield send(app, yield* transaction(app, callbacks, lifecycle));
 }
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
@@ -84,6 +88,10 @@ function pause(r: ActivityRecord): Promise<void> {
   }()));
   r.pausing = { done, settle: reported.resolve };
   return done;
+}
+/** pause the top activity until what is on top has paused: a start may push above it meanwhile */
+function* pauseTop(): Gen<void> {
+  for (let top = stack.at(-1); top && (top.state === "resumed" || top.pausing); top = stack.at(-1)) yield pause(top);
 }
 const settlePause = (r: ActivityRecord) => { r.pausing?.settle(); r.pausing = null; };
 const pauseItem = (r: ActivityRecord, finishing = false) => item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +finishing, 0, 0, 0);
@@ -235,27 +243,29 @@ function* startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityR
   try {
     if (yield* reuseActivity(intent, info)) return;
     const token = yield* awaited(systemToken());
-    const prev = stack.at(-1);
     const orientation = getDeclared<number>(info, AI, "screenOrientation"), translucent = yield* translucentTheme(info);
-    if (prev) yield pause(prev);
+    yield* pauseTop();
     // the display turns for the activity before it launches, so that it starts in that orientation
     if (displayHooks.requestOrientation?.(orientationRequest([...stack, { orientation, translucent, state: "launching", finishing: false }]))) yield configurationChanged();
     const { global, override } = yield* awaited(configurations());
-    const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
-      translucent, pausing: null, owed: null, remote, config: global, orientation };
-    stack.push(r);
-    reportPresentation();
     const windowInfo = yield newObj("android/window/ActivityWindowInfo", "()V");
     const launch = yield item("LaunchActivityItem",
       "Landroid/os/IBinder;Landroid/content/Intent;ILandroid/content/pm/ActivityInfo;Landroid/content/res/Configuration;Landroid/content/res/Configuration;" +
       "ILjava/lang/String;Lcom/android/internal/app/IVoiceInteractor;ILandroid/os/Bundle;Landroid/os/PersistableBundle;Ljava/util/List;Ljava/util/List;" +
       "Landroid/app/ActivityOptions$SceneTransitionInfo;ZLandroid/app/ProfilerInfo;Landroid/os/IBinder;Landroid/app/IActivityClientController;" +
       "Landroid/os/IBinder;ZLandroid/os/IBinder;Landroid/os/IBinder;Landroid/window/ActivityWindowInfo;",
-      token, intent, stack.length, info, global, override, 0, null, null, PROCESS_STATE_TOP, null, null, null, null, null, 1, null,
+      token, intent, stack.length + 1, info, global, override, 0, null, null, PROCESS_STATE_TOP, null, null, null, null, null, 1, null,
       yield newObj("android/os/Binder", "()V"), yield activityClientController(), yield newObj("android/os/Binder", "()V"), 0, null,
       yield newObj("android/os/Binder", "()V"), windowInfo);
-    r.state = "resumed";
-    yield* schedule(app, [launch, yield topResumedItem(r, true)], yield resumeItem(r));
+    const r: ActivityRecord = { token, intent, info, app, state: "resumed", resultTo, resultWho, requestCode, results: [], finishing: false,
+      translucent, pausing: null, owed: null, remote, config: global, orientation };
+    const tx = yield* transaction(app, [launch, yield topResumedItem(r, true)], yield resumeItem(r));
+    // a start that pushed while this one waited is on top now: AOSP's starts run one at a time, so it pauses too.
+    // The launch is sent as it is pushed, so that a later start's pause of it reaches the client after it
+    yield* pauseTop();
+    stack.push(r);
+    reportPresentation();
+    yield send(app, tx);
   } finally { transitions--; }
 }
 
@@ -406,10 +416,11 @@ function* finish(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<
     if (r.finishing) return true;
     r.finishing = true;
     yield* owedResult(r, resultCode, data);
-    const wasTop = stack.at(-1) === r;
+    const covered = stack.slice(stack.indexOf(r) + 1).some((a) => !a.finishing);
     yield pause(r);
-    const below = stack[stack.indexOf(r) - 1];
-    if (wasTop && below) yield* resume(below);
+    // the top running activity resumes, skipping those still finishing (ActivityTaskSupervisor.topRunningActivity)
+    const next = [...stack].reverse().find((a) => !a.finishing);
+    if (!covered && next && next.state !== "resumed") yield* resume(next);
     yield* destroy(r);
     return true;
   } finally { transitions--; }
