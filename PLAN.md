@@ -101,13 +101,16 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. At its feed the main
    process holds ~1.16 GB after a full collection, against 1.35 GB before one lazy-link stub per signature and the
    slimmer Program/dex metadata (2026-10-16). Its e2e flow now picks an adult birthdate on the guest birthdate screen.
+   A new device's first visit (platform caches warm) reaches signup in 37–40 s and the feed in 67–68 s.
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
    page's World, which blocks any parallel or ahead-of-time compile; seeding app numbers at dex arrival
    covers 99.9% of Komikku, but attaching a first build mid-session did not pay, see the history). Measure each on Komikku's first launch, three
    matched runs or more. Without a platform build FitNotes' quick flow takes 144 s against 46 s, so the on-demand
-   path itself is worth profiling.
+   path itself is worth profiling. Building an app's static roots before its first launch and a Zig compiler were
+   measured and rejected: the build costs more than the 6–9 s it saves TikTok's signup, and the compiler's profile
+   has no phase to move (history, 2026-10-16).
 5. **Application compatibility.**
    - *TikTok playback and input:* capture repeatable source media and separate decoded-video, EGL-swap and
      presentation counts; profile dense clips and warmed action latency. Its unchanged ByteVC decoder reached a
