@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { JniClass } from "./jnivm";
-import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry";
+import { JThread, mainThread, releaseThread, resumeAs, threadContended } from "../jvm/natives/jentry";
 import { rt } from "../jvm/runtime";
 import type { Strand } from "../jvm/suspend";
 import { mem } from "./mem";
@@ -136,8 +136,14 @@ export class Cpu {
   tlsTab = 0;
   pending: Promise<unknown> | null = null;
   private budgetWake: (() => void) | null = null;
-  /** signals queued for this thread, delivered at its next slice boundary */
-  signals: number[] = [];
+  /** signals pending for this thread, delivered at its next slice boundary, each with the siginfo its
+   *  sender described (a POSIX timer's; null is tgkill's). A pending signal does not queue again. */
+  signals = new Map<number, SigInfo | null>();
+  /** takes the first pending signal `pick` accepts, with its siginfo */
+  takePending(pick: (sig: number) => boolean): { sig: number; info: SigInfo | null } | null {
+    for (const [sig, info] of this.signals) if (pick(sig)) { this.signals.delete(sig); return { sig, info }; }
+    return null;
+  }
   signalInterrupt: (() => void) | null = null;
   private deferredSignalDepths = new Set<number>();
   deferSignalsUntilResume(): void { if (this.depth) this.deferredSignalDepths.add(this.depth); }
@@ -238,12 +244,11 @@ export class Cpu {
   }
   /** a pending signal the mask lets through: a call that raised or unblocked one returns to it, as
    *  the kernel delivers on the way back to user space */
-  private deliverable(): boolean { return this.signals.some((sig) => !blocked(this.signalMask, sig)); }
-  private takeSignal(): number {
-    if (!this.signals.length) return 0;
-    const i = this.signals.findIndex((sig) => !blocked(this.signalMask, sig));
-    return i < 0 ? 0 : this.signals.splice(i, 1)[0];
+  private deliverable(): boolean {
+    for (const sig of this.signals.keys()) if (!blocked(this.signalMask, sig)) return true;
+    return false;
   }
+  private takeSignal() { return this.takePending((sig) => !blocked(this.signalMask, sig)); }
   /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
    *  loop is the innermost one — a nested frame in its teardown, or a handler above, owns the register file */
   parkedAt = -1;
@@ -257,10 +262,10 @@ export class Cpu {
   handling = new Set<number>();                     // signals whose handler is running
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
-  kill(sig: number): void {
+  kill(sig: number, info: SigInfo | null = null): void {
     // an ignored signal is discarded unless blocked: a handler may be installed before it is unblocked
     if (this.finished || !blocked(this.signalMask, sig) && action(sig, this.signalMask, false) === "ignore") return;
-    if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
+    if (!this.signals.has(sig)) this.signals.set(sig, info);
     this.sigQueued?.();
     if (this.signalInterrupt && !blocked(this.signalMask, sig)) {
       this.deferSignalsUntilResume();
@@ -276,8 +281,8 @@ export class Cpu {
     if (this.budgetWake && this.deliverable()) this.budgetWake();
     queueMicrotask(() => {
       if (this.finished || this.deferredSignalDepths.size || (!this.parked && !this.baseAvailable)) return;
-      const sig = this.takeSignal();
-      if (sig) void this.deliver(sig);
+      const taken = this.takeSignal();
+      if (taken) void this.deliver(taken.sig, taken.info);
     });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran, the latest 40
@@ -289,7 +294,7 @@ export class Cpu {
    *  the base free keeps its Java caller's frames rather than suspending them */
   idleBase(): Promise<void> | undefined {
     if (this.baseBusy || this.loops > 0 && this.frames[0]?.handler) return this.awaitIdleBase();
-    if (this.baseAvailable && this.signals.some((sig) => !blocked(this.signalMask, sig))) return this.awaitIdleBase();
+    if (this.baseAvailable && this.deliverable()) return this.awaitIdleBase();
   }
   /** an entry from Java must not stack on a handler that owns the register file from the bottom */
   async awaitIdleBase(): Promise<void> {
@@ -300,15 +305,15 @@ export class Cpu {
         continue;
       }
       if (!this.baseAvailable) return;
-      const sig = this.takeSignal();
-      if (!sig) return;
-      await this.deliver(sig);
+      const taken = this.takeSignal();
+      if (!taken) return;
+      await this.deliver(taken.sig, taken.info);
     }
   }
-  /** `info`: the siginfo of a signal this thread's own instruction raised. As the kernel's
-   *  force_sig_fault, such a signal blocked or ignored takes its default action. */
-  async deliver(sig: number, info: SigInfo | null = null): Promise<void> {
-    const act = action(sig, this.signalMask, !!info);
+  /** `fault`: this thread's own instruction raised it. As the kernel's force_sig_fault, such a signal
+   *  blocked or ignored takes its default action. */
+  async deliver(sig: number, info: SigInfo | null = null, fault = false): Promise<void> {
+    const act = action(sig, this.signalMask, fault);
     if (act !== "handler") { if (act !== "ignore") void dieOfSignal(this, sig, info); return; }
     const h = dispositions.get(sig) as Handler;
     if (h.flags & SA_RESETHAND) dispositions.delete(sig);
@@ -385,7 +390,7 @@ export class Cpu {
     if (!retainThreadData) mem.free(this.threadData);
     mem.free(this.env);
     this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
-    this.signals.length = 0;
+    this.signals.clear();
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);
@@ -593,7 +598,7 @@ export class Cpu {
         else {
           turn.own();
           if (processExited()) { turn.release(); await never(); }
-          for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(turn, sig);
+          for (let taken; (taken = this.takeSignal());) await this.deliverFromLoop(turn, taken.sig, taken.info);
           ex = this.timedSlice();
         }
         const sliceMs = this.lastSliceMs;
@@ -630,7 +635,7 @@ export class Cpu {
           // the handler runs with the state the faulting instruction (or host body) left, pc at it
           const { sig, info } = this.raised!;
           this.raised = null;
-          await this.deliverFromLoop(turn, sig, info);
+          await this.deliverFromLoop(turn, sig, info, true);
           // a handler that returns to an instruction that faults again spins as on a device, but
           // as a slice: other threads and the page run between its turns
           turn.release();
@@ -645,7 +650,7 @@ export class Cpu {
         // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
         // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
         const now = performance.now();
-        if (!this.foreground(now) && (answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
+        if ((answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS) && !this.foreground(now))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
@@ -657,9 +662,10 @@ export class Cpu {
     } finally { if (sync.on) resumeAs(caller); else turn.release(); }
   }
 
-  /** exempt from the background share: the UI thread, a running signal handler, a frame producer */
+  /** exempt from the background share: the UI thread, a running signal handler, a frame producer,
+   *  and a thread another is blocked on, which would otherwise wait at the background's pace */
   private foreground(now: number): boolean {
-    return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS;
+    return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS || !!threadContended.hook?.(this.jthread);
   }
   /** run the core until the frame returns, a host call parks the thread, or the budget is spent */
   runSlice(budget: number): SliceExit {
@@ -679,13 +685,13 @@ export class Cpu {
         case CoreExit.Host:
           hostDispatch(this, this.exit);
           if (this.pending || this.finished || this.raised) { jitDrain(); return this.pending ? SliceExit.Suspend : this.raised ? SliceExit.Signal : SliceExit.Exit; }
-          if (this.signals.length && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
+          if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
           continue;
         case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
         case CoreExit.Syscall:
           this.syscall(this.exit);
           if (this.pending) { jitDrain(); return SliceExit.Suspend; }
-          if (this.signals.length && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
+          if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
           continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
@@ -795,9 +801,9 @@ export class Cpu {
   private get faultAddress(): bigint { return BigInt(this.u32[(OFF_ADDR >> 2) + 1]) << 32n | BigInt(this.u32[OFF_ADDR >> 2]); }
   /** the synchronous signal a slice ended on, for the run loop to deliver */
   raised: { sig: number; info: SigInfo } | null = null;
-  private async deliverFromLoop(turn: LoopTurn, sig: number, info: SigInfo | null = null): Promise<void> {
+  private async deliverFromLoop(turn: LoopTurn, sig: number, info: SigInfo | null, fault = false): Promise<void> {
     this.state = "deliver";
-    const delivery = this.deliver(sig, info);
+    const delivery = this.deliver(sig, info, fault);
     turn.release();
     await delivery;
     turn.own();

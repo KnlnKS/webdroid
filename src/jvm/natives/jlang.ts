@@ -6,6 +6,7 @@ import { HEAP_LIMIT } from "../abi";
 import { jarray } from "../abi";
 import { uptimeMillis, wallMillis } from "../../guest-clock";
 import { vfs } from "../../shell/vfs";
+import { processFileBytes } from "../../native/process-fd";
 import { processEnv } from "../../shell/environment";
 import { curThread, iof, vcall, type JThread } from "./jentry";
 import { shareable } from "../suspend";
@@ -36,7 +37,7 @@ const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7
 /** a library file, or an archive's entry ("base.apk!/lib/arm64-v8a/libx.so") the linker maps from the archive */
 function* libraryFile(path: string): Gen<Uint8Array | null> {
   const bang = path.indexOf("!/");
-  if (bang < 0) return yield vfs.readFile(path);
+  if (bang < 0) return yield processFileBytes(path);
   const archive = path.slice(0, bang), entry = path.slice(bang + 2);
   const [{ packedArchives }, { zipTree }] = yield* awaited(Promise.all([import("../../shell/packedarchive"), import("./jzip")]));
   const packed = packedArchives.get(archive);

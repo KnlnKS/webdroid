@@ -2,7 +2,7 @@
 // call in the wrong state with INVALID_OPERATION, which the JNI throws as IllegalStateException;
 // events reach Java through postEventFromNative, as the player's listener posts them.
 import { rt, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
+import { after, newObj, scall, vcall } from "../jvm/natives/jentry";
 import { fdInt } from "../jvm/natives/jio";
 import { readFully, type FileSource } from "../shell/lazyfile";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
@@ -10,11 +10,14 @@ import { newAudioSessionId, setSounding } from "./audio-output";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native";
 import { guestEndpoint } from "../native/net-address";
 import { deviceFetch } from "../shell/devicefetch";
+import { nativeParcel, writeInt } from "./parcel";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
   MEDIA_STARTED = 6, MEDIA_PAUSED = 7, MEDIA_STOPPED = 8, MEDIA_ERROR = 100, MEDIA_INFO = 200;
 const MP = "android/media/MediaPlayer", PP = "android/media/PlaybackParams";
+// android.media.Metadata: the keys NuPlayerDriver reports, BOOLEAN_VAL, and a boolean record's bytes
+const PAUSE_AVAILABLE = 1, SEEK_BACKWARD_AVAILABLE = 2, SEEK_FORWARD_AVAILABLE = 3, SEEK_AVAILABLE = 4, BOOLEAN_VAL = 3, RECORD_BYTES = 16, META_MARKER = 0x4d455441;
 /** PlaybackParams' SET_* bits: which of its fields a setPlaybackParams call changes */
 const SET_SPEED = 1, SET_PITCH = 2, SET_FALLBACK = 4, SET_STRETCH = 8;
 export type Handler = ((event: Event) => void) | null;
@@ -127,15 +130,15 @@ const loadFrom = (p: Player, source: FileSource | null) => {
   if (!source?.size) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   return after(readFully(source), (bytes) => p.load(URL.createObjectURL(new Blob([bytes as BlobPart]))));
 };
-/** where the media element reads `url`: through the proxy, or for a URL the device serves itself,
- *  read whole from the app's loopback server as the media server reads it, after its redirects */
-function mediaSource(url: string, hops = 0): string | Promise<string> {
-  if (!guestEndpoint(url)) return "/proxy?url=" + encodeURIComponent(url);
-  return deviceFetch(url, { headers: new Headers() }).then(async (response) => {
+/** where the media element reads `url` with `headers`: through the proxy, or for a URL the device serves
+ *  itself, read whole from the app's loopback server as the media server reads it, after its redirects */
+function mediaSource(url: string, headers: [string, string][], hops = 0): string | Promise<string> {
+  if (!guestEndpoint(url)) return `/proxy?url=${encodeURIComponent(url)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+  return deviceFetch(url, { headers: new Headers(headers.map(([k, v]): [string, string] => ["x-wd-" + k, v])) }).then(async (response) => {
     const status = Number(response.headers.get("x-wd-status")) || response.status, location = response.headers.get("location");
     if (status >= 300 && status < 400 && location && hops < 20) {
       await response.body?.cancel();
-      return mediaSource(new URL(location, url).href, hops + 1);
+      return mediaSource(new URL(location, url).href, headers, hops + 1);
     }
     if (status < 200 || status > 299) throw new Error(`HTTP ${status}`);
     return URL.createObjectURL(await response.blob());
@@ -160,9 +163,14 @@ rt.registerJnis(MP, {
     return after(dataSourceFile(source), (file) => loadFrom(p, file));
   }),
   // a URL with a scheme other than file; only HTTP is fetched, through the proxy or from the app's own loopback server
-  "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": M((p, _http: unknown, path: string) => {
+  // MediaHTTPConnection, an HttpURLConnection, sends the app's headers and http.agent when they name no User-Agent
+  "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": M((p, _http: unknown, path: string, keys: string[] | null, values: string[] | null) => {
     if (!/^https?:/i.test(path)) throw rt.mkThrowable("java/io/IOException", "setDataSource failed.: status=0x80000000");
-    p.load(mediaSource(path));
+    const headers: [string, string][] = (keys ?? []).map((k, i) => [k, values?.[i] ?? ""]);
+    const named = headers.some(([k]) => k.toLowerCase() === "user-agent");
+    return after(named ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent: string | null) => {
+      p.load(mediaSource(path, agent ? [...headers, ["User-Agent", agent]] : headers));
+    });
   }),
   "_setVideoSurface(Landroid/view/Surface;)V": M((p, surface: JObj | null) => {
     p.surface = surface;
@@ -206,6 +214,15 @@ rt.registerJnis(MP, {
   }),
   "getVideoWidth()I": M((p) => { p.require(~IDLE); return p.media?.videoWidth ?? 0; }),
   "getVideoHeight()I": M((p) => { p.require(~IDLE); return p.media?.videoHeight ?? 0; }),
+  // MediaPlayerService's header (its size and kMetaMarker) over NuPlayerDriver's records, each its size, key, type and value
+  "native_getMetadata(ZZLandroid/os/Parcel;)Z": M((p, _updateOnly: number, _filter: number, reply: JObj) => {
+    const parcel = nativeParcel(reply), start = parcel.pos, seekable = Number.isFinite(p.media?.duration) ? 1 : 0;
+    const records: [number, number][] = [[PAUSE_AVAILABLE, 1], [SEEK_BACKWARD_AVAILABLE, seekable], [SEEK_FORWARD_AVAILABLE, seekable], [SEEK_AVAILABLE, seekable]];
+    writeInt(parcel, 8 + RECORD_BYTES * records.length); writeInt(parcel, META_MARKER);
+    for (const [key, on] of records) { writeInt(parcel, RECORD_BYTES); writeInt(parcel, key); writeInt(parcel, BOOLEAN_VAL); writeInt(parcel, on); }
+    parcel.pos = start;
+    return 1;
+  }),
   // MediaPlayer::setPlaybackSettings: no player before a source or once stopped; a negative rate is
   // BAD_VALUE; speed 0 pauses a started player, and any other speed starts a prepared, paused or
   // completed one

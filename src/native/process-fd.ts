@@ -1,6 +1,6 @@
 import { E } from "./abi";
 import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
-  javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
+  javaPwriteFd, javaSeekFd, javaTruncateFd, javaAllocateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, S_IFDIR, S_IFIFO, openRemoteFifo, type OpenFile } from "./fs";
 import { isMutablePath } from "../shell/file-path";
 import { vfs } from "../shell/vfs";
 import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors";
@@ -59,10 +59,18 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
   if (!calls) return javaOpenFd(normalized,flags);
   return calls().fileDescriptor({kind:"open",path:normalized,flags}).then(reply => {
     if (reply.result < 0) return reply.result;
-    return installRemote(reply.result,calls,normalized,flags,reply.directory);
+    if (reply.type === S_IFIFO) return openRemoteFifo(normalized,flags);
+    return installRemote(reply.result,calls,normalized,flags,reply.type === S_IFDIR);
   });
 }
 
+/** a file's bytes, from the realm that owns its path */
+export async function processFileBytes(path: string): Promise<Uint8Array | null> {
+  if (!isMutablePath(path) || !descriptorTransport.calls) return vfs.readFile(path);
+  const fd = await processOpenFd(path, 0);
+  if (fd < 0) return null;
+  try { return await processFdBytes(fd); } finally { await processCloseFd(fd); }
+}
 export function processCloseFd(fd: number): number | Promise<number> {
   const remote = openFd(fd)?.remote, closed = javaCloseFd(fd);
   return remote?.close ?? closed;
@@ -99,6 +107,10 @@ export function processSeekFd(fd: number, offset: number, whence: number): numbe
 export function processTruncateFd(fd: number, length: number): number | Promise<number> {
   const remote = openFd(fd)?.remote;
   return remote ? result(remote,{kind:"truncate",length}) : javaTruncateFd(fd,length);
+}
+export function processAllocateFd(fd: number, offset: number, length: number): number | Promise<number> {
+  const remote = openFd(fd)?.remote;
+  return remote ? result(remote,{kind:"allocate",offset,length}) : javaAllocateFd(fd,offset,length);
 }
 export function processSyncFd(fd: number): number | Promise<number> {
   const remote = openFd(fd)?.remote;

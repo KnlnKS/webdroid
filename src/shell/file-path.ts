@@ -1,18 +1,18 @@
 import { E } from "../native/abi";
 import { vfs, type FileAttributes } from "./vfs";
 import { procIdentity } from "./procfs";
-import { mkdirPath, accessPath, renamePath, removePath, createPath } from "../native/fs";
-export type PathStat = { directory: boolean; size: number; mtime: number; uid: number; gid: number; mode: number };
+import { mkdirPath, accessPath, renamePath, removePath, createPath, makeFifo, localStat, pathType, type FileStat } from "../native/fs";
 export type PathReply<T> = { errno: number; value: T };
 export type FilePathCalls = {
   filePrepare(pkg: string): Promise<void>;
-  fileStat(path: string): Promise<PathReply<PathStat | null>>;
+  fileStat(path: string): Promise<PathReply<FileStat | null>>;
   fileMkdir(path: string): Promise<number>;
   fileAccess(path: string, mode: number): Promise<number>;
   fileList(path: string): Promise<PathReply<string[] | null>>;
   fileRename(from: string, to: string): Promise<number>;
   fileRemove(path: string, directory?: boolean): Promise<number>;
   fileCreate(path: string): Promise<number>;
+  fileFifo(path: string): Promise<number>;
   fileSetAttributes(path: string, change: Partial<FileAttributes>): Promise<number>;
 }
 /** Only mutable app/shared paths cross; platform archives and procfs stay in their owning realm. */
@@ -20,9 +20,9 @@ export const isMutablePath = (path: string): boolean => /^\/(?:data\/(?:data|use
 export const filePathTransport: { calls?: () => FilePathCalls } = {};
 export const remoteFilePath = (path: string): FilePathCalls | undefined => isMutablePath(path) ? filePathTransport.calls?.() : undefined;
 /** stat of normalized `p` in this realm's VFS */
-export function pathStat(p: string): PathReply<PathStat | null> {
+export function pathStat(p: string): PathReply<FileStat | null> {
   const directory = vfs.isDir(p), stat = directory ? null : vfs.stat(p);
-  return {errno: directory || stat ? 0 : E.NOENT, value: directory || stat ? {directory, size: directory ? 0 : stat!.size, mtime: vfs.mtime(p),...vfs.attributes(p,directory)} : null};
+  return directory || stat ? {errno: 0, value: localStat(p, pathType(p), stat?.size ?? 0, vfs.mtime(p), null)} : {errno: E.NOENT, value: null};
 }
 export function changeFileAttributes(path: string, change: Partial<FileAttributes>, uid = procIdentity.uid): number {
   for (const value of [change.uid,change.gid]) if (value !== undefined && (!Number.isInteger(value) || value < -1 || value > 0xffffffff)) return -E.INVAL;
@@ -47,7 +47,7 @@ export function canonicalFilePaths(authorize: (path: string, write: boolean) => 
       const p = vfs.norm(path), denied = authorize(p,true);
       return denied ? -denied : changeFileAttributes(p,change,uid);
     },
-    fileStat(path: string): PathReply<PathStat | null> {
+    fileStat(path: string): PathReply<FileStat | null> {
       const p = vfs.norm(path), denied = authorize(p, false);
       if (denied) return {errno: denied, value: null};
       return pathStat(p);
@@ -61,6 +61,7 @@ export function canonicalFilePaths(authorize: (path: string, write: boolean) => 
     },
     fileRemove(path: string, directory?: boolean): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : removePath(null,p,directory); },
     fileCreate(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : created(p,createPath(null,p)); },
+    fileFifo(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : created(p,makeFifo(null,p)); },
     fileAccess(path: string, mode: number): number { const p = vfs.norm(path), denied = authorize(p, !!(mode & 2)); return denied ? -denied : accessPath(null, p, mode); },
     fileList(path: string): PathReply<string[] | null> {
       const p = vfs.norm(path), denied = authorize(p, false);

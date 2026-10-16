@@ -21,7 +21,7 @@ export class NativeFormat {
 export const csdBytes = (format: NativeFormat, key: string): Uint8Array | undefined => { const b = format.buffer(key); return b && remainingBytes(b); };
 const TYPE_OF_BOX: Record<string, number> = { I: TYPE_INTEGER, J: TYPE_LONG, F: TYPE_FLOAT };
 /** the keys and values MediaCodec.configure passes down; others are dropped, as the JNI's ConvertKeyValueArraysToMessage does */
-export function formatFromJava(keys: string[] | null, values: unknown[] | null): NativeFormat {
+function formatFromJava(keys: string[] | null, values: unknown[] | null): NativeFormat {
   const format = new NativeFormat();
   for (let i = 0; i < (keys?.length ?? 0); i++) {
     const v = values![i], box = boxDesc(v);

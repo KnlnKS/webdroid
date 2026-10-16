@@ -4,7 +4,7 @@
 // strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime";
-import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit, type Entry } from "../../jvm/natives/jentry";
+import { JThread, curThread, mainThread, resumeAs, setCurThread, threadContended, threadExit, type Entry } from "../../jvm/natives/jentry";
 import { Strand as HostStrand } from "../../jvm/suspend";
 import { processExited, never } from "../../process-exit";
 import { mangleField } from "../../jvm/abi";
@@ -69,6 +69,7 @@ function makeEntry(w: World): Entry {
     return host;
   };
   sched.onThreadEnd = (rec) => threadExit.hook?.(jthreadOf(rec));
+  threadContended.hook = (t) => { const rec = t === mainThread ? sched.mainRec : recs.get(t); return !!rec && sched.contended(rec); };
   let threadName: FieldInfo | undefined;
   sched.onNamed = (rec) => {
     threadName ??= prog.require("java/lang/Thread").fields.find((f) => !f.isStatic && f.name === "name");

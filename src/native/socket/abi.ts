@@ -37,7 +37,7 @@ export function sockaddrOf(family: number, { port, address, scope = 0 }: Endpoin
 }
 const NO_ADDRESS = new Uint8Array(0);
 /** an address's whole sockaddr; none for no address */
-export function sockaddrBytes(addr: SocketAddress | null): Uint8Array {
+function sockaddrBytes(addr: SocketAddress | null): Uint8Array {
   if (!addr) return NO_ADDRESS;
   if (addr.family !== AF_UNIX) return sockaddrOf(addr.family, addr.ep);
   const name = sunPathBytes(addr.path), sockaddr = new Uint8Array(2 + name.length);

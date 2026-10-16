@@ -531,6 +531,12 @@ export class Sched {
       this.g.iw.value = (this.g.iw.value as number) + 1;
     });
   }
+  /** whether another thread is blocked on `thread`: on a lock it holds or a class it initializes */
+  contended(thread: ThreadRec): boolean {
+    if (this.monitors.contended(thread)) return true;
+    for (const id of this.initWaiters.keys()) if (this.strands[this.w.initWord(id) >>> 2]?.thread === thread) return true;
+    return false;
+  }
   /** whether `holder` waits, through the strands it waits for, on `waiter` */
   private waitsFor(holder: Strand, waiter: Strand): boolean {
     if (waiter.root) return false;

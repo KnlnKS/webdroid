@@ -19,9 +19,9 @@ import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs";
-import { remoteFilePath, changeFileAttributes, pathStat, type PathStat } from "../shell/file-path";
+import { remoteFilePath, changeFileAttributes, pathStat } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
-import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
+import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath, S_IFMT, S_IFDIR, type FileStat } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio";
 import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory";
@@ -232,7 +232,7 @@ export const uuidDefault = once(() => uuidFromString("41217664-9172-527a-b3d5-ed
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
 export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
 /** `then` once `path` exists in the realm that owns it (an app's private storage lives in the system realm), else `fn`'s ErrnoException */
-const existing = <T>(fn: string, path: string, then: (st: PathStat) => T) => after(pathReply(path), ({ errno: e, value }) => { if (!value) throw errno(fn, e); return then(value); });
+const existing = <T>(fn: string, path: string, then: (st: FileStat) => T) => after(pathReply(path), ({ errno: e, value }) => { if (!value) throw errno(fn, e); return then(value); });
 /** libcore's StructTimespec for a time in milliseconds */
 function timespec(ms: number): JObj {
   const t = rt.make("android/system/StructTimespec") as Record<string, bigint>;
@@ -272,7 +272,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`fstat(${FD})Landroid/system/StructStat;`]: driven(function* (d: JObj | null): Gen {
       const st = yield* awaited(processFdStat(fdInt(d)));
       if (!st) throw errno("fstat", E.BADF);
-      return yield* awaited(statOf(st.path, st.size, st.mode, st.mtime,{...st,mode:st.mode & 0o7777}));
+      return yield* awaited(statOf(st.path, st.size, st.mode, st.mtime, st));
     }),
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
       readBytes("read", buffer, offset, count, (target) => processReadFd(fdInt(d), target)),
@@ -399,7 +399,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) =>
-      existing("stat", path, (st) => statOf(path, st.size, st.directory ? 0o40000 : 0o100000, st.mtime, st)),
+      existing("stat", path, (st) => statOf(path, st.size, st.mode, st.mtime, st)),
     "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
       return after(remoteFilePath(path)?.fileSetAttributes(path,{mode}) ?? changeFileAttributes(path,{mode}), result => { sys("chmod",result); });
@@ -475,7 +475,7 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.canonical(path),
   "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) => {
     const p = vfs.norm(path), remote = remoteFilePath(p);
-    if (remote) return after(remote.fileStat(p), reply => reply.value ? BA_EXISTS | (reply.value.directory ? BA_DIRECTORY : BA_REGULAR) : 0);
+    if (remote) return after(remote.fileStat(p), reply => reply.value ? BA_EXISTS | ((reply.value.mode & S_IFMT) === S_IFDIR ? BA_DIRECTORY : BA_REGULAR) : 0);
     return vfs.isDir(p) ? BA_EXISTS | BA_DIRECTORY : vfs.exists(p) ? BA_EXISTS | BA_REGULAR : 0;
   },
   "list0(Ljava/io/File;)[Ljava/lang/String;": (file: JObj) => {
@@ -527,7 +527,7 @@ const unixError = (e: number) => {
 const unixSys = (result: number): number => { if (result < 0) throw unixError(-result); return result; };
 const cpath = (address: bigint) => mem.cstr(mem.txVa(BigInt.asUintN(64, address)));
 const bytesOf = (s: string) => i8(utf8.enc.encode(s));
-const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
+const AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
 /** a name relative to directory descriptor `dfd`, as the *at calls resolve it */
 function atPath(dfd: number, address: bigint): string {
   const name = cpath(address);
@@ -540,21 +540,20 @@ function atPath(dfd: number, address: bigint): string {
 const ATTR_FIELDS = ["st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size",
   "st_atime_sec", "st_atime_nsec", "st_mtime_sec", "st_mtime_nsec", "st_ctime_sec", "st_ctime_nsec"] as const;
 let attrProps: string[] | undefined;
-function fillAttrs(attrs: JObj, path: string, st: PathStat): void {
+function fillAttrs(attrs: JObj, path: string, st: FileStat): void {
   const a = attrs as unknown as Record<string, number | bigint>;
   const p = attrProps ??= ATTR_FIELDS.map((name) => declaredField("sun/nio/fs/UnixFileAttributes", name));
   const sec = BigInt(Math.floor(st.mtime / 1000)), nsec = BigInt((st.mtime % 1000) * 1e6);
-  a[p[0]] = modeOf(st); a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = st.uid; a[p[5]] = st.gid; a[p[6]] = BigInt(st.directory ? 4096 : st.size);
+  a[p[0]] = st.mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = st.uid; a[p[5]] = st.gid; a[p[6]] = BigInt(st.size);
   for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
 }
-const modeOf = (st: PathStat) => (st.directory ? S_IFDIR : S_IFREG) | st.mode;
 /** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
 function pathReply(path: string) { const p = vfs.norm(path); return remoteFilePath(p)?.fileStat(p) ?? pathStat(p); }
 function statPath(path: string, attrs: JObj | null): number | Promise<number> {
   return after(pathReply(path), ({ errno, value }) => {
     if (!value) throw unixError(errno);
     if (attrs) fillAttrs(attrs, vfs.norm(path), value);
-    return modeOf(value);
+    return value.mode;
   });
 }
 /** unlink(2) with `directory` false, rmdir(2) with true */
@@ -613,13 +612,12 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "realpath0(J)[B": (path: bigint) => { const p = vfs.norm(cpath(path)); return after(statPath(p, null), () => bytesOf(p)); },
   "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
   "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
-  "stat1(J)I": (path: bigint) => after(pathReply(cpath(path)), ({ value }) => value ? modeOf(value) : 0),
+  "stat1(J)I": (path: bigint) => after(pathReply(cpath(path)), ({ value }) => value?.mode ?? 0),
   "fstatat0(IJILsun/nio/fs/UnixFileAttributes;)V": (dfd: number, path: bigint, _flag: number, attrs: JObj) => after(statPath(atPath(dfd, path), attrs), () => {}),
   "fstat(ILsun/nio/fs/UnixFileAttributes;)V": (fd: number, attrs: JObj) => {
     const st = javaFdStat(fd);
     if (!st) throw unixError(E.BADF);
-    const path = st.path ?? "", directory = (st.mode & S_IFMT) === S_IFDIR;
-    fillAttrs(attrs, path, { directory, size: st.size, mtime: vfs.mtime(path), ...vfs.attributes(path, directory) });
+    fillAttrs(attrs, st.path ?? "", st);
   },
   "chmod0(JI)V": (path: bigint) => after(statPath(cpath(path), null), () => {}),
   "fchmod(II)V": (fd: number) => { fdPath(fd); },

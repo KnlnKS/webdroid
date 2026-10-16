@@ -45,6 +45,10 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
   try {
     const headers = new Headers();
     request.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });
+    // a media element sets no headers of its own: the device's travel in `headers`, and its Range is the element's
+    for (const [name, value] of JSON.parse(query.get("headers") ?? "[]") as [string, string][]) headers.set(name, value);
+    const range = request.headers.get("range");
+    if (range && !headers.has("range")) headers.set("range", range);
     const encoded = !frame && !isolated && headers.has("accept-encoding");
     const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
     /** the WebView's process answering `call`: its WebResourceResponse, or null for none */

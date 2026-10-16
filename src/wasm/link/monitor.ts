@@ -105,6 +105,8 @@ export class Monitors {
     m.owner = null;
     this.deflate(m);
   }
+  /** whether a strand waits to enter a monitor a strand of `thread` holds */
+  contended(thread: ThreadRec): boolean { return this.table.some((m) => m?.owner?.thread === thread && m.entrants.length > 0); }
   holds(obj: object, s: Strand): boolean {
     const l = this.header.lock(obj);
     return l > 0 ? owns(this.thin(l), s) : l < 0 && owns(this.inflated(l).owner, s);

@@ -59,6 +59,12 @@ export class Layer {
     this.relativeOf = to;
     to?.relatives.push(this);
   }
+  /** Layer::onRemovedFromCurrentState: the subtree, now offscreen, drops its Z order relative to layers outside it */
+  dropOutsideRelatives(): void {
+    const tree = new Set<Layer>(), add = (l: Layer) => { tree.add(l); l.children.forEach(add); };
+    add(this);
+    for (const l of tree) if (l.relativeOf && !tree.has(l.relativeOf)) l.relativeTo(null);
+  }
 }
 /** a buffer: a canvas the queue reuses, or a frame its producer hands over and the layer releases */
 type Frame = OffscreenCanvas | ImageBitmap | VideoFrame;
@@ -190,7 +196,7 @@ export function displayLayer(name: string, z: number): Layer {
 export function removeLayer(layer: Layer): void {
   layer.removed = true;
   layer.reparent(null);
-  layer.relativeTo(null);
+  layer.dropOutsideRelatives();
   roots.delete(layer);
   scheduleComposite();
 }
@@ -257,9 +263,11 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetLayerStack(JJI)V": op((l, stack: number) => { l.layerStack = stack; }),
   "nativeReparent(JJJ)V": (t: bigint, sc: bigint, parent: bigint) => {
     const layer = layerOf(sc), to = parent ? layerOf(parent) : null;
+    // a layer reparented to null is offscreen, not a display root, and goes once its controls are released
     tx(t).ops.push(() => {
       layer.reparent(to);
-      if (to) roots.delete(layer); else roots.add(layer);
+      roots.delete(layer);
+      if (!to) layer.dropOutsideRelatives();
     });
   },
   // properties the display composes without: the browser canvas has one color space, no HDR,

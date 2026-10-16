@@ -34,8 +34,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. Outside the corpus, NewPipe was exercised end to end on 2026-10-15, and Google Maps (2026-10-15) draws its
   vector map and layers, searches, and shows places, driving routes, active navigation, Street View and Immersive
-  View. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before the
-  Wasm tier, and need re-verification.
+  View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
+  search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
+  locator, and Tubi plays non-DRM titles.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
@@ -113,11 +114,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      Subway Surfers reaches an active run; its background Firebase initialization still throws. Genshin Impact
      (outside the matrix) reaches the Geetest captcha, which needs the account owner; its data exceeds the app pane's
      4.7 GB quota.
-   - *`apks/new`:* McDonald's gate needs microG 0.3.17; microG is still pinned at v0.3.16.252432
-     (`vendor/microg-README.md`, `SYSTEM_PACKAGE_RELEASE`), and the user chose to wait for the official release.
-     Then recheck Yelp's Google sheet and Walmart's geocoding. Yelp's business page and tabs are unverified;
-     Walmart needs a US egress (its location service follows the egress IP); Tubi's DRM (Widevine) and Snapseed's
-     GLES 3.1 compute "Looks" need a decision from the user.
+   - *`apks/new`:* McDonald's Order tab overlaps because the XAPK ships only the mdpi split. Walmart's Sparky needs
+     an on-demand feature split that is not in the XAPK, and microG's SplitInstallService is disabled. Tubi's Widevine
+     titles show a DRM error and Snapseed's "Looks" needs GLES 3.1 compute; both need a decision from the user.
 6. **Lower value; only with a new measurement that justifies it.**
    - `system_server` and the broker stores in a system Worker: the broker answers app IPC on the page thread, so
      slow page work starves app queries. Measure page-thread time during app IPC first.

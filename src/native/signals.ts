@@ -24,7 +24,7 @@ const SIG_IGN = 1;
 
 /** `sig`'s bit in a sigset_t */
 export const sigbit = (sig: number): bigint => 1n << BigInt(sig - 1);
-export const sigset = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | sigbit(sig), 0n);
+const sigset = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | sigbit(sig), 0n);
 export const blocked = (mask: bigint, sig: number): boolean => (mask & sigbit(sig)) !== 0n;
 /** the signals a mask can hold: SIGKILL and SIGSTOP are never blocked */
 export const BLOCKABLE = ~sigset(SIGKILL, SIGSTOP) & 0xffff_ffff_ffff_ffffn;
@@ -148,7 +148,7 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
   sigwait: () => new Promise<never>(() => {}),
-  sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals) & 0xffffffffn)); return 0; },
+  sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals.keys()) & 0xffffffffn)); return 0; },
   pthread_sigqueue: () => 0, killpg: () => 0,
 };
 for (const suffix of ["", "64"]) {

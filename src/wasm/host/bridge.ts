@@ -11,6 +11,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
+import { TRANSFER_BASE, TRANSFER_BYTES } from "../link/exc";
 import type { Strand } from "../link/sched";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
@@ -46,10 +47,8 @@ export const refOf = (v: unknown): object | undefined => typeof v === "object" &
 const PROBES = new Set(["then", "toJSON", "message", "stack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
-/** a native call's scope: the arrays it copied, each stored back when it ends, and the scratch it reserved ([sp, top), sp -1 until it reserves any) */
+/** a native call's scope: the arrays it copied, each stored back when it ends */
 class Scope implements BridgeScope {
-  sp = -1;
-  top = 0;
   copies: { java: object; host: object; store: () => void }[] = [];
   held = false;
 }
@@ -61,7 +60,7 @@ export class Bridge implements HostBridge {
   private live = new Map<object, object>();
   private owners = new WeakMap<object, object>();
   private bases = new WeakMap<object, number>();
-  /** the open scopes, innermost last; a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
+  /** the open scopes, innermost last */
   private scopes: Scope[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
   private accessors = { get: new WeakMap<FieldInfo, Fn>(), set: new WeakMap<FieldInfo, Fn>(), gets: new WeakMap<FieldInfo, Fn>(), sets: new WeakMap<FieldInfo, Fn>() };
@@ -101,7 +100,6 @@ export class Bridge implements HostBridge {
     if (s.held) return;
     try { for (let i = s.copies.length - 1; i >= 0; i--) { this.live.delete(s.copies[i].java); s.copies[i].store(); } } finally {
       this.scopes.pop();
-      if (s.sp >= 0 && (this.w.sp.value as number) <= s.top) this.w.sp.value = s.sp;
       if (!this.scopes.length && this.live.size) this.live.clear();
     }
   }
@@ -111,14 +109,15 @@ export class Bridge implements HostBridge {
   resume(s: Scope): void { s.held = false; this.scopes.push(s); for (const c of s.copies) this.live.set(c.java, c.host); }
   /** `host`, the copy of `java` the innermost call made, which `store` writes back when that call ends */
   private copied(java: object, host: object, store: () => void): void { this.scopes.at(-1)?.copies.push({ java, host, store }); }
-  private region(bytes: number): number {
-    const s = this.scopes.at(-1), sp = this.w.sp.value as number;
-    if (s && s.sp < 0) s.sp = sp;
-    const at = ((sp + 7) & -8), need = at + bytes, have = this.w.mem.buffer.byteLength;
-    if (need > have) this.w.mem.grow(Math.ceil((need - have) / 65536));
-    this.w.sp.value = need;
-    if (s) s.top = need;
-    return at;
+  /** copies elements [from, from + count) of the primitive array `o` into `bytes`, or from it, through the transfer window */
+  private transfer(o: object, size: number, from: number, count: number, bytes: Uint8Array, toHost: boolean): void {
+    const per = TRANSFER_BYTES / size;
+    for (let i = 0; i < count; i += per) {
+      // acopy addresses element k at pointer + k * size, so the window holds element from + i
+      const n = Math.min(per, count - i), at = TRANSFER_BASE - (from + i) * size, win = new Uint8Array(this.w.mem.buffer, TRANSFER_BASE, n * size);
+      if (toHost) { this.op.acopy(o, at, 1, from + i, n); bytes.set(win, i * size); }
+      else { win.set(bytes.subarray(i * size, (i + n) * size)); this.op.acopy(o, at, 0, from + i, n); }
+    }
   }
 
   // ---------- static initializer natives
@@ -147,13 +146,12 @@ export class Bridge implements HostBridge {
     return name.length === 2 ? this.primArray(o, name, range) : this.refArray(o, name);
   }
   private primArray(o: object, name: string, range?: [number, number]): unknown {
-    const len = this.op.alen(o), size = SIZE[elemKindOf(name)], at = this.region(len * size);
+    const len = this.op.alen(o), size = SIZE[elemKindOf(name)];
     const [from, count] = range && range[0] >= 0 && range[1] >= 0 && range[0] <= len && range[1] <= len - range[0] ? range : [0, len];
-    this.op.acopy(o, at, 1, from, count);
-    const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer), lo = from * size, n = count * size;
-    bytes.set(new Uint8Array(this.w.mem.buffer, at + lo, n));
+    const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer);
+    this.transfer(o, size, from, count, bytes, true);
     this.live.set(o, host); this.owners.set(host, o); this.bases.set(host, from);
-    this.copied(o, host, () => { new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
+    this.copied(o, host, () => this.transfer(o, size, from, count, bytes, false));
     return host;
   }
   /** `offset`, an index into the whole array, as an index into `host`, which holds the elements from a range's start */
@@ -416,18 +414,14 @@ export class Bridge implements HostBridge {
   }
   /** copies the elements of the host copy `host` of the Java array `j` (the range from its base, when it holds one) into the array, or the array's into it */
   private sync(j: object, host: HostView, toJava: boolean): void {
-    const base = this.bases.get(host) ?? 0, size = host.BYTES_PER_ELEMENT, at = this.region((base + host.length) * size);
-    const scratch = new Uint8Array(this.w.mem.buffer, at + base * size, host.byteLength), bytes = new Uint8Array(host.buffer, host.byteOffset, host.byteLength);
-    if (toJava) { scratch.set(bytes); this.op.acopy(j, at, 0, base, host.length); }
-    else { this.op.acopy(j, at, 1, base, host.length); bytes.set(scratch); }
+    this.transfer(j, host.BYTES_PER_ELEMENT, this.bases.get(host) ?? 0, host.length, new Uint8Array(host.buffer, host.byteOffset, host.byteLength), !toJava);
   }
   private newArrayOf(name: string): Fn {
     return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
   }
   private newPrimArray(a: ArrayBufferView & { length: number }): object {
-    const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArrayOf(name)(a.length), bytes = a.byteLength, at = this.region(bytes);
-    new Uint8Array(this.w.mem.buffer, at, bytes).set(new Uint8Array(a.buffer, a.byteOffset, bytes));
-    this.op.acopy(j, at, 0, 0, a.length);
+    const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArrayOf(name)(a.length);
+    this.transfer(j, (a as HostView).BYTES_PER_ELEMENT, 0, a.length, new Uint8Array(a.buffer, a.byteOffset, a.byteLength), false);
     return j;
   }
   private newRefArray(a: unknown[] & { $t?: string }, desc: string): object {

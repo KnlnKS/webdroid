@@ -64,6 +64,13 @@ rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {
   "getPrimaryStorageUuid()Ljava/lang/String;": () => null,
   "isCeStorageUnlocked(I)Z": (user: number) => +(user === USER),
   "getAllocatableBytes(Ljava/lang/String;ILjava/lang/String;)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).free); }),
+  // StorageManagerService frees cache when the request exceeds free space; the vfs holds none to free
+  "allocateBytes(Ljava/lang/String;JILjava/lang/String;)V": driven(function* (_volume: string | null, want: bigint): Gen {
+    const free = bytes((yield* awaited(storageEstimate())).free);
+    if (want <= free) return;
+    const failed = rt.mkThrowable("java/io/IOException", `Failed to allocate ${want} because only ${free} allocatable`);
+    throw yield newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", failed);
+  }),
   "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).total / 20); }),
   "getCacheSizeBytes(Ljava/lang/String;I)J": () => 0n,
   "fixupAppDir(Ljava/lang/String;)V": fixupAppDir,

@@ -14,6 +14,7 @@ import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit } from "../process-exit";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo";
 import { after } from "../jvm/natives/jentry";
+import { systemProviderTransport } from "../android/systemproviders";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
 import type { ServiceRequest, ServiceStarts } from "./servicerecords";
@@ -96,6 +97,7 @@ function connectWorkerTransports(): void {
   serviceTransport.connected = (key, binder, dead) => brokerCalls().serviceConnected(key, exportBinder(binder), dead);
   webStorageTransport.calls = brokerCalls;
   useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
+  systemProviderTransport.lookup = authority => brokerCalls().systemProvider(authority);
   notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
   useSettingsAccess(remoteSettings(brokerCalls));
   processTransport.signal = workerLife.signal;
@@ -129,6 +131,8 @@ export function closeProcessBrokerPort(): void {
   workerLocation.close();
   workerLife.close();
   workerActivityResults.clear();
+  // its presence routes system providers to system_server, which a closed port no longer reaches
+  systemProviderTransport.lookup = undefined;
 }
 const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
 function connectActivityCommands(): void {

@@ -1,7 +1,8 @@
 import { E } from "../native/abi";
 import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
-  javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
+  javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
+  detachFdScope, fdBase, installFile, S_IFDIR, S_IFIFO, S_IFREG, type OpenFile } from "../native/fs";
+import { isFifo } from "../native/pipe";
 import { vfs, type VfsFile } from "./vfs";
 import { writable } from "./lazyfile";
 
@@ -14,6 +15,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "pwrite"; fd: number; bytes: Uint8Array; offset: number }
   | { kind: "seek"; fd: number; offset: number; whence: number }
   | { kind: "truncate"; fd: number; length: number }
+  | { kind: "allocate"; fd: number; offset: number; length: number }
   | { kind: "fcntl"; fd: number; command: number; arg: number }
   | { kind: "dup"; fd: number; cloexec: boolean }
   | { kind: "stage" | "unstage"; fd: number }
@@ -24,7 +26,8 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingRelease"; fd: number }
   | { kind: "mappingSync"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
-export type DescriptorReply = { result: number; directory?: boolean; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
+/** `type`: an open's file type (S_IFMT bits) */
+export type DescriptorReply = { result: number; type?: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number; immutable: boolean } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -132,10 +135,12 @@ export class FileDescriptors {
       const path = vfs.norm(request.path);
       const denied = session.authorize(path, !!(request.flags & (O_ACCMODE | O_CREAT | O_TRUNC)));
       if (denied) return {result:-denied};
+      // the name only: a process keeps its own pipe behind it
+      if (isFifo(path)) return {result:0,type:S_IFIFO};
       const existed = vfs.exists(path), fd = javaOpenFd(path,request.flags);
       if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
       const result = this.put(session,fd);
-      return {result,directory:result >= 0 && openFd(fd)!.dir};
+      return {result,type:result >= 0 && openFd(fd)!.dir ? S_IFDIR : S_IFREG};
     }
     const descriptor = session.descriptors.get(request.fd);
     if (!descriptor) return {result:-E.BADF};
@@ -189,6 +194,7 @@ export class FileDescriptors {
         case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,operation.offset)}; break;
         case "seek": reply = {result:javaSeekFd(fd,operation.offset,operation.whence)}; break;
         case "truncate": reply = {result:javaTruncateFd(fd,operation.length)}; break;
+        case "allocate": reply = {result:javaAllocateFd(fd,operation.offset,operation.length)}; break;
         case "sync": {
           const result = javaSyncFd(fd);
           if (result === 0) await vfs.flush();

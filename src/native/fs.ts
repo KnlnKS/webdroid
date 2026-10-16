@@ -8,7 +8,7 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
-import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
+import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile";
@@ -17,6 +17,7 @@ import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag 
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
 import { SIGPIPE } from "./signals";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
@@ -25,12 +26,17 @@ import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWr
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
 const O_RDWR = 2;
-const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
-
-/** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
- *  open write ends, the last of which closing is its readers' end of file. `closed` also stands for
- *  a reader gone (or shut down), which a writer meets as EPIPE. */
-interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean }
+export const S_IFMT = 0xf000, S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000;
+const S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
+/** stat(2)'s answer: st_mode with the file type, st_size (a directory's one block), st_mtime in milliseconds and the owner */
+export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
+/** the type of a file this realm names */
+export const pathType = (p: string): number => vfs.isDir(p) ? S_IFDIR : isFifo(p) ? S_IFIFO : S_IFREG;
+/** the stat of a file this realm holds, of `size` bytes unless it is a directory */
+export function localStat(path: string, type: number, size: number, mtime: number, file = vfs.opened(path)): FileStat {
+  const { mode, uid, gid } = file?.attributes ?? vfs.attributes(path, type === S_IFDIR);
+  return { mode: type | mode, size: type === S_IFDIR ? 4096 : size, mtime, uid, gid };
+}
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share */
 export interface OpenFile {
@@ -51,18 +57,18 @@ export const F_DUPFD_CLOEXEC = 0x406;
 const EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
-const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: false });
-/** named pipes (mkfifo) in this process, by the file that names them: every open shares the one
- *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
- *  variables signal through them */
-const fifos = new WeakMap<VfsFile, Pipe>();
-export function makeFifo(cpu: Cpu, path: string): number {
+export function makeFifo(cpu: Cpu | null, path: string): number {
   const p = vfs.norm(path), taken = newName(cpu, p);
-  if (taken) return taken;
-  vfs.write(p, new Uint8Array(0));
-  fifos.set(vfs.open(p)!, newPipe(0));
-  return 0;
+  if (!taken) nameFifo(p);
+  return taken;
 }
+function openFifo(path: string, content: VfsFile, fifo: Pipe, flags: number): number {
+  const acc = flags & O_ACCMODE;
+  if (acc !== 0) { fifo.writers++; fifo.closed = false; }
+  return put({ ...fdBase(path), content, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
+    statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+}
+export const openRemoteFifo = (path: string, flags: number): number => openFifo(path, fdBase(path).content, remoteFifo(path), flags);
 const inotifies = new Set<Inotify>();
 function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
   const bytes = name ? utf8(name + "\0") : new Uint8Array(0);
@@ -95,7 +101,6 @@ function hookInotify(): void {
   inotifyHooked = true;
 }
 const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
-function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
 export const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
@@ -251,12 +256,8 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
   if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
-  const existing = vfs.open(path), fifo = existing && fifos.get(existing);
-  if (fifo) {
-    if (acc !== 0) { fifo.writers++; fifo.closed = false; }
-    return put({ ...fdBase(path), content: existing, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
-      statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
-  }
+  const existing = vfs.open(path), fifo = fifoOf(existing);
+  if (fifo) return openFifo(path, existing!, fifo, flags);
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
@@ -365,11 +366,11 @@ export const javaFcntlFd = (fd: number, cmd: number, arg: number): number => fdF
 export function javaIoctlIntFd(fd: number, request: number): number {
   return fds.has(fd) && request !== FIONREAD ? -E.NOTTY : fionread(fd);
 }
-export function javaFdStat(fd: number): { mode: number; size: number; path: string | null; uid: number; gid: number; mtime: number } | null {
+export function javaFdStat(fd: number): FileStat & { path: string | null } | null {
   const f = fds.get(fd);
   if (!f || f.remote) return null;
   const path = f.dir ? f.path : f.content.path, attributes = f.content.attributes ?? vfs.attributes(path,f.dir);
-  return { mode: fdMode(f), size: f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
+  return { mode: fdMode(f), size: f.dir ? 4096 : f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
 }
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
@@ -402,11 +403,22 @@ export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<nu
 }
 export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
   const calls = remoteFilePath(from) ?? remoteFilePath(to);
-  return calls ? kernelResult(cpu,calls.fileRename(vfs.norm(from),vfs.norm(to))) : renamePath(cpu,from,to);
+  if (!calls) return renamePath(cpu,from,to);
+  const a = vfs.norm(from), b = vfs.norm(to);
+  return kernelResult(cpu,calls.fileRename(a,b).then(r => { if (!r) moveRemoteFifo(a,b); return r; }));
 }
 export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
   const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileRemove(vfs.norm(path),directory)) : removePath(cpu,path,directory);
+  if (!calls) return removePath(cpu,path,directory);
+  const p = vfs.norm(path);
+  return kernelResult(cpu,calls.fileRemove(p,directory).then(r => { if (!r) moveRemoteFifo(p,null); return r; }));
+}
+/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
+export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
+  const type = mode & 0xf000, p = vfs.norm(path), calls = remoteFilePath(p);
+  if (type === S_IFIFO) return calls ? kernelResult(cpu,calls.fileFifo(p)) : makeFifo(cpu,p);
+  if (type === 0 || type === S_IFREG) return calls ? kernelResult(cpu,calls.fileCreate(p)) : createPath(cpu,p);
+  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
 }
 export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
   if (mode & ~7) return fail(cpu,E.INVAL);
@@ -420,7 +432,7 @@ export function statProcess(cpu: Cpu, path: string, buf: number): number | Promi
   return calls.fileStat(normalized).then(reply => {
     if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
     const stat = reply.value;
-    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized,undefined,stat);
+    fillStat(destination(),normalized,stat);
     return 0;
   });
 }
@@ -560,18 +572,6 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   const advance = (read: number) => { if (read > 0) f.pos += read; return read; };
   return result instanceof Promise ? result.then(advance) : advance(result);
 }
-/** up to `n` bytes a pipe holds, into guest memory at `p` */
-function takePipe(pipe: Pipe, p: number, n: number): number {
-  const q = pipe.q;
-  let k = 0;
-  while (k < n && q.length) {
-    const c = q[0], take = Math.min(n - k, c.length);
-    mem.write(p + k, c.subarray(0, take));
-    k += take;
-    if (take === c.length) q.shift(); else q[0] = c.subarray(take);
-  }
-  return k;
-}
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
@@ -604,7 +604,7 @@ export function dropFile(f: Fd): void {
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   // a pipe nobody reads: its writers meet EPIPE (a fifo's outlives its descriptors)
-  if (f.rpipe && fifos.get(f.content) !== f.rpipe) f.rpipe.closed = true;
+  if (f.rpipe && !f.rpipe.named) f.rpipe.closed = true;
   f.socket?.close();
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
@@ -648,16 +648,16 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir)): void {
+export function fillStat(buf: number, path: string, { mode, size, mtime, uid, gid }: FileStat): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : file && fifos.has(file) ? S_IFIFO : S_IFREG) | attributes.mode);
+  mem.st32(buf + KLAYOUT.ST_MODE, mode);
   mem.st32(buf + KLAYOUT.ST_NLINK, 1);
-  mem.st32(buf + KLAYOUT.ST_UID, attributes.uid); mem.st32(buf + KLAYOUT.ST_GID, attributes.gid);
+  mem.st32(buf + KLAYOUT.ST_UID, uid); mem.st32(buf + KLAYOUT.ST_GID, gid);
   mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
   mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
   mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
-  const sec = Math.floor(mtimeMs / 1000);
+  const sec = Math.floor(mtime / 1000);
   for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stLong(buf + o, sec);
   mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
 }
@@ -719,13 +719,12 @@ export const javaInotifyAddWatch = (fd: number, path: string, mask: number): num
 export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
 export function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
-  if (isRandomDevice(path)) { fillStat(buf, false, 0, Date.now(), path); return 0; }
+  if (isRandomDevice(path)) { fillStat(buf, path, localStat(path, S_IFREG, 0, Date.now())); return 0; }
   const s = procText(path);
-  if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
-  if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
-  const file = vfs.stat(path);
-  if (!file) return fail(cpu, E.NOENT);
-  fillStat(buf, false, file.size, Date.now(), path);
+  if (s !== null) { fillStat(buf, path, localStat(path, S_IFREG, utf8(s).length, Date.now())); return 0; }
+  const dir = vfs.isDir(path), file = dir ? null : vfs.stat(path);
+  if (!dir && !file) return fail(cpu, E.NOENT);
+  fillStat(buf, path, localStat(path, pathType(path), file?.size ?? 0, Date.now()));
   return 0;
 }
 function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
@@ -733,14 +732,13 @@ function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
     const destination = anchor(buf);
     return Promise.resolve(processFdStat(fd)).then(stat => {
       if (!stat) return fail(cpu,E.BADF);
-      fillStat(destination(),false,stat.size,stat.mtime,stat.path ?? fds.get(fd)?.path ?? "",undefined,{...stat,mode:stat.mode & 0o7777});
+      fillStat(destination(),stat.path ?? fds.get(fd)?.path ?? "",stat);
       return 0;
     });
   }
-  const f = fds.get(fd);
-  if (!f) return fail(cpu, E.BADF);
-  fillStat(buf, f.dir, f.content.len, Date.now(), f.path, f.content);
-  mem.st32(buf + KLAYOUT.ST_MODE, fdMode(f));
+  const f = fds.get(fd), stat = javaFdStat(fd);
+  if (!f || !stat) return fail(cpu, E.BADF);
+  fillStat(buf, f.path, { ...stat, mtime: Date.now() });
   return 0;
 }
 /** st_mode of an open file: /dev/null stdio and /dev/random are character devices, and eventfd,
@@ -810,16 +808,16 @@ function syncFd(cpu: Cpu | null, fd: number): number {
   if (!f) return fail(cpu, E.BADF);
   return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log || f.socket ? fail(cpu, E.INVAL) : 0;
 }
-/** posix_fallocate: grow the file to cover the range; it reports the error number itself */
-export function fdFallocate(fd: number, offset: number, len: number): number {
+/** fallocate's mode 0: grow the file to cover the range; 0 or a negative errno */
+export function javaAllocateFd(fd: number, offset: number, len: number): number {
   const f = fds.get(fd);
-  if (!f) return E.BADF;
-  if (offset < 0 || len <= 0) return E.INVAL;
+  if (!f || (f.statusFlags & O_ACCMODE) === 0) return -E.BADF;
+  if (offset < 0 || len <= 0) return -E.INVAL;
   if (offset + len > f.content.len) vfs.resize(f.content, offset + len);
   return 0;
 }
 /** a directory's entries as readdir lists them */
-export const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
+const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
 /** a directory's entries as readdir lists them, or a negative errno */
@@ -908,6 +906,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     return typeof to !== "string" ? to : renameProcess(cpu, from, to);
   },
   mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirProcess(cpu, path) : path; },
+  mknodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mknodProcess(cpu, path, a.i()) : path; },
   ftruncate: (cpu, a) => kernelResult(cpu,processTruncateFd(a.i(),offArg(a))),
   truncate: (cpu, a) => {
     const file = vfs.open(a.str()), n = offArg(a);

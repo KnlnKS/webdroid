@@ -84,8 +84,8 @@ export async function prepareSystemPackages(
       await writeFile(cached.name!, bytes);
     }
     if (hash(bytes) !== spec.sha256) throw new Error("System package digest mismatch: " + spec.file);
-    const index = await packArchive(bytes, directory), json = JSON.stringify(index);
-    if (hash(new TextEncoder().encode(json)) !== spec.indexSha256) throw new Error("Generated system package index differs from pinned output: " + spec.file);
+    const index = await packArchive(bytes, directory), json = JSON.stringify(index), digest = hash(new TextEncoder().encode(json));
+    if (digest !== spec.indexSha256) throw new Error(`Generated system package index differs from pinned output: ${spec.file} (${digest})`);
     await writeFile(target, json);
     console.log("[system packages] prepared", spec.pkg);
   }

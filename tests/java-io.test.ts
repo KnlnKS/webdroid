@@ -333,7 +333,7 @@ describe("file-descriptor", () => {
     const previous=descriptorTransport.calls, previousPaths=filePathTransport.calls;
     descriptorTransport.calls=() => proxy.endpoint;
     filePathTransport.calls=() => ({...paths,filePrepare:async () => {},fileSetAttributes:async (p,c) => paths.fileSetAttributes(p,c),fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
-      fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)});
+      fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileFifo:async p => paths.fileFifo(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)});
     vfs.mkdir("/data/data/test/fd");
     const raf=await newObj("java/io/RandomAccessFile","(Ljava/lang/String;Ljava/lang/String;)V",path,"rw");
     const fd=await vcall(raf,"getFD",FD);

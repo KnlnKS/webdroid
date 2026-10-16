@@ -1,18 +1,23 @@
 import { processExited } from "../process-exit";
-import { hostLib, PTR, ldp, stp, ldLong } from "./host";
+import { hostLib, PTR, ldp, ldLong, type HostFn } from "./host";
 import { clockTime, fail, readTs, writeTs } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { mem } from "./mem";
 import { startThread } from "./pthread";
 import { E } from "./abi";
+import { cpuByOsTid, cpus, type Cpu } from "./cpu";
+import { blocked } from "./signals";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 /** a POSIX timer or a timerfd: its clock, next expiry and interval, in that clock's milliseconds */
 export type ClockTimer = { clock: number; next: number; interval: number; timeout?: GuestTimer };
 type Timer = ClockTimer & { overrun: number; notify: () => void };
 const timers = new Map<number, Timer>();
-/** the ARM32 struct sigevent: sigval, signo, notify, then SIGEV_THREAD's function and attributes */
-const SIGEVENT = { value: 0, notify: 8, function: 12, attributes: 16 };
+let nextTimerId = 0;
+/** struct sigevent: sigval, signo, notify, then a union of SIGEV_THREAD_ID's tid and (ARM32 libc's
+ *  own) SIGEV_THREAD function and attributes */
+const SIGEVENT = { signo: 0, notify: 4, union: 8 };
+const SIGEV_SIGNAL = 0, SIGEV_NONE = 1, SIGEV_THREAD = 2, SIGEV_THREAD_ID = 4, SIGALRM = 14, SI_TIMER = -2;
 /** fire(expirations) once the clock passes the next expiry, then wait for the one after */
 export function armClockTimer(timer: ClockTimer, fire: (count: number) => void): void {
   disarmClockTimer(timer);
@@ -47,31 +52,42 @@ function validTime(p: number): boolean {
   const nanos = ldLong(p + PTR);
   return ldLong(p) >= 0 && nanos >= 0 && nanos < 1e9;
 }
+/** timer_create(2), and the HLE libc's, which runs SIGEV_THREAD's function on a thread of its own */
+function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcThreads: boolean): number {
+  if (![0, 1, 7].includes(clock) || !out) return fail(cpu, E.INVAL);
+  const id = nextTimerId, at = event + PTR;
+  const mode = event ? mem.ld32(at + SIGEVENT.notify) : SIGEV_SIGNAL, sig = event ? mem.ld32(at + SIGEVENT.signo) : SIGALRM;
+  const value = event ? BigInt(ldp(event)) : BigInt(id);
+  let notify = () => {};
+  if (mode === SIGEV_SIGNAL || mode === SIGEV_THREAD_ID) {
+    if (sig < 1 || sig > 64) return fail(cpu, E.INVAL);
+    const target = mode === SIGEV_THREAD_ID ? cpuByOsTid(mem.ld32(at + SIGEVENT.union)) : undefined;
+    if (mode === SIGEV_THREAD_ID && (!target || target.pid !== cpu.pid)) return fail(cpu, E.INVAL);
+    // a process-directed signal goes to a thread that does not block it
+    const thread = (): Cpu => target ?? [...cpus].find((c) => !c.finished && !blocked(c.signalMask, sig)) ?? cpu;
+    notify = () => thread().kill(sig, { code: SI_TIMER, addr: 0n, timer: { id, overrun: timer.overrun, value } });
+  } else if (mode === SIGEV_THREAD && libcThreads) {
+    const fn = ldp(at + SIGEVENT.union), attributes = ldp(at + SIGEVENT.union + PTR);
+    if (!fn) return fail(cpu, E.INVAL);
+    if (attributes) return fail(cpu, E.NOTSUP);
+    notify = () => { startThread(cpu, fn, value, true); };
+  } else if (mode !== SIGEV_NONE) return fail(cpu, E.INVAL);
+  const timer: Timer = { clock, next: 0, interval: 0, overrun: 0, notify };
+  timers.set(id, timer); nextTimerId++;
+  mem.st32(out, id); return 0;
+}
+/** the kernel's POSIX timer calls, which the HLE libc's are too */
+export const TIMER_SYSCALLS: Record<string, HostFn> = {
+  timer_create: (cpu, a) => createTimer(cpu, a.i(), a.p(), a.p(), false),
+  timer_settime: (cpu, a) => {
+    const timer = timers.get(a.i()), flags = a.i(), value = a.p(), old = a.p();
+    if (!timer || flags & ~1 || !setClockTimer(timer, flags, value, old)) return fail(cpu, E.INVAL);
+    timer.overrun = 0; arm(timer); return 0;
+  },
+  timer_gettime: (cpu, a) => { const timer = timers.get(a.i()), out = a.p(); if (!timer || !out) return fail(cpu, E.INVAL); timerState(timer, out); return 0; },
+  timer_getoverrun: (cpu, a) => timers.get(a.i())?.overrun ?? fail(cpu, E.INVAL),
+  timer_delete: (cpu, a) => { const id = a.i(), timer = timers.get(id); if (!timer) return fail(cpu, E.INVAL); disarmClockTimer(timer); timers.delete(id); return 0; },
+};
 export function timersInit(): void {
-  hostLib("libc.so", {
-    timer_create: (cpu, a) => {
-      const clock = a.i(), event = a.p(), out = a.p();
-      if (![0, 1, 7].includes(clock) || !out) return fail(cpu, E.INVAL);
-      const mode = event ? mem.ld32(event + SIGEVENT.notify) : 0;
-      if (mode !== 1 && mode !== 2) return fail(cpu, E.NOTSUP);
-      let notify = () => {};
-      if (mode === 2) {
-        const fn = ldp(event + SIGEVENT.function), attributes = ldp(event + SIGEVENT.attributes);
-        if (!fn) return fail(cpu, E.INVAL);
-        if (attributes) return fail(cpu, E.NOTSUP);
-        const arg = BigInt(mem.ld32(event + SIGEVENT.value) >>> 0);
-        notify = () => { startThread(cpu, fn, arg, true); };
-      }
-      const id = mem.malloc(4); if (!id) return fail(cpu, E.NOMEM);
-      timers.set(id, { clock, next: 0, interval: 0, overrun: 0, notify }); stp(out, id); return 0;
-    },
-    timer_settime: (cpu, a) => {
-      const timer = timers.get(a.p()), flags = a.i(), value = a.p(), old = a.p();
-      if (!timer || flags & ~1 || !setClockTimer(timer, flags, value, old)) return fail(cpu, E.INVAL);
-      timer.overrun = 0; arm(timer); return 0;
-    },
-    timer_gettime: (cpu, a) => { const timer = timers.get(a.p()), out = a.p(); if (!timer || !out) return fail(cpu, E.INVAL); timerState(timer, out); return 0; },
-    timer_getoverrun: (cpu, a) => timers.get(a.p())?.overrun ?? fail(cpu, E.INVAL),
-    timer_delete: (cpu, a) => { const id = a.p(), timer = timers.get(id); if (!timer) return fail(cpu, E.INVAL); disarmClockTimer(timer); timers.delete(id); mem.free(id); return 0; },
-  });
+  hostLib("libc.so", { ...TIMER_SYSCALLS, timer_create: (cpu, a) => createTimer(cpu, a.i(), a.p(), a.p(), true) });
 }

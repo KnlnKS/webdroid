@@ -162,9 +162,9 @@ test("AF_UNIX passes descriptors and credentials, times out receives and breaks 
     // EPIPE once the reader is gone, raising SIGPIPE (blocked, so pending) unless MSG_NOSIGNAL
     expect(await call("close", b)).toBe(0);
     expect(await call("sendto", a, data, 1, 0x4000 /* MSG_NOSIGNAL */, 0, 0)).toBe(-1);
-    expect([mem.ld32(cpu.errnoAddr), cpu.signals.includes(13)]).toEqual([E.PIPE, false]);
+    expect([mem.ld32(cpu.errnoAddr), cpu.signals.has(13)]).toEqual([E.PIPE, false]);
     expect(await call("write", a, data, 1)).toBe(-1);
-    expect(cpu.signals.includes(13)).toBe(true);
+    expect(cpu.signals.has(13)).toBe(true);
     for (const fd of [a, readEnd, received]) expect(await call("close", fd)).toBe(0);
   } finally { mem.free(scratch); cpu.dispose(); setA64(false); }
 });

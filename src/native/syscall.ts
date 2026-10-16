@@ -11,12 +11,14 @@ import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu";
 import { exitGroup, installDebuggerdHandlers } from "./crash";
 import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals";
 import { writeSiginfo } from "./sigframe";
-import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
-import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
+import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, kernelResult, readTs } from "./libc";
+import { FS_SYSCALLS, fsInit, faccessatPath, getdents64 } from "./fs";
+import { processAllocateFd } from "./process-fd";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
 import { NET_SYSCALLS } from "./socket/syscalls";
 import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll";
 import { PROC_SYSCALLS } from "./proc";
+import { TIMER_SYSCALLS } from "./timers";
 import { device } from "../shell/config";
 
 /** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
@@ -35,11 +37,12 @@ export let KLAYOUT = KERNEL32;
  *  ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */
 const SAME64: Record<number, string> = {
   17: "getcwd", 19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 23: "dup", 24: "dup3", 25: "fcntl",
-  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch", 29: "ioctl", 32: "flock", 34: "mkdirat", 35: "unlinkat",
+  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch", 29: "ioctl", 32: "flock", 33: "mknodat", 34: "mkdirat", 35: "unlinkat",
   43: "statfs", 44: "fstatfs", 45: "truncate", 46: "ftruncate", 49: "chdir", 52: "fchmod", 53: "fchmodat", 55: "fchown",
   56: "openat", 57: "close", 59: "pipe2", 62: "lseek", 63: "read", 64: "write", 65: "readv", 66: "writev", 67: "pread64",
   68: "pwrite64", 71: "sendfile", 78: "readlinkat", 79: "fstatat", 80: "fstat", 82: "fsync", 83: "fdatasync",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime", 88: "utimensat", 90: "capget", 101: "nanosleep",
+  107: "timer_create", 108: "timer_gettime", 109: "timer_getoverrun", 110: "timer_settime", 111: "timer_delete",
   113: "clock_gettime", 114: "clock_getres", 115: "clock_nanosleep", 120: "sched_getscheduler", 124: "sched_yield",
   129: "kill", 133: "sigsuspend", 131: "tgkill", 132: "sigaltstack", 134: "rt_sigaction", 140: "setpriority", 141: "getpriority", 155: "getpgid",
   160: "uname", 163: "getrlimit", 164: "setrlimit", 166: "umask", 167: "prctl", 169: "gettimeofday", 173: "getppid",
@@ -63,8 +66,7 @@ const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
 const A64: Record<number, HostFn> = {
   47: (cpu, a) => {                                                              // fallocate: mode 0 grows the file
     const fd = a.i(), mode = a.i(), off = Number(a.l()), len = Number(a.l());
-    const e = mode ? E.NOTSUP : fdFallocate(fd, off, len);
-    return e ? fail(cpu, e) : 0;
+    return mode ? fail(cpu, E.NOTSUP) : kernelResult(cpu, processAllocateFd(fd, off, len));
   },
   48: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), 0),                 // faccessat has no flags
   61: (cpu, a) => getdents64(cpu, a.i(), a.p(), a.u()),
@@ -105,12 +107,11 @@ const A64: Record<number, HostFn> = {
   137: (cpu, a) => {                                                             // rt_sigtimedwait
     const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
-      const i = cpu.signals.findIndex((sig) => blocked(set, sig));
-      if (i < 0) return 0;
-      const sig = cpu.signals.splice(i, 1)[0];
+      const taken = cpu.takePending((sig) => blocked(set, sig));
+      if (!taken) return 0;
       const at = info();
-      if (at) writeSiginfo(at, sig, 0);
-      return sig;
+      if (at) writeSiginfo(at, taken.sig, taken.info);
+      return taken.sig;
     };
     const now = take();
     if (now || ms === 0) return now || fail(cpu, E.AGAIN);
@@ -186,7 +187,7 @@ let table: (HostFn | undefined)[] = [];
 export function kernelInit(): void {
   const wide = PTR === 8;
   KLAYOUT = wide ? KERNEL64 : KERNEL32;
-  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS };
+  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
   table = [];
   for (const [nr, name] of Object.entries(wide ? SAME64 : SAME32)) {
     if (!byName[name]) throw new Error(`kernel: no body for ${name}`);

@@ -33,7 +33,7 @@ const DESTINATION = 0;
 /** a Worker's AudioOut and media elements over `port`; the page creates its context at the first command */
 export function sendMedia(port: MessagePort): { audio: AudioOut; createElement: () => MediaElement } {
   let next = DESTINATION + 1, sent = 0, closed = false;
-  let clock: Clock = { time: 0, at: 0, state: "suspended", sampleRate: 0, outputLatency: 0, baseLatency: 0 };
+  let clock: Clock = { time: 0, at: 0, state: "suspended", sampleRate: 0, outputLatency: 0, baseLatency: 0 }, shownTime = 0;
   const sources = new Map<number, Source>(), decodes = new Map<number, ReturnType<typeof Promise.withResolvers<AudioData>>>();
   const freed = new FinalizationRegistry<number>(id => post({ op: "free", id }));
   const post = (command: Command) => { if (!closed) { sent++; port.postMessage(command); } };
@@ -152,7 +152,8 @@ export function sendMedia(port: MessagePort): { audio: AudioOut; createElement: 
   };
   const destination = { id: DESTINATION, connect: () => { throw new Error("the destination has no outputs"); }, disconnect() {} };
   const audio: AudioOut = {
-    get currentTime() { return clock.state === "running" ? clock.time + Math.max(0, wallTime() - clock.at) / 1000 : clock.time; },
+    // the page's clock runs behind the wall clock this extrapolates with: a later report must not turn the time back
+    get currentTime() { return shownTime = Math.max(shownTime, clock.state === "running" ? clock.time + Math.max(0, wallTime() - clock.at) / 1000 : clock.time); },
     get sampleRate() { return clock.sampleRate || 44100; },
     get outputLatency() { return clock.outputLatency; },
     get baseLatency() { return clock.baseLatency; },

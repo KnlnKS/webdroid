@@ -300,7 +300,7 @@ function* mediaCall(method: string, extras: JObj | null): Gen<JObj> {
 }
 // FLAG_SYSTEM | FLAG_HAS_CODE | FLAG_ALLOW_CLEAR_USER_DATA, in its own package's process
 registerSystemProvider("media", { pkg: "com.google.android.providers.media.module", cls: "com.android.providers.media.MediaProvider",
-  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0 }, {
+  process: "com.google.android.providers.media.module", appFlags: 0x45, flags: 0, initOrder: 0, systemRealm: true }, {
   query, insert: mediaInsert, update: mediaUpdate, delete: mediaDelete, getType: mediaMime, openFile,
   // MediaStore.SCAN_FILE_CALL, which MediaScannerConnection makes, takes the file's path and
   // answers its row, indexed now; the create*Request calls answer a consent PendingIntent
