@@ -22,18 +22,21 @@ class Retriever {
     this.metadata.clear();
     this.picture = null;
   }
-  async open(source: FileSource) {
+  /** MediaExtractor.open makes Java buffers as the thread that calls it, so it follows the MP3 check through `after` */
+  open(source: FileSource): Promise<void> {
     this.reset();
-    const mp3 = await inspectMp3(source);
-    if (mp3) {
+    return Promise.resolve(after(inspectMp3(source), (mp3) => {
+      if (!mp3) {
+        const extractor = new MediaExtractor();
+        return extractor.open(source).then(() => this.describe(source, extractor));
+      }
       this.source = source;
       this.picture = mp3.picture;
       this.metadata = new Map([[9, String(mp3.durationMs)], [10, "1"], [12, "audio/mpeg"],
         [16, "yes"], [17, "no"], [20, String(mp3.bitrate)]]);
-      return;
-    }
-    const extractor = new MediaExtractor();
-    await extractor.open(source);
+    }));
+  }
+  private describe(source: FileSource, extractor: MediaExtractor): void {
     this.extractor = extractor;
     this.source = source;
     const tracks = extractor.tracks;

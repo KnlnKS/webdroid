@@ -72,6 +72,8 @@ const TH: Record<string, HostFn> = {
     const v: number = yield Promise.resolve(x), u: number = yield v + 1;
     return callbackEntry.scall("Th", "onDriven", "(I)I", u);
   } }),
+  // async to import it as Suspending (flagged owns the plain import's report); `after` runs before it waits, where an `await` would lose the thread
+  "afterEnters(I)I": async (x: number) => callbackEntry.after(sleep(1).then(() => x + 2), (v) => callbackEntry.scall("Th", "onDriven", "(I)I", v)),
   "nested(I)I": async (x: number) => (await w.entryAsync("Th", "inner", "(I)I")(x) as number) + 1,
   "flagged(I)I": (x: number) => Promise.resolve(x),
   "gapEcho([BI)[B": async (a: Int8Array, ms: number) => { await (gate ??= sleep(20 + ms).then(() => { gate = null; })); const r = Int8Array.from(a).reverse(); a[0] = a[0] + 1; return r; },
@@ -323,6 +325,7 @@ if (substrate) {
   expect("async native", await show(() => w.entryAsync("Th", "trap", "(I)I")(4)), 5);
   expect("generator native", await show(() => w.entryAsync("Th", "driven", "(I)I")(4)), 13);
   expect("generator native enters Java on its thread after a wait", await show(() => w.entryAsync("Th", "drivenThread", "(I)I")(4)), 5);
+  expect("after enters Java on the native's thread once its Promise settles", await show(() => w.entryAsync("Th", "afterThread", "(I)I")(4)), 6);
   expect("nested promising entry", await show(() => w.entryAsync("Th", "nested", "(I)I")(4)), 11);
   // arrays given to and answered by natives that wait at the same time stay each strand's own
   expect("array arguments and results across a wait", await show(() => w.entryAsync("Th", "arrayGap", "(I)I")(300)), 0);

@@ -38,7 +38,8 @@ export interface Entry {
   classNameOf(o: unknown): string | undefined;
   /** `call` on `thread`, which owns the turn while it runs, as a chain of its own */
   callOn<T>(thread: JThread, call: () => T): T;
-  /** `f` of `r`, now or once it settles */
+  /** `f` of `r`, now or once it settles, as the thread and call chain that call `after`. A native that waits enters Java again through it
+   *  or as a generator native: code after an `await` or in a `.then` runs as the host's current thread */
   after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T>;
 }
 const unset = (): never => { throw new Error("no World runs Java yet: useWorld installs one"); };
