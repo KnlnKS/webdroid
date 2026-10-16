@@ -709,13 +709,20 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 ### Shared host and worktrees
 
-- **Shared-host hygiene**. Other sessions' servers and runs share the host: never `pkill -f server.ts` or `pkill -f e2e`; stop your own server by port (`lsof -ti tcp:<port> | xargs kill`). Restart the dev server after changing `server.ts` or vendor files (a stale server served 404s that failed flows). Never `git stash -u` while a server runs from the tree.
+- **Shared-host hygiene**. Other sessions' servers and runs share the host: never `pkill -f vite` or `pkill -f e2e`; stop your own server by port (`lsof -ti tcp:<port> | xargs kill`). Restart the dev server after changing `server.ts` or vendor files (a stale server served 404s that failed flows). Never `git stash -u` while a server runs from the tree.
 - **Worktree setup**. Agent worktrees start from `main`; reset them onto the working branch while clean. Symlink `apks`, `node_modules`, `vendor/aosp`, `vendor/microg` and `conform-cache`, and give each its own port. Check that a link target does not exist first: `ln -s` into an existing symlinked directory nests a link inside the real vendor directory (`vendor/aosp/aosp`, 2026-09-27). sql.js builds are cached per patch and script under `~/.cache/webdroid` (`vendor/sql.js/rebuild.sh`).
 
 ### Reference AVD and gen-framework
 
 - **Environment**. Use `JAVA_HOME=/opt/homebrew/opt/openjdk@21`; `scripts/android-sdk.ts` finds the SDK at `/opt/homebrew/share/android-commandlinetools`. Boot `webdroid_api35_ref` with `emulator -avd webdroid_api35_ref -no-window -no-snapshot -no-boot-anim -no-audio`.
 - **What gen-framework pulls**. Boot jars (`BOOT_JAR_PATHS`), `/apex/com.android.{i18n,tzdata}/etc` into `vendor/aosp/apex/` (`PLATFORM_DATA`), Monet colors, OsConstants (`scripts/DumpOsConstants.java` under `app_process`) and the boot-image profile (`profman` as root). `--settings`, `--properties` and `--identity [url]` record only those parts.
+
+### Node toolchain (2026-10-16)
+
+- **Flags**. Node 24 strips types, so imports name `.ts`. `NODE_OPTIONS` rejects `--experimental-wasm-jspi`, so package scripts and spawned children (`scripts/node.ts`) pass the flags and the preload; Vitest takes them from `test.execArgv`.
+- **Dev server**. `server.ts` is a Vite plugin that serves `/` itself; `appType: "custom"` keeps Vite's HMR client and socket out of the page. `sql.js`, a CommonJS workspace package, needs `optimizeDeps.include`. A config bundled by Vite misses the preload's polyfills, hence `--configLoader native`.
+- **Production build**. `vp build` sets `NODE_ENV=production` in its own process, where the runtime would fetch its core as a page does; scripts that load the runtime run as children without it (`runNode`).
+- **Bun replacements**. `serve()` binds `127.0.0.1` because `localhost` binds only `::1` on macOS. Static files answer ranges, which `RangeFile` reads as 206. `html-rewriter-wasm` stands in for Bun's `HTMLRewriter`; its chunks view Wasm memory and must be copied before the next write. Killing `vp dev` leaves its Vite child listening, so stop servers by port.
 
 ### Cleanup
 
