@@ -110,6 +110,7 @@ export fn host_bypass(on: u32) void {
     bypass = on != 0;
 }
 
+/// an ARM32 register is its low word: a compiled region spills only that
 inline fn arg(c: *Cpu, i: u32) u64 {
     return if (c.a64 != 0) c.x[i] else @as(u32, @truncate(c.x[i]));
 }
@@ -142,8 +143,8 @@ inline fn vreg(c: *Cpu, comptime T: type, i: u32) *align(16) T {
 }
 inline fn farg(c: *Cpu, comptime F: type, i: u32) F {
     if (c.a64 != 0) return vreg(c, F, i).*;
-    if (F == f32) return @bitCast(@as(u32, @truncate(c.x[i])));
-    return @bitCast(@as(u64, @truncate(c.x[2 * i])) | (@as(u64, @truncate(c.x[2 * i + 1])) << 32));
+    if (F == f32) return @bitCast(@as(u32, @truncate(arg(c, i))));
+    return @bitCast(arg(c, 2 * i) | arg(c, 2 * i + 1) << 32);
 }
 inline fn fret(c: *Cpu, comptime F: type, v: F) void {
     if (c.a64 != 0) {
@@ -151,7 +152,7 @@ inline fn fret(c: *Cpu, comptime F: type, v: F) void {
         vreg(c, F, 0).* = v;
     } else if (F == f32) c.x[0] = @as(u32, @bitCast(v)) else {
         const b: u64 = @bitCast(v);
-        c.x[0] = @truncate(b);
+        c.x[0] = @as(u32, @truncate(b));
         c.x[1] = b >> 32;
     }
 }

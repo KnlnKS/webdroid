@@ -2,6 +2,7 @@
 //! neonMisc, neonShift, neonLong and neonImmediate compute it. D registers are the 8-byte halves
 //! of cpu.v: an operation may read the lanes past a D operand, but a D result stores only its own
 //! 8 bytes. Anything else falls back to the interpreter.
+const arm = @import("arm.zig");
 const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
 const simd = @import("simd.zig");
@@ -96,9 +97,10 @@ fn shuffle(b: *Buf, mask: [16]u8) void {
 fn same(b: *Buf, w: u32) bool {
     const size = bits(w, 20, 2);
     const scalar = is(w, 0xfe800050, 0xf2800040) and size != 3;
+    if (scalar and arm.neonLongByScalar(w)) return long(b, w);
     const d = reg(w, 22, 12);
     const n = reg(w, 7, 16);
-    const m = if (scalar) bits(w, 0, if (size == 1) 3 else 4) else reg(w, 5, 0);
+    const m = reg(w, 5, 0);
     const q = (if (scalar) bits(w, 24, 1) else bits(w, 6, 1)) != 0;
     if (q and (d | n | (if (scalar) 0 else m)) & 1 != 0) return false;
     const op = bits(w, 8, 4);
@@ -124,10 +126,7 @@ fn same(b: *Buf, w: u32) bool {
     if (scalar) {
         if (size == 0 or (op & 1 != 0 and size != 2) or (op & 0xe != 0 and op & 0xe != 4 and op & 0xe != 8)) return false;
         const float = op & 1 != 0;
-        const lane: Lane = if (size == 1)
-            .{ .off = OFF_V + m * 8 + ((bits(w, 5, 1) << 1) | bits(w, 3, 1)) * 2, .esz = 1 }
-        else
-            .{ .off = OFF_V + m * 8 + bits(w, 5, 1) * 4, .esz = 2 };
+        const lane = scalarLane(w, size);
         const mul = if (float) S.fmul[0] else S.mul[size];
         if (op & 0xe == 8) {
             b.get(L_CPU);
@@ -492,16 +491,23 @@ fn shift(b: *Buf, w: u32) bool {
     return true;
 }
 
-/// VMLAL, VMLSL and VMULL: widening products of the D operands' lanes.
+/// A by-scalar form's Dm[x].
+fn scalarLane(w: u32, size: u32) Lane {
+    const m, const lane = arm.neonScalar(w, size);
+    return .{ .off = OFF_V + m * 8 + (lane << @intCast(size)), .esz = size };
+}
+
+/// VMLAL, VMLSL and VMULL, by vector or by scalar: widening products of the D operands' lanes.
 fn long(b: *Buf, w: u32) bool {
-    const op = bits(w, 8, 4);
+    const scalar = w & 0x40 != 0;
+    const op = arm.neonLongOp(w);
     const size = bits(w, 20, 2);
     const d = reg(w, 22, 12);
-    if (size == 3 or d & 1 != 0 or (op != 8 and op != 10 and op != 12)) return false;
+    if (size == 3 or (scalar and size == 0) or d & 1 != 0 or (op != 8 and op != 10 and op != 12)) return false;
     b.get(L_CPU);
     if (op != 12) load(b, d);
     load(b, reg(w, 7, 16));
-    load(b, reg(w, 5, 0));
+    if (scalar) scalarLane(w, size).push(b) else load(b, reg(w, 5, 0));
     b.emit(.{sv(S.extmul_low_s[size] + @as(u8, if (w & (1 << 24) != 0) 2 else 0))});
     if (op != 12) b.emit(.{sv(if (op == 8) S.add[size + 1] else S.sub[size + 1])});
     store(b, d, true);
