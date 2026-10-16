@@ -37,7 +37,7 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-At `71e437ae`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
+At `4de1c0a9`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
 natives, draw errors, settle timeouts or wedges; 1,153 unit tests pass (the browser tests' "End Of Central
 Directory" flake recurred once); FitNotes `smoke` is clean; all 16 `wasm all` suites and 31 of 31 `fwtest`
 exercises pass. The default five-at-a-time run missed four flows on worker-diagnostic and completion timeouts
