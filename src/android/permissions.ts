@@ -118,9 +118,10 @@ registerSystemActivity("android.settings.action.MANAGE_OVERLAY_PERMISSION", driv
   if (packages.get(pkg)?.permissions.has(name)) yield* awaited(grantPrompted(pkg, name));
   return null;
 }));
+const declaration = (owner: PackageRecord, name: string) => owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   for (const owner of packages.values()) {
-    const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
+    const node = declaration(owner, name);
     if (node) return [owner, node];
   }
   return null;
@@ -137,7 +138,7 @@ export function checkPermission(permission: string, pkg: string): number | Promi
 async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
   const certificates = await record.certificates();
   for (const owner of packages.values()) {
-    if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
+    if (!declaration(owner, permission)) continue;
     const signers = await owner.certificates();
     if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
   }
