@@ -262,10 +262,10 @@ export class Cpu {
   handling = new Set<number>();                     // signals whose handler is running
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
-  kill(sig: number, info?: SigInfo): void {
+  kill(sig: number, info: SigInfo | null = null): void {
     // an ignored signal is discarded unless blocked: a handler may be installed before it is unblocked
     if (this.finished || !blocked(this.signalMask, sig) && action(sig, this.signalMask, false) === "ignore") return;
-    if (!this.signals.has(sig)) this.signals.set(sig, info ?? null);
+    if (!this.signals.has(sig)) this.signals.set(sig, info);
     this.sigQueued?.();
     if (this.signalInterrupt && !blocked(this.signalMask, sig)) {
       this.deferSignalsUntilResume();

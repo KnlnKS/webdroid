@@ -168,7 +168,7 @@ rt.registerJnis(MP, {
     if (!/^https?:/i.test(path)) throw rt.mkThrowable("java/io/IOException", "setDataSource failed.: status=0x80000000");
     const headers: [string, string][] = (keys ?? []).map((k, i) => [k, values?.[i] ?? ""]);
     const named = headers.some(([k]) => k.toLowerCase() === "user-agent");
-    return after<string | null, void>(named ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent) => {
+    return after(named ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent: string | null) => {
       p.load(mediaSource(path, agent ? [...headers, ["User-Agent", agent]] : headers));
     });
   }),

@@ -64,8 +64,8 @@ function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcTh
     const target = mode === SIGEV_THREAD_ID ? cpuByOsTid(mem.ld32(at + SIGEVENT.union)) : undefined;
     if (mode === SIGEV_THREAD_ID && (!target || target.pid !== cpu.pid)) return fail(cpu, E.INVAL);
     // a process-directed signal goes to a thread that does not block it
-    const thread = (): Cpu | undefined => target ?? [...cpus].find((c) => !c.finished && !blocked(c.signalMask, sig)) ?? cpu;
-    notify = () => thread()?.kill(sig, { code: SI_TIMER, addr: 0n, timer: { id, overrun: timer.overrun, value } });
+    const thread = (): Cpu => target ?? [...cpus].find((c) => !c.finished && !blocked(c.signalMask, sig)) ?? cpu;
+    notify = () => thread().kill(sig, { code: SI_TIMER, addr: 0n, timer: { id, overrun: timer.overrun, value } });
   } else if (mode === SIGEV_THREAD && libcThreads) {
     const fn = ldp(at + SIGEVENT.union), attributes = ldp(at + SIGEVENT.union + PTR);
     if (!fn) return fail(cpu, E.INVAL);

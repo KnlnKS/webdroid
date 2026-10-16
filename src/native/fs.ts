@@ -68,7 +68,6 @@ function openFifo(path: string, content: VfsFile, fifo: Pipe, flags: number): nu
   return put({ ...fdBase(path), content, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
     statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
-/** opens this process's pipe for a fifo the owning realm names */
 export const openRemoteFifo = (path: string, flags: number): number => openFifo(path, fdBase(path).content, remoteFifo(path), flags);
 const inotifies = new Set<Inotify>();
 function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
@@ -723,8 +722,8 @@ export function statPath(cpu: Cpu, path: string, buf: number): number {
   if (isRandomDevice(path)) { fillStat(buf, path, localStat(path, S_IFREG, 0, Date.now())); return 0; }
   const s = procText(path);
   if (s !== null) { fillStat(buf, path, localStat(path, S_IFREG, utf8(s).length, Date.now())); return 0; }
-  const file = vfs.isDir(path) ? null : vfs.stat(path);
-  if (!file && !vfs.isDir(path)) return fail(cpu, E.NOENT);
+  const dir = vfs.isDir(path), file = dir ? null : vfs.stat(path);
+  if (!dir && !file) return fail(cpu, E.NOENT);
   fillStat(buf, path, localStat(path, pathType(path), file?.size ?? 0, Date.now()));
   return 0;
 }

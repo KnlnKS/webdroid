@@ -26,15 +26,17 @@ const SYSTEM_VALUES = new Map<Ann, [string, string]>([[Ann.SignatureOfClass, [SI
   [Ann.SignatureOfField, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.PermittedSubclasses, [PERMITTED, "[Ljava/lang/Class;"]]]);
 const enum Element { Class, Field, Method }
 /** the element each kind asks about */
-const ELEMENT = new Map<Ann, Element>([[Ann.Class, Element.Class], [Ann.SignatureOfClass, Element.Class], [Ann.PermittedSubclasses, Element.Class],
-  [Ann.Field, Element.Field], [Ann.SignatureOfField, Element.Field], [Ann.Executable, Element.Method], [Ann.ExecutableParams, Element.Method],
-  [Ann.DefaultValue, Element.Method], [Ann.SignatureOfExecutable, Element.Method], [Ann.Parameters, Element.Method]]);
+const ELEMENT: Record<Ann, Element> = {
+  [Ann.Class]: Element.Class, [Ann.SignatureOfClass]: Element.Class, [Ann.PermittedSubclasses]: Element.Class,
+  [Ann.Field]: Element.Field, [Ann.SignatureOfField]: Element.Field,
+  [Ann.Executable]: Element.Method, [Ann.ExecutableParams]: Element.Method, [Ann.DefaultValue]: Element.Method, [Ann.SignatureOfExecutable]: Element.Method, [Ann.Parameters]: Element.Method,
+};
 
 /** the annotations of the element whose object the host was given */
 function elementOf(w: World, kind: Ann, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
   const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
   // an array or primitive class has no definition, so no annotations
-  const element = ELEMENT.get(kind)!;
+  const element = ELEMENT[kind];
   if (element === Element.Class) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
   if (element === Element.Field) {
     const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
@@ -200,7 +202,7 @@ const elementId: Record<Element, (cx: Compiler, c: Code) => void> = {
 /** host.annotation over the element in local 0 (kind `kind`), with the object argument in local `arg` */
 function ask(cx: Compiler, c: Code, kind: Ann, arg: number | null): void {
   emitRestored(cx, c, [], [T.anyref], () => {
-    c.i32(kind); elementId[ELEMENT.get(kind)!](cx, c); c.i32(0);
+    c.i32(kind); elementId[ELEMENT[kind]](cx, c); c.i32(0);
     if (arg !== null) c.lget(arg).externConvertAny(); else c.refNull(HT.extern);
     c.call(cx.imp.annotation);
     emitSettled(cx, c);

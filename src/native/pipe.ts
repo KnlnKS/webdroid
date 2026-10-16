@@ -44,8 +44,7 @@ export function remoteFifo(path: string): Pipe {
 /** the owning realm renamed (`to`) or removed (null) a name: this process's pipe for it follows */
 export function moveRemoteFifo(from: string, to: string | null): void {
   const fifo = remoteFifos.get(from);
-  if (to !== null) remoteFifos.delete(to);
-  if (!fifo) return;
   remoteFifos.delete(from);
-  if (to !== null) remoteFifos.set(to, fifo);
+  if (to === null) return;
+  if (fifo) remoteFifos.set(to, fifo); else remoteFifos.delete(to);
 }
