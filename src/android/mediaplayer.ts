@@ -16,6 +16,8 @@ const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUS
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
   MEDIA_STARTED = 6, MEDIA_PAUSED = 7, MEDIA_STOPPED = 8, MEDIA_ERROR = 100, MEDIA_INFO = 200;
 const MP = "android/media/MediaPlayer", PP = "android/media/PlaybackParams";
+// android.media.Metadata: the keys NuPlayerDriver reports, BOOLEAN_VAL, and a boolean record's bytes
+const PAUSE_AVAILABLE = 1, SEEK_BACKWARD_AVAILABLE = 2, SEEK_FORWARD_AVAILABLE = 3, SEEK_AVAILABLE = 4, BOOLEAN_VAL = 3, RECORD_BYTES = 16, META_MARKER = 0x4d455441;
 /** PlaybackParams' SET_* bits: which of its fields a setPlaybackParams call changes */
 const SET_SPEED = 1, SET_PITCH = 2, SET_FALLBACK = 4, SET_STRETCH = 8;
 export type Handler = ((event: Event) => void) | null;
@@ -165,8 +167,8 @@ rt.registerJnis(MP, {
   "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": M((p, _http: unknown, path: string, keys: string[] | null, values: string[] | null) => {
     if (!/^https?:/i.test(path)) throw rt.mkThrowable("java/io/IOException", "setDataSource failed.: status=0x80000000");
     const headers: [string, string][] = (keys ?? []).map((k, i) => [k, values?.[i] ?? ""]);
-    if (headers.some(([k]) => k.toLowerCase() === "user-agent")) { p.load(mediaSource(path, headers)); return; }
-    return after(scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent: string | null) => {
+    const named = headers.some(([k]) => k.toLowerCase() === "user-agent");
+    return after<string | null, void>(named ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent) => {
       p.load(mediaSource(path, agent ? [...headers, ["User-Agent", agent]] : headers));
     });
   }),
@@ -212,11 +214,12 @@ rt.registerJnis(MP, {
   }),
   "getVideoWidth()I": M((p) => { p.require(~IDLE); return p.media?.videoWidth ?? 0; }),
   "getVideoHeight()I": M((p) => { p.require(~IDLE); return p.media?.videoHeight ?? 0; }),
-  // MediaPlayerService's header over NuPlayerDriver's records: pause, then backward, forward and any seek, as BOOLEAN_VAL records
+  // MediaPlayerService's header (its size and kMetaMarker) over NuPlayerDriver's records, each its size, key, type and value
   "native_getMetadata(ZZLandroid/os/Parcel;)Z": M((p, _updateOnly: number, _filter: number, reply: JObj) => {
     const parcel = nativeParcel(reply), start = parcel.pos, seekable = Number.isFinite(p.media?.duration) ? 1 : 0;
-    writeInt(parcel, 8 + 4 * 16); writeInt(parcel, 0x4d455441);
-    for (const [key, on] of [[1, 1], [2, seekable], [3, seekable], [4, seekable]]) { writeInt(parcel, 16); writeInt(parcel, key); writeInt(parcel, 3); writeInt(parcel, on); }
+    const records: [number, number][] = [[PAUSE_AVAILABLE, 1], [SEEK_BACKWARD_AVAILABLE, seekable], [SEEK_FORWARD_AVAILABLE, seekable], [SEEK_AVAILABLE, seekable]];
+    writeInt(parcel, 8 + RECORD_BYTES * records.length); writeInt(parcel, META_MARKER);
+    for (const [key, on] of records) { writeInt(parcel, RECORD_BYTES); writeInt(parcel, key); writeInt(parcel, BOOLEAN_VAL); writeInt(parcel, on); }
     parcel.pos = start;
     return 1;
   }),
