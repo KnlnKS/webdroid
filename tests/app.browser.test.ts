@@ -1,20 +1,17 @@
 // Runtime paths that need a real Canvas2D/WebGL: the fixtures in fixtures/browser are bundled once,
 // served beside the framework resources, and each probe runs in its own page.
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { text } from "node:stream/consumers";
 import { chromium, type Browser } from "playwright";
 import { bundle } from "../scripts/bundle.ts";
-import { nodeCommand } from "../scripts/node.ts";
+import { runNode } from "../scripts/node.ts";
 import { serve, type Served } from "../scripts/serve.ts";
 
 let browser: Browser;
 let server: Served;
 
 beforeAll(async () => {
-  const fontIndex = spawn(...nodeCommand("scripts/font-index.ts"), { stdio: ["ignore", "pipe", "inherit"] });
-  const [script, index, launched] = await Promise.all([bundle("tests/fixtures/browser/index.ts"), text(fontIndex.stdout), chromium.launch({ headless: true })]);
+  const [script, index, launched] = await Promise.all([bundle("tests/fixtures/browser/index.ts"), runNode("scripts/font-index.ts"), chromium.launch({ headless: true })]);
   browser = launched;
   // each file is read once and served from memory, whole or the range a request asks for
   const files = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();

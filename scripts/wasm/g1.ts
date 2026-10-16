@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { NODE_FLAGS } from "../node.ts";
 import { fileResponse, serve } from "../serve.ts";
 import type { G1Config, G1Result } from "./g1run.ts";
 import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
@@ -56,7 +57,7 @@ const todo = names.filter((n) => !only.length || only.includes(n));
 // ---- one bundle per engine (a page's node:fs is the preloaded files); node runs its bundle without the preload's polyfills, so with V8's base64 switched on where it is off
 const base64 = spawnSync(process.execPath, ["-p", "typeof Uint8Array.fromBase64"], { encoding: "utf8" }).stdout.trim() === "function" ? [] : ["--js-base-64"];
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
-  const r = spawnSync(process.execPath, ["--expose-gc", "--experimental-wasm-jspi", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)],
+  const r = spawnSync(process.execPath, [...NODE_FLAGS, ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)],
     { env: { ...process.env, ...(installedDir && { G1_APP: installedDir }) }, encoding: "utf8", maxBuffer: 1 << 28 });
   const line = r.stdout.split("\n").find((l) => l.startsWith("G1"));
   if (!line) throw new Error(`${cfg.workload}: ${String(r.error ?? r.stderr).slice(0, 400)}`);
