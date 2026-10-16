@@ -1,6 +1,6 @@
 // Per-file Java-object coupling ranking + boundary (zero-coupling) files. Run after ast-survey.ts.
 import { readFileSync } from "fs";
-const j = JSON.parse(readFileSync(import.meta.dir + "/out/ast.json", "utf8"));
+const j = JSON.parse(readFileSync(import.meta.dirname + "/out/ast.json", "utf8"));
 const E = j.entries as any[];
 const g = (c: any, ...ks: string[]) => ks.reduce((a, k) => a + (c[k] ?? 0), 0);
 const rows = Object.entries<any>(j.perFile).map(([f, v]) => {

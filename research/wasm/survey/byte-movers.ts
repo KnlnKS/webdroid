@@ -1,6 +1,6 @@
 // Table for candidate "byte mover" / boundary files: LOC, coupling, registered natives, runtime imports.
 import { readFileSync } from "fs";
-const j = JSON.parse(readFileSync(import.meta.dir + "/out/ast.json", "utf8"));
+const j = JSON.parse(readFileSync(import.meta.dirname + "/out/ast.json", "utf8"));
 const E = j.entries as any[];
 const g = (c: any, ...ks: string[]) => ks.reduce((a, k) => a + (c[k] ?? 0), 0);
 const groups: Record<string, string[]> = {
@@ -22,7 +22,7 @@ for (const [g1, fs] of Object.entries(groups)) {
     const c = v.c;
     const s = g(c, "fieldSelfR", "fieldSelfW", "fieldOtherR", "fieldOtherW", "dollarProp", "dynNameAccessR", "dynNameAccessW", "declaredFieldHelper", "anyAccessR", "anyAccessW", "call_vcall", "call_vcallOn", "call_scall", "call_newObj", "call_callOn", "call_staticField", "instanceofJava", "identityJavaTyped", "dotI", "dotConstructor", "jarray", "dotT");
     const r = E.filter((e) => e.file === k).length;
-    const src = readFileSync(import.meta.dir + "/../../../" + k, "utf8");
+    const src = readFileSync(import.meta.dirname + "/../../../" + k, "utf8");
     const imp = /from "\.\.\/jvm\/(runtime|natives\/jentry)"|from "\.\/runtime"/.test(src);
     loc += v.loc; score += s; reg += r; if (imp) rtImp++;
     rows.push(`${f}[${v.loc}/${s}/${r}${imp ? "/rt" : ""}]`);
