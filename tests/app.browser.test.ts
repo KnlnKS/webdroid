@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { chromium, type Browser } from "playwright";
 import { bundle } from "../scripts/bundle.ts";
 import { runNode } from "../scripts/node.ts";
-import { serve, type Served } from "../scripts/serve.ts";
+import { fileResponse, serve, type Served } from "../scripts/serve.ts";
 
 let browser: Browser;
 let server: Served;
@@ -13,21 +13,12 @@ let server: Served;
 beforeAll(async () => {
   const [script, index, launched] = await Promise.all([bundle("tests/fixtures/browser/index.ts"), runNode("scripts/font-index.ts"), chromium.launch({ headless: true })]);
   browser = launched;
-  // each file is read once and served from memory, whole or the range a request asks for
-  const files = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   server = await serve({ fetch(request) {
-    const path = new URL(request.url).pathname;
-    const file = async (at: string, headers: Record<string, string> = {}) => {
-      if (!files.has(at)) files.set(at, readFile(`${import.meta.dirname}/..${at}`));
-      const bytes = await files.get(at)!, range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
-      if (!range) return new Response(bytes, { headers });
-      const end = Math.min(range[2] ? +range[2] + 1 : bytes.length, bytes.length);
-      return new Response(bytes.subarray(+range[1], end), { status: 206, headers: { ...headers, "content-range": `bytes ${range[1]}-${end - 1}/${bytes.length}` } });
-    };
+    const path = new URL(request.url).pathname, file = (at: string) => fileResponse(`${import.meta.dirname}/..${at}`, request);
     if (path === "/framework.apk") return file("/vendor/aosp/framework-res.apk");
     if (path === "/font-index.json") return new Response(index, { headers: { "content-type": "application/json" } });
     if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return file(`/node_modules/harfbuzzjs/dist${path}`);
-    if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm", { "content-type": "application/wasm" });
+    if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm");
     // no saved platform build: the page compiles what it runs
     if (path.startsWith("/aot/")) return new Response(null, { status: 404 });
     if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return file(path);

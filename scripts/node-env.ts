@@ -35,7 +35,7 @@ globalThis.HTMLRewriter ??= class {
         const rewriter = new (lolHtml().HTMLRewriter)((chunk) => controller.enqueue(chunk.slice()));
         for (const add of handlers) add(rewriter);
         try {
-          if (response.body) for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) await rewriter.write(chunk);
+          if (response.body) for await (const chunk of response.body) await rewriter.write(chunk);
           await rewriter.end();
           controller.close();
         } catch (e) { controller.error(e); } finally { rewriter.free(); }

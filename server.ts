@@ -7,7 +7,6 @@ import { readFile } from "node:fs/promises";
 import http, { type IncomingMessage } from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { Readable } from "node:stream";
 import tls from "node:tls";
 import type { Plugin } from "vite";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
@@ -22,7 +21,7 @@ import { prepareSystemPackages } from "./scripts/system-packages.ts";
 import { aotFile, aotManifest } from "./scripts/wasm/aot-serve.ts";
 import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
-import { fileResponse, respond } from "./scripts/serve.ts";
+import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
@@ -67,7 +66,7 @@ async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
     for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
     const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
     if (empty) res.resume();
-    const response = new Response(empty ? null : Readable.toWeb(res) as unknown as ReadableStream, { status, statusText: res.statusMessage, headers });
+    const response = new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
     return Object.defineProperty(response, "url", { value: url });
   }
 }
@@ -81,29 +80,23 @@ function serveFile(req: Request, dir: string, name: string, headers?: Record<str
 /** a reference-build file mirrored under vendor/aosp at its device path (PLATFORM_DATA) */
 const devicePath = (req: Request, path: string) => path.includes("..") ? new Response("nope", { status: 400 }) : fileResponse(path.slice(1), req, { "cache-control": IMMUTABLE });
 
+/** `make(key)` once per key, made again after it fails or the cache is cleared */
+function memo<T>(make: (key: string) => Promise<T>): ((key?: string) => Promise<T>) & { clear(): void } {
+  const made = new Map<string, Promise<T>>();
+  return Object.assign((key = "") => {
+    let pending = made.get(key);
+    if (!pending) made.set(key, pending = make(key).catch((e: unknown) => { made.delete(key); throw e; }));
+    return pending;
+  }, { clear: () => made.clear() });
+}
 /** scripts/font-index.ts, run once: the reference build's fonts change only with gen-framework */
-let fontIndex: Promise<string> | null = null;
-const fontIndexJson = () => fontIndex ??= runNode("scripts/font-index.ts").catch((e: unknown) => { fontIndex = null; throw e; });
-
-const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
+const fontIndexJson = memo(() => runNode("scripts/font-index.ts"));
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
-function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
-  let pending = assetCache.get(apk);
-  if (!pending) {
-    pending = readFile(`${apkDirectory}/${apk}`)
-      .then((bytes) => openInstall(new Uint8Array(bytes)).zip)
-      .catch((error: unknown) => { assetCache.delete(apk); throw error; });
-    assetCache.set(apk, pending);
-  }
-  return pending;
-}
-
+const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(`${apkDirectory}/${apk}`))).zip);
 /** a worker (src/wasm/host/compile-worker.ts, src/process-worker.ts) bundled for the page, until a source changes */
-const workerBuilds = new Map<string, Promise<string>>();
-const compileWorker = async (entry: string) => new Response(
-  await (workerBuilds.get(entry) ?? workerBuilds.set(entry, bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } })).get(entry)!),
-  { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
+const compileWorker = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 
 type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Response>;
 const ROUTES: [RegExp, Route][] = [
@@ -268,7 +261,7 @@ export function devServer(): Plugin {
     name: "webdroid:dev-server",
     async configureServer(server) {
       await prepareSystemPackages();
-      server.watcher.on("all", () => workerBuilds.clear());
+      server.watcher.on("all", () => workerBuild.clear());
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         for (const [pattern, route] of ROUTES) {

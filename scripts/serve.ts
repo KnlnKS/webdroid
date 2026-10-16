@@ -1,10 +1,13 @@
 // HTTP through fetch handlers: a loopback server for the harnesses and tests that serve a browser, and the dev server's routes
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { mimeOf } from "../src/mime.ts";
+
+/** `stream` as the web stream a Response takes: node and the DOM declare ReadableStream apart */
+export const toWeb = (stream: Readable): ReadableStream<Uint8Array> => Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
 
 export type Handler = (req: Request) => Response | Promise<Response>;
 export interface Served { url: URL; port: number; stop(force?: boolean): void }
@@ -13,7 +16,7 @@ export interface Served { url: URL; port: number; stop(force?: boolean): void }
 export async function respond(req: IncomingMessage, res: ServerResponse, fetch: Handler): Promise<void> {
   const aborted = new AbortController();
   res.once("close", () => { if (!res.writableFinished) aborted.abort(); });
-  const body = req.method === "GET" || req.method === "HEAD" ? undefined : Readable.toWeb(req) as unknown as ReadableStream;
+  const body = req.method === "GET" || req.method === "HEAD" ? undefined : toWeb(req);
   const headers = new Headers();
   for (let i = 0; i < req.rawHeaders.length; i += 2) headers.append(req.rawHeaders[i], req.rawHeaders[i + 1]);
   try {
@@ -48,7 +51,7 @@ const SERVED_MIME: Record<string, string> = { wasm: "application/wasm", mjs: "te
 /** the file at `path` as a streamed answer to `req`, typed by its extension: 404 when there is none, the span a single
  *  byte range asks for (RangeFile reads files that way), headers alone for HEAD */
 export function fileResponse(path: string, req?: Request, headers?: HeadersInit): Response {
-  const stat = existsSync(path) ? statSync(path) : null;
+  const stat = statSync(path, { throwIfNoEntry: false });
   if (!stat?.isFile()) return new Response("not found", { status: 404 });
   const h = new Headers(headers), type = SERVED_MIME[path.slice(path.lastIndexOf(".") + 1)] ?? mimeOf(path), size = stat.size;
   if (type && !h.has("content-type")) h.set("content-type", type);
@@ -62,6 +65,6 @@ export function fileResponse(path: string, req?: Request, headers?: HeadersInit)
     status = 206;
   }
   h.set("content-length", String(end - start + 1));
-  const body = req?.method === "HEAD" || start > end ? null : Readable.toWeb(createReadStream(path, { start, end })) as unknown as ReadableStream;
+  const body = req?.method === "HEAD" || start > end ? null : toWeb(createReadStream(path, { start, end }));
   return new Response(body, { status, headers: h });
 }
