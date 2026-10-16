@@ -23,6 +23,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   (medians 45–128), mostly first-tier Java and on-demand compiling; single runs still exceed 150 ms by up to 27 ms. Compile
   Worker answers wait out the input window. `lat --ecores` measures an about 6× slower device. The 80–170 ms stalls that failed
   earlier runs were the engine freeing merged-away units in one pause, now released in batches (`World.retire`).
+  With second-tier units adopted again (`8392a936`), Komikku's cold `settings` and `appearance` taps ran 30–40 ms
+  slower than without them on a loaded host (history, "Restored units cost Komikku's taps"); unresolved.
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
   bursts of up to 30 ms. Heavy apps are reports (`"gate": false`). Scroll p95 is 17.3–17.8 ms with no missed vsyncs.
   Every re-architecture plan item is done, rejected, or measured with nothing to recover
@@ -38,11 +40,12 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-At `01e96bf7` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 170.9 s with no new missing APIs,
+At `knlnks/maps-wasm` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 180.7 s with no missing APIs,
 errors, required natives, draw errors, settle timeouts or wedges, with diagnostics from the page and every Worker, and
-every flow upgrades methods to the second tier (31-483 per flow). 1,148 unit tests pass; the FitNotes and boot-jar
-sweep is clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass. With 24 busy loops beside the gate (load
-about 45) FitNotes failed 11 steps on this branch and 14 at `89868cac`, all completion timeouts: its off-screen spinners
+every flow upgrades methods to the second tier (35-485 per flow). 1,153 unit tests pass; all 16 `wasm all` suites,
+31 of 31 `fwtest` exercises and the Google Maps sweep (351,903 methods) pass. `lat` fails on a loaded host: Mihon's launch
+is unavailable, as at `cae91309`, and Komikku's cold taps reach 155-177 ms (see Latency). At `01e96bf7`, with 24 busy
+loops beside the gate (load about 45), FitNotes failed 11 steps, and 14 at `89868cac`, all completion timeouts: its off-screen spinners
 keep vsync requested, as on the reference AVD, and the pixel rule's readbacks stretch past the bound (history, "FitNotes
 under host load").
 
