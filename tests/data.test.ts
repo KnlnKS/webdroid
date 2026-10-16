@@ -664,7 +664,7 @@ test("libcore directory operations await their canonical owner and observe peer 
     expect(await onMain(()=>vcall(file,"isDirectory","()Z"))).toBe(1);
     expect(await onMain(()=>vcall(file,"mkdir","()Z"))).toBe(0);
     const parent=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",root));
-    expect(await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))).toEqual(["created"]);
+    expect([...await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))]).toEqual(["created"]);
   }finally{release();filePathTransport.calls=previous;vfs.rmdir(path);vfs.rmdir(root);}
 });
 

@@ -27,6 +27,8 @@ export default defineConfig(({ command }) => ({
     // Java runs on the Wasm tier, which suspends through JSPI; --expose-gc lets heap limits be judged on live data
     execArgv: ["--experimental-wasm-jspi", "--expose-gc"],
     setupFiles: ["tests/platform.ts"],
+    // node imports the sources as the scripts do: Vite's runner would rewrite the import() of functions tests hand a page
+    experimental: { viteModuleRunner: false, nodeLoader: false },
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

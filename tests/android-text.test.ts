@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java.ts";
+import { loadLibcore, loadSystemFonts, fakeStyles, scall, thrown } from "./java.ts";
 import "../src/natives.ts";
 import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
@@ -34,7 +34,7 @@ describe("locale-span", () => {
     expect(await vcall(restored, "getSpanTypeId", "()I")).toBe(23);
     const empty = await newObj("android/text/style/LocaleSpan", "(Ljava/util/Locale;)V", null);
     expect(await vcall(empty, "getLocale", "()Ljava/util/Locale;")).toBeNull();
-    await expect(vcallAsync(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint)).rejects.toMatchObject({ msg: "locales cannot be null or empty" });
+    expect(await thrown(() => vcallAsync(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint))).toMatch(/: locales cannot be null or empty$/);
   });
 });
 

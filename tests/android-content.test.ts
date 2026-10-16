@@ -154,7 +154,7 @@ describe("package-installer", () => {
     await vcall(out, "write", "([B)V", Int8Array.of(1, 2, 3));
     await vcall(session, "fsync", "(Ljava/io/OutputStream;)V", out);
     await vcall(out, "close", "()V");
-    expect(await vcall(session, "getNames", "()[Ljava/lang/String;")).toEqual(["base.apk"]);
+    expect([...await vcall(session, "getNames", "()[Ljava/lang/String;")]).toEqual(["base.apk"]);
     expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toEqual(Uint8Array.of(1, 2, 3));
     const info = await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id);
     expect(await vcall(info, "getInstallerPackageName", "()Ljava/lang/String;")).toBe("test.installer");

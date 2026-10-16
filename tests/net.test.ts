@@ -76,7 +76,7 @@ describe("http-stream", () => {
       expect([...out]).toEqual([0, 1, 2, 0, 0]);
       expect(await vcall(stream, "available", "()I")).toBe(1);
       expect(await vcall(stream, "read", "()I")).toBe(3);
-      await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Read timed out" });
+      expect(await thrown(() => vcallAsync(stream, "read", "()I"))).toMatch(/: Read timed out$/);
       controller!.enqueue(Uint8Array.of(4, 5, 6, 7));
       expect(await vcall(stream, "skip", "(J)J", 2n)).toBe(2n);
       expect(await vcall(stream, "read", "()I")).toBe(6);
@@ -86,7 +86,7 @@ describe("http-stream", () => {
       expect(await vcall(stream, "read", "([BII)I", out, 0, 0)).toBe(0);
       expect(await vcall(stream, "markSupported", "()Z")).toBe(0);
       await vcall(connection, "disconnect", "()V");
-      await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
+      expect(await thrown(() => vcallAsync(stream, "read", "()I"))).toMatch(/: Stream closed$/);
     });
   }, 5000);
 
@@ -186,7 +186,7 @@ describe("http-upload", () => {
       expect(headers.get("content-type")).toBe("application/binary");
       expect(headers.get("x-example")).toBe("value");
       expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", null)).toBe("HTTP/1.1 200 OK");
-      await expect(vcallAsync(connection, "getOutputStream", "()Ljava/io/OutputStream;")).rejects.toMatchObject({ msg: "Cannot write output after reading input" });
+      expect(await thrown(() => vcallAsync(connection, "getOutputStream", "()Ljava/io/OutputStream;"))).toMatch(/: Cannot write output after reading input$/);
     } finally { globalThis.fetch = original; }
   });
 });
@@ -306,7 +306,7 @@ describe("ssl-parameters", () => {
     await vcall(socket, "setSSLParameters", "(Ljavax/net/ssl/SSLParameters;)V", parameters);
     await vcall(parameters, "setApplicationProtocols", "([Ljava/lang/String;)V", ["changed"]);
     const stored = await vcall(socket, "getSSLParameters", "()Ljavax/net/ssl/SSLParameters;");
-    expect(await vcall(stored, "getApplicationProtocols", "()[Ljava/lang/String;")).toEqual(["h2", "http/1.1"]);
+    expect([...await vcall(stored, "getApplicationProtocols", "()[Ljava/lang/String;")]).toEqual(["h2", "http/1.1"]);
     expect(await vcall(socket, "getApplicationProtocol", "()Ljava/lang/String;")).toBeNull();
     await expect(vcallAsync(parameters, "setApplicationProtocols", "([Ljava/lang/String;)V", [""])).rejects.toBeDefined();
   });
