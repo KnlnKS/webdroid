@@ -47,7 +47,7 @@ export const refOf = (v: unknown): object | undefined => typeof v === "object" &
 const PROBES = new Set(["then", "toJSON", "message", "stack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
-/** a native call's scope: the arrays it copied, each stored back when it ends, and the scratch it reserved ([sp, top), sp -1 until it reserves any) */
+/** a native call's scope: the arrays it copied, each stored back when it ends */
 class Scope implements BridgeScope {
   copies: { java: object; host: object; store: () => void }[] = [];
   held = false;
