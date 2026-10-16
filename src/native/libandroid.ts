@@ -5,7 +5,8 @@
 import { mem, anchor } from "./mem";
 import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
+import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface";
+import { activateEglCurrent } from "./egl-current";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { after, mainThread } from "../jvm/natives/jentry";
@@ -74,6 +75,18 @@ export function nativeWindowFor(surface: GlSurface): number {
 }
 export function windowOf(h: number): GlSurface | null { return windows.get(h)?.surface ?? null; }
 const YV12 = 0x32315659;
+
+// ── ASurfaceTexture (surface_texture.cpp): a handle on a Java SurfaceTexture's consumer, whose release frees the handle only.
+// GL calls act in the calling thread's context.
+const surfaceTextures = new Map<number, NativeSurfaceTexture>();
+let nextSurfaceTexture = 1;
+const inContext = <T>(cpu: Cpu, a: ArgReader, op: (st: NativeSurfaceTexture) => T): T | number => {
+  const st = surfaceTextures.get(a.i());
+  if (!st) return BAD_VALUE;
+  activateEglCurrent(cpu.jthread);
+  return op(st);
+};
+
 function lockWindow(_cpu: Cpu, args: ArgReader): number {
   const buffer = W(args), out = args.p(), dirty = args.p();
   if (!buffer || !out) return -22;
@@ -252,6 +265,23 @@ export function ndkInit(): void {
       return 0;
     },
     ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
+
+    ASurfaceTexture_fromSurfaceTexture: (cpu, a) => {
+      a.p(); const st = surfaceTextureOf(deref(a.i(), cpu));
+      if (!st) return 0;
+      surfaceTextures.set(nextSurfaceTexture, st);
+      return nextSurfaceTexture++;
+    },
+    ASurfaceTexture_release: (_c, a) => { surfaceTextures.delete(a.i()); },
+    ASurfaceTexture_acquireANativeWindow: (_c, a) => { const st = surfaceTextures.get(a.i()); return st && !st.abandoned ? nativeWindowFor(st.surface) : 0; },
+    ASurfaceTexture_attachToGLContext: (cpu, a) => inContext(cpu, a, (st) => st.attach(a.u())),
+    ASurfaceTexture_detachFromGLContext: (cpu, a) => inContext(cpu, a, (st) => st.detach()),
+    ASurfaceTexture_updateTexImage: (cpu, a) => inContext(cpu, a, (st) => st.update()),
+    ASurfaceTexture_getTransformMatrix: (_c, a) => {
+      const st = surfaceTextures.get(a.i()), out = a.p();
+      if (st) st.matrix.forEach((v, i) => mem.stf32(out + 4 * i, v));
+    },
+    ASurfaceTexture_getTimestamp: (_c, a) => surfaceTextures.get(a.i())?.timestamp ?? 0n,
 
     ALooper_prepare: (cpu, a) => prepareLooper(cpu, !!(a.i() & 1)),
     ALooper_forThread: (cpu) => looperOf.get(cpu) ?? (cpu.jthread.looper ? prepareLooper(cpu, false) : 0),
