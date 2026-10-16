@@ -625,12 +625,22 @@ export class World {
     return mb.importFunc("rt", "link", mb.addFuncType([T.i32], []));
   }
   /** Lazy-link stubs, one per signature for every slot of it: a call through the table names its slot in rt.callee (CALLEE), which the stub links and
-   *  calls again. A module makes the stubs of every signature a request lacks. */
+   *  calls again. A module's cost to the engine is mostly fixed, so the module making the stubs a request lacks also makes those of every signature
+   *  the dexes loaded since the last one declare. */
   private stubs = new Map<string, Function>();
+  private stubbedDexes = new Set<DexFile>();
   private stubsFor(kinds: Kinds[]): Function[] {
-    const lacking = new Map<string, Kinds>();
-    for (const k of kinds) if (!this.stubs.has(stubKey(k))) lacking.set(stubKey(k), k);
+    const lacking = new Map<string, Kinds>(), want = (k: Kinds) => { const key = stubKey(k); if (!this.stubs.has(key)) lacking.set(key, k); };
+    kinds.forEach(want);
     if (lacking.size) {
+      for (const p of [this.prog.base, this.prog]) for (const [dex] of p?.loadedDexes() ?? []) {
+        if (this.stubbedDexes.has(dex)) continue;
+        this.stubbedDexes.add(dex);
+        for (const s of dex.shorties()) {
+          const params = [...s.slice(1)].map(kindOf), ret: Kind | "V" = s[0] === "V" ? "V" : kindOf(s[0]);
+          want({ params, ret }); want({ params: ["L" as Kind, ...params], ret });
+        }
+      }
       const mb = new ModuleBuilder(); declareBase(mb);
       mb.importGlobal("rt", "callee", T.i32, true);
       mb.importTable("rt", "table", T.funcref, 0);

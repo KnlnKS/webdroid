@@ -176,15 +176,19 @@ export class DexFile {
   stringLen(i: number): number {
     return new Reader(this.bytes, this.view.getUint32(this.stringIdsOff + i * 4, true)).uleb();
   }
-  string(i: number): string {
-    let s = this.stringCache[i];
-    if (s === undefined) {
-      const off = this.view.getUint32(this.stringIdsOff + i * 4, true);
-      const r = new Reader(this.bytes, off);
-      const len = r.uleb();
-      s = this.stringCache[i] = decodeModifiedUtf8(this.bytes, r.pos, this.bytes.length, len);
+  string(i: number): string { return this.stringCache[i] ??= this.decodeString(i); }
+  private decodeString(i: number): string {
+    const r = new Reader(this.bytes, this.view.getUint32(this.stringIdsOff + i * 4, true)), len = r.uleb();
+    return decodeModifiedUtf8(this.bytes, r.pos, this.bytes.length, len);
+  }
+  /** the shorty descriptors of its protos, each once, without keeping their strings */
+  shorties(): Set<string> {
+    const out = new Set<string>(), seen = new Set<number>();
+    for (let i = 0; i < this.protoCache.length; i++) {
+      const s = this.view.getUint32(this.protoIdsOff + i * 12, true);
+      if (!seen.has(s)) { seen.add(s); out.add(this.stringCache[s] ?? this.decodeString(s)); }
     }
-    return s;
+    return out;
   }
 
   /** the index of string `s`, or -1. string_ids sort by UTF-16 code units, which is how JS compares strings (ART's verifier rejects any other order). */
