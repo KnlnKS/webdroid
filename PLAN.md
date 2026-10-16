@@ -86,7 +86,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 1. **Cold taps: fewer, cheaper modules.** A tap without a saved build compiles the methods it first calls, one
    module per method; compiling ahead covers 16–45% of those links. The compiler takes 52% of `linkSlot`. A
    Chrome Worker charges about 18.5 µs per module against Node's 4.2 µs, and no V8 flag changes that, so fold
-   `linkEnsure` (603 modules) and the stub pools (318) into fewer modules. A callee prediction must hit more than
+   `linkEnsure` (603 modules) into fewer modules. A callee prediction must hit more than
    about 70% to pay inside a tap (single-target callees hit 64%).
 2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
    serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
@@ -96,9 +96,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    content); do not raise the limit.
 3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
    launch budget is not rechecked). With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
-   native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. The main process holds
-   ~1.34 GB live, ~240 MB of it Program/dex metadata and ~80 MB pool stubs (358,000, 72% for slots never looked up;
-   passing the slot at the call site would let one stub per signature serve every unlinked method).
+   native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. At its feed the main
+   process holds ~1.16 GB after a full collection, against 1.35 GB before one lazy-link stub per signature and the
+   slimmer Program/dex metadata (2026-10-16). Its e2e flow now picks an adult birthdate on the guest birthdate screen.
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
@@ -155,9 +155,9 @@ Unranked; each needs a measurement or a check against the current code before wo
   `getImageData`/`putImageData` every frame; WebGL2 shader passes would remove the readback. Every frame replays the
   whole root display list (no damage tracking); measure raster time on a hardware GPU first.
 - **GLES:** `keepsClean` validation excludes draws, uniforms and state setters, so `gl.getError` follows them;
-  rangeless client-array indexed draws read the element buffer back.
-- **ARM JIT:** ARM32 regions load and spill all 15 GPRs, and A64 regions end at 4 KiB pages, so a call or return to
-  another page spills and reloads. Precise ARM32 register sets and multi-page regions would help CPU-bound games.
+  Google Maps' two `getError`s per frame come through the untracked Java bindings (history, EGL/GLES).
+- **ARM JIT:** ARM32 regions still end at 4 KiB pages, so a call or return to another page spills and reloads (A64
+  regions span pages and ARM32 ones spill only the registers they name since 2026-10-16); CPU-bound games are unmeasured.
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
