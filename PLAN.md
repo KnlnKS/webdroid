@@ -46,9 +46,8 @@ of 12-32: typecheck passes; 1,158 unit tests pass under Vitest; 31 of 31 `fwtest
 suites pass; `build:prod` and `worker:check` pass; `textcmp FitNotes.apk` matches 108 of 108 layouts and 184 of 184
 hyphenated lines. The quick e2e gate reaches 6 of 7 flows, Doodle Jump failing as below; interleaved with `2f48474e` on
 Bun, both stacks drew its title loop at the same cost (history, "Doodle Jump under load"). `conform` guava
-(368,772/368,794) and jsr166 (3,209/3,211) have no regressions; ojluni-time reports 4 `TestTextParserWithLocale` names
-missing on both stacks, since its non-ISO `chronoLocalDate` names carry today's date and the baseline was taken on
-2026-10-13. `lat` fails on both stacks alike: Mihon's launch is unavailable (once, at a load of 32, its process died of a
+(368,772/368,794), jsr166 (3,209/3,211) and ojluni-time (30,596/30,602) have no regressions, once ojluni-time's
+clock-derived non-ISO dates in test names hash stably. `lat` fails on both stacks alike: Mihon's launch is unavailable (once, at a load of 32, its process died of a
 `NullPointerException` instead; four reruns did not repeat it), and Komikku's `start`, `more` and
 `appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each.
 
