@@ -364,15 +364,24 @@ pub fn neonLongOp(w: u32) u32 {
     return if (w & 0x40 != 0) 8 + (bits(w, 10, 2) << 1) + bits(w, 8, 1) else bits(w, 8, 4);
 }
 
+/// Whether a by-scalar form is one of those long forms, which neonLong computes.
+pub fn neonLongByScalar(w: u32) bool {
+    const op = bits(w, 8, 4);
+    return op & 2 != 0 and op < 12;
+}
+
+/// A by-scalar form's Dm[x]: the D register and the lane.
+pub fn neonScalar(w: u32, size: u32) struct { u32, u32 } {
+    return if (size == 1) .{ bits(w, 0, 3), (bits(w, 5, 1) << 1) | bits(w, 3, 1) } else .{ bits(w, 0, 4), bits(w, 5, 1) };
+}
+
 /// The by-scalar forms' Dm[x], in every lane of v18.
 fn splatScalar(c: *Cpu, w: u32, size: u32) void {
-    if (size == 1) {
-        const lane = @as([*]u16, @ptrCast(vreg(u64, c, bits(w, 0, 3))))[(bits(w, 5, 1) << 1) | bits(w, 3, 1)];
-        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(lane);
-    } else {
-        const lane = @as([*]u32, @ptrCast(vreg(u64, c, bits(w, 0, 4))))[bits(w, 5, 1)];
-        @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(lane);
-    }
+    const m, const lane = neonScalar(w, size);
+    if (size == 1)
+        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(@as([*]u16, @ptrCast(vreg(u64, c, m)))[lane])
+    else
+        @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(@as([*]u32, @ptrCast(vreg(u64, c, m)))[lane]);
 }
 
 fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
@@ -398,14 +407,14 @@ fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
 
 fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const scalar = w & 0xfe800050 == 0xf2800040 and bits(w, 20, 2) != 3;
-    const op = bits(w, 8, 4);
-    if (scalar and op & 2 != 0 and op < 12) return neonLong(c, w, pc);
+    if (scalar and neonLongByScalar(w)) return neonLong(c, w, pc);
     const size = bits(w, 20, 2);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
-    const m = if (scalar) bits(w, 0, if (size == 1) @as(u32, 3) else 4) else (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = if (scalar) bits(w, 24, 1) else bits(w, 6, 1);
     if (q != 0 and (d | n | (if (scalar) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
+    const op = bits(w, 8, 4);
     const extract = w & 0xffb00010 == 0xf2b00000;
     if (extract and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
     const b = bits(w, 4, 1);

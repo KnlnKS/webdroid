@@ -97,13 +97,13 @@ fn shuffle(b: *Buf, mask: [16]u8) void {
 fn same(b: *Buf, w: u32) bool {
     const size = bits(w, 20, 2);
     const scalar = is(w, 0xfe800050, 0xf2800040) and size != 3;
-    const op = bits(w, 8, 4);
-    if (scalar and op & 2 != 0 and op < 12) return long(b, w);
+    if (scalar and arm.neonLongByScalar(w)) return long(b, w);
     const d = reg(w, 22, 12);
     const n = reg(w, 7, 16);
-    const m = if (scalar) bits(w, 0, if (size == 1) 3 else 4) else reg(w, 5, 0);
+    const m = reg(w, 5, 0);
     const q = (if (scalar) bits(w, 24, 1) else bits(w, 6, 1)) != 0;
     if (q and (d | n | (if (scalar) 0 else m)) & 1 != 0) return false;
+    const op = bits(w, 8, 4);
     const b4 = w & 0x10 != 0;
     const u = w & (1 << 24) != 0;
     const f_sub = w & (1 << 21) != 0;
@@ -493,10 +493,8 @@ fn shift(b: *Buf, w: u32) bool {
 
 /// A by-scalar form's Dm[x].
 fn scalarLane(w: u32, size: u32) Lane {
-    return if (size == 1)
-        .{ .off = OFF_V + bits(w, 0, 3) * 8 + ((bits(w, 5, 1) << 1) | bits(w, 3, 1)) * 2, .esz = 1 }
-    else
-        .{ .off = OFF_V + bits(w, 0, 4) * 8 + bits(w, 5, 1) * 4, .esz = 2 };
+    const m, const lane = arm.neonScalar(w, size);
+    return .{ .off = OFF_V + m * 8 + (lane << @intCast(size)), .esz = size };
 }
 
 /// VMLAL, VMLSL and VMULL, by vector or by scalar: widening products of the D operands' lanes.
