@@ -54,7 +54,7 @@ if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== reg
     cx.callMethod(c, prog.resolve("sun/misc/Unsafe", "getInt", "(Ljava/lang/Object;J)I")!);
     c.i32((offset & 3) * 8).raw(OP.i32_shr_u).i32(255).raw(OP.i32_and);
   } });
-  if (w.table.get(slot)!() !== 0x83) throw new Error("Unsafe aligned byte read selected another field");
+  if (w.invoker([], "I")(slot, -1) !== 0x83) throw new Error("Unsafe aligned byte read selected another field");
 }
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const cases = methods.map((m) => ({ m, args: [0n] }));
