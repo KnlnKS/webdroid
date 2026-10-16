@@ -1,6 +1,6 @@
 # microG Services and Companion
 
-Upstream: https://github.com/microg/GmsCore/tree/v0.3.16.252432
+Upstream: https://github.com/microg/GmsCore/tree/v0.3.17.252432
 
 Source URLs, APK SHA-256 digests and generated-index digests are pinned in
 `src/shell/system-packages.ts`. Generated files live in `vendor/microg/`, which is
@@ -21,7 +21,7 @@ verify decoded entries and reconstructed source fragments. No bytecode or native
 library is patched. Android execution remains entirely in the browser.
 
 microG is Copyright 2013–2025 microG Project Team, Apache License 2.0.
-Upstream license: https://github.com/microg/GmsCore/blob/v0.3.16.252432/LICENSE
+Upstream license: https://github.com/microg/GmsCore/blob/v0.3.17.252432/LICENSE
 Bundled dependencies retain their upstream licenses in the APKs.
 
 Signature compatibility reads the APK's own `fake-signature` manifest metadata, only
