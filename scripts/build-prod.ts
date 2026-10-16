@@ -69,7 +69,8 @@ export function prodAssets(): Plugin {
       this.emitFile({ type: "asset", fileName: "process-worker.js", source: processWorker });
       this.emitFile({ type: "asset", fileName: "font-index.json", source: fontIndex });
     },
-    async closeBundle() {
+    async closeBundle(error) {
+      if (error) return;
       await Promise.all([...STATIC.map(([from, to = from]) => cp(from, join(out, to), { recursive: true, dereference: true })), copyAosp(out), copyAot(out)]);
       console.log(`Production assets ready in ${out}/`);
     },

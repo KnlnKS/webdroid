@@ -1,10 +1,13 @@
 import "./scripts/node-env.ts";
 import { defineConfig } from "vite-plus";
 import { ensureGenerated } from "./scripts/generated.ts";
+import { NODE_FLAGS } from "./scripts/node.ts";
+
+// before the plugins load: the dev server's modules import the generated ones
+await ensureGenerated();
 
 export default defineConfig(({ command }) => ({
   plugins: [
-    { name: "webdroid:generated", configResolved: () => ensureGenerated() },
     // each loads the runtime's modules, so only the command that uses it does
     command === "serve" && !process.env.VITEST && import("./server.ts").then((m) => m.devServer()),
     command === "build" && import("./scripts/build-prod.ts").then((m) => m.prodAssets()),
@@ -24,8 +27,7 @@ export default defineConfig(({ command }) => ({
   build: { rolldownOptions: { external: [/core(\.safe)?\.wasm\.ts$/] } },
   test: {
     include: ["{src,tests}/**/*.test.ts"],
-    // Java runs on the Wasm tier, which suspends through JSPI; --expose-gc lets heap limits be judged on live data
-    execArgv: ["--experimental-wasm-jspi", "--expose-gc"],
+    execArgv: NODE_FLAGS,
     setupFiles: ["tests/platform.ts"],
     // node imports the sources as the scripts do: Vite's runner would rewrite the import() of functions tests hand a page
     experimental: { viteModuleRunner: false, nodeLoader: false },
