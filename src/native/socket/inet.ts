@@ -43,12 +43,15 @@ abstract class InetSocket extends Socket {
    *  ENETUNREACH for an IPv4(-mapped) one on an IPV6_V6ONLY socket */
   protected familyError(ep: Endpoint): number {
     return this.family === AF_INET && ep.address.length === 16 ? -E.AFNOSUPPORT
-      : this.family === AF_INET6 && ep.address.length === 4 && this.option(IPPROTO_IPV6, IPV6_V6ONLY) ? -E.NETUNREACH : 0;
+      : ep.address.length === 4 && this.v6only ? -E.NETUNREACH : 0;
   }
+  get v6only(): boolean { return this.family === AF_INET6 && !!this.option(IPPROTO_IPV6, IPV6_V6ONLY); }
   private portTaken(ep: Endpoint): boolean {
     for (const other of this.bound) {
       const local = other.local!;
       if (other === this || local.port !== ep.port) continue;
+      // an IPV6_V6ONLY socket leaves the port's IPv4 addresses to IPv4 sockets
+      if (other.family !== this.family && (this.v6only || other.v6only)) continue;
       const overlap = isAny(local.address) || isAny(ep.address) || sameBytes(local.address, ep.address);
       const shared = this.option(SOL_SOCKET, SO_REUSEADDR) && other.option(SOL_SOCKET, SO_REUSEADDR) && !this.exclusive(other);
       if (overlap && !shared) return true;
@@ -291,7 +294,7 @@ function listenerFor(ep: Endpoint): TcpSocket | null {
     if (!s.backlog || s.local!.port !== ep.port) continue;
     const local = s.local!.address;
     if (s.family === AF_INET && ep.address.length === 16) continue;
-    if (s.family === AF_INET6 && ep.address.length === 4 && s.option(IPPROTO_IPV6, IPV6_V6ONLY)) continue;
+    if (ep.address.length === 4 && s.v6only) continue;
     if (sameBytes(local, ep.address) || isAny(local)) return s;
   }
   return null;
