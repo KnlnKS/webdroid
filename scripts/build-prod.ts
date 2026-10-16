@@ -50,27 +50,31 @@ async function copyAot(out: string): Promise<void> {
 }
 
 export function prodAssets(): Plugin {
-  let out = "dist";
+  let out = "dist", systemPackages: Promise<string>, emitted: Promise<string[]>;
   return {
     name: "webdroid:prod-assets",
     configResolved: (config) => { out = config.build.outDir; },
-    async buildStart() {
+    buildStart() {
       for (const name of aospFiles) if (!existsSync(`vendor/aosp/${name}`)) throw new Error(`Missing vendor/aosp/${name}; run pnpm gen-framework`);
-      // in node of its own, as it loads the runtime (runNode)
-      process.stdout.write(await runNode("scripts/system-packages.ts"));
-    },
-    async generateBundle() {
-      const [compileWorker, processWorker, fontIndex] = await Promise.all([
+      // beside the page's build: the workers and the font index are emitted with it, and the system packages (in node of their own, as
+      // they load the runtime) are copied after it. Each failure surfaces where its result is awaited.
+      systemPackages = runNode("scripts/system-packages.ts");
+      emitted = Promise.all([
         bundle("src/wasm/host/compile-worker.ts", { minify: true, define: PRODUCTION }),
         bundle("src/process-worker.ts", { minify: true, define: PRODUCTION }),
         runNode("scripts/font-index.ts"),
       ]);
+      for (const pending of [systemPackages, emitted]) pending.catch(() => {});
+    },
+    async generateBundle() {
+      const [compileWorker, processWorker, fontIndex] = await emitted;
       this.emitFile({ type: "asset", fileName: "wasm-compile-worker.js", source: compileWorker });
       this.emitFile({ type: "asset", fileName: "process-worker.js", source: processWorker });
       this.emitFile({ type: "asset", fileName: "font-index.json", source: fontIndex });
     },
     async closeBundle(error) {
       if (error) return;
+      process.stdout.write(await systemPackages);
       await Promise.all([...STATIC.map(([from, to = from]) => cp(from, join(out, to), { recursive: true, dereference: true })), copyAosp(out), copyAot(out)]);
       console.log(`Production assets ready in ${out}/`);
     },
