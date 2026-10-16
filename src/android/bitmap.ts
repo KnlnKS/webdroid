@@ -66,7 +66,7 @@ export class NativeBitmap {
     if (!this.cv) {
       this.cv = new OffscreenCanvas(this.w, this.h);
       this.cx = this.cv.getContext("2d", { willReadFrequently: true })!;
-      if (this.img) { this.cx.drawImage(this.img, 0, 0); this.img.close(); this.img = null; }
+      if (this.img) { this.cx.drawImage(this.img, 0, 0); this.img = null; }
       else if (this.px) this.cx.putImageData(new ImageData(this.px, this.w, this.h), 0, 0);
     }
     return this.cv;
@@ -93,8 +93,8 @@ export class NativeBitmap {
   }
   /** a decoded image as the whole contents */
   setImage(img: ImageBitmap): void { this.dropPixels(); this.img = img; this.genId = nextGeneration(); }
+  /** a display list recorded before keeps drawing a decoded image, as hwui's holds its own reference to the pixels: the collector frees it, not close */
   private dropPixels(): void {
-    this.img?.close();
     this.cv = this.cx = this.px = this.img = null;
   }
   /** Bitmap::reconfigure: the same allocation with new dimensions and undefined contents */
