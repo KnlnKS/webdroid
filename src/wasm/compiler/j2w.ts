@@ -148,6 +148,7 @@ export class Compiler implements Base {
     Object.assign(this, declareBase(mb));
     this.baseTypes = mb.types.length;
     this.classStruct.set("java/lang/Object", this.tObj);
+    this.globalImports.set("rt.callee", mb.importGlobal("rt", "callee", T.i32, true));
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
     this.str = new StructStrings(this);

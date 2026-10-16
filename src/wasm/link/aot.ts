@@ -84,7 +84,7 @@ export interface CHeader extends UnitHeader {
   absent: number[];
 }
 // Emitted class import names replace type reflection, which can reject valid GC references.
-export const VERSION = 15;
+export const VERSION = 16;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -105,7 +105,7 @@ function numberingDiff(a: Numbering, b: Numbering): string {
 }
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 18;
+export const APP_VERSION = 19;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
 export interface AppIndex {
@@ -201,7 +201,6 @@ export class AotRuntime {
   private rejectedData = new Set<string>();
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
-  private originalStubs = new Map<number, Function>();
   private overridden = new Set<number>();
   /** the overridden slots by the code module that holds them, made from `overridden` when it has grown */
   private overriddenBy = new Map<number, number[]>();
@@ -394,7 +393,7 @@ export class AotRuntime {
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
     if (head.version !== VERSION) { this.rejectedData.add(file); return undefined; }
-    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
+    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubImports(mod) }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
     for (const id of head.touch) this.touch(id);
@@ -564,14 +563,6 @@ export class AotRuntime {
       for (const slot of this.overridden) { const m = this.cOf[w.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
       this.overriddenSeen = this.overridden.size;
     }
-    // the lazy stubs D installed where this code is undone as it loads or once a missing class arrives, kept before C overwrites them;
-    // Table.get makes a JS function of each, too dear for every slot
-    for (const slot of [...head.missing.map(([, owner]) => owner), ...this.overriddenBy.get(c) ?? []]) {
-      const state = w.peek(slot);
-      if (absent.has(slot) || this.originalStubs.has(slot) || state?.k === "method" && state.done) continue;
-      const stub = w.table.get(slot);
-      if (stub) this.originalStubs.set(slot, stub);
-    }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
     if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
@@ -611,11 +602,6 @@ export class AotRuntime {
     this.appDOf.clear();
     this.patchesOver.clear();
     this.synthIn.clear();
-  }
-  /** the lazy-link stub for a slot whose precompiled code was undone */
-  stub(slot: number): Function | undefined {
-    const w = this.w, s = w.peek(slot);
-    return s?.k === "method" ? this.originalStubs.get(slot) ?? w.restoreStub(slot, s.m) : undefined;
   }
   // ---- stack traces
   /** the trace of function `name` of a loaded code module, whose section is indexed the first time a stack needs one of its functions and read function by function */

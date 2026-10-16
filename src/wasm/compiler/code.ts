@@ -1,4 +1,7 @@
 import { T, sleb, uleb, vt, type VT, type FuncBytes, functionIndex } from "./wasmbin.ts";
+/** The global a call through the slot table (table 0) first sets to the slot it calls, which a lazy-link stub serving every slot of its signature reads:
+ *  global 0 of every module with such calls */
+export const CALLEE = 0;
 /** instruction emitter for one function body */
 export class Code {
   nparams: number;
@@ -55,7 +58,11 @@ export class Code {
   targets: number[] = [];
   indirect = 0;
   call(f: number): this { this.mark(); this.targets.push(f); this.b.push(0x10); functionIndex(f, this.b); return this; }
-  callIndirect(type: number, table = 0): this { this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
+  private calleeLocal = -1;
+  callIndirect(type: number, table = 0): this {
+    if (table === 0) { const s = this.calleeLocal < 0 ? (this.calleeLocal = this.newLocal(T.i32)) : this.calleeLocal; this.ltee(s).gset(CALLEE).lget(s); }
+    this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this;
+  }
   callRef(type: number): this { this.indirect++; this.b.push(0x14); uleb(type, this.b); return this; }
   block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
   loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
