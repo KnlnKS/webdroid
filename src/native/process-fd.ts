@@ -63,6 +63,13 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
   });
 }
 
+/** a file's bytes, from the realm that owns its path */
+export async function processFileBytes(path: string): Promise<Uint8Array | null> {
+  if (!isMutablePath(path) || !descriptorTransport.calls) return await vfs.readFile(path);
+  const fd = await processOpenFd(path, 0);
+  if (fd < 0) return null;
+  try { return await processFdBytes(fd); } finally { await processCloseFd(fd); }
+}
 export function processCloseFd(fd: number): number | Promise<number> {
   const remote = openFd(fd)?.remote, closed = javaCloseFd(fd);
   return remote?.close ?? closed;
