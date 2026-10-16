@@ -292,6 +292,8 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
 });
 
 const AI = "android/content/pm/ActivityInfo";
+/** whether an ActivityInfo is the component `ref` names */
+const isActivity = (info: JObj, ref: ComponentRef) => getDeclared<string>(info, AI, "packageName") === ref.pkg && getDeclared<string>(info, AI, "name") === ref.cls;
 /** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
@@ -300,7 +302,7 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = yield* intentQuery$(intent), system = systemActivity(q, false) ??
-      (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
+      (info && isActivity(info, { pkg: "android", cls: SYSTEM_ACTIVITY }) ? systemActivity(q) : null);
     if (system) { detached(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode)), logUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
     const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
@@ -391,9 +393,7 @@ function* finish(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<
  *  new instance; with none, only `r` finishes. Returns whether the destination was in the task. */
 function* navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, resultData: JObj | null): Gen<boolean> {
   const target = yield* componentParts$(yield vcall(dest, "getComponent", "()Landroid/content/ComponentName;"));
-  let parent: ActivityRecord | null = null;
-  for (let i = stack.indexOf(r) - 1; i >= 0 && target && !parent; i--)
-    if (getDeclared<string>(stack[i].info, AI, "packageName") === target.pkg && getDeclared<string>(stack[i].info, AI, "name") === target.cls) parent = stack[i];
+  const parent = target ? stack.slice(0, stack.indexOf(r)).reverse().find((p) => isActivity(p.info, target)) ?? null : null;
   const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
   const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
     ((yield vcall(dest, "getFlags", "()I")) & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
