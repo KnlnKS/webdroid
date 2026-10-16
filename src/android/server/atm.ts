@@ -293,29 +293,55 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
 
 const AI = "android/content/pm/ActivityInfo";
 const isActivity = (info: JObj, ref: ComponentRef) => getDeclared<string>(info, AI, "packageName") === ref.pkg && getDeclared<string>(info, AI, "name") === ref.cls;
-/** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
+/** ActivityStarter.execute up to the start itself: the resolved activity starts here, or through the
+ *  broker in its own process (`remote`, which the caller awaits), or an error code */
+function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number):
+  Gen<{ run: () => Gen<unknown>; remote: boolean } | number> {
+  const info = yield* resolveActivity(intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA);
+  // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
+  const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
+  const q = yield* intentQuery$(intent), system = systemActivity(q, false) ??
+    (info && isActivity(info, { pkg: "android", cls: SYSTEM_ACTIVITY }) ? systemActivity(q) : null);
+  if (system) return { run: () => runSystemActivity(system, intent, resultRecord, resultWho, requestCode), remote: false };
+  if (!info) return START_INTENT_NOT_RESOLVED;
+  const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+  const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
+  if (runsHere(pkg, process)) return { run: () => startActivity(app, copy, info, resultRecord, resultWho, requestCode), remote: false };
+  const launch = activityTransport.launch;
+  if (!launch) return START_INTENT_NOT_RESOLVED;
+  return { remote: true, run: function* () {
+    yield launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+      caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
+      deliver: (resultCode, data) => detached(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data))), logUncaught),
+    } : undefined);
+  } };
+}
+/** a resolved start: the pause a local start waits for runs on the caller's main thread, so the
+ *  call returns once it is under way, as ActivityStarter returns once the pause is scheduled */
+function* runStarts(starts: { run: () => Gen<unknown>; remote: boolean }[]): Gen<void> {
+  if (starts.length === 1 && starts[0].remote) { yield* starts[0].run(); return; }
+  detached(() => rt.drive(function* () { for (const start of starts) yield* start.run(); }()), logUncaught);
+}
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
   try {
-    const info = yield* resolveActivity(intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA);
-    // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
-    const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
-    const q = yield* intentQuery$(intent), system = systemActivity(q, false) ??
-      (info && isActivity(info, { pkg: "android", cls: SYSTEM_ACTIVITY }) ? systemActivity(q) : null);
-    if (system) { detached(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode)), logUncaught); return START_SUCCESS; }
-    if (!info) return START_INTENT_NOT_RESOLVED;
-    const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
-    const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
-    // the pause a local start waits for runs on the caller's main thread, so the call returns once it
-    // is under way, as ActivityStarter returns once the pause is scheduled
-    if (runsHere(pkg, process)) detached(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)), logUncaught);
-    else if (activityTransport.launch) {
-      yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
-        caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
-        deliver: (resultCode, data) => detached(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data))), logUncaught),
-      } : undefined);
+    const start = yield* resolveStart(app, intent, resolvedType, resultTo, resultWho, requestCode);
+    if (typeof start === "number") return start;
+    yield* runStarts([start]);
+    return START_SUCCESS;
+  } finally { transitions--; }
+});
+/** ActivityStartController.startActivities: each intent resolved, then started in order, the last on top */
+const startActivities = driven(function* (app: JObj, intents: JObj[], resolvedTypes: (string | null)[] | null, resultTo: JObj | null): Gen<number> {
+  transitions++;
+  try {
+    const starts = [];
+    for (const [i, intent] of intents.entries()) {
+      const start = yield* resolveStart(app, intent, resolvedTypes?.[i] ?? null, i ? null : resultTo, null, -1);
+      if (typeof start === "number") return start;
+      starts.push(start);
     }
-    else return START_INTENT_NOT_RESOLVED;
+    yield* runStarts(starts);
     return START_SUCCESS;
   } finally { transitions--; }
 });
@@ -523,4 +549,7 @@ export const activityTaskMethods = {
   "startActivity(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IILandroid/app/ProfilerInfo;Landroid/os/Bundle;)I":
     (app: JObj, _pkg: string, _feature: string, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number) =>
       startActivityFor(app, intent, resolvedType, resultTo, resultWho, requestCode),
+  "startActivities(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;[Landroid/content/Intent;[Ljava/lang/String;Landroid/os/IBinder;Landroid/os/Bundle;I)I":
+    (app: JObj, _pkg: string, _feature: string, intents: JObj[], resolvedTypes: (string | null)[] | null, resultTo: JObj | null) =>
+      startActivities(app, intents, resolvedTypes, resultTo),
 };
