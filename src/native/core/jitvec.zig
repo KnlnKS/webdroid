@@ -487,11 +487,18 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
         vput(e, rd, q);
         return true;
     }
-    if (opcode == 11) {
+    if (opcode == 11 or (opcode == 5 and !U and size == 0)) {
         b.get(L_CPU);
         vget(e, rn);
-        b.emit(.{sv(if (U) S.neg[size] else S.neg[size] - 1)});
+        b.emit(.{sv(if (opcode == 5) S.popcnt else if (U) S.neg[size] else S.neg[size] - 1)});
         vput(e, rd, q);
+        return true;
+    }
+    if (opcode == 19 and U and size < 3) {
+        b.get(L_CPU);
+        vget(e, rn);
+        b.emit(.{ sv(S.extend_low_s[size] + @as(u8, if (q) 3 else 2)), c32(@intCast(@as(u32, 8) << @intCast(size))), sv(S.shl[size + 1]) });
+        vput(e, rd, true);
         return true;
     }
     const es: usize = @as(usize, 1) << @intCast(size);
@@ -603,9 +610,32 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         b.emit(.{vm(S.store, voff(rd))});
         return true;
     }
+    // SRI and SLI: the shifted bits of Vn replace those of Vd
+    if (U and ((opcode == 8 and shr < bitsT) or opcode == 10)) {
+        const ones: u64 = if (esz == 3) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bitsT)) - 1;
+        const left = opcode == 10;
+        const shift = if (left) amount - bitsT else shr;
+        b.get(L_CPU);
+        vget(e, rn);
+        b.emit(.{ c32(@intCast(shift)), sv(if (left) S.shl[esz] else S.shr_u[esz]) });
+        vget(e, rd);
+        vectorConst(e, esz, if (left) ones << @intCast(shift) else ones >> @intCast(shift));
+        b.emit(.{sv(S.bitselect)});
+        vput(e, rd, q);
+        return true;
+    }
+    // FCVTZS/FCVTZU with fbits: scaling by 2^fbits is exact, so it truncates as the interpreter does
+    if (opcode == 31 and esz == 2) {
+        b.get(L_CPU);
+        vget(e, rn);
+        vectorConst(e, 2, (127 + shr) << 23);
+        b.emit(.{ sv(S.fmul[0]), sv(if (U) S.i32x4_trunc_sat_f32x4_u else S.i32x4_trunc_sat_f32x4_s) });
+        vput(e, rd, q);
+        return true;
+    }
     const op: u8 = switch (opcode) {
         0 => if (U) (if (shr >= bitsT) return false else S.shr_u[esz]) else S.shr_s[esz],
-        10 => if (U) return false else S.shl[esz],
+        10 => S.shl[esz],
         else => return false,
     };
     b.get(L_CPU);
@@ -789,6 +819,30 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         if (size == 0) b.emit(.{ c32(0xffff), O.i32_and });
         b.memop(if (size == 2) O.i64_store else O.i32_store, voff(rd));
         zeroTop(e, rd, size == 2);
+        return true;
+    }
+    if (is(w, 0x8f3e_0c00, 0x0e30_0800) and size < 3) {
+        if (size == 2 and !q) return false;
+        const op: u8 = switch (bits(w, 12, 5)) {
+            10 => if (U) S.max_u[size] else S.max_s[size],
+            26 => if (U) S.min_u[size] else S.min_s[size],
+            27 => if (U) return false else S.add[size],
+            else => return false,
+        };
+        // fold the upper half of the remaining lanes onto the lower until lane 0 holds the result
+        b.get(L_CPU);
+        vget(e, rn);
+        var width: usize = if (q) 8 else 4;
+        while (width >= @as(usize, 1) << @intCast(size)) : (width /= 2) {
+            var lanes: [16]u8 = undefined;
+            for (0..16) |i| lanes[i] = @intCast((i + width) & 15);
+            b.emit(.{ tee(jit.L_VA), get(jit.L_VA), get(jit.L_VA), sv(S.shuffle) });
+            b.bytes(&lanes);
+            b.emit(.{sv(op)});
+        }
+        b.emit(.{ sv(S.extract_u[size]), @as(u8, 0) });
+        b.memop(O.i32_store, voff(rd));
+        zeroTop(e, rd, false);
         return true;
     }
     if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {

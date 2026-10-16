@@ -175,6 +175,7 @@ pub const Simd = struct {
     pub const xor: u8 = 0x51;
     pub const bitselect: u8 = 0x52;
     pub const any_true: u8 = 0x53;
+    pub const popcnt: u8 = 0x62;
     pub const narrow_s = [_]u8{ 0x65, 0x85 };
     pub const narrow_u = [_]u8{ 0x66, 0x86 };
     pub const f32x4_demote_f64x2_zero: u8 = 0x5e;
