@@ -30,8 +30,12 @@ function* describe(node: JObj, rect: JObj): Gen<UiNode | null> {
   };
 }
 
-/** a provider's virtual node and its descendants */
-function* walkVirtual(provider: JObj, id: number, rect: JObj, out: UiNode[]): Gen<void> {
+const A11Y_NODE = "android/view/accessibility/AccessibilityNodeInfo";
+
+/** a provider's virtual node and its descendants. A child id naming another view (addChild(View)
+ *  stores HOST_VIEW_ID as its virtual part) is that view's own tree, found as
+ *  AccessibilityInteractionController finds it. */
+function* walkVirtual(hostId: number, provider: JObj, id: number, rect: JObj, out: UiNode[]): Gen<void> {
   const node = yield vcall(provider, "createAccessibilityNodeInfo", "(I)Landroid/view/accessibility/AccessibilityNodeInfo;", id);
   if (!node) return;
   const ui = yield* describe(node, rect);
@@ -40,14 +44,21 @@ function* walkVirtual(provider: JObj, id: number, rect: JObj, out: UiNode[]): Ge
   const count: number = yield vcall(node, "getChildCount", "()I");
   for (let i = 0; i < count; i++) {
     const child: bigint = yield vcall(node, "getChildId", "(I)J", i);
-    yield* walkVirtual(provider, yield scall("android/view/accessibility/AccessibilityNodeInfo", "getVirtualDescendantId", "(J)I", child), rect, out);
+    const viewId: number = yield scall(A11Y_NODE, "getAccessibilityViewId", "(J)I", child);
+    if (viewId === hostId) {
+      yield* walkVirtual(hostId, provider, yield scall(A11Y_NODE, "getVirtualDescendantId", "(J)I", child), rect, out);
+      continue;
+    }
+    const ids = yield scall("android/view/accessibility/AccessibilityNodeIdManager", "getInstance", "()Landroid/view/accessibility/AccessibilityNodeIdManager;");
+    const view = yield vcall(ids, "findView", "(I)Landroid/view/View;", viewId);
+    if (view) yield* walkView(view, rect, out);
   }
 }
 
 function* walkView(view: JObj, rect: JObj, out: UiNode[]): Gen<void> {
   if (!(yield vcall(view, "isShown", "()Z"))) return;
   const provider: JObj | null = yield vcall(view, "getAccessibilityNodeProvider", "()Landroid/view/accessibility/AccessibilityNodeProvider;");
-  if (provider) { yield* walkVirtual(provider, HOST_VIEW_ID, rect, out); return; }
+  if (provider) { yield* walkVirtual(yield vcall(view, "getAccessibilityViewId", "()I"), provider, HOST_VIEW_ID, rect, out); return; }
   const node = yield vcall(view, "createAccessibilityNodeInfo", "()Landroid/view/accessibility/AccessibilityNodeInfo;");
   const ui = node && (yield* describe(node, rect));
   if (ui) out.push(ui);
