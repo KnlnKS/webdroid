@@ -99,15 +99,17 @@ function* resume(r: ActivityRecord): Gen<void> {
   yield* schedule(r.app, [delivery, top], yield resumeItem(r));
 }
 
-const CFG = "Landroid/content/res/Configuration;";
+const CFG = "Landroid/content/res/Configuration;", CONFIG_WINDOW_CONFIGURATION = 0x20000000;
 /** ActivityRecord.ensureActivityConfiguration: an activity that declared every changed bit in its
  *  configChanges hears the change; any other relaunches, ending at `lifecycle` with `results`
  *  delivered and `after` run. Returns whether it relaunched. */
 function* ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj, after: JObj | null = null): Gen<boolean> {
   const { global, override } = yield* awaited(configurations());
-  const changes: number = yield vcall(r.config, "diff", `(${CFG})I`, global);
-  if (!changes) return false;
+  const diff: number = yield vcall(r.config, "diff", `(${CFG})I`, global);
+  if (!diff) return false;
   r.config = global;
+  // ActivityRecord.getConfigurationChanges: the window configuration (bounds, rotation) never relaunches
+  const changes = diff & ~CONFIG_WINDOW_CONFIGURATION;
   const windowInfo = yield newObj("android/window/ActivityWindowInfo", "()V");
   if (!(changes & ~(yield vcall(r.info, "getRealConfigChanged", "()I")))) {
     yield* schedule(r.app, yield item("ActivityConfigurationChangeItem", `Landroid/os/IBinder;${CFG}Landroid/window/ActivityWindowInfo;`, r.token, override, windowInfo), null);
