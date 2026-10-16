@@ -621,6 +621,15 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 - **Black despite a rendering label** (2026-10-08..12). The Wasm flow drew black (Flutter `SharedPreferencesAsyncApi` channel-error) while smoke labelled it 15/15 rendering; after loader and unbox fixes it completes 15 actions (280 GL frames, moves, Stockfish replies). Its reference shows a notification-permission request the emulator does not.
 
+### NewPipe
+
+- **Playing on the Wasm tier** (2026-10-15). NewPipe 0.29.1 (ExoPlayer 2.19.1, Coil 3) searches, plays Big Buck Bunny at content rate (the position advanced 20 s in 20 s of wall time, 720p over the async MediaCodec adapter), keeps playing across the fullscreen rotation, switches to the background and popup players, opens a channel, subscribes, refreshes What's New, downloads an m4a into a picked folder and shows its Settings screens. The fixes:
+  - `MainActivity` died in `Parcel.readException` from `IAppTask.getTaskInfo`: `TaskInfo.writeToParcel` writes `token` unchecked and the task's info had none. It carries the task's window token.
+  - Coil's disk-cached thumbnails drew blank. The decoders took an fd's bytes with `javaFdBytes`, which is null for a descriptor the page owns (a file under `/data/data` opened in an app Worker), so they decoded no bytes; they read through the process (`processFdBytes`).
+  - `ObjectInputStream` (the play queue in an Intent extra) threw ClassNotFoundException: the closest user class loader was null for a class of the app's default namespace, whose loader has no object of its own. It is the app's loader object, returned as a host value.
+  - The popup player asked for "display over other apps" on every tap: special access was held only below targetSdk 23 or by a system package. `ACTION_MANAGE_OVERLAY_PERMISSION`, which since Android 11 opens the app list rather than the package an intent names, grants it to the app that opened it by the policy runtime requests follow.
+- **Not webdroid** (2026-10-15, on the reference AVD). A live stream's DASH segments sometimes answer HTTP 403 (`Source error`) on the AVD as well; another run of the same stream played in webdroid. `ResourcesCompat`'s "Failed to inflate ColorStateList" warnings for `ShapeableImageView` and What's New staying empty after a subscription until refreshed also occur on the AVD. Headless Chromium shows no directory picker, so a headless download needs `showDirectoryPicker` stubbed with an OPFS directory.
+
 ### Reddit
 
 - **One Tap sheet** (2026-10-02..04). The welcome screen pauses for microG's One Tap activity, shown 0.6-3.3 s later by another process; taps meanwhile reach the paused screen, as on a device, so the flow is timing-sensitive.
