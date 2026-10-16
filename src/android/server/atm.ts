@@ -12,7 +12,7 @@ import { configurations, resizeWindows, setClientVisible } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
-import { intentQuery$, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
+import { intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
 import { grantResultUris } from "../urigrants";
 import { attached, thisApp, userLaunched, pms, runsHere } from "./am";
 
@@ -302,8 +302,7 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
       (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
     if (system) { detached(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode)), logUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
-    const copy = yield newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
-    yield vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
+    const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
     const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled

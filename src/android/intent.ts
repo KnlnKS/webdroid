@@ -23,6 +23,12 @@ export function* componentParts$(component: JComponentName | null): Gen<Componen
   if (!component) return null;
   return { pkg: yield vcall(component, "getPackageName", `()${S}`), cls: yield vcall(component, "getClassName", `()${S}`) };
 }
+/** a copy of `intent` sent to `component` */
+export function* withComponent$(intent: JIntent, component: JComponentName): Gen<JIntent> {
+  const copy = yield newObj("android/content/Intent", `(${I})V`, intent);
+  yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${I}`, component);
+  return copy;
+}
 
 /** what the shell routes an Intent by, read through its Java API */
 export interface IntentQuery {

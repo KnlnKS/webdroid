@@ -15,7 +15,7 @@ import { PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
-import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent } from "../intent";
+import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
@@ -72,11 +72,6 @@ function* denial(t: Target, callingPackage: string): Gen<string | null> {
   if (!getDeclared(t.info, SI, "exported")) return "not exported from uid " + uid;
   const permission = getDeclared<string | null>(t.info, SI, "permission");
   return permission && (yield* awaited(checkPermission(permission, callingPackage))) !== 0 ? permission : null;
-}
-function* withComponent(intent: JObj, name: JObj): Gen<JObj> {
-  const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
-  yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, name);
-  return copy;
 }
 function remoteOwner(t: Target) {
   const owner = packages.get(t.pkg);
@@ -264,7 +259,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
   if (denied) return yield* awaited(mkComponentName("!", denied));
-  const bound = yield* withComponent(intent, t.name);
+  const bound = yield* withComponent$(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else detached(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground), logUncaught);
   return t.name;
@@ -283,7 +278,7 @@ export const activeServiceMethods = {
     if (!t) return 0;
     if (yield* denial(t, appHost!.pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
-    else { const bound = yield* withComponent(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
+    else { const bound = yield* withComponent$(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
     return 1;
   }),
   "stopServiceToken(Landroid/content/ComponentName;Landroid/os/IBinder;I)Z": driven(function* (_name: JObj, token: JObj, startId: number) {
@@ -297,7 +292,7 @@ export const activeServiceMethods = {
       const t = yield* resolve(intent, resolvedType);
       if (!t) return 0;
       if (yield* denial(t, callingPackage)) return -1;
-      const bound = yield* withComponent(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
+      const bound = yield* withComponent$(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
       const connected = (binder: JObj | null, dead: boolean) => detached(() => vcall(conn, "connected", CONNECTED, t.name, binder, +dead), binderEscape());
       if (isLocal(t)) {
         yield* bindLocal(t, bound, { id: conn, autoCreate: !!(bits & BIND_AUTO_CREATE), connected });
@@ -340,7 +335,7 @@ export const activeServiceMethods = {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return null;
     if (yield* denial(t, callingPackage)) throw rt.mkThrowable("java/lang/SecurityException", "Permission Denial: Accessing service " + t.pkg);
-    return isLocal(t) ? yield* peekLocal(t) : yield serviceTransport.peek(remoteOwner(t), t.process, yield* withComponent(intent, t.name));
+    return isLocal(t) ? yield* peekLocal(t) : yield serviceTransport.peek(remoteOwner(t), t.process, yield* withComponent$(intent, t.name));
   }),
   // Service.startForeground (id) and stopForeground (its STOP_FOREGROUND_* flags): the service's notification
   "setServiceForeground(Landroid/content/ComponentName;Landroid/os/IBinder;ILandroid/app/Notification;II)V":
