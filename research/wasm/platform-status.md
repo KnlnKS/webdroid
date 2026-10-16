@@ -42,7 +42,7 @@ tier was removed on 2026-10-13, and the compiler emits no tail calls now.
 
 ## JSPI under node (2026-10-04, node 24.19 / V8 13.6, M4 Pro)
 
-Node needs `--experimental-wasm-jspi` (every package.json script passes it). Chrome 153 has JSPI on by default.
+Node needs `--experimental-wasm-jspi` (package.json scripts start through `scripts/node`, which passes it). Chrome 153 has JSPI on by default.
 
 | Fact | Result |
 |---|---|
