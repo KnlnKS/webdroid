@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { sampleError } from "../scripts/wasm/g1report.ts";
 
 test("G1 rejects partial, errored, mismatched and unusable samples", () => {

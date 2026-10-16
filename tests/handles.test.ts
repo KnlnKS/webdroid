@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import "../src/natives.ts";
 import { declaredField } from "../src/jvm/runtime.ts";
 import { newObj } from "../src/jvm/natives/jentry.ts";
@@ -30,6 +30,6 @@ test("the native state a native stores for its receiver goes with the receiver",
   const cls = "android/graphics/Camera";
   const h = await (async () => (await newObj(cls, "()V") as Record<string, bigint>)[declaredField(cls, "native_instance")])();
   expect(deref(h)).toBeDefined();
-  for (let i = 0; i < 20 && deref(h) !== undefined; i++) { Bun.gc(true); await new Promise((r) => setTimeout(r, 10)); }
+  for (let i = 0; i < 20 && deref(h) !== undefined; i++) { globalThis.gc?.(); await new Promise((r) => setTimeout(r, 10)); }
   expect(deref(h)).toBeUndefined();
 });

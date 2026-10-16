@@ -1,4 +1,4 @@
-// bun scripts/wasm/undernode.ts tests/fixtures/remote-provider.ts: another process's provider as the
+// pnpm ts tests/fixtures/remote-provider.ts: another process's provider as the
 // activity manager hands it out and AOSP's ContentProviderProxy reaches it, as one JSON object. The
 // "other process" is this realm behind a loopback binder transport that renames its binders' pid.
 import "../../tests/platform.ts";

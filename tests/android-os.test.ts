@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
 import "../src/natives.ts";
 import { TV } from "../src/android/axml.ts";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry.ts";

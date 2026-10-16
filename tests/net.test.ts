@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
 import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
@@ -6,6 +6,7 @@ import { dialName, syntheticAddress } from "../src/shell/relay.ts";
 import { scall, mountApexData, loadFrameworkJar, thrown } from "./java.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { jarray } from "../src/jvm/abi.ts";
+import { serve } from "../scripts/serve.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -51,9 +52,8 @@ describe("http-stream", () => {
   /** `body` with fetch reaching a local server that answers through `handler` as the fetch proxy
    *  would, and with `cookies` as the default CookieHandler */
   async function viaProxy(handler: (request: Request) => Response, body: () => Promise<void>, cookies: unknown = null) {
-    const server = Bun.serve({ port: 0, fetch: handler }), original = globalThis.fetch;
-    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
+    const server = await serve({ fetch: handler }), original = globalThis.fetch;
+    globalThis.fetch = (input, init) => original(new URL(String(input), server.url), init);
     if (cookies) await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", cookies);
     try { await body(); } finally {
       if (cookies) await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
@@ -227,7 +227,7 @@ describe("inet", () => {
 describe("localsocket", () => {
   test("LocalServerSocket accepts an in-process LocalSocket and streams bytes both ways", async () => {
     const server = await newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock");
-    expect(await thrown(() => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))).toStartWith("java/io/IOException:");
+    expect(await thrown(() => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))).toMatch(/^java\/io\/IOException:/);
     const accepted = vcall(server, "accept", "()Landroid/net/LocalSocket;");
     const client = await newObj("android/net/LocalSocket");
     await vcall(client, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"));
@@ -247,7 +247,7 @@ describe("localsocket", () => {
     await vcall(server, "close", "()V");
     const late = await newObj("android/net/LocalSocket");
     const address = await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock");
-    expect(await thrown(() => vcall(late, "connect", "(Landroid/net/LocalSocketAddress;)V", address))).toStartWith("java/io/IOException:");
+    expect(await thrown(() => vcall(late, "connect", "(Landroid/net/LocalSocketAddress;)V", address))).toMatch(/^java\/io\/IOException:/);
   });
   test("LocalSocket passes descriptors and credentials through the kernel, and its timeout reads EAGAIN", async () => {
     const pair: JObj[] = [await newObj("java/io/FileDescriptor"), await newObj("java/io/FileDescriptor")];
@@ -268,7 +268,7 @@ describe("localsocket", () => {
     expect(await vcall(credentials, "getUid", "()I")).toBe(await scall("android/os/Process", "myUid", "()I"));
     await vcall(b, "setSoTimeout", "(I)V", 20);
     const input = await vcall(b, "getInputStream", "()Ljava/io/InputStream;");
-    expect(await thrown(() => vcall(input, "read", "()I"))).toStartWith("java/io/IOException:");
+    expect(await thrown(() => vcall(input, "read", "()I"))).toMatch(/^java\/io\/IOException:/);
     for (const s of [a, b]) await vcall(s, "close", "()V");
   });
   test("closing a LocalServerSocket ends the streams of connections it never accepted", async () => {

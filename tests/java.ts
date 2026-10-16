@@ -10,6 +10,9 @@ export { scall } from "../src/jvm/natives/jentry.ts";
 export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
   .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
 
+/** the JCA engine `cls` (a Cipher, a KeyPairGenerator, ...) for `algo` */
+export const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
+
 /** a fixture process that stalls prints the Java threads' states and exits rather than outliving its test */
 export function fixtureDeadline(ms = 90_000): void {
   setTimeout(async () => {
@@ -28,7 +31,7 @@ export async function loadFrameworkJar(): Promise<void> {
   await (framework ??= (async () => {
     await loadLibcore();
     const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework.ts"), import("../src/jvm/provenance.ts")]);
-    loadPlatformJar(new Uint8Array(await Bun.file(new URL("../vendor/aosp/framework.jar", import.meta.url)).arrayBuffer()), PLATFORM_JARS.indexOf("framework.jar"));
+    loadPlatformJar(new Uint8Array(readFileSync(new URL("../vendor/aosp/framework.jar", import.meta.url))), PLATFORM_JARS.indexOf("framework.jar"));
   })());
   await (await import("../src/android/mainloop.ts")).startMainLooper();
 }
@@ -36,9 +39,7 @@ export async function loadFrameworkJar(): Promise<void> {
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */
 export function mountApexData(): Promise<void> {
-  return apex ??= import("../src/shell/apex.ts").then((m) => m.mountPlatformData((path, size) => ({
-    size, read: async (at, length) => new Uint8Array(await Bun.file(new URL(`../vendor/aosp${path}`, import.meta.url)).slice(at, at + length).arrayBuffer()),
-  })));
+  return apex ??= import("../scripts/lib.ts").then((m) => m.mountLocalPlatformData());
 }
 let fontMap: Promise<void> | null = null;
 /** the font map and text paints the zygote preloads (whose locale scripts are ICU's), as a booted
@@ -65,7 +66,7 @@ export function loadLibcore(): Promise<void> {
   return libcore ??= (async () => {
     const [{ loadPlatformJar }, { PLATFORM_JARS }] = await Promise.all([import("../src/android/framework.ts"), import("../src/jvm/provenance.ts")]);
     for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"])
-      loadPlatformJar(new Uint8Array(await Bun.file(new URL(`../vendor/aosp/${jar}`, import.meta.url)).arrayBuffer()), PLATFORM_JARS.indexOf(jar));
+      loadPlatformJar(new Uint8Array(readFileSync(new URL(`../vendor/aosp/${jar}`, import.meta.url))), PLATFORM_JARS.indexOf(jar));
   })();
 }
 
@@ -111,9 +112,9 @@ const booted = new Map<string, Promise<BootedApp>>();
 let started: Promise<unknown> | null = null;
 /** `record`'s process as a page boots it: the package installed and naming this process, AOSP's
  *  ActivityThread attached to the activity manager, which binds its Application. Resolves to that
- *  Application once its onCreate ran. A serial `bun test` runs every file in one process, so a file
- *  asking for another package takes the process over: its identity, name and Application, made by
- *  its own LoadedApk, are the current ones until a file asks for another. */
+ *  Application once its onCreate ran. Asking for another package takes the process over: its
+ *  identity, name and Application, made by its own LoadedApk, are the current ones until another
+ *  is asked for. */
 export async function bootApp(record: import("../src/android/packages.ts").PackageRecord, pid = 4321): Promise<JObj> {
   const { packages } = await import("../src/android/packages.ts");
   const { registerApk } = await import("../src/android/assetmanager.ts");
@@ -147,7 +148,7 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
       return onMain(async () => {
         const at = await thread(), bound = getDeclared<JObj>(at, AT, "mBoundApplication");
         // bindApplication enables StrictMode's death on network for the main thread, which test
-        // bodies call Java from; a later file in the same process does network I/O there
+        // bodies call Java from; a later test does network I/O there
         await scall("android/os/StrictMode", "setThreadPolicy", "(Landroid/os/StrictMode$ThreadPolicy;)V",
           await staticField("android/os/StrictMode$ThreadPolicy", "LAX"));
         return { app: getDeclared<JObj>(at, AT, "mInitialApplication"), info: getDeclared<JObj>(bound, BIND, "appInfo"), loaded: getDeclared<JObj>(bound, BIND, "info") };

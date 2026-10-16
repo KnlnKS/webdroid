@@ -1,4 +1,5 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import { readFileSync } from "node:fs";
 import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java.ts";
 import "../src/natives.ts";
 import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
@@ -225,7 +226,7 @@ describe("minikin", () => {
   test("line breaking over the reference device's advances breaks where the device does", async () => {
     await loadLibcore();
     const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin.ts");
-    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => {
       const [, text, width, size, , frequency] = r.split("\t");
       return { text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), width: +width, size: +size, hyphenated: !!+(frequency ?? 0) };
@@ -259,7 +260,7 @@ describe("minikin", () => {
   test("Paint's advances are the reference device's", async () => {
     await loadLibcore();
     const { styleOf, advances } = await import("../src/android/minikin.ts");
-    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));
     const paint = await newPaint("android/text/TextPaint"), mismatches: string[] = [];
     for (const [, i, spacing, ...device] of rows.filter((r) => r.startsWith("advances ")).map((r) => r.split(" "))) {

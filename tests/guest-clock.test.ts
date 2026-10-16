@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vite-plus/test";
 import { ControlledGuestClock } from "../src/guest-clock.ts";
 import { connectClock, serveClock } from "../src/shell/clock-port.ts";
 

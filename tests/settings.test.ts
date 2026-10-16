@@ -1,4 +1,4 @@
-import { expect, test, beforeAll, describe } from "bun:test";
+import { expect, test, beforeAll, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";

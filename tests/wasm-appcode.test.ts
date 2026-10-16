@@ -1,4 +1,4 @@
-import { expect, test, spyOn } from 'bun:test';
+import { expect, test, vi } from 'vite-plus/test';
 import { prepareApp } from '../src/wasm/host/appcode.ts';
 import type { WorkerPort } from '../src/wasm/host/compiler.ts';
 import type { FetchStore } from '../src/wasm/link/aotstore.ts';
@@ -21,16 +21,16 @@ const world = {demand: {methods: new Set(), classes: [], infos: []}, prog: {root
 Object.defineProperty(navigator, 'locks', {value: undefined, configurable: true});
 
 test('app code death closes its builder, rejects its build and prevents late restart', async () => {
-  const fetchMock = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
   const ports: CompilePort[] = [], signal = new AbortController();
   const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-close.invalid/', key: 'platform'} as FetchStore,
     spawn: () => { const port = new CompilePort(); ports.push(port); return port; }, persist: new Persist(memoryBackend()), roots: {launch: []}, signal: signal.signal});
   expect(ports).toHaveLength(0);
   const timers: (() => void)[] = [];
-  const timeout = spyOn(globalThis, 'setTimeout').mockImplementation(((f: () => void) => {
+  const timeout = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((f: () => void) => {
     timers.push(f); return timers.length;
   }) as typeof setTimeout);
-  const clear = spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
+  const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => {});
   try {
     code.watch(world);
     code.watch(world);
@@ -52,7 +52,7 @@ test('app code death closes its builder, rejects its build and prevents late res
 });
 
 test('death reentering builder creation closes its newly returned port', async () => {
-  const fetchMock = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
   const signal = new AbortController(), ports: CompilePort[] = [];
   try {
     const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-reentrant.invalid/', key: 'platform'} as FetchStore,

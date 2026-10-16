@@ -1,15 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { chromium } from "playwright";
+import { serveModules } from "./browser.ts";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/perf.ts", import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
-  if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
-  const server = Bun.serve({ port: 0, fetch(request) {
-    const path = new URL(request.url).pathname;
-    const output = build.outputs.find(out => out.path.endsWith(path));
-    return output ? new Response(output, { headers: { "content-type": "text/javascript" } })
-      : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
-  } });
+  const server = await serveModules(["src/perf.ts", "src/shell/process-life.ts", "src/shell/aot-profile.ts", "src/shell/ime-port.ts", "src/shell/location-access.ts",
+    "src/shell/worker-control-methods.ts", "src/shell/process-port.ts", "tests/fixtures/browser/process-bootstrap.ts"]);
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(), errors: string[] = [];

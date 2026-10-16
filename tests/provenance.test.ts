@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { rt } from "../src/jvm/runtime.ts";
 import { TS_SPECS, tsSpecAllowance, tsSpecViolation } from "../src/jvm/provenance.ts";
 import "../src/natives.ts";

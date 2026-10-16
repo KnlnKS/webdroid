@@ -1,6 +1,6 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import { PNG } from "pngjs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addReachedMembers, buildCatalog, parseApiVersions } from "../scripts/fuzz/catalog.ts";
@@ -79,8 +79,8 @@ describe("fuzz-core", () => {
         commands: [{ op: "drawRect", args: [1, 2] }] })).toThrow("must contain 4 items");
     });
 
-    test("probe and TypeScript graphics operations stay in lockstep", async () => {
-      const source = await Bun.file("tests/fuzz-probe/src/org/webdroid/fuzz/ProbeActivity.java").text();
+    test("probe and TypeScript graphics operations stay in lockstep", () => {
+      const source = readFileSync("tests/fuzz-probe/src/org/webdroid/fuzz/ProbeActivity.java", "utf8");
       const graphicsSwitch = source.slice(source.indexOf('switch (command.getString("op"))'), source.indexOf("default -> throw", source.indexOf('switch (command.getString("op"))')));
       const javaOperations = [...graphicsSwitch.matchAll(/case "([^"]+)"/g)].map((match) => match[1]).sort();
       expect(javaOperations).toEqual([...GRAPHICS_OPERATIONS].sort());
@@ -88,8 +88,8 @@ describe("fuzz-core", () => {
 
     test("case protocol orders and validates results", async () => {
       const cases = generateApiCases(2, 2);
-      const server = serveCases(cases, 0, 1_000);
-      const concurrent = serveCases([], 0, 1_000);
+      const server = await serveCases(cases, 0, 1_000);
+      const concurrent = await serveCases([], 0, 1_000);
       try {
         expect(server.url).not.toBe(concurrent.url);
         for (const input of cases) {
@@ -190,7 +190,7 @@ describe("fuzz-semantic", () => {
       const directory = mkdtempSync(join(tmpdir(), "wd-ui-explorer-"));
       try {
         const apk = join(directory, "sample.apk");
-        await Bun.write(apk, "test apk bytes");
+        writeFileSync(apk, "test apk bytes");
         const nodes = [node({ text: "Open", clickable: true })];
         const explorer = await UiExplorer.open(directory, "sample", apk);
         const initial = explorer.observeState(nodes, 100, 100, { actions: [], states: [], target: null });
@@ -215,7 +215,7 @@ describe("fuzz-semantic", () => {
       const directory = mkdtempSync(join(tmpdir(), "wd-ui-scroll-"));
       try {
         const apk = join(directory, "sample.apk");
-        await Bun.write(apk, "test apk bytes");
+        writeFileSync(apk, "test apk bytes");
         const firstPage = [node({ text: "First page", scrollable: true })];
         const explorer = await UiExplorer.open(directory, "sample", apk);
         const initial = explorer.observeState(firstPage, 100, 100, { actions: [], states: [], target: null });

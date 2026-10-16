@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import "../src/natives.ts";
 import { vcall } from "../src/jvm/natives/jentry.ts";
 import { scall, loadLibcore } from "./java.ts";

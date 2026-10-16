@@ -1,13 +1,13 @@
-import { expect, test } from "bun:test";
-
-/** a fixture runs Java on the Wasm tier, so under node as the unit tests do */
-const UNDER_NODE = new URL("../scripts/wasm/undernode.ts", import.meta.url).pathname;
+import { expect, test } from "vite-plus/test";
+import { spawn } from "node:child_process";
+import { text } from "node:stream/consumers";
+import { nodeCommand } from "../scripts/node.ts";
 
 // Each fixture drives the activity manager in a process of its own, whose app identity and
 // registered binders it sets up from scratch.
 async function fixture(name: string): Promise<unknown> {
-  const run = Bun.spawn(["bun", UNDER_NODE, new URL(`fixtures/${name}.ts`, import.meta.url).pathname], { stdout: "pipe", stderr: "ignore" });
-  return JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
+  const run = spawn(...nodeCommand(new URL(`fixtures/${name}.ts`, import.meta.url).pathname), { stdio: ["ignore", "pipe", "ignore"] });
+  return JSON.parse((await text(run.stdout)).trim().split("\n").at(-1)!);
 }
 
 test("the activity manager drives a process's services and ordered receivers through its IApplicationThread", async () => {

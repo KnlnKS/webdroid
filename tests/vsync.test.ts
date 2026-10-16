@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { recordVsync } from "../src/android/vsync.ts";
 import { device } from "../src/shell/config.ts";
 

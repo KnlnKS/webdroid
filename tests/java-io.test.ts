@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { mkPfd, pfdBackingBytes, fdContents, ashmemFd, readBytes, writeBytes } from "../src/android/os.ts";
 import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder.ts";

@@ -1,9 +1,7 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { vcall, newObj } from "../src/jvm/natives/jentry.ts";
-import { scall } from "./java.ts";
-
-const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
+import { getInstance, scall } from "./java.ts";
 
 describe("keystore2", () => {
   test("AndroidKeyStore keys stay in the service and round-trip AES-GCM", async () => {

@@ -1,5 +1,5 @@
 import { webStorageTransport } from "../src/android/webstorage.ts";
-import { expect, test, jest, describe, beforeAll } from "bun:test";
+import { expect, test, vi, describe, beforeAll } from "vite-plus/test";
 import initSqlJs from "sql.js";
 import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
@@ -45,6 +45,8 @@ beforeAll(loadFrameworkJar);
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+/** the store's snapshot timers and clock under test control; the runtime's other scheduling stays real */
+const fakeTimers = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
 
 test("preference commands acknowledge Java-visible changes without overwriting other keys", async () => {
   const pkg = "org.webdroid.test.preferencecommands";
@@ -373,7 +375,7 @@ describe("sqlite", () => {
       expect(await long(second, "SELECT count(*) FROM t")).toBe(1n);
       await vcall(first, "endTransaction", "()V");
       expect(await long(second, "SELECT count(*) FROM t")).toBe(1n);
-      expect(await thrown(() => exec(first, "INSERT INTO absent VALUES (1)"))).toStartWith("android/database/sqlite/SQLiteException: ");
+      expect(await thrown(() => exec(first, "INSERT INTO absent VALUES (1)"))).toMatch(/^android\/database\/sqlite\/SQLiteException: /);
       const cursor = await vcall(second, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT big, value FROM t", null);
       try {
         expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
@@ -401,7 +403,7 @@ describe("sqlite", () => {
       const a = await call(first, openMethod, ":memory:", 0x10000000) as bigint;
       const b = await call(second, openMethod, ":memory:", 0x10000000) as bigint;
       const st = await call(first, "nativePrepareStatement(JLjava/lang/String;)J", a, "SELECT 42") as bigint;
-      expect(await thrown(() => call(second, "nativeExecuteForLong(JJ)J", b, st))).toStartWith("android/database/sqlite/SQLiteMisuseException: ");
+      expect(await thrown(() => call(second, "nativeExecuteForLong(JJ)J", b, st))).toMatch(/^android\/database\/sqlite\/SQLiteMisuseException: /);
       const tiny = await call(first, "nativePrepareStatement(JLjava/lang/String;)J", a, "SELECT 1, 2") as bigint;
       const failedWindow = await first.call({ family: "platform", method: "nativeExecuteForCursorWindow(JJJIIZ)J",
         args: [a, tiny, 0n, 0, 0, 1], window: { name: "tiny", size: 16, readOnly: false } });
@@ -413,11 +415,11 @@ describe("sqlite", () => {
       sqliteTransport.call = request => first.call(request);
       try {
         const fill = rt.jniFn("android/database/sqlite/SQLiteConnection", "nativeExecuteForCursorWindow(JJJIIZ)J")! as (...args: unknown[]) => unknown;
-        expect(await thrown(() => fill(a, tiny, windowHandle, 0, 0, 1))).toStartWith("java/lang/IllegalStateException: ");
+        expect(await thrown(() => fill(a, tiny, windowHandle, 0, 0, 1))).toMatch(/^java\/lang\/IllegalStateException: /);
         expect(readOnly.values).toEqual([42]); expect(readOnly.rows).toBe(1);
       } finally { sqliteTransport.call = null; release(windowHandle); }
       first.close(); first.close();
-      expect(await thrown(() => call(first, "nativeExecuteForLong(JJ)J", a, st))).toStartWith("android/os/DeadObjectException: ");
+      expect(await thrown(() => call(first, "nativeExecuteForLong(JJ)J", a, st))).toMatch(/^android\/os\/DeadObjectException: /);
       const live = await call(second, "nativePrepareStatement(JLjava/lang/String;)J", b, "SELECT 7") as bigint;
       expect(await call(second, "nativeExecuteForLong(JJ)J", b, live)).toBe(7n);
       const bundled = async (family: SQLiteRequest["family"], method: string, ...args: SQLiteRequest["args"]) =>
@@ -439,8 +441,8 @@ describe("sqlite", () => {
       await reading;
       const queued = thrown(() => call(dying, openMethod, ":memory:", 0x10000000));
       const closing = dying.close();
-      expect(await pending).toStartWith("android/os/DeadObjectException: ");
-      expect(await queued).toStartWith("android/os/DeadObjectException: ");
+      expect(await pending).toMatch(/^android\/os\/DeadObjectException: /);
+      expect(await queued).toMatch(/^android\/os\/DeadObjectException: /);
       unblock(); await closing;
       expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
       vfs.delete(path);
@@ -519,8 +521,8 @@ describe("sqlite", () => {
     await exec(first, "CREATE TEMP TABLE marker (id INTEGER)");
     expect(await long(first, "SELECT count(*) FROM sqlite_temp_master")).toBe(1n);
     expect(await long(second, "SELECT count(*) FROM sqlite_temp_master")).toBe(0n);
-    expect(await thrown(() => exec(second, "INSERT INTO t VALUES (1, 0)"))).toStartWith("android/database/sqlite/SQLiteConstraintException: ");
-    expect(await thrown(() => long(second, "SELECT big FROM t WHERE id = 2"))).toStartWith("android/database/sqlite/SQLiteDoneException: ");
+    expect(await thrown(() => exec(second, "INSERT INTO t VALUES (1, 0)"))).toMatch(/^android\/database\/sqlite\/SQLiteConstraintException: /);
+    expect(await thrown(() => long(second, "SELECT big FROM t WHERE id = 2"))).toMatch(/^android\/database\/sqlite\/SQLiteDoneException: /);
     const cursor = await vcall(second, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT big, 1.5 FROM t", null);
     expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
     expect([await vcall(cursor, "getString", `(I)${S}`, 0), await vcall(cursor, "getString", `(I)${S}`, 1)]).toEqual(["9007199254740993", "1.5"]);
@@ -534,11 +536,11 @@ describe("sqlite", () => {
     const db = await open(path);
     await exec(db, "CREATE TEMP TABLE changes(n)");
     await exec(db, "CREATE TEMP TRIGGER track AFTER INSERT ON payload BEGIN INSERT INTO changes VALUES (1); END");
-    jest.useFakeTimers();
+    fakeTimers();
     try {
       await exec(db, "INSERT INTO payload VALUES (x'010203')");
-      jest.runOnlyPendingTimers();
-    } finally { jest.useRealTimers(); }
+      vi.runOnlyPendingTimers();
+    } finally { vi.useRealTimers(); }
     const saved = new sql.Database(vfs.read(path)!);
     expect(saved.exec("SELECT length(value) FROM payload")[0].values).toEqual([[6 * 1024 * 1024], [3]]);
     expect(await long(db, "SELECT count(*) FROM changes")).toBe(1n);
@@ -552,26 +554,26 @@ describe("sqlite", () => {
     const sql = await loadSql(), path = "/data/data/test.sqlite/databases/restore.db", backup = new sql.Database();
     backup.exec("CREATE TABLE t (v INTEGER); INSERT INTO t VALUES (7)");
     const restored = backup.export(); backup.close();
-    jest.useFakeTimers();
+    fakeTimers();
     try {
       const db = await open(path);
       await exec(db, "CREATE TABLE t (v INTEGER)");
-      jest.runOnlyPendingTimers();
+      vi.runOnlyPendingTimers();
       await vcall(db, "beginTransaction", "()V");
       await exec(db, "INSERT INTO t VALUES (1)");
       const before = vfs.mtime(path);
-      jest.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
       expect(vfs.mtime(path)).toBe(before);
       await vcall(db, "setTransactionSuccessful", "()V");
       await vcall(db, "endTransaction", "()V");
-      jest.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
       expect(vfs.mtime(path)).toBeGreaterThan(before);
       await exec(db, "INSERT INTO t VALUES (2)");
       await vcall(db, "close", "()V");
-      jest.advanceTimersByTime(1);
+      vi.advanceTimersByTime(1);
       vfs.write(path, restored);
-      jest.runOnlyPendingTimers();
-    } finally { jest.useRealTimers(); }
+      vi.runOnlyPendingTimers();
+    } finally { vi.useRealTimers(); }
     expect(vfs.read(path)).toEqual(restored);
     expect(await long(await open(path), "SELECT sum(v) FROM t")).toBe(7n);
   });

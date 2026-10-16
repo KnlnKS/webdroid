@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { ModuleBuilder, T } from "../src/wasm/compiler/wasmbin.ts";
 import { Code, OP } from "../src/wasm/compiler/code.ts";
 

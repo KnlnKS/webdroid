@@ -1,4 +1,5 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import { readFileSync } from "node:fs";
 import { loadFrameworkJar, bootApp, packageRecord, thrown } from "./java.ts";
 import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
@@ -80,7 +81,7 @@ describe("media-retriever", () => {
   test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", async () => {
     await app();
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
-    vfs.write("/sdcard/media-probe.mp4", new Uint8Array(await Bun.file("tests/fixtures/media.mp4").arrayBuffer()));
+    vfs.write("/sdcard/media-probe.mp4", new Uint8Array(readFileSync("tests/fixtures/media.mp4")));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp4");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 12)).toBe("video/mp4");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 18)).toBe("32");
@@ -93,7 +94,7 @@ describe("media-retriever", () => {
 
   test("MediaMetadataRetriever reads MP3 metadata", async () => {
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
-    vfs.write("/sdcard/media-probe.mp3", new Uint8Array(await Bun.file("tests/fixtures/audio.mp3").arrayBuffer()));
+    vfs.write("/sdcard/media-probe.mp3", new Uint8Array(readFileSync("tests/fixtures/audio.mp3")));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp3");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 12)).toBe("audio/mpeg");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 9)).toBe("52");
@@ -105,7 +106,7 @@ describe("mediadrm", () => {
 
   test("MediaDrm reports the browser device's unsupported schemes", async () => {
     const uuid = await newObj("java/util/UUID", "(JJ)V", 0n, 0n);
-    expect(await thrown(() => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))).toStartWith("android/media/UnsupportedSchemeException:");
+    expect(await thrown(() => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))).toMatch(/^android\/media\/UnsupportedSchemeException:/);
     expect(await scall("android/media/MediaDrm", "isCryptoSchemeSupported", "(Ljava/util/UUID;)Z", uuid)).toBe(0);
   });
 });

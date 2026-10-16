@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { discardedEntries, loadTimeAbiReads, sharedSuspensions, undelegatedGenerators } from "../scripts/generators.ts";
 
 test("every driven generator a native calls is run", () => {

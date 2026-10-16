@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry.ts";
 import { vfs } from "../src/shell/vfs.ts";

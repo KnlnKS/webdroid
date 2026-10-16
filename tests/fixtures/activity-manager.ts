@@ -1,4 +1,4 @@
-// bun scripts/wasm/undernode.ts tests/fixtures/activity-manager.ts: what the activity manager asks of a
+// pnpm ts tests/fixtures/activity-manager.ts: what the activity manager asks of a
 // process's IApplicationThread as its services and receivers are driven, as one JSON object.
 import "../../tests/platform.ts";
 import "../../src/natives.ts";

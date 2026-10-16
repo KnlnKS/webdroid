@@ -288,7 +288,7 @@ export async function clockBootstrapOwnership() {
       const endpoint = new MessageChannel();
       await serveWorkerEndpoint(endpoint.port1);
       const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
-      const {RemoteFile} = await import(${JSON.stringify(location.origin + "/file.js")});
+      const {RemoteFile} = await import(${JSON.stringify(location.origin + "/remote-file.js")});
       const file = new RemoteFile(data.registry.find(record=>record.pkg===data.pkg).source);
       const archive = Array.from(await file.read(0,1));
       setGuestTimeout(()=>{

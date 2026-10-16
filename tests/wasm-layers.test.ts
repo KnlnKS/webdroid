@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
@@ -7,7 +7,7 @@ import { dirname, relative, resolve } from "node:path";
 const SHARED_FRONT_END = new Set(["abi", "dex", "opcodes", "prepared", "structure", "stack-format"]);
 
 test("src/wasm keeps its layers", () => {
-  const root = resolve(import.meta.dir, "..", "src");
+  const root = resolve(import.meta.dirname, "..", "src");
   const violations: string[] = [];
   for (const file of globSync("**/*.ts", { cwd: root })) {
     if (file.endsWith(".test.ts") || file.endsWith(".d.ts")) continue;
@@ -31,7 +31,7 @@ test("src/wasm keeps its layers", () => {
 });
 
 test("host code holds Java objects only as the facades toHost makes", () => {
-  const root = resolve(import.meta.dir, "..", "src/wasm/host");
+  const root = resolve(import.meta.dirname, "..", "src/wasm/host");
   const raw = globSync("*.ts", { cwd: root }).filter((file) => /\b(?:w|world)\.entry\(/.test(readFileSync(resolve(root, file), "utf8")));
   expect(raw).toEqual([]);
 });

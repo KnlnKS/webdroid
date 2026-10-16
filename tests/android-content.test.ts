@@ -1,5 +1,7 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import { zipSync } from "fflate";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
 import { jarray } from "../src/jvm/abi.ts";
@@ -115,7 +117,7 @@ describe("package-checksums", () => {
   });
 
   test("the package service reports installed APK checksums and signing certificates", async () => {
-    const bytes = new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer());
+    const bytes = new Uint8Array(readFileSync("apks/FitNotes.apk"));
     const archive = await parsePackageArchive(bytes);
     const path = "/data/app/checksum-test/base.apk";
     vfs.write(path, bytes);
@@ -244,7 +246,7 @@ describe("package-permissions", () => {
 
 describe("packagearchive", () => {
   test("foreign package metadata retains lazy assets without reading the whole APK", async () => {
-    const bytes = new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer());
+    const bytes = new Uint8Array(readFileSync("apks/FitNotes.apk"));
     const baseline = await parsePackageArchive(bytes), file = new BytesFile(bytes);
     let readBytes = 0;
     const archive = await packageArchiveSource({ size: file.size, read(offset, length) {
@@ -268,11 +270,11 @@ describe("packagearchive", () => {
   });
 
   test("v1 APK certificate discovery leaves unrelated ZIP entries lazy", async () => {
-    const bytes = new Uint8Array(await Bun.file("apks/flappybird.apk").arrayBuffer());
+    const bytes = new Uint8Array(readFileSync("apks/flappybird.apk"));
     const zip = zipTree(bytes), descriptors = Object.getOwnPropertyDescriptors(zip);
     const certificates = await apkCertificates(bytes, zip);
     expect(certificates).toHaveLength(1);
-    expect(new Bun.CryptoHasher("sha256").update(certificates[0]).digest("hex"))
+    expect(createHash("sha256").update(certificates[0]).digest("hex"))
       .toBe("91cc0cfca44abfc55f7974e68fb4bcaa9684d6e222d44f3393b5c4bcdbc95654");
     for (const [name, descriptor] of Object.entries(descriptors)) {
       if (!/^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name)) {
@@ -546,7 +548,7 @@ describe("resource-type-id-offset", () => {
   }
 
   test("a file resource resolves to a reference to itself, once", async () => {
-    const zip = zipTree(new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer()));
+    const zip = zipTree(new Uint8Array(readFileSync("apks/FitNotes.apk")));
     const table = new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null), res = new Resources(table, zip, undefined, true);
     const id = table.findId("layout", "activity_main"), ref = res.ref(id);
     expect(ref).toMatchObject({ t: TV.REFERENCE, d: id });

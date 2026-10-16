@@ -1,4 +1,4 @@
-import { expect, test, describe } from "bun:test";
+import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { driven, type Gen, rt } from "../src/jvm/runtime.ts";
 import { Cpu, setA64 } from "../src/native/cpu.ts";

@@ -1,4 +1,4 @@
-import { expect, test, beforeAll, describe } from "bun:test";
+import { expect, test, beforeAll, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry.ts";
@@ -91,7 +91,7 @@ describe("fonts", () => {
   test("FontManager exists and its configuration needs UPDATE_FONTS", async () => {
     const fonts = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "font");
     expect(fonts).not.toBeNull();
-    expect(await thrown(() => vcall(fonts, "getFontConfig", "()Landroid/text/FontConfig;"))).toStartWith("java/lang/SecurityException");
+    expect(await thrown(() => vcall(fonts, "getFontConfig", "()Landroid/text/FontConfig;"))).toMatch(/^java\/lang\/SecurityException/);
   });
 });
 
