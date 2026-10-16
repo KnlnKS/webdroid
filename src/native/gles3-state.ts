@@ -102,7 +102,7 @@ export const textureTarget = (target: number): number => (target === 0x8d65 ? 0x
 const externalSamplers = new WeakMap<WebGLShader, Set<string>>();
 /** WebGL has no external samplers, so a shader's samplerExternalOES reads that storage as a
  *  sampler2D; the #extension line is blanked in place to keep compile errors' line numbers, in
- *  every stage that requires it (Unity's video blit requires it in its vertex shader too). */
+ *  every stage that requires it, sampler or not. */
 export function externalSamplersAs2D(shader: WebGLShader, source: string): string {
   if (!source.includes("GL_OES_EGL_image_external")) { externalSamplers.delete(shader); return source; }
   externalSamplers.set(shader, new Set(Array.from(source.matchAll(/\bsamplerExternalOES\s+(\w+)/g), (m) => m[1])));
