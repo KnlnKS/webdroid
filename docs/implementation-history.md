@@ -643,7 +643,8 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 ### Snapseed
 
-- **Looks needs GLES 3.1 compute** (2026-09-27). Editor, Tune, Crop, Details, Healing, Brush, undo/redo and export work (hardware GPU). Looks `_exit(1)`s: MediaPipe/LiteRT's ML Drift GL delegate needs ES 3.1 compute, and a real ES 3.0 device fails the same way.
+- **Export from an app Worker** (2026-10-15, Wasm tier). Welcome, picking a photo, Tune, Crop (Square, Rotate), Details, Selective, Healing, undo/redo and export work with the hardware GPU. Export said "Could not save photo!": `systemProviderHolder` built a local MediaProvider stub in the app's Worker, whose `vfs.write` of the inserted row's file stayed Worker-local while `ParcelFileDescriptor.open` on `/sdcard` went to the page, which had neither the file nor its directory (ENOENT). A provider whose state lives in the page (`systemRealm`: MediaProvider's files and index) now resolves to system_server's binder over the broker; SettingsProvider stays local (its store is reached through the settings transport) and ExternalStorageProvider's picked handles persist in IndexedDB. One earlier run logged `SQLiteDatabaseLockedException` at `PRAGMA journal_mode` on `image_edit_local_db`; it did not recur, and sql.js connections have no busy-timeout emulation.
+- **Looks needs GLES 3.1 compute** (2026-09-27; unchanged 2026-10-15: `request_gpu_info` gets GL_INVALID_ENUM from the ES 3.0 context, then `auto_correct_filter` fails a check). Editor, Tune, Crop, Details, Healing, Brush, undo/redo and export work (hardware GPU). Looks `_exit(1)`s: MediaPipe/LiteRT's ML Drift GL delegate needs ES 3.1 compute, and a real ES 3.0 device fails the same way.
 
 ### TikTok
 
