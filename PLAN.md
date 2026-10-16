@@ -100,10 +100,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      Subway Surfers reaches an active run; its background Firebase initialization still throws. Genshin Impact
      (outside the matrix) reaches the Geetest captcha, which needs the account owner; its data exceeds the app pane's
      4.7 GB quota.
-   - *`apks/new`:* McDonald's can hang after "Upgrade Later", and its Order tab overlaps because the XAPK ships
-     only the mdpi split. Walmart's Sparky needs an on-demand feature split that is not in the XAPK, and microG's
-     SplitInstallService is disabled. Tubi's Widevine titles show a DRM error and Snapseed's "Looks" needs GLES 3.1
-     compute; both need a decision from the user.
+   - *`apks/new`:* McDonald's Order tab overlaps because the XAPK ships only the mdpi split. Walmart's Sparky needs
+     an on-demand feature split that is not in the XAPK, and microG's SplitInstallService is disabled. Tubi's Widevine
+     titles show a DRM error and Snapseed's "Looks" needs GLES 3.1 compute; both need a decision from the user.
 6. **Lower value; only with a new measurement that justifies it.**
    - `system_server` and the broker stores in a system Worker: the broker answers app IPC on the page thread, so
      slow page work starves app queries. Measure page-thread time during app IPC first.
