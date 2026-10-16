@@ -23,6 +23,8 @@ export interface GlSurface {
   swapInterval?: number;
   presentationTimeNanos?: bigint;
   onFrame?: () => void;
+  /** the buffer a Canvas (Surface.lockCanvas, a HardwareRenderer) draws a SurfaceTexture's next frame into */
+  canvas?: OffscreenCanvas;
   /** a BLAST queue's producer side (surfaceflinger.ts glSurfaceOf): a frame goes to the queue, which
    *  releases it once the layer latches the next */
   post?: (frame: ImageBitmap | VideoFrame) => void;

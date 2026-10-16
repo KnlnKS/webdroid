@@ -15,7 +15,7 @@ import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { frameDrawn } from "./vsync";
 import { note, Ev } from "../timeline";
-import type { GlSurface } from "./glsurface";
+import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor";
 import { detached } from "../jvm/natives/jthrowable";
 
@@ -305,18 +305,22 @@ interface Queue { name: string; control: Control | null; width: number; height: 
 /** a producer's handle: on a BLAST queue, on a layer, or on a SurfaceTexture's GL surface */
 export interface Surface { queue: Queue | null; layer: Layer | null; producer?: GlSurface }
 const queue = (h: bigint) => deref<Queue>(h);
-/** the buffer a surface's next frame draws into, sized to its queue */
+/** the buffer a surface's next frame draws into, sized to its queue or to its SurfaceTexture's buffers */
 export function surfaceBuffer(s: Surface): OffscreenCanvas | null {
-  const q = s.queue;
-  if (!q || q.width <= 0 || q.height <= 0) return null;
-  if (!q.canvas) q.canvas = new OffscreenCanvas(q.width, q.height);
-  else if (q.canvas.width !== q.width || q.canvas.height !== q.height) { q.canvas.width = q.width; q.canvas.height = q.height; }
-  return q.canvas;
+  const q = s.queue, p = s.producer, owner = q ?? p;
+  if (!owner) return null;
+  const width = q ? q.width : bufferWidth(p!), height = q ? q.height : bufferHeight(p!);
+  if (width <= 0 || height <= 0) return null;
+  if (!owner.canvas) owner.canvas = new OffscreenCanvas(width, height);
+  else if (owner.canvas.width !== width || owner.canvas.height !== height) { owner.canvas.width = width; owner.canvas.height = height; }
+  return owner.canvas;
 }
 /** BLASTBufferQueue's onFrameAvailable: the drawn buffer latches on the queue's layer, through the
  *  transaction a sync asked for if one is waiting, else at once. Latching releases the frame the
- *  layer held, as acquiring the next buffer releases the last. */
+ *  layer held, as acquiring the next buffer releases the last. A SurfaceTexture's consumer takes
+ *  the drawn buffer as a frame of its own. */
 export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?? null): unknown {
+  if (s.producer) { if (s.producer.canvas) presentSurface(s.producer, s.producer.canvas.transferToImageBitmap()); return; }
   const q = s.queue, layer = q?.control?.layer;
   if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
