@@ -527,7 +527,9 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     pending.set(id, (m) => m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result));
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
-  return { send, events, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
+  // the profile is removed after close, so close waits for Chrome's last writes to it
+  const exited = new Promise((r) => proc.once("exit", r));
+  return { send, events, version: (await send("Browser.getVersion")).product, close: async () => { ws.close(); proc.kill(); await exited; } };
 }
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
