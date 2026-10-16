@@ -71,8 +71,25 @@ export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeout
 }
 export function gles3Extensions(gl: GL): string[] {
   let e = extsOf.get(gl);
-  if (!e) { e = CORE.split(" "); for (const [w, n] of EXT) if (gl.getExtension(w) && n) e.push(n); extsOf.set(gl, e); }
+  if (!e) {
+    e = CORE.split(" ");
+    for (const [w, n] of EXT) if (gl.getExtension(w) && n && (n !== "GL_EXT_color_buffer_half_float" || rendersRgb16f(gl))) e.push(n);
+    extsOf.set(gl, e);
+  }
   return e;
+}
+/** GL_EXT_color_buffer_half_float makes RGB16F color-renderable, which WebGL 2's EXT_color_buffer_half_float need not: an engine that renders
+ *  to RGB16F where it is advertised (Filament's HDR targets) draws nothing into an incomplete framebuffer */
+function rendersRgb16f(gl: GL): boolean {
+  if (!("texStorage2D" in gl)) return false;
+  const texture = gl.getParameter(gl.TEXTURE_BINDING_2D), draw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING), read = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+  const t = gl.createTexture(), f = gl.createFramebuffer();
+  gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGB16F, 1, 1);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, draw); gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read); gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.deleteFramebuffer(f); gl.deleteTexture(t);
+  return complete;
 }
 function str(name: number): string {
   switch (name) {
