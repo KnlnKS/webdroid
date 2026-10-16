@@ -89,12 +89,12 @@ const inContext = <T>(cpu: Cpu, a: ArgReader, op: (st: NativeSurfaceTexture) => 
 
 function lockWindow(_cpu: Cpu, args: ArgReader): number {
   const buffer = W(args), out = args.p(), dirty = args.p();
-  if (!buffer || !out) return -22;
+  if (!buffer || !out) return BAD_VALUE;
   if (buffer.locked) return -16;
   const width = bufferWidth(buffer.surface), height = bufferHeight(buffer.surface);
   const stride = buffer.format === YV12 ? Math.ceil(width / 16) * 16 : width;
   const size = buffer.format === YV12 ? (stride + Math.ceil(stride / 32) * 16) * height : width * height * (buffer.format === 4 ? 2 : 4);
-  if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
+  if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return BAD_VALUE;
   if (size !== buffer.size) {
     if (buffer.bits) mem.free(buffer.bits);
     buffer.bits = mem.malloc(size); buffer.size = buffer.bits ? size : 0;
@@ -111,7 +111,7 @@ function lockWindow(_cpu: Cpu, args: ArgReader): number {
 }
 async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
   const buffer = W(args);
-  if (!buffer?.locked) return -22;
+  if (!buffer?.locked) return BAD_VALUE;
   const width = buffer.lockedWidth, height = buffer.lockedHeight;
   if (buffer.format === YV12) {
     const stride = Math.ceil(width / 16) * 16, chromaStride = Math.ceil(stride / 32) * 16;
@@ -250,16 +250,16 @@ export function ndkInit(): void {
       windowBySurface.delete(window.surface); windows.delete(window.handle); mem.free(window.handle);
     },
     // the consumer's default size (NATIVE_WINDOW_WIDTH); setBuffersGeometry sizes only the buffers
-    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : -22; },
-    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : -22; },
-    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : -22; },
+    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : BAD_VALUE; },
+    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : BAD_VALUE; },
+    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : BAD_VALUE; },
     // no buffer has a dataspace set: ADATASPACE_UNKNOWN
-    ANativeWindow_getBuffersDataSpace: (_c, a) => W(a) ? 0 : -22,
+    ANativeWindow_getBuffersDataSpace: (_c, a) => W(a) ? 0 : BAD_VALUE,
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
       const buffer = W(a), width = a.i(), height = a.i(), format = a.i();
       if (!buffer || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
-        || format === YV12 && ((width | height) & 1)) return -22;
+        || format === YV12 && ((width | height) & 1)) return BAD_VALUE;
       if (buffer.locked) return -16;
       buffer.surface.userWidth = width; buffer.surface.userHeight = height; buffer.format = format || 1;
       return 0;
