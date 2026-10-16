@@ -1,7 +1,9 @@
 // What the media classes' native halves share: the peer a JNI keeps for a Java object, events
 // posted back through postEventFromNative, and the sources a native half reads.
 import { rt, setDeclared, type JObj } from "../jvm/runtime.ts";
-import { after, callOn, scall, vcall } from "../jvm/natives/jentry.ts";
+import { after, callOn, scall, vcall, JThread } from "../jvm/natives/jentry.ts";
+import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
+import { processExited } from "../process-exit.ts";
 import { binderThread } from "./binder.ts";
 import { javaFdSource } from "../native/fs.ts";
 import { SliceFile, type FileSource } from "../shell/lazyfile.ts";
@@ -35,11 +37,22 @@ export function nativePeer<T>(cls: string | null, missing: string | null, close:
   };
 }
 
-/** An event to `to`'s postEventFromNative on the main thread, as the JNI's listener posts one; a
- *  [class, WeakReference] target is the static form. It is dropped unless `live` holds when it
- *  runs, and `obj` builds its payload then. */
-export function postNativeEvent(to: JObj | [string, JObj], live: (() => boolean) | null, what: number, arg1 = 0, arg2 = 0, obj: () => unknown = () => null): void {
-  postMain(() => !live || live() ? after(obj(), (o) => Array.isArray(to)
+/** A native thread attached to the VM, as an ALooper's: each job runs on it after the last, as a call of
+ *  its own, and an exception it leaves ends there as it would end the thread. */
+export function nativeThread(name: string): (job: () => unknown) => void {
+  const thread = Object.assign(new JThread(), { jname: name });
+  let tail: Promise<unknown> = Promise.resolve();
+  return (job) => {
+    tail = tail.then(() => processExited() ? undefined : callOn(thread, job)).catch((error) => dispatchUncaught(thread, error));
+  };
+}
+
+/** An event to `to`'s postEventFromNative, made on the thread `on` runs jobs on (the main thread unless
+ *  the JNI's listener has one of its own); a [class, WeakReference] target is the static form. It is
+ *  dropped unless `live` holds when it runs, and `obj` builds its payload then. */
+export function postNativeEvent(to: JObj | [string, JObj], live: (() => boolean) | null, what: number, arg1 = 0, arg2 = 0, obj: () => unknown = () => null,
+  on: (job: () => unknown) => void = postMain): void {
+  on(() => !live || live() ? after(obj(), (o) => Array.isArray(to)
     ? scall(to[0], "postEventFromNative", "(Ljava/lang/Object;IIILjava/lang/Object;)V", to[1], what, arg1, arg2, o)
     : vcall(to, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, o)) : undefined);
 }
