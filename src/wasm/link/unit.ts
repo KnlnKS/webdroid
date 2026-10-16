@@ -4,7 +4,6 @@
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (World.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w";
 import { methodOf, mid } from "../compiler/ids";
-import { compileModule } from "./module";
 import { unitHeader, type Marks, type Numbering, type UnitHeader } from "./aot";
 import type { World } from "./world";
 
@@ -31,8 +30,9 @@ export interface UnitResult {
   header: UnitHeader;
   /** what the unit numbered beyond the World it was asked by: that World takes it, or does not take the unit */
   numbering: Numbering;
-  /** the unit's module, which the worker has validated: its bytes, since a compiled module does not cross to another agent cluster, as from the compile host's frame */
-  bytes: Uint8Array;
+  /** the unit's module: its bytes as the worker sends them, since a compiled module does not cross to another agent cluster (as from the compile host's
+   *  frame), then compiled where they arrive (CompileClient) */
+  module: Uint8Array | WebAssembly.Module;
   /** the stack traces of its functions: name, method id, Wasm offsets and the dex pcs they belong to */
   traces: { name: string; m: string; offsets: Int32Array; pcs: Int32Array }[];
 }
@@ -48,7 +48,7 @@ export class UnitCompiler {
     this.known = this.w.numbering();
     return true;
   }
-  /** the unit for `job`: an error message if the compiler's code does not validate */
+  /** the unit for `job`: an error message if the job does not follow this World */
   upgrade(job: UpgradeJob): UnitResult | string {
     const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
     for (const [referrer, name, key] of job.resolved ?? []) {
@@ -71,8 +71,7 @@ export class UnitCompiler {
     w.beginTouch();
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
     const touch = w.endTouch();
-    try { compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; }
-    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), bytes,
+    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
   }
 }

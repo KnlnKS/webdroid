@@ -159,7 +159,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
         if (!units.sync(req.sync, req.keep)) throw new Error("the page's numbering is not the worker's");
         const result = units.upgrade(req.job);
         if (typeof result === "string") send({ type: "failed", id, message: result });
-        else send({ type: "unit", id: req.id, result, ms: performance.now() - t0 }, [result.bytes.buffer as ArrayBuffer]);
+        else send({ type: "unit", id: req.id, result, ms: performance.now() - t0 }, [(result.module as Uint8Array).buffer as ArrayBuffer]);
       }
     } catch (e) { send({ type: "failed", id, message: String((e as Error)?.stack ?? e) }); }
   };
