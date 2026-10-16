@@ -1,5 +1,5 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
-import { ModuleBuilder, T } from "../compiler/wasmbin.ts";
+import { T } from "../compiler/wasmbin.ts";
 import { Code, OP } from "../compiler/code.ts";
 import type { Kind } from "../compiler/program.ts";
 import type { Compiler, FnTrace } from "../compiler/j2w.ts";
@@ -127,17 +127,15 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
 /** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
 const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
-const WEBKIT_FRAME = /^(.*?)@wasm-function\[\d+\]$/;
-const wasmFrame = (line: string) => FRAME.exec(line) ?? WEBKIT_FRAME.exec(line);
-/** the names of the Wasm functions on an engine stack, innermost first */
-export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = wasmFrame(line)?.[1]; return name ? [name] : []; });
-/** Java frames, innermost first. WebKit names functions but does not report module offsets. */
+/** the names of the Wasm functions on a V8 `Error.stack`, innermost first */
+export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = FRAME.exec(line)?.[1]; return name ? [name] : []; });
+/** The Java frames of a V8 `Error.stack`, innermost first (the first `count` of them, with their line numbers unless `lines` is false): wasm frames are named by method id and carry a module offset */
 export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "get">, count = Infinity, lines = true): JavaFrame[] {
   const out: JavaFrame[] = [];
   let chunk: string | undefined;
   for (const line of stack.split("\n")) {
     if (out.length >= count) break;
-    const m = wasmFrame(line);
+    const m = FRAME.exec(line);
     const name = m?.[1], exact = name ? traces.get(name) : undefined;
     const loop = exact ? -1 : name?.lastIndexOf("#loop") ?? -1;
     const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
@@ -146,25 +144,13 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
     // An outlined loop and its callers are one Java activation; keep the innermost PC.
     if (chunk === id) { chunk = loop >= 0 ? id : undefined; continue; }
     chunk = loop >= 0 ? id : undefined;
-    const off = m![2] === undefined ? undefined : parseInt(m![2], 16);
+    const off = parseInt(m![2], 16);
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
-    if (off !== undefined) while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
-    const pc = off === undefined ? -1 : at < 0 ? 0 : t.pcs[at];
-    out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff && pc >= 0 ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+    const pc = at < 0 ? 0 : t.pcs[at];
+    out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
   }
   return out;
-}
-
-let named: boolean | undefined;
-/** whether the engine's `Error.stack` identifies Wasm frames */
-export function namesWasmFrames(): boolean {
-  if (named === undefined) {
-    const mb = new ModuleBuilder(), f = mb.importFunc("h", "f", mb.addFuncType([], [])), g = mb.addFunc(mb.addFuncType([], []), new Code(0).call(f).finish(), "probe");
-    mb.export("g", "func", g);
-    named = false;
-    (new WebAssembly.Instance(new WebAssembly.Module(mb.build() as BufferSource), { h: { f: () => { named = /wasm-function\[\d+\]/.test(new Error().stack ?? ""); } } }).exports.g as () => void)();
-  }
-  return named;
 }
 
 export const isStackOverflow = (e: unknown): boolean => e instanceof RangeError && /call stack/i.test(e.message);
