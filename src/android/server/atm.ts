@@ -292,7 +292,6 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
 });
 
 const AI = "android/content/pm/ActivityInfo";
-/** whether an ActivityInfo is the component `ref` names */
 const isActivity = (info: JObj, ref: ComponentRef) => getDeclared<string>(info, AI, "packageName") === ref.pkg && getDeclared<string>(info, AI, "name") === ref.cls;
 /** ActivityStarter.execute: the resolved activity starts here, or through the broker in its own process */
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {

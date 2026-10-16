@@ -114,7 +114,6 @@ export function processFdStat(fd: number): ReturnType<typeof javaFdStat> | Promi
   const remote = openFd(fd)?.remote;
   return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null) : javaFdStat(fd);
 }
-/** a remote descriptor's position and how many bytes lie from there to its end */
 const remoteRest = (fd: number) => Promise.all([processFdStat(fd),processSeekFd(fd,0,1)])
   .then(([stat,position]) => !stat || position < 0 ? null : {position,length:Math.max(0,stat.size-position)});
 /** the bytes from `fd`'s position to its end, which stays where it was */

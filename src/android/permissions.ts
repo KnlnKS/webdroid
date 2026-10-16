@@ -86,8 +86,7 @@ export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Pr
 export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
   RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : true;
 /** whether a package holds a platform permission no third-party app is granted at install: it is a
- *  system package that requests it (privileged or preinstalled), or special access held without its
- *  screen. It reads no store, which an app process reaches only through the broker (permissionGranted). */
+ *  system package that requests it (privileged or preinstalled), or special access held without its screen */
 export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
   const record = packages.get(pkg);
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name);
