@@ -2,7 +2,6 @@
   "name": "webdroid",
   "private": true,
   "type": "module",
-  "workspaces": ["vendor/sql.js"],
   "scripts": {
     "dev": "bun run server.ts",
     "build:prod": "bun scripts/build-prod.ts",
@@ -53,15 +52,17 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260924.1",
-    "@types/bun": "^1.4.0",
     "@types/estree": "^1.0.9",
-    "@types/node": "^26.6.2",
+    "@types/node": "26.6.5",
     "@types/node-forge": "^1.3.14",
     "@types/pngjs": "^6.0.5",
     "@types/sql.js": "^1.4.11",
     "pixelmatch": "^7.2.0",
     "playwright": "^1.62.1",
     "pngjs": "^7.0.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
+    "vite-plus": "1.3.0",
     "wrangler": "^4.137.0"
-  }
+  },
+  "packageManager": "pnpm@11.0.8"
 }
