@@ -1,5 +1,5 @@
 import { E } from "./abi";
-import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd,
+import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
   javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
 import { isMutablePath } from "../shell/file-path";
 import { vfs } from "../shell/vfs";
@@ -113,6 +113,14 @@ export function processFcntlFd(fd: number, command: number, arg: number): number
 export function processFdStat(fd: number): ReturnType<typeof javaFdStat> | Promise<ReturnType<typeof javaFdStat>> {
   const remote = openFd(fd)?.remote;
   return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null) : javaFdStat(fd);
+}
+/** the bytes from `fd`'s position to its end, which stays where it was */
+export async function processFdBytes(fd: number): Promise<Uint8Array | null> {
+  if (!isRemoteFd(fd)) return javaFdBytes(fd);
+  const [stat, position] = await Promise.all([processFdStat(fd), processSeekFd(fd, 0, 1)]);
+  if (!stat || position < 0) return null;
+  const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await processPreadFd(fd, bytes, position);
+  return n < 0 ? null : bytes.subarray(0, n);
 }
 export function processIoctlIntFd(fd: number, command: number): number | Promise<number> {
   if (!isRemoteFd(fd)) return javaIoctlIntFd(fd,command);

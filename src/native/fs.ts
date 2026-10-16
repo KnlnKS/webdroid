@@ -375,9 +375,7 @@ export function javaFdStat(fd: number): { mode: number; size: number; path: stri
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
 export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
-  if (f?.remote) return null; // Binder needs a canonical capability, not copied local bytes.
-  if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
-  if (!f) return null;
+  if (!f || f.remote || f.dir || (f.statusFlags & O_ACCMODE) === 1) return null;   // processFdBytes reads a remote one
   if (!f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll && !f.socket) {
     vfs.sync(f.content);
     try { return f.content.source ? await readFully(f.content.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
