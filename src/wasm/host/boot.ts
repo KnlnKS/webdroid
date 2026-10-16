@@ -56,7 +56,7 @@ const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
 let aheading = false;
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
-const hostLoop: HostLoop = {
+export const hostLoop: HostLoop = {
   yield: (soon) => soon ? wakeSoon() : yieldToLoop(),
   due: () => turnElapsed() >= 8,
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },

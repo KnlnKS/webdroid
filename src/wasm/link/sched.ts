@@ -198,17 +198,10 @@ export interface HostLoop {
   /** runs `fn` after `ms`; the function cancels */
   after(ms: number, fn: () => void): () => void;
 }
-const channel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
-const turns: (() => void)[] = [];
-// node: a pending turn holds the process open, an idle port lets it exit
-const hold = channel?.port1 as unknown as { ref?: () => void; unref?: () => void } | undefined;
-if (channel) { channel.port1.onmessage = () => { turns.shift()?.(); if (!turns.length) hold!.unref?.(); }; hold!.unref?.(); }
 let turnStart = 0;
+/** the loop of a World given none, which only compiles: timers alone. The hosts that run Java pass their own (boot.ts) */
 export const defaultLoop: HostLoop = {
-  yield: () => new Promise<void>((r) => {
-    turns.push(() => { turnStart = performance.now(); r(); });
-    if (channel) { hold!.ref?.(); channel.port2.postMessage(0); } else setTimeout(() => turns.shift()?.(), 0);
-  }),
+  yield: () => new Promise<void>((r) => setTimeout(() => { turnStart = performance.now(); r(); }, 0)),
   due: () => performance.now() - turnStart >= 8,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
 };

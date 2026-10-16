@@ -1,7 +1,7 @@
 // The page of boot-probe.ts, also loaded in an iframe of itself (`?frame`) as a second load of the same build.
 import { fetchPlatformJars, jarDexes } from "../../src/android/framework.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { openAot, platformProgram } from "../../src/wasm/host/boot.ts";
+import { hostLoop, openAot, platformProgram } from "../../src/wasm/host/boot.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
 import { openPersist } from "../../src/wasm/host/persist.ts";
@@ -61,7 +61,7 @@ async function probe(): Promise<ProbeResult> {
   const dexes = dexesIn(new Uint8Array(await (await fetch("/app.dex")).arrayBuffer()), "app.dex"), persist = await openPersist();
    const p0 = performance.now();
   const code = await prepareApp({ dexes, aot: store!, persist, spawn: () => spawnCompileWorker(undefined, "/wasm-compile-worker.js"), roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } });
-  const prepareMs = performance.now() - p0, b0 = performance.now(), w = new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, net: hostNet, guest: guestMemory, aot: store, app: code.saved, compiler: code.compiler });
+  const prepareMs = performance.now() - p0, b0 = performance.now(), w = new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, loop: hostLoop, net: hostNet, guest: guestMemory, aot: store, app: code.saved, compiler: code.compiler });
   code.start(w);  await startProcess(w);  const bootMs = performance.now() - b0, s = w.stats;
   // the app: a loop hot enough to ask for the second tier, and the entry points whose answers every load must agree on
   const hot = w.entry("Pst", "hot", "(I)I");

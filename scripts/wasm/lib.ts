@@ -12,7 +12,7 @@ import { Natives } from "../../src/wasm/host/natives.ts";
 import { hostNet } from "../../src/wasm/host/inet.ts";
 import { guestMemory } from "../../src/wasm/host/guest.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { useWorld } from "../../src/wasm/host/boot.ts";
+import { hostLoop, useWorld } from "../../src/wasm/host/boot.ts";
 
 export function loadDexes(path: string) {
   return dexesFrom(new Uint8Array(readFileSync(path)), path);
@@ -49,5 +49,5 @@ export function current(w: World): World {
 }
 /** a current World over `src` (dex and jar paths, or a Program) */
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return current(new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
+  return current(new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, loop: hostLoop, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
 }

@@ -16,7 +16,8 @@ import { rt } from "../../src/jvm/runtime.ts";
 import { perf } from "../../src/perf.ts";
 import { fnRunnable } from "../../src/android/mainloop.ts";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
-import { defaultLoop, emitRestored } from "../../src/wasm/link/sched.ts";
+import { emitRestored } from "../../src/wasm/link/sched.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { resumeAs } from "../../src/jvm/natives/jentry.ts";
 import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc.ts";
@@ -37,11 +38,11 @@ let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns =
 const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => {
+} satisfies NativeSource), loop: { ...hostLoop, due: () => admissionProbe || arithmeticProbe || hostLoop.due(), yield: (soon) => {
   if (rejectAdmission) return Promise.reject(new Error("admission timer rejected"));
   if (admissionProbe) admissionTurns++;
   if (arithmeticProbe) { turns++; return Promise.resolve(); }
-  const pending = defaultLoop.yield(soon);
+  const pending = hostLoop.yield(soon);
   if (idleBeforeResume) {
     // Model another entry completing between the admission reaction and the engine's resume.
     const then = pending.then.bind(pending);
@@ -141,7 +142,7 @@ if (substrate) {
   for (const mode of ["bridge", "full", "recovered"] as const) {
     let full = false, turns = 0, bridge = 0;
     const heap = world(w.prog, { heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
-      ...defaultLoop, after: (ms, run) => defaultLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
+      ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
     heap.host.heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };

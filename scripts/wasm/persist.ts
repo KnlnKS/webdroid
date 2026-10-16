@@ -4,6 +4,7 @@
 import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { guestMemory } from "../../src/wasm/host/guest.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,7 +51,7 @@ const platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, guest: guestMemory, aot: aotStore, ...opts }));
+const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, loop: hostLoop, guest: guestMemory, aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => addHostClasses(world(dexes, opts));
 

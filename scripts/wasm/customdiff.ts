@@ -15,7 +15,7 @@ import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatu
 import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
 import { mem } from "../../src/native/mem.ts";
-import { defaultLoop } from "../../src/wasm/link/sched.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
@@ -159,9 +159,9 @@ const dex = join(out, "classes.dex"), jars = CORE_PATHS;
 await mountPlatform(ROOT);
 
 let forceAdmission = false, admissionTurns = 0;
-const loop = { ...defaultLoop, due: () => (forceAdmission && admissionTurns < 32) || defaultLoop.due(), yield: (soon: boolean) => {
+const loop = { ...hostLoop, due: () => (forceAdmission && admissionTurns < 32) || hostLoop.due(), yield: (soon: boolean) => {
   if (forceAdmission && admissionTurns < 32) admissionTurns++;
-  return defaultLoop.yield(soon);
+  return hostLoop.yield(soon);
 } };
 const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
 const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m => decodeInstructions(m.dex.code(m.codeOff).insns));
