@@ -313,6 +313,7 @@ function placePixels(img: ImageBitmap | null, w: number, h: number, config: numb
   if (config === ALPHA_8) grayToAlpha(b);
   return b;
 }
+const alphaType = (header: { opaque: boolean }, premultiplied: boolean) => header.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL;
 /** the Java Bitmap a decode answers: the reused inBitmap, reinitialized, or a new one around `b` */
 const javaResult = (b: NativeBitmap, reused: object | null, premultiplied: boolean, chunk: Int8Array | null = null, insets: unknown = null) =>
   reused ? after(reinitJava(reused, b, premultiplied), () => reused) : javaBitmap(b, -1, chunk, insets, premultiplied);
@@ -337,7 +338,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
   const img = yield* awaited(decodePixels(bytes, h, sw, sh, null, false));
   // an incomplete input decodes as far as it goes (here: not at all), a corrupt one fails
   if (!img && h.complete) return null;
-  const b = placePixels(img, sw, sh, config, h.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
+  const b = placePixels(img, sw, sh, config, alphaType(h, premultiplied), hardware, reuse);
   b.immutable = !mutable || hardware;
   const chunk = h.patch && h.patch.slice();
   if (chunk && scale !== 1) scalePatch(chunk, sw / w, sh / ht, sw, sh);
@@ -415,7 +416,7 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
       // a crop reaching outside the image is transparent there, as the zero-initialized output is
       const img = yield* awaited(decodePixels(bytes, header, bw, bh, [x, y, w, ht], false));
       if (!img && header.complete) return null;
-      const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
+      const b = placePixels(img, bw, bh, config, alphaType(header, premultiplied), hardware, reuse);
       if (!reuse) b.immutable = true;
       if (options) yield setOuts(options, bw, bh, header.mime, hardware ? HARDWARE : config);
       return javaResult(b, reuse && options![opt().inBitmap] as object, premultiplied);
@@ -492,7 +493,7 @@ rt.registerJnis(DECODER, {
       // SkCodec::kIncompleteInput or kErrorInInput: the listener may take what was decoded
       const partial = !header.complete ? SOURCE_INCOMPLETE : !img ? SOURCE_MALFORMED_DATA : 0;
       if (partial) yield vcall(jdecoder, "onPartialImage", "(ILjava/lang/Throwable;)V", partial, null);
-      const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL, hardware);
+      const b = placePixels(img, bw, bh, config, alphaType(header, !unpremul), hardware);
       if (postProcess) {
         const format: number = yield vcall(jdecoder, "postProcessAndRelease", "(Landroid/graphics/Canvas;)I",
           yield newObj("android/graphics/Canvas", "(J)V", handle(bitmapCanvas(b))));
