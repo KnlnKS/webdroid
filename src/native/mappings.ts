@@ -71,28 +71,28 @@ export function trackSharedMap(va: bigint, n: number, off: number, file: VfsFile
   mapped.add(shared);
 }
 
-/** a lease's operations run in order; `off` of a remote mapping is its offset in the lease, which starts at file offset `start` */
-type Lease = { lease: ProcessMapping; queue: Promise<void>; path: string | null; start: number };
+/** `off` of a remote mapping is its offset in the lease, which starts at offset `start` of the file */
+type Lease = { lease: ProcessMapping; path: string | null; start: number };
 type RemoteMapping = SharedMapping & { owner: Lease };
 let remoteMaps: RemoteMapping[] = [];
-/** each file's lease operations not yet done, which a new mapping of it waits for, even those of unmapped leases */
-const pending = new Map<string, Promise<void>>();
+/** the lease operations not yet done of each file (of each lease, when its file has no path), which run in order and a new mapping of the file waits for */
+const queues = new Map<string | Lease, Promise<void>>();
 const leased = (owner: Lease, operation: () => Promise<void>) => {
-  owner.queue = owner.queue.then(operation).catch((error) => console.error("[mmap]", error));
-  const { path } = owner;
-  if (path === null) return;
-  const done: Promise<void> = Promise.all([pending.get(path), owner.queue]).then(() => { if (pending.get(path) === done) pending.delete(path); });
-  pending.set(path, done);
+  const key = owner.path ?? owner;
+  const done: Promise<void> = (queues.get(key) ?? Promise.resolve()).then(operation).catch((error) => console.error("[mmap]", error))
+    .then(() => { if (queues.get(key) === done) queues.delete(key); });
+  queues.set(key, done);
 };
 /** The stores through remote mapping `m` go to its file, and into this process's other mappings of that
  *  file, which one page cache would share */
 function flushRemote(m: RemoteMapping): void {
-  const { owner } = m;
+  const { owner } = m, { path } = owner;
   stored(m, m.n, (i, bytes) => {
     leased(owner, () => owner.lease.write(m.off + i, bytes));
+    if (path === null) return;
     const at = owner.start + m.off + i;
     for (const o of remoteMaps) {
-      if (o === m || owner.path === null || o.owner.path !== owner.path) continue;
+      if (o === m || o.owner.path !== path) continue;
       const from = o.owner.start + o.off, lo = Math.max(at, from), hi = Math.min(at + bytes.length, from + o.n);
       if (lo >= hi) continue;
       const part = bytes.subarray(lo - at, hi - at);
@@ -111,13 +111,13 @@ export async function mapRemoteShared(va: bigint, n: number, off: number, fd: nu
   // like a read of the file, the new mapping sees what this process's mappings of it stored
   if (path !== null) {
     for (const m of remoteMaps) if (m.owner.path === path) flushRemote(m);
-    await pending.get(path);
+    await queues.get(path);
   }
   const lease = await processMapping(fd, off, length, prot);
   if (typeof lease === "number") return -lease;
   const bytes = await lease.read(0, length);
   mem.write(guestAt(va), bytes);
-  remoteMaps.push({ va, n: length, off: 0, base: prot & 2 ? bytes.slice() : null, owner: { lease, queue: Promise.resolve(), path, start: off } });
+  remoteMaps.push({ va, n: length, off: 0, base: prot & 2 ? bytes.slice() : null, owner: { lease, path, start: off } });
   return 0;
 }
 
