@@ -44,7 +44,7 @@ export function loadSystemFonts(): Promise<void> {
 }
 /** the device's languages and the text paint classes, as the zygote sets them up: a TS TextView
  *  constructs its TextPaint synchronously */
-export async function preloadTextPaint(): Promise<void> {
+async function preloadTextPaint(): Promise<void> {
   await (await import("../src/android/resnative.ts")).initDeviceLocales();
   await (await import("../src/android/paint.ts")).preloadPaint();
 }

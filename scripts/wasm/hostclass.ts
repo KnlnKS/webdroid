@@ -1,8 +1,6 @@
 // Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on a
 // World with the registered classes added to it and must answer as java/hc/expected.txt records; then the Wasm tier's own rules: what dies together, and what the tables keep.
 // Run: pnpm wasm hostclass
-import { runInNewContext } from "node:vm";
-import { setFlagsFromString } from "node:v8";
 import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";
 import { resumeAs, scall } from "../../src/jvm/natives/jentry.ts";
@@ -77,8 +75,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 }
 
 // lifetime: the Java object and the host object live and die together
-setFlagsFromString("--expose-gc");
-const gc = runInNewContext("gc") as () => void;
+const gc = globalThis.gc!;
 const turn = () => new Promise((r) => setTimeout(r, 0));
 async function collected(refs: WeakRef<object>[]): Promise<boolean> {
   for (let i = 0; i < 5 && refs.some((r) => r.deref()); i++) { await turn(); gc(); }

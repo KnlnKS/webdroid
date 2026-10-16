@@ -503,7 +503,9 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
     ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
   // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
-  const proc = spawn(command, argv, { stdio: ["ignore", chromeLog ? openSync(chromeLog, "w") : "ignore", chromeLog ? openSync(chromeLog + ".err", "w") : "ignore"] });
+  const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
+  const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });
+  for (const fd of logs) if (typeof fd === "number") closeSync(fd);
   let port = "";
   for (let i = 0; i < 100 && !port; i++) {
     await delay(100);
