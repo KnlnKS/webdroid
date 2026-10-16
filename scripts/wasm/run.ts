@@ -28,9 +28,10 @@
 //                aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `pnpm aot`, `aot-profile` (in this order, with the
 //                server running) regroup the build by what launches of apps use and write its startup list.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeWhole } from "../generated.ts";
 import { nodeCommand } from "../node.ts";
 import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
 
@@ -59,7 +60,7 @@ function buildAot(args: string[]): number {
     if (startup) return startup;
   }
   if (manifest) {
-    writeFileSync(join(AOT_ROOT, "current.json"), JSON.stringify(manifest));
+    writeWhole(join(AOT_ROOT, "current.json"), JSON.stringify(manifest));
     for (const old of readdirSync(AOT_ROOT).filter((f) => f !== manifest.key && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
   }
   return 0;

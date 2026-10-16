@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { writeWhole } from "../generated.ts";
 import type { UiNode } from "../../tests/e2e/types.ts";
 import type { Random } from "./random.ts";
 import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction, type UiAction } from "./ui-model.ts";
@@ -147,9 +148,7 @@ export class UiExplorer {
   async save(): Promise<void> {
     const journal: Journal = { schemaVersion: 2, apkHash: this.apkHash, states: this.states, scrollAttempts: this.scrollAttempts,
       signals: [...this.signals] };
-    const temporary = `${this.file}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(journal));
-    renameSync(temporary, this.file);
+    writeWhole(this.file, JSON.stringify(journal));
   }
 
   summary(): { states: number; actions: number; signals: number } {
