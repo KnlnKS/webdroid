@@ -93,6 +93,8 @@ export const device = {
   navBarDp: 24,
   /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */
   touchSlopDp: 8,
+  /** AOSP ViewConfiguration.EDGE_SLOP: dp from the screen's edge where a touch reads as the edge of a hand */
+  edgeSlopDp: 12,
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
   scrollUnitDp: 64,
   /** framework-res config_minScalingSpan: ScaleGestureDetector does not scale two fingers closer */
@@ -121,6 +123,7 @@ export const device = {
   get statusBar(): number { return Math.round(this.statusBarDp * this.density); },
   get navBar(): number { return Math.round(this.navBarDp * this.density); },
   get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },
+  get edgeSlop(): number { return Math.round(this.edgeSlopDp * this.density); },
   get scrollUnit(): number { return this.scrollUnitDp * this.density; },
   /** getDimensionPixelSize of a mm dimension: xdpi, which display.ts reports as densityDpi, per inch */
   get minScalingSpan(): number { return Math.round(this.minScalingSpanMm * this.densityDpi / 25.4); },

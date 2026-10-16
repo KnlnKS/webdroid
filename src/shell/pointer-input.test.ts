@@ -14,7 +14,7 @@ function attach() {
   const source = new EventTarget(), sent: number[][] = [];
   const canvas = Object.assign(source, { getBoundingClientRect: () => new Rect(0, 0, 100, 200) });
   const input = attachPointerInput(canvas as unknown as HTMLCanvasElement,
-    () => ({ width: 200, height: 400, scrollUnit: 128, touchSlop: 16, minScalingSpan: 49 }),
+    () => ({ width: 200, height: 400, scrollUnit: 128, touchSlop: 16, edgeSlop: 10, minScalingSpan: 49 }),
     async (action, pointers) => { sent.push([action, ...pointers.flatMap(p => [p.id, p.x, p.y])]); });
   const pointer = (type: string, pointerId: number, clientX: number, clientY: number, init: object = {}) =>
     source.dispatchEvent(Object.assign(new Event(type), { pointerId, clientX, clientY, pointerType: "touch", altKey: false, ...init }));
@@ -69,35 +69,36 @@ test("an Alt-held mouse press mirrors a second finger through the display's cent
   ]);
 });
 
-test("Ctrl+wheel (a trackpad pinch) drives two fingers about the cursor and lifts them once the stream idles", async () => {
+test("Ctrl+wheel (a trackpad pinch) drives two level fingers about the cursor and lifts them once the stream idles", async () => {
   const { sent, wheel, close } = attach();
   const frames = async (n: number) => { for (let i = 0; i < n; i++) { drainPointers(); await settle(); } };
   const pinch = { ctrlKey: true };
   // under the slop: each finger would travel 5 of 16
-  wheel(50, 100, -10, pinch);
+  wheel(10, 100, 10, pinch);
   await frames(1);
   expect(sent).toEqual([]);
-  // to twice the span: the fingers go down 100 apart along the display's longer side, centred on
-  // the cursor, and the first MOVE crosses the slop by a pixel
-  wheel(50, 100, -100 * Math.log(2) + 10, pinch);
+  // a squeeze: the fingers go down two minimum scaling spans (49) apart, a pixel over, on the
+  // cursor's row, slid right so the first stays out of the edge slop; they stop one span apart, and
+  // the first MOVE crosses the touch slop by a pixel
+  wheel(10, 100, 1000, pinch);
   await frames(12);
-  const spread = sent.length;
-  // pinching in hard stops at the minimum scaling span (49), a pixel over
-  wheel(50, 100, 1000, pinch);
+  const squeezed = sent.length;
+  // spreading carries them past the display's edge
+  wheel(10, 100, -100 * Math.log(4), pinch);
   await frames(12);
   await settle(130);
   await frames(1);
   close();
   const round = (e: number[]) => e.map(v => Math.round(v * 1e6) / 1e6);
-  expect(sent.slice(0, 3).map(round)).toEqual([[0, 0, 100, 150], [5 | 1 << 8, 0, 100, 150, 1, 100, 250], [2, 0, 100, 133, 1, 100, 267]]);
-  expect(sent.slice(-2).map(round)).toEqual([[6, 0, 100, 175, 1, 100, 225], [1, 1, 100, 225]]);
+  expect(sent.slice(0, 3).map(round)).toEqual([[0, 0, 10, 200], [5 | 1 << 8, 0, 10, 200, 1, 110, 200], [2, 0, 27, 200, 1, 93, 200]]);
+  expect(sent.slice(-2).map(round)).toEqual([[6, 0, -40, 200, 1, 160, 200], [1, 1, 160, 200]]);
   // then MOVEs cover half the remaining ratio each frame, so the scale reaches the app as a stream
   const spans = (moves: number[][]) => moves.map(e => {
-    expect(e[0]).toBe(2);
-    expect((e[3] + e[6]) / 2).toBeCloseTo(200);
-    return e[6] - e[3];
+    expect([e[0], e[3], e[6]]).toEqual([2, 200, 200]);
+    expect((e[2] + e[5]) / 2).toBeCloseTo(60);
+    return e[5] - e[2];
   });
-  const out = spans(sent.slice(2, spread)), inward = spans(sent.slice(spread, -2));
+  const inward = spans(sent.slice(2, squeezed)), out = spans(sent.slice(squeezed, -2));
   for (const [steps, target, sign] of [[out, 200, 1], [inward, 50, -1]] as const) {
     expect(steps.length).toBeGreaterThan(3);
     expect(steps.at(-1)).toBeCloseTo(target);
@@ -110,7 +111,7 @@ test("a wheel burst that gains or drops Ctrl lifts the gesture it was driving", 
   const frame = async () => { drainPointers(); await settle(); };
   wheel(50, 100, 20);
   await frame();
-  // the UP goes out at once; the pinch presses once it has landed
+  // the UP goes out at once; the pinch presses once it has landed, a spread one span apart
   wheel(50, 100, -100, { ctrlKey: true });
   await frame();
   await frame();
@@ -119,8 +120,8 @@ test("a wheel burst that gains or drops Ctrl lifts the gesture it was driving", 
     [0, 0, 100, 200],
     [2, 0, 100, 160],
     [1, 0, 100, 160],
-    [0, 0, 100, 150],
-    [5 | 1 << 8, 0, 100, 150, 1, 100, 250],
-    [2, 0, 100, 133, 1, 100, 267],
+    [0, 0, 75, 200],
+    [5 | 1 << 8, 0, 75, 200, 1, 125, 200],
+    [2, 0, 58, 200, 1, 142, 200],
   ]);
 });

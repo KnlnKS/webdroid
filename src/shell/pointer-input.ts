@@ -1,7 +1,7 @@
 // One page-owned canvas's pointer/wheel stream. Java dispatch stays behind the injected boundary.
 import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue";
 
-export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number; minScalingSpan: number };
+export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number; edgeSlop: number; minScalingSpan: number };
 /** a MotionEvent's action and pointers to the display */
 export type PointerDispatch = (action: number, pointers: TouchPointer[]) => Promise<void>;
 const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
@@ -18,7 +18,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   let closed = false;
   const device = { get width() { return geometry().width; }, get height() { return geometry().height; },
     get scrollUnit() { return geometry().scrollUnit; }, get touchSlop() { return geometry().touchSlop; },
-    get minScalingSpan() { return geometry().minScalingSpan; } };
+    get edgeSlop() { return geometry().edgeSlop; }, get minScalingSpan() { return geometry().minScalingSpan; } };
   function listenOn<K extends keyof HTMLElementEventMap>(name: K, handler: (event: HTMLElementEventMap[K]) => void,
     options: AddEventListenerOptions = {}) {
     source.addEventListener(name, handler, { ...options, signal: listeners.signal });
@@ -99,19 +99,28 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   let ox = 0, oy = 0, ax = 0, ay = 0, last: TouchPointer[] = [];
   let live = false, armed = false, pinch = false, lastWheel = 0, pending = 0;
   /** a pinch's scale, the scale its fingers last moved to (0 before they have), and half their
-   *  starting span along the display's longer side */
-  let scale = 1, shown = 0, hx = 0, hy = 0;
-  const fingers = (k: number): TouchPointer[] =>
-    [{ id: 0, x: ox - hx * k, y: oy - hy * k }, { id: 1, x: ox + hx * k, y: oy + hy * k }];
+   *  starting span */
+  let scale = 1, shown = 0, half = 0;
+  // The fingers go down level, on the cursor's row: a phone's layout stacks full-width bands (bars,
+  // chips, sheets, the content between), and a level pair stays in the band the cursor is over
+  // where a pair across the rows lands one finger on a neighbour, which split touch then gives it.
+  const fingers = (k: number): TouchPointer[] => [{ id: 0, x: ox - half * k, y: oy }, { id: 1, x: ox + half * k, y: oy }];
+  /** ScaleGestureDetector ends a scale below config_minScalingSpan; a pixel over, so float rounding cannot */
+  const minSpan = () => device.minScalingSpan + 1;
+  /** Half the span a pinch starts at. The detector begins once the span has moved its slop and is at
+   *  least the minimum, so a spread starts one minimum span apart, the shortest reach. A squeeze needs
+   *  room to close and starts two apart, or as far apart as the display allows outside its edge slop. */
+  const startHalf = (spread: boolean) => (spread ? minSpan() : Math.min(2 * minSpan(), device.width - 2 * device.edgeSlop)) / 2;
+  /** the least scale: the fingers one minimum span apart */
+  const floor = () => minSpan() / 2 / (armed ? half : startHalf(false));
   /** The scale of the pinch's next MOVE. The fingers travel rather than jump: a scale detector
    *  begins on the MOVE that crosses its slop and measures from that span, so the first MOVE only
    *  crosses the slop, and each later one covers half the remaining ratio. A wheel notch is 2.7×,
    *  and Google Maps scaled nothing when it came as one or two MOVEs. */
   function pinchStep(): number {
-    const h = Math.hypot(hx, hy);
-    const k = !shown ? 1 + Math.sign(scale - 1) * Math.min((device.touchSlop + 1) / h, Math.abs(scale - 1))
+    const k = !shown ? 1 + Math.sign(scale - 1) * Math.min((device.touchSlop + 1) / half, Math.abs(scale - 1))
       : Math.sqrt(shown * scale);
-    return Math.abs(scale - k) * h < 1 ? scale : k;
+    return Math.abs(scale - k) * half < 1 ? scale : k;
   }
 
   /** A wheel stream — the fingers, and the momentum macOS sends after they lift — never gaps this
@@ -203,15 +212,11 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
         pinch = e.ctrlKey;
         scale = 1;
         shown = 0;
-        // The fingers start two minimum scaling spans apart and come no closer than one, since
-        // ScaleGestureDetector ends a scale under it; a pixel over, so float rounding cannot.
-        const h = device.minScalingSpan + 1;
-        [hx, hy] = device.width > device.height ? [h, 0] : [0, h];
       }
       if (pinch) {
         // the scale Chrome's pinch deltas encode: deltaY = -100 ln(scale). Lines (Firefox's mouse
         // notch is three) count as a third of the 100 px Chrome gives a notch.
-        scale = Math.max(scale * Math.exp(-e.deltaY * (e.deltaMode ? 100 / 3 : 1) / 100), 1 / 2);
+        scale = Math.max(scale * Math.exp(-e.deltaY * (e.deltaMode ? 100 / 3 : 1) / 100), floor());
       } else {
         // deltaMode: 0 = CSS px, which is what a trackpad sends; 1 = lines; 2 = pages. A wheel notch
         // is three DOM lines and one AXIS_VSCROLL unit, which this device scrolls by scrollUnit px.
@@ -238,7 +243,8 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
       // Under the slop nothing is dispatched at all, so a stray two-finger nudge cannot land a
       // press highlight, a tap or a long press on whatever the cursor happens to be over. A
       // pinch's fingers each travel half the span's change.
-      if ((pinch ? Math.hypot(hx, hy) * Math.abs(scale - 1) : Math.hypot(ax, ay)) < device.touchSlop) {
+      const h = pinch ? startHalf(scale > 1) : 0;
+      if ((pinch ? h * Math.abs(scale - 1) : Math.hypot(ax, ay)) < device.touchSlop) {
         if (idle) live = false;
         return;
       }
@@ -247,6 +253,13 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
       // below goes out in the same pass, so the scroll container intercepts and cancels the child
       // it pressed within one dispatch instead of leaving it lit for a frame.
       if (pinch) {
+        // About the cursor, slid only as far as keeps both out of the edge slop, where a press reads
+        // as the edge of a hand: Google Maps, like AOSP's early ScaleGestureDetector, defers a pinch
+        // until such a finger leaves it.
+        half = h;
+        const slop = device.edgeSlop;
+        ox = Math.min(Math.max(ox, slop + half), device.width - slop - half);
+        oy = Math.min(Math.max(oy, slop), device.height - slop);
         const [a, b] = fingers(1);
         send(ACTION_DOWN, [a]);
         send(ACTION_POINTER_DOWN | 1 << 8, [a, b]);
