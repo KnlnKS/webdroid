@@ -68,6 +68,8 @@ rt.st = resumeAs;
 rt.su = releaseThread;
 /** the native tier releases a finished thread's Cpu and stack through this */
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
+/** whether another thread is blocked on a lock or class initialization `t` holds */
+export const threadContended = { hook: null as ((t: JThread) => boolean) | null };
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
 /** run as strand `s` from here: the code that follows owns the turn as its thread and chain */
 export function resumeAs(s: Strand): void {

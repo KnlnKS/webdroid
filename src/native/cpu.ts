@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { JniClass } from "./jnivm";
-import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry";
+import { JThread, mainThread, releaseThread, resumeAs, threadContended } from "../jvm/natives/jentry";
 import { rt } from "../jvm/runtime";
 import type { Strand } from "../jvm/suspend";
 import { mem } from "./mem";
@@ -669,9 +669,10 @@ export class Cpu {
     } finally { if (sync.on) resumeAs(caller); else turn.release(); }
   }
 
-  /** exempt from the background share: the UI thread, a running signal handler, a frame producer */
+  /** exempt from the background share: the UI thread, a running signal handler, a frame producer,
+   *  and a thread another is blocked on, which would otherwise wait at the background's pace */
   private foreground(now: number): boolean {
-    return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS;
+    return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS || !!threadContended.hook?.(this.jthread);
   }
   /** run the core until the frame returns, a host call parks the thread, or the budget is spent */
   runSlice(budget: number): SliceExit {
