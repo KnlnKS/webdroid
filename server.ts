@@ -15,7 +15,7 @@ import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject.ts";
 import { webDocument } from "./src/shell/webhtml.ts";
 import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
-import { EXT_MIME } from "./src/mime.ts";
+import { mimeOf } from "./src/mime.ts";
 import { WebRelay } from "./src/shell/webrelay.ts";
 import { parseIpv4 } from "./src/shell/relay.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
@@ -48,7 +48,14 @@ async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
     const status = res.statusCode!, location = res.headers.location;
     if (init.redirect !== "manual" && location && [301, 302, 303, 307, 308].includes(status) && hops < 20) {
       res.resume();
-      url = new URL(location, url).href;
+      const next = new URL(location, url);
+      if (next.origin !== new URL(url).origin) {
+        // as node's fetch does: credentials stay with the origin they were sent to
+        const headers = new Headers(init.headers);
+        for (const name of ["authorization", "proxy-authorization", "cookie", "host"]) headers.delete(name);
+        init = { ...init, headers };
+      }
+      url = next.href;
       if (status === 303 || ((status === 301 || status === 302) && init.method === "POST")) {
         const headers = new Headers(init.headers);
         for (const name of ["content-length", "content-type", "content-encoding"]) headers.delete(name);
@@ -59,6 +66,7 @@ async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
     const headers = new Headers();
     for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
     const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
+    if (empty) res.resume();
     const response = new Response(empty ? null : Readable.toWeb(res) as unknown as ReadableStream, { status, statusText: res.statusMessage, headers });
     return Object.defineProperty(response, "url", { value: url });
   }
@@ -75,7 +83,7 @@ const devicePath = (req: Request, path: string) => path.includes("..") ? new Res
 
 /** scripts/font-index.ts, run once: the reference build's fonts change only with gen-framework */
 let fontIndex: Promise<string> | null = null;
-const fontIndexJson = () => fontIndex ??= runNode("scripts/font-index.ts");
+const fontIndexJson = () => fontIndex ??= runNode("scripts/font-index.ts").catch((e: unknown) => { fontIndex = null; throw e; });
 
 const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
@@ -124,9 +132,8 @@ const ROUTES: [RegExp, Route][] = [
     if (apk.includes("/") || apk.includes("..") || !path.startsWith("assets/") || path.includes("..")) return new Response("nope", { status: 400 });
     const bytes = (await apkAssets(apk))[path];
     if (!bytes) return new Response("not found", { status: 404 });
-    const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-    const type = EXT_MIME[ext] ?? "application/octet-stream";
-    if (ext === "html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
+    const type = mimeOf(path) ?? "application/octet-stream";
+    if (type === "text/html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
     return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
   }],
   [/^\/aot\/current\.json$/, () => aotManifest()],
@@ -176,6 +183,9 @@ const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 // This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
 // as /proxy above, and the same reason both are dev-server-only: bound to loopback, never
 // meant to face a network.
+/** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
+const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
+
 function relayTcp(ws: WebSocket, url: URL): void {
   const host = url.searchParams.get("host") ?? "", port = Number(url.searchParams.get("port"));
   const alpn = url.searchParams.getAll("alpn"), secure = url.searchParams.get("tls") === "1";
@@ -199,8 +209,8 @@ function relayTcp(ws: WebSocket, url: URL): void {
   socket.once("close", () => ws.close());
   socket.on("error", (e: NodeJS.ErrnoException) => {
     // the errno code leads, for the guest's connect(2) to report
-    if (!connected) ws.close(4000, `${e.code ?? ""} ${String(e)}`.trim().slice(0, 100));
-    else if (!ready) ws.close(4001, String(e).slice(0, 100));
+    if (!connected) ws.close(4000, closeReason(`${e.code ?? ""} ${String(e)}`.trim()));
+    else if (!ready) ws.close(4001, closeReason(String(e)));
     else ws.close();
   });
   ws.on("message", (data: RawData, binary: boolean) => {
@@ -211,7 +221,7 @@ function relayTcp(ws: WebSocket, url: URL): void {
     if (ready) socket.write(chunk); else pending.push(chunk);
     if (socket.writableLength + pending.reduce((n, c) => n + c.length, 0) > MAX_PENDING_TCP_BYTES) ws.close(4002, "TCP upstream is too slow");
   });
-  ws.once("close", () => { pending.length = 0; socket.end(); });
+  ws.once("close", () => { pending.length = 0; socket.end(() => socket.destroy()); });
 }
 
 function relayUdp(ws: WebSocket): void {
@@ -227,8 +237,10 @@ function relayUdp(ws: WebSocket): void {
     frame.set(name, 3); frame.set(bytes, 3 + name.length);
     ws.send(frame);
   });
-  socket.once("error", () => ws.close(4000, "UDP bind failed"));
-  socket.bind(0, () => ws.send("ready"));
+  let bound = false;
+  // once bound, a failed send is a lost datagram
+  socket.on("error", () => { if (!bound) ws.close(4000, "UDP bind failed"); });
+  socket.bind(0, () => { bound = true; ws.send("ready"); });
   ws.on("message", async (data: RawData, binary: boolean) => {
     const msg = data as Buffer;
     if (!binary || msg.length < 3) return;
@@ -269,8 +281,10 @@ export function devServer(): Plugin {
       });
       const sockets = new WebSocketServer({ noServer: true });
       server.httpServer?.on("upgrade", (req, socket, head) => {
-        const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-        const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, use);
+        const url = URL.parse(req.url ?? "/", `http://${req.headers.host}`);
+        if (!url) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+        // a socket's error (a frame past the size limit) closes it, which its relay ends with
+        const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
         if (url.pathname === "/webview-socket") {
           const id = url.searchParams.get("id") ?? "";
           if (!BRIDGE_ID.test(id) || req.headers.origin !== url.origin) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
