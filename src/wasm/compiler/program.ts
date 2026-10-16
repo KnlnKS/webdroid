@@ -236,7 +236,8 @@ export class Program {
         const name = dex.rawTypeName(dex.classDef2Type(i));
         if (loader === this.root ? this.has(name) : loader.defined.has(name)) continue;
         const key = loader.id ? `${name}@${loader.id}` : name;
-        loader.defined.set(name, key);
+        // the root's namespace is this Program's classes
+        if (loader !== this.root) loader.defined.set(name, key);
         this.classes.set(key, new DexClass(key, dex, i));
         added.push(key);
       }
