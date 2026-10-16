@@ -4,21 +4,25 @@
 // which the handler may rewrite before rt_sigreturn loads them back.
 
 import { mem } from "./mem";
-import { PTR, ldWord } from "./host";
+import { PTR, ldWord, stWord } from "./host";
 import type { Cpu } from "./cpu";
 import { BLOCKABLE } from "./signals";
 
-/** siginfo's si_code and si_addr, for a signal an instruction raised */
-export type SigInfo = { code: number; addr: bigint };
+/** siginfo's si_code, and a fault's si_addr or a POSIX timer's id, overrun count and sigval */
+export type SigInfo = { code: number; addr: bigint; timer?: { id: number; overrun: number; value: bigint } };
 const SIGINFO_SIZE = 0x80;
 const SI_TKILL = -6, FPSIMD_MAGIC = 0x46508001, VFP_MAGIC = 0x56465001;
 
-/** siginfo_t: si_signo, si_code and a fault's si_addr */
-export function writeSiginfo(p: number, sig: number, code: number, addr: bigint | null = null): void {
+/** siginfo_t: si_signo, si_code, then a fault's si_addr or a timer's si_timerid, si_overrun and
+ *  si_value; a signal sent without one is tgkill's */
+export function writeSiginfo(p: number, sig: number, info: SigInfo | null): void {
   mem.memset(p, 0, SIGINFO_SIZE);
   mem.st32(p, sig);
-  mem.st32(p + 8, code);
-  if (addr !== null) { if (PTR === 8) mem.st64(p + 16, addr); else mem.st32(p + 12, Number(addr & 0xffffffffn)); }
+  mem.st32(p + 8, info ? info.code : SI_TKILL);
+  if (!info) return;
+  const union = p + (PTR === 8 ? 16 : 12), timer = info.timer;
+  if (!timer) { stWord(union, info.addr); return; }
+  mem.st32(union, timer.id); mem.st32(union + 4, timer.overrun); stWord(union + 8, timer.value);
 }
 export const readSiginfo = (p: number): SigInfo => ({ code: mem.ld32(p + 8), addr: ldWord(p + (PTR === 8 ? 16 : 12)) });
 
@@ -83,7 +87,7 @@ export const frameSize = (cpu: Cpu): number => (cpu.a64 ? A64 : A32).size;
 export function writeFrame(cpu: Cpu, frame: number, sig: number, info: SigInfo | null, mask: bigint): number {
   const layout = cpu.a64 ? A64 : A32;
   mem.memset(frame, 0, layout.size);
-  writeSiginfo(frame, sig, info ? info.code : SI_TKILL, info ? info.addr : null);
+  writeSiginfo(frame, sig, info);
   layout.write(cpu, frame + SIGINFO_SIZE, info, mask);
   return frame + SIGINFO_SIZE;
 }

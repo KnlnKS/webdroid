@@ -138,6 +138,14 @@ export class Cpu {
   private budgetWake: (() => void) | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
+  /** the siginfo of a queued signal its sender described (a timer's); others are tgkill's */
+  private signalInfo = new Map<number, SigInfo>();
+  /** a taken signal's siginfo */
+  queuedInfo(sig: number): SigInfo | null {
+    const info = this.signalInfo.get(sig) ?? null;
+    this.signalInfo.delete(sig);
+    return info;
+  }
   signalInterrupt: (() => void) | null = null;
   private deferredSignalDepths = new Set<number>();
   deferSignalsUntilResume(): void { if (this.depth) this.deferredSignalDepths.add(this.depth); }
@@ -257,10 +265,13 @@ export class Cpu {
   handling = new Set<number>();                     // signals whose handler is running
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
-  kill(sig: number): void {
+  kill(sig: number, info?: SigInfo): void {
     // an ignored signal is discarded unless blocked: a handler may be installed before it is unblocked
     if (this.finished || !blocked(this.signalMask, sig) && action(sig, this.signalMask, false) === "ignore") return;
-    if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
+    if (!this.signals.includes(sig)) {                                  // pending already: signals do not queue up
+      this.signals.push(sig);
+      if (info) this.signalInfo.set(sig, info);
+    }
     this.sigQueued?.();
     if (this.signalInterrupt && !blocked(this.signalMask, sig)) {
       this.deferSignalsUntilResume();
@@ -309,6 +320,7 @@ export class Cpu {
    *  force_sig_fault, such a signal blocked or ignored takes its default action. */
   async deliver(sig: number, info: SigInfo | null = null): Promise<void> {
     const act = action(sig, this.signalMask, !!info);
+    const queued = info ? null : this.queuedInfo(sig);
     if (act !== "handler") { if (act !== "ignore") void dieOfSignal(this, sig, info); return; }
     const h = dispositions.get(sig) as Handler;
     if (h.flags & SA_RESETHAND) dispositions.delete(sig);
@@ -329,7 +341,7 @@ export class Cpu {
     const p = (async () => {
       const frame = h.flags & SA_SIGINFO ? mem.malloc(frameSize(this)) : 0;
       if (h.flags & SA_SIGINFO && !frame) throw new NativeFault("[native] out of memory for signal frame");
-      const context = frame ? writeFrame(this, frame, sig, info, mask) : 0;
+      const context = frame ? writeFrame(this, frame, sig, info ?? queued, mask) : 0;
       const previousAlt = this.alternateStack, previousActive = this.alternateActive;
       if (alt !== undefined) {
         const autodisarm = !!(previousAlt && previousAlt.flags & SS_AUTODISARM);
@@ -385,7 +397,7 @@ export class Cpu {
     if (!retainThreadData) mem.free(this.threadData);
     mem.free(this.env);
     this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
-    this.signals.length = 0;
+    this.signals.length = 0; this.signalInfo.clear();
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);
