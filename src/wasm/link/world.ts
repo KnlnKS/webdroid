@@ -990,6 +990,7 @@ export class World {
   }
   /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
   private linkEnsure(slot: number): void {
+    this.settleInits();
     const cls = this.blockClass[this.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
     const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slotAt(at);
     const own = clinit?.k === "method" && !clinit.done && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
@@ -999,6 +1000,23 @@ export class World {
     if (own) { this.demand.methods.add(own); this.stats.methods++; }
     this.stats.units++;
     this.install(own ? [at!] : [], false, cx, this.unitImports(cx), built, slot, clock);
+    this.initializing.push([slot, cls, own ? at! : -1]);
+  }
+  /** ensure() units whose class may still be initializing: their slot, class and the <clinit> slot compiled beside them (-1 if none) */
+  private initializing: [number, string, number][] = [];
+  /** Once a class is initialized its ensure() returns at once and its <clinit> is not called again: the slot gets the shared no-op, the <clinit> its stub,
+   *  and the unit is retired */
+  private settleInits(): void {
+    const done: Function[] = [];
+    this.initializing = this.initializing.filter(([slot, cls, at]) => {
+      if (!this.initialized(cls)) return true;
+      done.push(this.table.get(slot) as Function);
+      this.table.set(slot, this.rt.nop);
+      const s = at < 0 ? undefined : this.slotAt(at);
+      if (s?.k === "method" && s.done && s.stub) { this.table.set(at, s.stub); s.done = false; s.hot = false; this.groupOf.delete(at); this.hotUnits.forget(at); }
+      return false;
+    });
+    if (done.length) this.retire(done);
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
