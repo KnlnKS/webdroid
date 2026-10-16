@@ -3,8 +3,8 @@
 // it, as the host's client hints do. WebView keeps the full version (no UA reduction); the host's
 // reduced UA gives the major until its client hints answer, and the first reader fixes it. A host
 // that is not Chromium has none to give: 120.0.0.0.
-import { propertyValue } from "../shell/properties";
-import { webViewBrands, type ClientHints } from "../shell/webpage/clienthints";
+import { propertyValue } from "../shell/properties.ts";
+import { webViewBrands, type ClientHints } from "../shell/webpage/clienthints.ts";
 
 let webViewVersion = /Chrome\/([\d.]+)/.exec(globalThis.navigator?.userAgent ?? "")?.[1] ?? "120.0.0.0", versionRead = false;
 type HostHints = { getHighEntropyValues(hints: string[]): Promise<{ fullVersionList?: { brand: string; version: string }[] }> };

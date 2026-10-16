@@ -4,15 +4,15 @@
 // GL_FIXED data is converted on upload (WebGL has no fixed-point attributes). Matrices are
 // column-major Float32Array(16) stacks; the shader takes the MVP product and the texture matrix.
 
-import { mem } from "./mem";
-import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
-import type { Cpu } from "./cpu";
-import { glCommon, glProbe } from "./gles3";
-import { readGuestPixels, pixelStore } from "./gles3-pixels";
-import { vertexTypeBytes, guestIndices, indexBounds } from "./gles3-client-arrays";
-import { gl, invert, takeError, untracked, raise } from "../android/gl";
-import { perf } from "../perf";
-import { activateEglCurrent } from "./egl-current";
+import { mem } from "./mem.ts";
+import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
+import { glCommon, glProbe } from "./gles3.ts";
+import { readGuestPixels, pixelStore } from "./gles3-pixels.ts";
+import { vertexTypeBytes, guestIndices, indexBounds } from "./gles3-client-arrays.ts";
+import { gl, invert, takeError, untracked, raise } from "../android/gl.ts";
+import { perf } from "../perf.ts";
+import { activateEglCurrent } from "./egl-current.ts";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
 export function gles1String(context: GL, name: number): string | null {

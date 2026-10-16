@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
-import "../src/natives";
-import { vcall, newObj } from "../src/jvm/natives/jentry";
-import { scall, mountApexData, thrown } from "./java";
+import "../src/natives.ts";
+import { vcall, newObj } from "../src/jvm/natives/jentry.ts";
+import { scall, mountApexData, thrown } from "./java.ts";
 
 const hex = (b: Int8Array) => Buffer.from(b).toString("hex");
 const bytes = (h: string) => new Int8Array(Buffer.from(h, "hex"));
@@ -51,11 +51,11 @@ describe("conscrypt-natives", () => {
 
   test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
     const nc = await import("node:crypto");
-    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers");
-    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest");
-    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey");
-    const { modPow } = await import("../src/jvm/natives/jmath");
-    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der");
+    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers.ts");
+    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest.ts");
+    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey.ts");
+    const { modPow } = await import("../src/jvm/natives/jmath.ts");
+    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der.ts");
     const rnd = (n: number) => new Uint8Array(nc.randomBytes(n));
     const same = (a: Uint8Array, b: Uint8Array | Buffer) => expect(Buffer.from(a).toString("hex")).toBe(Buffer.from(b).toString("hex"));
     for (const keyLen of [16, 24, 32]) {

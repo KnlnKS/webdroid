@@ -2,14 +2,14 @@
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { getDeclared, setDeclared } from "../../src/jvm/runtime";
-import { JThrowable } from "../../src/jvm/natives/jthrowable";
-import { boxDesc, unbox } from "../../src/jvm/natives/jbox";
-import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
-import { javaInterface } from "../../src/android/webjavabridge";
-import { processFailure } from "../../src/shell/process-port";
-import { JAVA } from "./paths";
-import { dexAndroid, shellIn } from "./tools";
+import { getDeclared, setDeclared } from "../../src/jvm/runtime.ts";
+import { JThrowable } from "../../src/jvm/natives/jthrowable.ts";
+import { boxDesc, unbox } from "../../src/jvm/natives/jbox.ts";
+import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
+import { javaInterface } from "../../src/android/webjavabridge.ts";
+import { processFailure } from "../../src/shell/process-port.ts";
+import { JAVA } from "./paths.ts";
+import { dexAndroid, shellIn } from "./tools.ts";
 
 let built: string | undefined;
 /** the fixture E (and its nested classes) as a dex, built once per process */

@@ -1,47 +1,47 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
-import "./natives";
-import { PROCESS_PID } from "./android/os";
-import { hostFrames, recordVsync, vsyncScheduled } from "./android/vsync";
-import { pendingTransitions } from "./android/server/atm";
-import { mountSystemCertificates } from "./shell/cacerts";
-import { mountPlatformData } from "./shell/apex";
+import "./natives.ts";
+import { PROCESS_PID } from "./android/os.ts";
+import { hostFrames, recordVsync, vsyncScheduled } from "./android/vsync.ts";
+import { pendingTransitions } from "./android/server/atm.ts";
+import { mountSystemCertificates } from "./shell/cacerts.ts";
+import { mountPlatformData } from "./shell/apex.ts";
 
-import { newObj, vcall, scall } from "./jvm/natives/jentry";
-import { fetchPlatformJars, loadFramework } from "./android/framework";
-import { loadSkia } from "./android/skia";
-import type { Mirror } from "./shell/frame-port";
-import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
-import { attachIme } from "./shell/input";
-import { drainPointers } from "./shell/pointer-input";
-import { clearRoots } from "./shell/hostfs";
-import { clearPickedDocuments } from "./android/documents";
-import { mark, perf, perfReset } from "./perf";
-import { loadTier, wasmThreads } from "./jvm/tier";
-import { onMain } from "./android/mainloop";
-import { imeInput, imeAction } from "./android/ime";
-import { setWebLayer, webViewInfo } from "./android/webframes";
-import { packagesWithData, removePackageData } from "./shell/packagedata";
-import { clearUserData, deletePackage } from "./android/appdata";
-import { jitStats } from "./native/core";
-import { mountDiagnostics } from "./shell/diagnostics";
-import { realmWd, type RealmWd } from "./shell/realmwd";
-import { createShell } from "./shell/ui";
-import { openInstallLocal, openInstallRemote } from "./shell/install";
-import { activateLocalAssets, localAsset } from "./shell/localassets";
-import { vfs } from "./shell/vfs";
-import { yieldStats, timedParks } from "./jvm/yield";
-import { provisionPackages, provisionServices } from "./shell/provision";
-import { processBroker } from "./shell/processes";
-import { displayRate } from "./shell/display-rate";
-import { processPresentation } from "./shell/process-endpoint";
-import { timelineSince } from "./timeline";
-import { swipe } from "./shell/gesture";
-import { device } from "./shell/config";
-import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
-import { hasFocusedWindow, hasTouchWindow, dispatchKey } from "./android/server/wm";
-import { imeActive } from "./android/ime";
-import { systemInputLayer } from "./shell/system-input";
-import { onProcessExit } from "./process-exit";
+import { newObj, vcall, scall } from "./jvm/natives/jentry.ts";
+import { fetchPlatformJars, loadFramework } from "./android/framework.ts";
+import { loadSkia } from "./android/skia.ts";
+import type { Mirror } from "./shell/frame-port.ts";
+import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device.ts";
+import { attachIme } from "./shell/input.ts";
+import { drainPointers } from "./shell/pointer-input.ts";
+import { clearRoots } from "./shell/hostfs.ts";
+import { clearPickedDocuments } from "./android/documents.ts";
+import { mark, perf, perfReset } from "./perf.ts";
+import { loadTier, wasmThreads } from "./jvm/tier.ts";
+import { onMain } from "./android/mainloop.ts";
+import { imeInput, imeAction } from "./android/ime.ts";
+import { setWebLayer, webViewInfo } from "./android/webframes.ts";
+import { packagesWithData, removePackageData } from "./shell/packagedata.ts";
+import { clearUserData, deletePackage } from "./android/appdata.ts";
+import { jitStats } from "./native/core.ts";
+import { mountDiagnostics } from "./shell/diagnostics.ts";
+import { realmWd, type RealmWd } from "./shell/realmwd.ts";
+import { createShell } from "./shell/ui.ts";
+import { openInstallLocal, openInstallRemote } from "./shell/install.ts";
+import { activateLocalAssets, localAsset } from "./shell/localassets.ts";
+import { vfs } from "./shell/vfs.ts";
+import { yieldStats, timedParks } from "./jvm/yield.ts";
+import { provisionPackages, provisionServices } from "./shell/provision.ts";
+import { processBroker } from "./shell/processes.ts";
+import { displayRate } from "./shell/display-rate.ts";
+import { processPresentation } from "./shell/process-endpoint.ts";
+import { timelineSince } from "./timeline.ts";
+import { swipe } from "./shell/gesture.ts";
+import { device } from "./shell/config.ts";
+import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot.ts";
+import { hasFocusedWindow, hasTouchWindow, dispatchKey } from "./android/server/wm.ts";
+import { imeActive } from "./android/ime.ts";
+import { systemInputLayer } from "./shell/system-input.ts";
+import { onProcessExit } from "./process-exit.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -259,7 +259,7 @@ const wd = {
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
-  looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
+  looperDump: () => import("./android/mainloop.ts").then((m) => m.looperDump()),
   threads: wasmThreads,
   redraw,
   testFrame: async () => {

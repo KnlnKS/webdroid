@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, cpus, setA64 } from "./cpu";
-import { core, CORE_LIBC } from "./core";
-import { Args, hostFn, lookupHost } from "./host";
-import { mem } from "./mem";
-import { pthreadInit, startThread } from "./pthread";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, cpus, setA64 } from "./cpu.ts";
+import { core, CORE_LIBC } from "./core.ts";
+import { Args, hostFn, lookupHost } from "./host.ts";
+import { mem } from "./mem.ts";
+import { pthreadInit, startThread } from "./pthread.ts";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
   setA64(false); pthreadInit();

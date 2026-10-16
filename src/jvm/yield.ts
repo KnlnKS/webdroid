@@ -1,6 +1,6 @@
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
-import { never, processExited } from "../process-exit";
-import { note, Ev } from "../timeline";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
+import { never, processExited } from "../process-exit.ts";
+import { note, Ev } from "../timeline.ts";
 
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),

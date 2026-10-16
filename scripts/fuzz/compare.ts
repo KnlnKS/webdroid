@@ -1,6 +1,6 @@
 import { PNG } from "pngjs";
-import { diffImages } from "../../tests/e2e/lib/diff";
-import { stableJson, type Failure, type JsonValue, type ProbeCase, type ProbeResult } from "./model";
+import { diffImages } from "../../tests/e2e/lib/diff.ts";
+import { stableJson, type Failure, type JsonValue, type ProbeCase, type ProbeResult } from "./model.ts";
 
 type GraphicsValue = { width: number; height: number; saveCount: number; center: number; png: string; [key: string]: JsonValue };
 

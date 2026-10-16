@@ -1,10 +1,10 @@
-import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, bindCpu } from "./cpu";
-import { processExited } from "../process-exit";
-import { hostLib, stp, ptr, type HostFn } from "./host";
-import { mem, anchor } from "./mem";
-import { toThread } from "../jvm/natives/jthrowable";
+import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output.ts";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, bindCpu } from "./cpu.ts";
+import { processExited } from "../process-exit.ts";
+import { hostLib, stp, ptr, type HostFn } from "./host.ts";
+import { mem, anchor } from "./mem.ts";
+import { toThread } from "../jvm/natives/jthrowable.ts";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
 const AAUDIO_STREAM_STATE_OPEN = 2, AAUDIO_STREAM_STATE_STARTED = 4, AAUDIO_STREAM_STATE_PAUSED = 6, AAUDIO_STREAM_STATE_FLUSHED = 8,
@@ -17,6 +17,7 @@ class Builder {
   callback = 0; context: number | bigint = 0;
 }
 class Stream {
+  readonly handle: number; readonly config: Builder;
   readonly track: PcmOutput;
   readonly cpu: Cpu;
   readonly buffer: number;
@@ -26,7 +27,8 @@ class Stream {
   state = AAUDIO_STREAM_STATE_OPEN;
   pumping: Promise<void> | null = null;
   readonly waiters = new Set<() => void>();
-  constructor(readonly handle: number, readonly config: Builder, parent: Cpu) {
+  constructor(handle: number, config: Builder, parent: Cpu) {
+    this.handle = handle; this.config = config;
     const track = this.track = new PcmOutput({ rate: config.SampleRate || outputSampleRate(), channels: config.ChannelCount || 2,
       bytesPerSample: config.Format === 1 ? 2 : 4, sessionId: config.SessionId === 0 ? newAudioSessionId() : config.SessionId });
     this.frames = config.FramesPerDataCallback || Math.ceil(track.rate / 100);

@@ -2,10 +2,10 @@
 // into the memory it imports. One instance per process; the memory grows as the guest's pages
 // come into use (mem.zig's back), within the native ABI's address space (mem.init).
 
-import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi";
-import { JIT_SLOTS, LIBC_FNS, TLS_KEYS } from "./core-abi.gen";
-import { perf } from "../perf";
-import { guestNow, wallMillis } from "../guest-clock";
+import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi.ts";
+import { JIT_SLOTS, LIBC_FNS, TLS_KEYS } from "./core-abi.gen.ts";
+import { perf } from "../perf.ts";
+import { guestNow, wallMillis } from "../guest-clock.ts";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -13,7 +13,8 @@ export class NativeFault extends Error {
 /** a host access through a guest pointer to nothing mapped: copy_from_user's EFAULT under a
  *  system call, the guest's own SIGSEGV under a libc function that reads it in user space */
 export class BadAddress extends NativeFault {
-  constructor(readonly addr: bigint, message: string) { super(message); }
+  readonly addr: bigint;
+  constructor(addr: bigint, message: string) { super(message); this.addr = addr; }
 }
 
 interface Core {
@@ -130,7 +131,7 @@ async function load(): Promise<WebAssembly.Module> {
     return WebAssembly.compile(imported(new Uint8Array(await response.arrayBuffer())));
   }
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing
-  const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm")).default : (await import("./core.wasm")).default;
+  const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm.ts")).default : (await import("./core.wasm.ts")).default;
   return WebAssembly.compile(imported(Uint8Array.fromBase64(b64)));
 }
 const instance = await WebAssembly.instantiate(await load(), {

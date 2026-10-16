@@ -1,8 +1,8 @@
 // Primitive arrays between Wasm GC arrays and linear memory: element sizes, the typed arrays a host function sees, and the generated copy loop.
-import { Code, OP } from "./code";
-import { T } from "./wasmbin";
-import type { Compiler } from "./j2w";
-import type { ElemKind } from "./consts";
+import { Code, OP } from "./code.ts";
+import { T } from "./wasmbin.ts";
+import type { Compiler } from "./j2w.ts";
+import type { ElemKind } from "./consts.ts";
 
 /** bytes per element, by storage kind */
 export const SIZE: Record<ElemKind, number> = { i8: 1, i16: 2, i32: 4, i64: 8, ref: 4 };

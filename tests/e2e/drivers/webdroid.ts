@@ -2,9 +2,9 @@
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { chromium, type Browser, type BrowserServer, type Page } from "playwright";
-import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types";
-import { BASE_URL, webdroidUrl } from "../lib/util";
-import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
+import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
+import { BASE_URL, webdroidUrl } from "../lib/util.ts";
+import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe.ts";
 
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
@@ -83,9 +83,10 @@ type StepOptions = {
 };
 
 export class WebdroidDriver {
+  private browser: Browser; page: Page; readonly screen: CaptureScreen; private server?: BrowserServer;
   readonly errors: string[] = [];
   private closing?: Promise<void>;
-  constructor(private browser: Browser, public page: Page, readonly screen: CaptureScreen, private server?: BrowserServer) {}
+  constructor(browser: Browser, page: Page, screen: CaptureScreen, server?: BrowserServer) { this.browser = browser; this.page = page; this.screen = screen; this.server = server; }
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();

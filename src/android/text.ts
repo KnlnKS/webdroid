@@ -1,8 +1,8 @@
 // android.text: AndroidCharacter's natives.
-import { rt, driven, type Gen } from "../jvm/runtime";
-import { after } from "../jvm/natives/jentry";
-import { isLead, isTrail } from "../jvm/natives/jstring";
-import { uchar } from "../jvm/natives/jicu";
+import { rt, driven, type Gen } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { isLead, isTrail } from "../jvm/natives/jstring.ts";
+import { uchar } from "../jvm/natives/jicu.ts";
 
 // android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)
 // and u_charMirror, answered by ICU4J's UCharacter over the same ICU data

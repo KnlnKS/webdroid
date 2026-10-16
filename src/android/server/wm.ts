@@ -1,17 +1,17 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, type Gen } from "../../jvm/runtime";
-import { jarray } from "../../jvm/abi";
-import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry";
-import { hostStub } from "../binder";
-import { device } from "../../shell/config";
-import { uptimeMillis } from "../../guest-clock";
-import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger";
-import { type Channel, channelOf, sendFocus, publish } from "../inputchannel";
-import { javaConfiguration } from "../resources";
-import { deviceConfiguration, systemResource } from "../resnative";
-import { edges } from "../graphics";
+import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, type Gen } from "../../jvm/runtime.ts";
+import { jarray } from "../../jvm/abi.ts";
+import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry.ts";
+import { hostStub } from "../binder.ts";
+import { device } from "../../shell/config.ts";
+import { uptimeMillis } from "../../guest-clock.ts";
+import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger.ts";
+import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts";
+import { javaConfiguration } from "../resources.ts";
+import { deviceConfiguration, systemResource } from "../resnative.ts";
+import { edges } from "../graphics.ts";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
@@ -53,6 +53,7 @@ const SUB_LAYERS: Record<number, number> = { 1000: 1, 1001: -2, 1002: 2, 1003: 1
 const isSubWindow = (type: number) => type >= 1000 && type <= 1999;
 
 class WindowState {
+  readonly client: JObj; readonly attrs: JObj; readonly parent: WindowState | null;
   layer: Layer;
   frame = { left: 0, top: 0, right: 0, bottom: 0 };
   channel: Channel | null = null;
@@ -61,7 +62,8 @@ class WindowState {
   javaSurface: JObj | null = null;
   dim: Layer | null = null;
   requested = { width: -1, height: -1 };
-  constructor(readonly client: JObj, readonly attrs: JObj, readonly parent: WindowState | null, name: string, type: number, z: number) {
+  constructor(client: JObj, attrs: JObj, parent: WindowState | null, name: string, type: number, z: number) {
+    this.client = client; this.attrs = attrs; this.parent = parent;
     if (parent) {
       this.layer = displayLayer(name, 0);
       this.layer.layerStack = -1;

@@ -4,18 +4,18 @@
 //   WEBDROID_AOT=<platform build> bun run wasm g1app --out DIR [workload ...]
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { Program } from "../../src/wasm/compiler/program";
-import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
-import type { FetchStore } from "../../src/wasm/link/aotstore";
-import type { World } from "../../src/wasm/link/world";
-import { prepareApp, type AppCode } from "../../src/wasm/host/appcode";
-import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve";
-import type { WorkerPort } from "../../src/wasm/host/compiler";
-import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
-import { heapUsed } from "../../src/wasm/host/stats";
-import { loadDexes, world } from "./lib";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
-import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
+import type { FetchStore } from "../../src/wasm/link/aotstore.ts";
+import type { World } from "../../src/wasm/link/world.ts";
+import { prepareApp, type AppCode } from "../../src/wasm/host/appcode.ts";
+import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
+import type { WorkerPort } from "../../src/wasm/host/compiler.ts";
+import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
+import { heapUsed } from "../../src/wasm/host/stats.ts";
+import { loadDexes, world } from "./lib.ts";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
 
 const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
 if (!AOT || !out) throw new Error("usage: WEBDROID_AOT=<platform build> g1app --out DIR [workload ...]");

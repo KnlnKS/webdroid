@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { androidTool } from "../android-sdk";
-import { device, formatScreen } from "../../src/shell/config";
-import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes";
-import { serveCases } from "./case-server";
-import type { ProbeCase, ProbeResult } from "./model";
-import { startWebdroid } from "./webdroid-session";
+import { androidTool } from "../android-sdk.ts";
+import { device, formatScreen } from "../../src/shell/config.ts";
+import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes.ts";
+import { serveCases } from "./case-server.ts";
+import type { ProbeCase, ProbeResult } from "./model.ts";
+import { startWebdroid } from "./webdroid-session.ts";
 
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";

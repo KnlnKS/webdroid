@@ -1,4 +1,4 @@
-import { rt } from "../jvm/runtime";
+import { rt } from "../jvm/runtime.ts";
 
 // No DRM plugin is installed: no scheme is supported, and creating a MediaDrm or MediaCrypto
 // fails as the JNI does when the plugin factory has none.

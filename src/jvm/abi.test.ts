@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { charsToString, decodeModifiedUtf8, demangle, mangleField, mangleMethod, mangleStaticField } from "./abi";
+import { charsToString, decodeModifiedUtf8, demangle, mangleField, mangleMethod, mangleStaticField } from "./abi.ts";
 
 test("Unicode Java members and literal escape-like names retain distinct JS properties", () => {
   const names = ["ﻏ", "ﻐ", "ﾒ", "_", "$fecf$", "😀", "😁"];

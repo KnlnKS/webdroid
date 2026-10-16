@@ -4,20 +4,20 @@
 // stub copies it to and back from. Every other reference (a receiver, an object, an array of objects) crosses as an opaque
 // externref; the host side turns it into the value the production native expects, and a reference result back into a Java value,
 // through the Bridge (bridge.ts), which reaches fields and elements only through generated Wasm accessors.
-import { Code, OP } from "../compiler/code";
-import { T, type VT } from "../compiler/wasmbin";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import { ACC, kindOf, type MethodInfo } from "../compiler/program";
-import { elemKindOf, type ElemKind } from "../compiler/consts";
-import { mid } from "../compiler/ids";
-import { decodeInstructions } from "../../jvm/prepared";
-import { Bridge } from "./bridge";
-import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend";
-import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi";
-import type { World } from "../link/world";
-import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
-import { emitSave, emitRestored, ROOT } from "../link/sched";
-import { crossings } from "./stats";
+import { Code, OP } from "../compiler/code.ts";
+import { T, type VT } from "../compiler/wasmbin.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { ACC, kindOf, type MethodInfo } from "../compiler/program.ts";
+import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { mid } from "../compiler/ids.ts";
+import { decodeInstructions } from "../../jvm/prepared.ts";
+import { Bridge } from "./bridge.ts";
+import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend.ts";
+import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
+import type { World } from "../link/world.ts";
+import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy.ts";
+import { emitSave, emitRestored, ROOT } from "../link/sched.ts";
+import { crossings } from "./stats.ts";
 
 /** the primitive array classes natives take and return */
 const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
@@ -104,9 +104,10 @@ interface Plan {
 
 export class Natives implements NativeBinder {
   /** the plans of the natives by id, for the imports; and of every method, since what a method binds to depends on the Program it is in (a host class changes it) */
+  readonly source: NativeSource | undefined;
   private plans = new Map<string, Plan | string>();
   private byMethod = new WeakMap<MethodInfo, Plan | string>();
-  constructor(readonly source: NativeSource | undefined = undefined) {}
+  constructor(source: NativeSource | undefined = undefined) { this.source = source; }
   bridge(w: World): HostBridge { return new Bridge(w, this.source); }
 
   /** `m` as a host import; `override` asks for the production method even where the bytecode would run (an intrinsic's error path) */

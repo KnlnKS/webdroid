@@ -1,9 +1,9 @@
 import { mkdirSync } from "node:fs";
-import { injectedProbeFailure, injectedUiFailure } from "./injected";
-import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import { sameFailure, SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model";
-import { minimizeUiActions, type UiFailureBundle } from "./ui";
-import type { UiAction } from "./ui-model";
+import { injectedProbeFailure, injectedUiFailure } from "./injected.ts";
+import { minimizeCaseBatched, reproducesTwice } from "./minimize.ts";
+import { sameFailure, SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model.ts";
+import { minimizeUiActions, type UiFailureBundle } from "./ui.ts";
+import type { UiAction } from "./ui-model.ts";
 
 const OUT = "fuzz-results/smoke";
 

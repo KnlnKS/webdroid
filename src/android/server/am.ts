@@ -2,26 +2,26 @@
 // application (ApplicationInfo and the process's providers from the package manager, the device
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
-import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry";
-import { newArrayList } from "../../jvm/natives/jcoll";
-import { hostedService } from "../binder";
-import { PROCESS_NAME, PROCESS_UID } from "../os";
-import { appHost } from "../apphost";
-import { configurations } from "./wm";
-import { startMainActivity } from "./atm";
-import { uptimeMillis } from "../../guest-clock";
-import { systemProviderHolder } from "../systemproviders";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
-import { uriText, type JUri } from "../net";
-import { systemFontMap } from "../fonts";
-import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo";
-import { callingIdentity, newStub, parceledList } from "../binder";
-import { packages } from "../packages";
-import { checkUidPermission } from "../permissions";
-import { mkPfd } from "../os";
-import { clearUserData } from "../appdata";
-import { COMPAT_CHANGES } from "../compat-changes";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime.ts";
+import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
+import { newArrayList } from "../../jvm/natives/jcoll.ts";
+import { hostedService } from "../binder.ts";
+import { PROCESS_NAME, PROCESS_UID } from "../os.ts";
+import { appHost } from "../apphost.ts";
+import { configurations } from "./wm.ts";
+import { startMainActivity } from "./atm.ts";
+import { uptimeMillis } from "../../guest-clock.ts";
+import { systemProviderHolder } from "../systemproviders.ts";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants.ts";
+import { uriText, type JUri } from "../net.ts";
+import { systemFontMap } from "../fonts.ts";
+import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
+import { callingIdentity, newStub, parceledList } from "../binder.ts";
+import { packages } from "../packages.ts";
+import { checkUidPermission } from "../permissions.ts";
+import { mkPfd } from "../os.ts";
+import { clearUserData } from "../appdata.ts";
+import { COMPAT_CHANGES } from "../compat-changes.ts";
 
 export const GET_SHARED_LIBRARY_FILES = 0x400n;
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and

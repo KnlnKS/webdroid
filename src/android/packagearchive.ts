@@ -1,10 +1,10 @@
-import { parseAXML, attrStr, type XmlNode } from "./axml";
-import { zipTree, centralDirOfSource } from "../jvm/natives/jzip";
-import { ZipEntryFile } from "../shell/install";
-import { readFully, type FileSource } from "../shell/lazyfile";
-import { Arsc } from "./arsc";
-import { Resources } from "./res";
-import { apkSigningBlock, signingSequence as sequence } from "./apksignature";
+import { parseAXML, attrStr, type XmlNode } from "./axml.ts";
+import { zipTree, centralDirOfSource } from "../jvm/natives/jzip.ts";
+import { ZipEntryFile } from "../shell/install.ts";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
+import { Arsc } from "./arsc.ts";
+import { Resources } from "./res.ts";
+import { apkSigningBlock, signingSequence as sequence } from "./apksignature.ts";
 
 export interface PackageArchive {
   root: XmlNode;
@@ -36,7 +36,7 @@ export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uin
   }
   const entries = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
   if (!entries.length) return [];
-  const forge = (await import("../forge")).default;
+  const forge = (await import("../forge.ts")).default;
   return entries.flatMap((name) => {
     const block = zip[name];
     let binary = "";

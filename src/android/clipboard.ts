@@ -1,9 +1,9 @@
 // IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jentry";
-import { parcelledWithRights, releaseBinderParcel, unparcelled, type ParcelData } from "./binder";
-import { postMain } from "./mainloop";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { parcelledWithRights, releaseBinderParcel, unparcelled, type ParcelData } from "./binder.ts";
+import { postMain } from "./mainloop.ts";
 
 export const clipboardTransport: {
   set: (data: ParcelData | null) => void | Promise<void>;

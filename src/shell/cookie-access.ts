@@ -1,4 +1,4 @@
-import type { WebCookies } from "./webcookies";
+import type { WebCookies } from "./webcookies.ts";
 
 /** CookieManager operations; the owner resolves the caller's package, never a wire package name. */
 export type CookieCalls = {

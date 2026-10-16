@@ -1,6 +1,6 @@
-import { certificates } from "../../vendor/android-cacerts-index";
-import { vfs } from "./vfs";
-import { RangeFile, SliceFile } from "./lazyfile";
+import { certificates } from "../../vendor/android-cacerts-index.ts";
+import { vfs } from "./vfs.ts";
+import { RangeFile, SliceFile } from "./lazyfile.ts";
 
 export function mountSystemCertificates(): void {
   const source = new RangeFile("/vendor/android-cacerts.pem", certificates.reduce((size, [, length]) => size + length, 0), 1 << 16, 4);

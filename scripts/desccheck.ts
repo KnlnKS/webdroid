@@ -5,13 +5,13 @@
 //   bun run desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { rt } from "../src/jvm/runtime";
-import { ACC } from "../src/jvm/dex";
-import { descToName } from "../src/jvm/abi";
-import type { ClassDef, DexFile } from "../src/jvm/dex";
-import { jarDexes } from "../src/android/framework";
-import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance";
-import "../src/natives";
+import { rt } from "../src/jvm/runtime.ts";
+import { ACC } from "../src/jvm/dex.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
+import { jarDexes } from "../src/android/framework.ts";
+import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
+import "../src/natives.ts";
 
 const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
 /** a method declaration: its access flags, and whether it has a bytecode body */

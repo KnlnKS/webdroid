@@ -4,19 +4,19 @@
 // browser for high accuracy, and passive requests only hear fixes others asked for. As in
 // LocationManagerService, locations need ACCESS_COARSE_LOCATION or ACCESS_FINE_LOCATION (a coarse
 // grant is not fudged here) and a caller without either sees no providers.
-import { awaited, JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { after, newObj, scall, vcall } from "../jvm/natives/jentry";
-import { logUncaught } from "../jvm/natives/jthrowable";
-import { once } from "../jvm/suspend";
-import { bootTime, uptimeMillis } from "../guest-clock";
-import { onMain, postMain } from "./mainloop";
-import { hostStub } from "./binder";
-import { geocodeMethods } from "./geocoder";
-import { permissionsGranted } from "./permissions";
-import { packages } from "./packages";
-import { appHost } from "./apphost";
-import type { LocationEvent, LocationFix } from "../shell/geolocation";
+import { awaited, JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { logUncaught } from "../jvm/natives/jthrowable.ts";
+import { once } from "../jvm/suspend.ts";
+import { bootTime, uptimeMillis } from "../guest-clock.ts";
+import { onMain, postMain } from "./mainloop.ts";
+import { hostStub } from "./binder.ts";
+import { geocodeMethods } from "./geocoder.ts";
+import { permissionsGranted } from "./permissions.ts";
+import { packages } from "./packages.ts";
+import { appHost } from "./apphost.ts";
+import type { LocationEvent, LocationFix } from "../shell/geolocation.ts";
 
 export type LocationAccess = {
   available(): boolean | Promise<boolean>;

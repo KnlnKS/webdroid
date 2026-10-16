@@ -1,12 +1,12 @@
 // System services and binder-ish plumbing, and FileObserver's inotify.
 
-import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jentry";
-import { logUncaught } from "../jvm/natives/jthrowable";
-import { utf8 } from "../jvm/abi";
-import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { hostStub, newStub } from "./binder";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, vcall } from "../jvm/natives/jentry.ts";
+import { logUncaught } from "../jvm/natives/jthrowable.ts";
+import { utf8 } from "../jvm/abi.ts";
+import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { hostStub, newStub } from "./binder.ts";
 
 // IRestrictionsManager, under AOSP's RestrictionsManager: no device or profile owner manages this
 // device, so there are no restrictions and no provider to ask

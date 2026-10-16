@@ -1,12 +1,12 @@
 // The Wasm tier's compile worker (compile-serve.ts) in a page, bundled by the server and by scripts/build-prod.ts as /wasm-compile-worker.js and started by
 // spawnCompileWorker (compiler.ts). Its first message brings the port it serves and the one it fetches through: it may run in another origin's process.
-import "../../natives";
-import { jarDexes, platformJarUrl } from "../../android/framework";
-import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance";
-import { externs, intrinsics } from "../link/intrinsics";
-import { serveCompile } from "./compile-serve";
-import { natives } from "./nativesource";
-import { heapUsed } from "./stats";
+import "../../natives.ts";
+import { jarDexes, platformJarUrl } from "../../android/framework.ts";
+import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance.ts";
+import { externs, intrinsics } from "../link/intrinsics.ts";
+import { serveCompile } from "./compile-serve.ts";
+import { natives } from "./nativesource.ts";
+import { heapUsed } from "./stats.ts";
 
 onmessage = ({ data: { port, fetcher } }: MessageEvent<{ port: MessagePort; fetcher: MessagePort }>) => {
   onmessage = null;

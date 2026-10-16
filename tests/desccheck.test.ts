@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { BASELINE, descriptorMismatches, hasPlatformJars, withoutHint } from "../scripts/desccheck";
-import { dexesFrom } from "../scripts/dexes";
-import { PLATFORM_JARS } from "../src/jvm/provenance";
-import { Program } from "../src/wasm/compiler/program";
-import { externs, intrinsics } from "../src/wasm/link/intrinsics";
+import { BASELINE, descriptorMismatches, hasPlatformJars, withoutHint } from "../scripts/desccheck.ts";
+import { dexesFrom } from "../scripts/dexes.ts";
+import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
+import { Program } from "../src/wasm/compiler/program.ts";
+import { externs, intrinsics } from "../src/wasm/link/intrinsics.ts";
 
 // A registered descriptor AOSP does not declare is never reached by bytecode calling the real
 // method. Accepted ones (extras shared across a hierarchy, other API levels) are in the baseline;

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { rt } from "../src/jvm/runtime";
-import { TS_SPECS, tsSpecAllowance, tsSpecViolation } from "../src/jvm/provenance";
-import "../src/natives";
+import { rt } from "../src/jvm/runtime.ts";
+import { TS_SPECS, tsSpecAllowance, tsSpecViolation } from "../src/jvm/provenance.ts";
+import "../src/natives.ts";
 
 test("TS specs in libcore's namespaces are on the allowlist, and every entry is used", () => {
   const specs = [...rt.natives.keys()];

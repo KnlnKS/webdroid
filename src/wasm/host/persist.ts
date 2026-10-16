@@ -1,10 +1,10 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, VERSION, type AotStore, type AppIndex, type Numbering, type UnitHeader } from "../link/aot";
-import { compileBytes } from "../link/module";
-import type { DexFile } from "../../jvm/dex";
-import { COMPILED_CODE_DIR } from "../../shell/hostfs";
+import { APP_VERSION, VERSION, type AotStore, type AppIndex, type Numbering, type UnitHeader } from "../link/aot.ts";
+import { compileBytes } from "../link/module.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import { COMPILED_CODE_DIR } from "../../shell/hostfs.ts";
 
 /** where the files live; paths are "<key>/<file>" and "meta.json" */
 export interface FileBackend {
@@ -17,7 +17,8 @@ const LIMITS = { entry: 256 << 20, total: 1024 << 20 };
 interface Meta { clock: number; entries: Record<string, { files: Record<string, number>; used: number }> }
 
 export class Persist {
-  constructor(private fs: FileBackend, private limits = LIMITS) {}
+  private fs: FileBackend; private limits;
+  constructor(fs: FileBackend, limits = LIMITS) { this.fs = fs; this.limits = limits; }
   private async meta(): Promise<Meta> {
     const raw = await this.fs.read("meta.json");
     try { return raw ? JSON.parse(new TextDecoder().decode(raw)) as Meta : { clock: 0, entries: {} }; } catch { return { clock: 0, entries: {} }; }
@@ -79,8 +80,9 @@ export async function appKey(dexes: Iterable<DexFile>, platform: string): Promis
 
 /** a saved app build ready to attach: its index and its code modules compiled (off the main thread) */
 export class SavedBuild implements AotStore {
+  readonly index: AppIndex;
   private modules = new Map<string, WebAssembly.Module>();
-  private constructor(readonly index: AppIndex) {}
+  private constructor(index: AppIndex) { this.index = index; }
   static async open(files: Map<string, Uint8Array>): Promise<SavedBuild | undefined> {
     const raw = files.get("index.json");
     if (!raw) return undefined;

@@ -5,9 +5,9 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adb } from "../adb";
-import { JAVA, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
+import { adb } from "../adb.ts";
+import { JAVA, ROOT } from "./paths.ts";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "3"), refPath = flag("--ref", ""), engine = flag("--engine", "chrome");

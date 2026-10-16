@@ -1,8 +1,8 @@
 // What every fwtest exercise shares: the runner that reports what the real bytecode reached, and
 // the comparisons against values the reference AVD printed for the same calls.
-import type { DexFile } from "../../src/jvm/dex";
-import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry";
+import type { DexFile } from "../../src/jvm/dex.ts";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
+import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry.ts";
 
 const reached: string[] = [];
 /** how a harness makes dex files known to the Java that runs: the driver gives its World's */

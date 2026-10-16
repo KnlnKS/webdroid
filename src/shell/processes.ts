@@ -1,64 +1,64 @@
-import type { ProcessLifeCalls } from "./process-life";
-import { readCounterReceipt, type CounterReceipt } from "./perf-receipts";
+import type { ProcessLifeCalls } from "./process-life.ts";
+import { readCounterReceipt, type CounterReceipt } from "./perf-receipts.ts";
 // The broker: system_server's part across process realms, kept in the page's realm, which
 // outlives them all. It registers each process and its Worker, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
-import type { PendingAccess } from "../android/pendingintent";
-import { PendingIntents, type PendingOperation } from "./pendingintents";
-import { Alarms } from "./alarms";
-import { AccountStore, canonicalAccountCommands, type AccountCalls } from "./accounts";
-import { accountAuthority } from "../android/accounts";
-import { encodeIntent, intentCodec } from "../android/intentipc";
-import type { IntentCodec } from "./pendingintents";
-import { packages } from "../android/packages";
-import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
-import { NativeParcel, writeString } from "../android/parcel";
-import { newIntent, type ComponentRef } from "../android/intent";
-import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, copyExitRecord, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
-import type { PackageDataChange } from "./packagedata";
-import { logUncaught } from "../jvm/natives/jthrowable";
-import { uptimeMillis } from "../guest-clock";
-import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords";
-import { ActivityStack } from "./activitystack";
-import type { FileSource } from "./lazyfile";
-import { vfs } from "./vfs";
-import { device, formatScreen, naturalLandscape } from "./config";
-import type { Sender } from "../android/server/broadcastqueue";
-import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
-import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
-import { attrStr } from "../android/axml";
-import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
-import { preferenceStore, canonicalPreferenceCommands, createAppData, type PreferenceCalls } from "../android/sharedprefs";
-import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification";
-import { PROCESS_PID } from "../android/os";
-import { settingsStore } from "../android/settings";
-import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
-import type { WebCookies } from "./webcookies";
-import { cookieCalls, type CookieCalls } from "./cookie-access";
-import type { LocationCalls } from "./location-access";
-import { BrowserLocation, type LocationEvent } from "./geolocation";
-import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path";
-import { FileDescriptors, type DescriptorCalls } from "./file-descriptors";
-import type { WorkerControl } from "./worker-control";
-import { StoredParcel, StoredParcelError } from "./stored-parcel";
-import { platformWarmed, spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client";
-import { PrivateFiles } from "./privatefiles";
-import { packedArchives } from "./packedarchive";
-import { is64BitPackage } from "../jvm/natives/jvmruntime";
-import { serveFile } from "./remote-file";
-import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage";
-import { receiveWebSurfaces } from "./web-surface-port";
-import { receiveMedia } from "./media-port";
-import { hostUi, hostUiMethods, type HostUi } from "./host-ui";
-import { storageAccess, storageEntries, storageWrite } from "./device-storage";
-import { receiveIme } from "./ime-port";
-import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port";
-import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
-import type { SettingsCalls, SettingsTable } from "./settings";
-import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
+import type { PendingAccess } from "../android/pendingintent.ts";
+import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
+import { Alarms } from "./alarms.ts";
+import { AccountStore, canonicalAccountCommands, type AccountCalls } from "./accounts.ts";
+import { accountAuthority } from "../android/accounts.ts";
+import { encodeIntent, intentCodec } from "../android/intentipc.ts";
+import type { IntentCodec } from "./pendingintents.ts";
+import { packages } from "../android/packages.ts";
+import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
+import { NativeParcel, writeString } from "../android/parcel.ts";
+import { newIntent, type ComponentRef } from "../android/intent.ts";
+import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, copyExitRecord, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
+import type { PackageDataChange } from "./packagedata.ts";
+import { logUncaught } from "../jvm/natives/jthrowable.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords.ts";
+import { ActivityStack } from "./activitystack.ts";
+import type { FileSource } from "./lazyfile.ts";
+import { vfs } from "./vfs.ts";
+import { device, formatScreen, naturalLandscape } from "./config.ts";
+import type { Sender } from "../android/server/broadcastqueue.ts";
+import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm.ts";
+import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions.ts";
+import { attrStr } from "../android/axml.ts";
+import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite.ts";
+import { preferenceStore, canonicalPreferenceCommands, createAppData, type PreferenceCalls } from "../android/sharedprefs.ts";
+import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification.ts";
+import { PROCESS_PID } from "../android/os.ts";
+import { settingsStore } from "../android/settings.ts";
+import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
+import type { WebCookies } from "./webcookies.ts";
+import { cookieCalls, type CookieCalls } from "./cookie-access.ts";
+import type { LocationCalls } from "./location-access.ts";
+import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
+import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path.ts";
+import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
+import type { WorkerControl } from "./worker-control.ts";
+import { StoredParcel, StoredParcelError } from "./stored-parcel.ts";
+import { platformWarmed, spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client.ts";
+import { PrivateFiles } from "./privatefiles.ts";
+import { packedArchives } from "./packedarchive.ts";
+import { is64BitPackage } from "../jvm/natives/jvmruntime.ts";
+import { serveFile } from "./remote-file.ts";
+import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage.ts";
+import { receiveWebSurfaces } from "./web-surface-port.ts";
+import { receiveMedia } from "./media-port.ts";
+import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
+import { storageAccess, storageEntries, storageWrite } from "./device-storage.ts";
+import { receiveIme } from "./ime-port.ts";
+import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
+import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
+import type { SettingsCalls, SettingsTable } from "./settings.ts";
+import { serveProcess, processProxy, processError, serveCalls } from "./process-port.ts";
 
-export type { ProcessBootstrap } from "./process-bootstrap-data";
+export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
@@ -231,7 +231,7 @@ export class ProcessBroker {
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
     let store = this.cookieStores.get(pkg);
-    if (!store) { store = import("./webcookies").then(({ WebCookies }) => new WebCookies(pkg)); this.cookieStores.set(pkg, store); }
+    if (!store) { store = import("./webcookies.ts").then(({ WebCookies }) => new WebCookies(pkg)); this.cookieStores.set(pkg, store); }
     return store;
   }
   readonly databases = sqliteStore;
@@ -254,7 +254,7 @@ export class ProcessBroker {
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
-    rotate: async (entry) => { if (entry.landscape !== undefined) await (await import("./device")).followDisplay(entry.landscape); },
+    rotate: async (entry) => { if (entry.landscape !== undefined) await (await import("./device.ts")).followDisplay(entry.landscape); },
   }, naturalLandscape);
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
@@ -843,7 +843,7 @@ export class ProcessBroker {
    *  which may be the package */
   async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string): Promise<boolean> {
     if (prompt && !confirm(prompt)) return false;
-    await (await import("./packagedata")).changePackageData(this, pkg, change, broadcasts);
+    await (await import("./packagedata.ts")).changePackageData(this, pkg, change, broadcasts);
     return true;
   }
   watch(pid: number, died: (death: Death) => void): () => void {

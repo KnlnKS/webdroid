@@ -1,21 +1,21 @@
 // bun scripts/wasm/undernode.ts tests/fixtures/activity-manager.ts: what the activity manager asks of a
 // process's IApplicationThread as its services and receivers are driven, as one JSON object.
-import "../../tests/platform";
-import "../../src/natives";
-import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry";
-import { setAppHost } from "../../src/android/apphost";
-import { testAppHost, fixtureDeadline } from "../../tests/java";
-import { packages, PackageRecord, packageUid } from "../../src/android/packages";
-import { Resources } from "../../src/android/res";
-import { TV } from "../../src/android/axml";
-import { setProcessIdentity, setProcessName } from "../../src/android/os";
-import { hostedService } from "../../src/android/binder";
-import { newIntent, mkComponentName } from "../../src/android/intent";
-import { deliverBroadcast } from "../../src/android/server/broadcastqueue";
-import { startMainLooper } from "../../src/android/mainloop";
-import { serviceTransport } from "../../src/android/server/activeservices";
-import { serveCalls,callProxy } from "../../src/shell/process-port";
+import "../../tests/platform.ts";
+import "../../src/natives.ts";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
+import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
+import { setAppHost } from "../../src/android/apphost.ts";
+import { testAppHost, fixtureDeadline } from "../../tests/java.ts";
+import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
+import { Resources } from "../../src/android/res.ts";
+import { TV } from "../../src/android/axml.ts";
+import { setProcessIdentity, setProcessName } from "../../src/android/os.ts";
+import { hostedService } from "../../src/android/binder.ts";
+import { newIntent, mkComponentName } from "../../src/android/intent.ts";
+import { deliverBroadcast } from "../../src/android/server/broadcastqueue.ts";
+import { startMainLooper } from "../../src/android/mainloop.ts";
+import { serviceTransport } from "../../src/android/server/activeservices.ts";
+import { serveCalls,callProxy } from "../../src/shell/process-port.ts";
 console.warn = () => {};
 fixtureDeadline();
 // Exercise the real Java lifecycle with delayed owner replies, not a synchronous replica.
@@ -110,13 +110,13 @@ const allowCaller = Promise.withResolvers<void>();
 creationGate = { entered: creationEntered.resolve, wait: allowCreation.promise };
 const concurrentIntent = await serviceIntent(), ca = await newObj("webdroid/test/Connection"), cb = await newObj("webdroid/test/Connection");
 let firstFinished = false;
-const firstBind = rt.drive(function* (): import("../../src/jvm/runtime").Gen<void> {
+const firstBind = rt.drive(function* (): import("../../src/jvm/runtime.ts").Gen<void> {
   yield vcall(am, "bindServiceInstance", BIND, app, null, concurrentIntent, null, ca, 1n, null, PKG, 0);
   yield allowCaller.promise;
   firstFinished = true;
 }());
 await creationEntered.promise;
-const secondBind = rt.drive(function* (): import("../../src/jvm/runtime").Gen<number> {
+const secondBind = rt.drive(function* (): import("../../src/jvm/runtime.ts").Gen<number> {
   return yield vcall(am, "bindServiceInstance", BIND, app, null, concurrentIntent, null, cb, 1n, null, PKG, 0);
 }());
 // The existing owner channel delays requested/created acknowledgments by one task.

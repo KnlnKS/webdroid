@@ -1,11 +1,11 @@
 import { expect, test, describe, beforeAll } from "bun:test";
-import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { dialName, syntheticAddress } from "../src/shell/relay";
-import { scall, mountApexData, loadFrameworkJar, thrown } from "./java";
-import { vfs } from "../src/shell/vfs";
-import { jarray } from "../src/jvm/abi";
+import "../src/natives.ts";
+import { rt, JObj } from "../src/jvm/runtime.ts";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
+import { dialName, syntheticAddress } from "../src/shell/relay.ts";
+import { scall, mountApexData, loadFrameworkJar, thrown } from "./java.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { jarray } from "../src/jvm/abi.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);

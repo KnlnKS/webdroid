@@ -1,18 +1,18 @@
 // The page owns system services; application Java runs in its own process realm.
-import { loadFramework, loadPlatformDex } from "../android/framework";
-import { setProcessIdentity, setProcessName, PROCESS_PID } from "../android/os";
-import { onMain } from "../android/mainloop";
-import { applyDeviceConfiguration } from "../android/resources";
-import { initDeviceLocales } from "../android/resnative";
-import { scall } from "../jvm/natives/jentry";
-import { fixProcessBitness } from "../jvm/natives/jvmruntime";
-import { loadAppCode, loadTier } from "../jvm/tier";
-import { startZygote, setSystemDisplayTarget, useDisplayRotation } from "./device";
-import { connectProcess } from "./process-endpoint";
-import { processBroker } from "./processes";
-import { hostWindowManager } from "../android/server/wm";
-import { loadSystemFontMap } from "../android/fonts";
-import { rt } from "../jvm/runtime";
+import { loadFramework, loadPlatformDex } from "../android/framework.ts";
+import { setProcessIdentity, setProcessName, PROCESS_PID } from "../android/os.ts";
+import { onMain } from "../android/mainloop.ts";
+import { applyDeviceConfiguration } from "../android/resources.ts";
+import { initDeviceLocales } from "../android/resnative.ts";
+import { scall } from "../jvm/natives/jentry.ts";
+import { fixProcessBitness } from "../jvm/natives/jvmruntime.ts";
+import { loadAppCode, loadTier } from "../jvm/tier.ts";
+import { startZygote, setSystemDisplayTarget, useDisplayRotation } from "./device.ts";
+import { connectProcess } from "./process-endpoint.ts";
+import { processBroker } from "./processes.ts";
+import { hostWindowManager } from "../android/server/wm.ts";
+import { loadSystemFontMap } from "../android/fonts.ts";
+import { rt } from "../jvm/runtime.ts";
 
 let booted: Promise<void> | undefined;
 /** SystemServer's ActivityThread.systemMain creates the real system Context,
@@ -43,9 +43,9 @@ export function bootSystemOwner(): Promise<void> {
 
 /** Install the selected package with its original archive and split sources;
  * loading its bytecode remains the application's Worker responsibility. */
-export async function prepareWorkerInstall(install: import("./install").Install): Promise<{ pkg: string; label: string }> {
+export async function prepareWorkerInstall(install: import("./install.ts").Install): Promise<{ pkg: string; label: string }> {
   const [{ apkCertificates, packageArchive }, { registerPackage, installedPath }, { readFully }, { vfs }] = await Promise.all([
-    import("../android/packagearchive"), import("../android/pm"), import("./lazyfile"), import("./vfs"),
+    import("../android/packagearchive.ts"), import("../android/pm.ts"), import("./lazyfile.ts"), import("./vfs.ts"),
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
   const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install.lazyEntries);

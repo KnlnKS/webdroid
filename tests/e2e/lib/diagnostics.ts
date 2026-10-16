@@ -1,5 +1,5 @@
-import type { Flow } from "../types";
-import type { StepRun } from "../capture-webdroid";
+import type { Flow } from "../types.ts";
+import type { StepRun } from "../capture-webdroid.ts";
 
 const expectedError = (flow: Flow, message: string) => (flow.expectedErrors ?? []).some((part) => message.includes(part));
 

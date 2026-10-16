@@ -5,14 +5,14 @@
 // Manifest components and services files are the roots; rapid type analysis resolves virtual
 // and interface sites. With --framework the AOSP dex joins the program and the report becomes
 // the native methods this apk would need if those classes ran as AOSP bytecode.
-import { openApk, openDexes, dexesOf } from "./lib";
-import { argv } from "./args";
-import { Program, reach } from "../src/jvm/reach";
-import { rootsOf, reflectiveRoots } from "../src/jvm/roots";
-import { DexFile } from "../src/jvm/dex";
-import { rt } from "../src/jvm/runtime";
-import "../src/natives";
-import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface";
+import { openApk, openDexes, dexesOf } from "./lib.ts";
+import { argv } from "./args.ts";
+import { Program, reach } from "../src/jvm/reach.ts";
+import { rootsOf, reflectiveRoots } from "../src/jvm/roots.ts";
+import type { DexFile } from "../src/jvm/dex.ts";
+import { rt } from "../src/jvm/runtime.ts";
+import "../src/natives.ts";
+import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";
 
 const args = process.argv.slice(2);
 const { flag, opt, positional } = argv(args, ["--limit", "--json", "--from"]);

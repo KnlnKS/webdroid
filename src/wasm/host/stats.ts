@@ -1,8 +1,8 @@
 // The Wasm tier's counters live in `perf` (src/perf.ts), which is what a page reports as run.json's counters.
-import { perf } from "../../perf";
-import type { ThreadState } from "../../jvm/tier";
-import type { Strand, ThreadRec } from "../link/sched";
-import type { World } from "../link/world";
+import { perf } from "../../perf.ts";
+import type { ThreadState } from "../../jvm/tier.ts";
+import type { Strand, ThreadRec } from "../link/sched.ts";
+import type { World } from "../link/world.ts";
 
 export const count = (name: "wasmEntries" | "wasmFacadeMisses" | "wasmGaps" | "wasmNativeSuspended" | "wasmSuspendErrors"): void => { perf[name]++; };
 

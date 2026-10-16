@@ -1,7 +1,7 @@
 // Debug helper: bun dbg.ts <apk> '<Lcls;.name>' — prints the method's disassembly and inference.
-import { ROOT, openDexes } from "./load";
-import { decodeInstructions } from "../../../src/jvm/prepared";
-import { inferMethod } from "./infer";
+import { ROOT, openDexes } from "./load.ts";
+import { decodeInstructions } from "../../../src/jvm/prepared.ts";
+import { inferMethod } from "./infer.ts";
 const [path, want] = process.argv.slice(2);
 for (const dex of await openDexes(path)) for (let i = 0; i < dex.classDefCount; i++) {
   const def = dex.classDef(i), cls = dex.type(def.typeIdx);

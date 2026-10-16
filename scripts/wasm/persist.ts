@@ -1,33 +1,33 @@
 // The compile worker and the persisted app build: the protocol (compile-serve.ts over a MessageChannel, so the numbering handshake runs as it does with a Worker), second-tier units
 // compiled elsewhere and adopted only while the numbering they rely on is the World's, an app build attached on top of the platform build and kept sound as dexes arrive, and the
 // bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`bun run wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
-import { vfs } from "../../src/shell/vfs";
-import { BytesFile } from "../../src/shell/lazyfile";
-import { guestMemory } from "../../src/wasm/host/guest";
+import { vfs } from "../../src/shell/vfs.ts";
+import { BytesFile } from "../../src/shell/lazyfile.ts";
+import { guestMemory } from "../../src/wasm/host/guest.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AotStore } from "../../src/wasm/link/aot";
-import { APP_VERSION, VERSION, packModule, sameMarks } from "../../src/wasm/link/aot";
-import { Program } from "../../src/wasm/compiler/program";
-import { World, type WorldOptions } from "../../src/wasm/link/world";
-import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
-import { Compiler } from "../../src/wasm/compiler/j2w";
-import { compileModule } from "../../src/wasm/link/module";
-import { UnitCompiler } from "../../src/wasm/link/unit";
-import { buildApp } from "../../src/wasm/link/apps";
-import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve";
-import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler";
-import { prepareApp } from "../../src/wasm/host/appcode";
-import { fetchBundle } from "../../src/wasm/host/bundle";
-import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist";
-import { heapUsed } from "../../src/wasm/host/stats";
-import { current, loadDexes } from "./lib";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { checker, filesIn, shellIn } from "./tools";
-import type { FetchStore } from "../../src/wasm/link/aotstore";
-import type { DexFile } from "../../src/jvm/dex";
+import type { AotStore } from "../../src/wasm/link/aot.ts";
+import { APP_VERSION, VERSION, packModule, sameMarks } from "../../src/wasm/link/aot.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
+import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
+import { Compiler } from "../../src/wasm/compiler/j2w.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { UnitCompiler } from "../../src/wasm/link/unit.ts";
+import { buildApp } from "../../src/wasm/link/apps.ts";
+import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
+import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler.ts";
+import { prepareApp } from "../../src/wasm/host/appcode.ts";
+import { fetchBundle } from "../../src/wasm/host/bundle.ts";
+import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
+import { heapUsed } from "../../src/wasm/host/stats.ts";
+import { current, loadDexes } from "./lib.ts";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { checker, filesIn, shellIn } from "./tools.ts";
+import type { FetchStore } from "../../src/wasm/link/aotstore.ts";
+import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;
 if (!AOT) { console.log("persist: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
@@ -92,8 +92,8 @@ const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsi
 // A one-shot Builder and a refine-capable worker must produce the same numbered code.
 {
   const run = async (oneShot: boolean, refine = false, build = true) => {
-    const responses: import("../../src/wasm/host/compile-serve").CompileResponse[] = [];
-    const port: import("../../src/wasm/host/compile-serve").Port = { onmessage: null, postMessage: m => responses.push(m as typeof responses[number]) };
+    const responses: import("../../src/wasm/host/compile-serve.ts").CompileResponse[] = [];
+    const port: import("../../src/wasm/host/compile-serve.ts").Port = { onmessage: null, postMessage: m => responses.push(m as typeof responses[number]) };
     serveCompile(port, env);
     await port.onmessage!({ data: { type: "init", dexes: [["classes.dex", new Uint8Array(readFileSync(join(out, "classes.dex")))]],
       aot: { base: BASE }, ...(build && { build: { launch: ["Pst"], limit: 500 } }), ...(oneShot && { oneShot: true }) } } as MessageEvent);

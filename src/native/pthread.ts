@@ -1,20 +1,20 @@
 // pthreads over cooperative Cpus: one Cpu per thread, mutex/cond/keys/once, and the sleeping calls.
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
-import { mem, AddrMap, guestAt } from "./mem";
-import { NativeFault } from "./core";
-import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "./host";
-import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, nameThread } from "./cpu";
-import { yieldToLoop } from "../jvm/yield";
-import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { TLS_KEYS } from "./core";
-import { RET_SENTINEL, E } from "./abi";
-import { JThread } from "../jvm/natives/jentry";
-import { logUncaught, dispatchUncaught } from "../jvm/natives/jthrowable";
-import { threadExit } from "../jvm/natives/jentry";
-import { readTs, fail, clockTime, utf8 } from "./libc";
-import { KLAYOUT } from "./syscall";
-import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock";
+import { mem, AddrMap, guestAt } from "./mem.ts";
+import { NativeFault } from "./core.ts";
+import { hostLib, NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "./host.ts";
+import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, nameThread } from "./cpu.ts";
+import { yieldToLoop } from "../jvm/yield.ts";
+import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
+import { TLS_KEYS } from "./core.ts";
+import { RET_SENTINEL, E } from "./abi.ts";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { logUncaught, dispatchUncaught } from "../jvm/natives/jthrowable.ts";
+import { threadExit } from "../jvm/natives/jentry.ts";
+import { readTs, fail, clockTime, utf8 } from "./libc.ts";
+import { KLAYOUT } from "./syscall.ts";
+import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock.ts";
 
 /** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
  *  owner tid for recursive/error-check mutexes. Normal mutexes deliberately have no owner. */

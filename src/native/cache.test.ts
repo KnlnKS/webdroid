@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { codeStats, invalidateRange, setA64 } from "./cpu";
-import { mem } from "./mem";
-import { finish, RET, run } from "./a64.testkit";
-import { JIT_HEAT, jitEvict, jitStats } from "./core";
-import { LOW, RET_SENTINEL } from "./abi";
+import { codeStats, invalidateRange, setA64 } from "./cpu.ts";
+import { mem } from "./mem.ts";
+import { finish, RET, run } from "./a64.testkit.ts";
+import { JIT_HEAT, jitEvict, jitStats } from "./core.ts";
+import { LOW, RET_SENTINEL } from "./abi.ts";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
 

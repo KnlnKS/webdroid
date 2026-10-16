@@ -1,17 +1,17 @@
 // The entry seam (B1): host code calls Java through jentry's names over a World, and the answers, the exceptions that leave the calls and the identity
 // of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: bun run wasm entry
 import { join } from "node:path";
-import { rt } from "../../src/jvm/runtime";
-import { mangleField } from "../../src/jvm/abi";
-import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry";
-import { perf } from "../../src/perf";
-import { runningThread, wasmEntry } from "../../src/wasm/host/entry";
-import { UInfo } from "../../src/wasm/link/unsafe";
-import { world } from "./lib";
-import { mountPlatform, natives } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { entryCases, entryDex } from "./entrycases";
-import { recorded, unlike } from "./tools";
+import { rt } from "../../src/jvm/runtime.ts";
+import { mangleField } from "../../src/jvm/abi.ts";
+import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry.ts";
+import { perf } from "../../src/perf.ts";
+import { runningThread, wasmEntry } from "../../src/wasm/host/entry.ts";
+import { UInfo } from "../../src/wasm/link/unsafe.ts";
+import { world } from "./lib.ts";
+import { mountPlatform, natives } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { entryCases, entryDex } from "./entrycases.ts";
+import { recorded, unlike } from "./tools.ts";
 
 const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => PLATFORM_PATHS[i]);
 await mountPlatform(ROOT);

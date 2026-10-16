@@ -1,7 +1,7 @@
 // The audio output: one shared Web Audio context (closed when the process dies), the PCM a Java AudioTrack or an
 // AAudio stream schedules on it, and what is sounding there for AudioManager.isMusicActive.
 
-import { onProcessExit } from "../process-exit";
+import { onProcessExit } from "../process-exit.ts";
 
 /** the Web Audio subset this output uses, which a process Worker reaches on the page */
 export interface AudioNodeLike { connect(node: AudioNodeLike): unknown; disconnect(): void }

@@ -1,7 +1,7 @@
 import { createReadStream, renameSync } from "node:fs";
-import type { UiNode } from "../../tests/e2e/types";
-import { Random } from "./random";
-import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction, type UiAction } from "./ui-model";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import type { Random } from "./random.ts";
+import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction, type UiAction } from "./ui-model.ts";
 
 const MAX_STATES = 256;
 const MAX_ACTIONS_PER_STATE = 256;
@@ -53,13 +53,15 @@ function parseJournal(value: unknown, apkHash: string): Journal {
 }
 
 export class UiExplorer {
+  private readonly file: string; private readonly apkHash: string;
   private readonly states: Record<string, State>;
   private readonly signals: Set<string>;
   private readonly scrollAttempts: Record<string, number>;
   private liveCandidates: UiAction[] = [];
   private liveKey = "";
 
-  private constructor(private readonly file: string, private readonly apkHash: string, journal: Journal) {
+  private constructor(file: string, apkHash: string, journal: Journal) {
+    this.file = file; this.apkHash = apkHash;
     this.states = journal.states;
     this.scrollAttempts = journal.scrollAttempts;
     this.signals = new Set(journal.signals);

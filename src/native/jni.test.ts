@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test";
-import "../natives";
-import { rt } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { DexFile } from "../jvm/dex";
-import { loadDex } from "../jvm/tier";
-import { JThread, mainThread, setCurThread, scall, newObj, vcall, staticField, classNameOf } from "../jvm/natives/jentry";
-import { cpuFor, setA64, type Cpu, type CallArg } from "./cpu";
-import { defineHost, retPair, PTR, ldp, cstr, type ArgReader } from "./host";
-import { javaVM, jniInit, pinnedCount, resolveByExport } from "./jni";
-import { mem } from "./mem";
-import { handle, deref } from "../android/handles";
+import "../natives.ts";
+import { rt } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { DexFile } from "../jvm/dex.ts";
+import { loadDex } from "../jvm/tier.ts";
+import { JThread, mainThread, setCurThread, scall, newObj, vcall, staticField, classNameOf } from "../jvm/natives/jentry.ts";
+import { cpuFor, setA64, type Cpu, type CallArg } from "./cpu.ts";
+import { defineHost, retPair, PTR, ldp, cstr, type ArgReader } from "./host.ts";
+import { javaVM, jniInit, pinnedCount, resolveByExport } from "./jni.ts";
+import { mem } from "./mem.ts";
+import { handle, deref } from "../android/handles.ts";
 
 // The members and natives under test are tests/fixtures/JniProbe.java.
 loadDex(new DexFile(new Uint8Array(await Bun.file(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)).arrayBuffer())));
@@ -34,7 +34,8 @@ const array = (op: "New" | "Get" | "Release" | "GetRegion" | "SetRegion", type: 
 
 /** native code's view of a JNIEnv: a call of one of its functions on the Cpu, and the results it leaves in registers */
 class Env {
-  constructor(readonly cpu: Cpu, readonly env: number) {}
+  readonly cpu: Cpu; readonly env: number;
+  constructor(cpu: Cpu, env: number) { this.cpu = cpu; this.env = env; }
   call(slot: number, ...args: CallArg[]): Promise<number> { return this.cpu.call(ldp(ldp(this.env) + slot * PTR), [this.env, ...args]); }
   async long(slot: number, ...args: CallArg[]): Promise<bigint> { const r = await this.call(slot, ...args); return retPair(r, this.cpu.ret1); }
   async double(slot: number, ...args: CallArg[]): Promise<number> { await this.call(slot, ...args); return this.cpu.retD(); }

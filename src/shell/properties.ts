@@ -3,10 +3,10 @@
 // what follows from the native tier, and the live device profile's (config.ts). Any other property
 // is ABSENT, so its reader gets its own default: what a device that has not set one reports, rather
 // than a made-up answer a library will branch on.
-import { device } from "./config";
-import { DEVICE_PROPERTIES } from "./device-properties";
-import { PLATFORM_PROPERTIES } from "./platform-properties";
-import { utf8 } from "../jvm/abi";
+import { device } from "./config.ts";
+import { DEVICE_PROPERTIES } from "./device-properties.ts";
+import { PLATFORM_PROPERTIES } from "./platform-properties.ts";
+import { utf8 } from "../jvm/abi.ts";
 
 /** The ABIs the device runs, most-preferred first, which are those the native tier executes
  *  (src/native/loader.ts): arm64 and 32-bit arm, as on a device whose ro.zygote is zygote64_32.

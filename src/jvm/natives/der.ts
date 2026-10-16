@@ -1,5 +1,5 @@
 // DER (X.690) for the natives that parse and build keys and certificates.
-import { concat } from "../abi";
+import { concat } from "../abi.ts";
 
 export type Tlv = { tag: number; /** the whole encoding */ raw: Uint8Array; body: Uint8Array };
 export class DerError extends Error {}

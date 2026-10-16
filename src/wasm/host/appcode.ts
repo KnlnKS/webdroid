@@ -3,18 +3,18 @@
 // also notes what its World compiled and built on demand despite the build, and once that has settled a worker makes the build again with it, so the launches after
 // the next find it too. A compile worker for the launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only
 // while it has numbered what it had when the app's dexes arrived, as when the build was made (the zygote's numbering).
-import type { World, WorldOptions } from "../link/world";
-import type { Demand, Numbering } from "../link/aot";
-import { mid } from "../compiler/ids";
-import type { DexFile } from "../../jvm/dex";
-import type { FetchStore } from "../link/aotstore";
-import { buildFiles, appKey, SavedBuild, type Persist } from "./persist";
-import { fetchBundle } from "./bundle";
-import { switchOn } from "../../switches";
-import { prefetchInWorker } from "./aotload";
-import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./compiler";
-import type { BuildRoots, CompileResponse, Containers } from "./compile-serve";
-import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program";
+import type { World, WorldOptions } from "../link/world.ts";
+import type { Demand, Numbering } from "../link/aot.ts";
+import { mid } from "../compiler/ids.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import type { FetchStore } from "../link/aotstore.ts";
+import { buildFiles, appKey, SavedBuild, type Persist } from "./persist.ts";
+import { fetchBundle } from "./bundle.ts";
+import { switchOn } from "../../switches.ts";
+import { prefetchInWorker } from "./aotload.ts";
+import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./compiler.ts";
+import type { BuildRoots, CompileResponse, Containers } from "./compile-serve.ts";
+import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program.ts";
 
 export interface AppCodeRequest {
   /** the app's dex files */
@@ -207,11 +207,12 @@ function rootLibraries(world: World): RootLibraries | undefined {
 
 /** A build owns a fresh numbering context; its worker is retired after transferring the result. */
 class Builder {
+  private req: AppCodeRequest; private key: string;
   private closed = false;
   private port?: WorkerPort;
   private waiting?: { resolve(built: Built): void; reject(error: Error): void };
   private lease?: AbortController;
-  constructor(private req: AppCodeRequest, private key: string) {}
+  constructor(req: AppCodeRequest, key: string) { this.req = req; this.key = key; }
   get busy(): boolean { return !!this.waiting; }
   /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
   build(demand: Demand, hostClasses?: string[], libraries?: RootLibraries): Promise<Built> {

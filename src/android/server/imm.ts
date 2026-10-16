@@ -3,15 +3,15 @@
 // startInput binds it with an IInputMethodSession that hears the editor's selection and text; the
 // page's edits reach the editor through its IRemoteInputConnection; showSoftInput and hideSoftInput
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
-import { once } from "../../jvm/suspend";
-import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, scall, staticField, newObj, vcall } from "../../jvm/natives/jentry";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable";
-import { newArrayList } from "../../jvm/natives/jcoll";
-import { hostStub } from "../binder";
-import { postMain } from "../mainloop";
-import { type ImeSession, serveInput, showInput, extractedInput, mirrorInput } from "../ime";
-import { setImeShown } from "./wm";
+import { once } from "../../jvm/suspend.ts";
+import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
+import { after, scall, staticField, newObj, vcall } from "../../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { newArrayList } from "../../jvm/natives/jcoll.ts";
+import { hostStub } from "../binder.ts";
+import { postMain } from "../mainloop.ts";
+import { type ImeSession, serveInput, showInput, extractedInput, mirrorInput } from "../ime.ts";
+import { setImeShown } from "./wm.ts";
 
 const CLIENT = "Lcom/android/internal/inputmethod/IInputMethodClient;";
 const BIND = "com/android/internal/inputmethod/InputBindResult";

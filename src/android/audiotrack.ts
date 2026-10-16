@@ -1,19 +1,21 @@
 // AudioTrack's native half (MODE_STREAM): PCM written from Java is scheduled back-to-back on the
 // shared AudioContext. The periodic position event is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
-import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jentry";
-import { type JBuffer, readBufferBytes } from "../jvm/natives/jnio";
-import { uptimeMillis } from "../guest-clock";
-import { PCM_BYTES, PcmOutput, type PcmConfig, audioContext, minFrames, newAudioSessionId, outputSampleRate } from "./audio-output";
-import { nativePeer, postNativeEvent } from "./media-native";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { type JBuffer, readBufferBytes } from "../jvm/natives/jnio.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { PCM_BYTES, PcmOutput, type PcmConfig, audioContext, minFrames, newAudioSessionId, outputSampleRate } from "./audio-output.ts";
+import { nativePeer, postNativeEvent } from "./media-native.ts";
 
 const bitCount = (mask: number) => { let n = 0; for (; mask; mask &= mask - 1) n++; return n; };
 const AT = "android/media/AudioTrack";
 /** a Java AudioTrack's native track, which posts position events back through its WeakReference */
 class Track extends PcmOutput {
-  constructor(readonly ref: JObj, config: PcmConfig, bufBytes: number) {
+  readonly ref: JObj;
+  constructor(ref: JObj, config: PcmConfig, bufBytes: number) {
     super(config);
+    this.ref = ref;
     this.bufBytes = Math.max(bufBytes, minFrames(this.rate) * this.frameBytes());
   }
   readonly bufBytes: number;

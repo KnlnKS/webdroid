@@ -11,15 +11,15 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
-import { handle, deref, FINALIZER } from "./handles";
-import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
-import { writeThrough } from "../jvm/natives/jio";
-import { type JBuffer, readBufferBytes, writeRemainingBytes, position, elementShift } from "../jvm/natives/jnio";
-import { u8 } from "../jvm/abi";
-import { paintAt } from "./paint";
-import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel";
-import { extractBitmapAlpha } from "./maskfilter";
+import { awaited, rt, type JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
+import { writeThrough } from "../jvm/natives/jio.ts";
+import { type JBuffer, readBufferBytes, writeRemainingBytes, position, elementShift } from "../jvm/natives/jnio.ts";
+import { u8 } from "../jvm/abi.ts";
+import { paintAt } from "./paint.ts";
+import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel.ts";
+import { extractBitmapAlpha } from "./maskfilter.ts";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -38,6 +38,7 @@ export type RGBA = Uint8ClampedArray<ArrayBuffer>;
 interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
 export class NativeBitmap {
+  w: number; h: number; config;
   rowBytes: number;
   /** bytes the pixels were allocated with, which reconfigure and inBitmap reuse may not exceed */
   allocation: number;
@@ -52,7 +53,8 @@ export class NativeBitmap {
   /** a decoded image not yet drawn into a raster: drawing it needs no copy */
   private img: ImageBitmap | null = null;
 
-  constructor(public w: number, public h: number, public config = ARGB_8888, alphaType = PREMUL, rowBytes = w * bytesPerPixel(config)) {
+  constructor(w: number, h: number, config = ARGB_8888, alphaType = PREMUL, rowBytes = w * bytesPerPixel(config)) {
+    this.w = w; this.h = h; this.config = config;
     this.rowBytes = rowBytes;
     this.allocation = rowBytes * h;
     this.alphaType = alphaFor(config, alphaType);

@@ -1,7 +1,7 @@
 // android.net.Uri runs from AOSP bytecode; TS services reach one through its Java methods.
 
-import { awaited, rt, type JObj, type Gen } from "../jvm/runtime";
-import { scall, vcall } from "../jvm/natives/jentry";
+import { awaited, rt, type JObj, type Gen } from "../jvm/runtime.ts";
+import { scall, vcall } from "../jvm/natives/jentry.ts";
 
 export type JUri = JObj;
 /** Uri.parse */

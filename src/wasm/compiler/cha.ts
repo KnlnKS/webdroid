@@ -1,6 +1,6 @@
-import { failed, symbolicOverride } from "./linkage";
-import type { DexFile } from "../../jvm/dex";
-import { ACC, classDefIdx, declaredMethod, mkey, type JClass, type MethodInfo, type Program } from "./program";
+import { failed, symbolicOverride } from "./linkage.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import { ACC, classDefIdx, declaredMethod, mkey, type JClass, type MethodInfo, type Program } from "./program.ts";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
@@ -52,11 +52,13 @@ class Index {
  *  a dex added afterwards can still falsify it, which `World.addDexes` checks against the recorded assumptions.
  *  The index of a base Program is built once and kept in the Program, which processes share. */
 export class Cha {
+  private prog: Program;
   private base: Index[] = [];
   private own = new Index();
   /** answers by decl, then name and descriptor */
   private memo = new Map<string, Map<string, MethodInfo[]>>();
-  constructor(private prog: Program) {
+  constructor(prog: Program) {
+    this.prog = prog;
     for (let p = prog.base; p; p = p.base) this.base.unshift(sharedIndex(p));
     for (const c of prog.own()) this.own.add(c);
   }

@@ -4,7 +4,7 @@
 // exercise from scratch, log against it, and read ITS graph. Aspirational by design — it
 // deliberately crosses surfaces the implementation history lists as unfinished (overflow menu, EditText box
 // styling, the ViewPager draw/settle gap), because the flow is the target, not a certificate.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 // Normalized centres verified on-device. EditTexts and ActionBar icons carry no matchable
 // text, so they are tapped positionally; everything else uses a text anchor.

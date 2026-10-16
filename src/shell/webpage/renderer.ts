@@ -1,8 +1,8 @@
 // The renderer bootstrap: the document every WebView frame first loads on its renderer origin. It
 // announces itself to the app's window, which hands it its task and a port: load the page (fetched
 // through this origin's proxy worker, or written by the app), or work on the origin's storage.
-import { holdFrames } from "./frames";
-import type { AppMessage, LoadMessage, PageConfig, PageMessage, RendererContext, RendererReady, RendererTask, StorageOp } from "./protocol";
+import { holdFrames } from "./frames.ts";
+import type { AppMessage, LoadMessage, PageConfig, PageMessage, RendererContext, RendererReady, RendererTask, StorageOp } from "./protocol.ts";
 
 /** the page script, as the renderer bootstrap writes it into an apk asset's document */
 declare const WEB_INJECT: string;

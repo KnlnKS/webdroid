@@ -1,4 +1,4 @@
-import type { DocumentCookie } from "./protocol";
+import type { DocumentCookie } from "./protocol.ts";
 
 /** document.cookie's cookies once the page sets `value` at `page`, as the jar will store it: a
  *  cookie it would refuse, or one this document cannot see, is left out */

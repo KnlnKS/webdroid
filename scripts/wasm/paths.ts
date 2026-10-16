@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 
 export const ROOT = join(import.meta.dir, "../..");
 export const AOSP = join(ROOT, "vendor/aosp");

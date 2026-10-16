@@ -5,20 +5,20 @@
 // pthread_internal_t and bionic_tls. Offsets are this build's (checked against libc.so's own
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
 
-import { mem } from "./mem";
-import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host";
-import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl";
-import { setThreadHooks, type Cpu } from "./cpu";
-import { setAbortMessage } from "./crash";
-import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
-import { auxv, fail } from "./libc";
-import { memcpyChk } from "./proc";
-import type { Module } from "./elf";
-import { processEnv } from "../shell/environment";
-import { procIdentity } from "../shell/procfs";
-import { PROPERTY_AREA_PATH, propertyArea } from "../shell/properties";
-import { vfs } from "../shell/vfs";
-import { targetSdkVersion } from "../jvm/natives/jvmruntime";
+import { mem } from "./mem.ts";
+import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host.ts";
+import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl.ts";
+import { setThreadHooks, type Cpu } from "./cpu.ts";
+import { setAbortMessage } from "./crash.ts";
+import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi.ts";
+import { auxv, fail } from "./libc.ts";
+import { memcpyChk } from "./proc.ts";
+import type { Module } from "./elf.ts";
+import { processEnv } from "../shell/environment.ts";
+import { procIdentity } from "../shell/procfs.ts";
+import { PROPERTY_AREA_PATH, propertyArea } from "../shell/properties.ts";
+import { vfs } from "../shell/vfs.ts";
+import { targetSdkVersion } from "../jvm/natives/jvmruntime.ts";
 
 /** device paths, in the order the linker initializes them (dependencies first) */
 const BIONIC_LIBS = ["/apex/com.android.runtime/lib64/bionic/libdl.so", "/apex/com.android.runtime/lib64/bionic/libc.so",

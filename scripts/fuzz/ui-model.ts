@@ -1,5 +1,5 @@
-import type { UiNode } from "../../tests/e2e/types";
-import { Random } from "./random";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import type { Random } from "./random.ts";
 
 export type SemanticIdentity = {
   resourceId?: string;

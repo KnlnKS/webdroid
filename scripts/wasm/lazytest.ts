@@ -3,12 +3,12 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDexes, world } from "./lib";
-import { HEAP_LIMIT } from "../../src/jvm/abi";
-import { JAVA, PLATFORM_PATHS } from "./paths";
-import { checker, filesIn, shellIn } from "./tools";
-import { Natives } from "../../src/wasm/host/natives";
-import { bundleForNode } from "./undernode";
+import { loadDexes, world } from "./lib.ts";
+import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
+import { JAVA, PLATFORM_PATHS } from "./paths.ts";
+import { checker, filesIn, shellIn } from "./tools.ts";
+import { Natives } from "../../src/wasm/host/natives.ts";
+import { bundleForNode } from "./undernode.ts";
 
 const jars = PLATFORM_PATHS.slice(0, 2);
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-lz-"));

@@ -2,16 +2,16 @@
 // per-package state ActivityManager and PackageManager reset beside it (clearApplicationUserData);
 // removing the package (uninstall, the shell's reset) clears it, then also takes its install state
 // and what the system keeps for it while it is installed.
-import type { processBroker, Receiver } from "./processes";
-import type { ParcelData } from "../android/binder";
-import { webData } from "../android/webstorage";
-import { keystoreData } from "../android/keystore";
-import { uriGrantData } from "../android/urigrants";
-import { legacySnapshotData } from "../android/sqlite";
-import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo";
-import { installData, knownUid, packages } from "../android/packages";
-import { installedPath } from "../android/pm";
-import { forgetPackage } from "./packages";
+import type { processBroker, Receiver } from "./processes.ts";
+import type { ParcelData } from "../android/binder.ts";
+import { webData } from "../android/webstorage.ts";
+import { keystoreData } from "../android/keystore.ts";
+import { uriGrantData } from "../android/urigrants.ts";
+import { legacySnapshotData } from "../android/sqlite.ts";
+import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
+import { installData, knownUid, packages } from "../android/packages.ts";
+import { installedPath } from "../android/pm.ts";
+import { forgetPackage } from "./packages.ts";
 
 type Broker = ReturnType<typeof processBroker>;
 /** clearApplicationUserData's terms: `fromApp` (the app cleared itself) keeps its notification
@@ -28,7 +28,7 @@ export type PackageState = {
 const owners = (broker: Broker): PackageState[] => [
   broker.alarms, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
-    packages: async () => (await import("./webcookies")).WebCookies.packages() },
+    packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
   broker.files, webData, broker.intents, broker.accounts, exitRecordData, installData,
 ];
 

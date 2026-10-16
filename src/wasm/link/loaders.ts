@@ -2,14 +2,14 @@
 // (compiler/program.ts): the classes its dex files define and its parent does not are its own, with their own ids, statics and Class objects, and the dex files
 // see the classes through it. The boot loader, the app's own class loader and a loader that opens dex files the Program already holds stand for the default
 // namespace. Class.forName, VMClassLoader.findLoadedClass and Class.getClassLoader answer from it.
-import { T } from "../compiler/wasmbin";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { Loader } from "../compiler/program";
-import { dexesIn, type DexFile } from "../../jvm/dex";
-import type { World } from "./world";
-import { prepareDefinition, resolvedMirror } from "./resolution";
-import { emitRestored, emitSettled } from "./sched";
+import { T } from "../compiler/wasmbin.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { Loader } from "../compiler/program.ts";
+import { dexesIn, type DexFile } from "../../jvm/dex.ts";
+import type { World } from "./world.ts";
+import { prepareDefinition, resolvedMirror } from "./resolution.ts";
+import { emitRestored, emitSettled } from "./sched.ts";
 
 /** after host.classByName set local `id`: the Class it named (null for 0), or the settled answer of a lookup that parked */
 export function emitClassAnswer(cx: Compiler, c: Code, id: number): void {
@@ -19,7 +19,8 @@ export function emitClassAnswer(cx: Compiler, c: Code, id: number): void {
 }
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
-export const enum Lookup { Visible, Defined, Cookie, ForName }
+export const Lookup = { Visible: 0, Defined: 1, Cookie: 2, ForName: 3 } as const;
+export type Lookup = (typeof Lookup)[keyof typeof Lookup];
 /** the kind of host.obj that answers the ClassLoader object of a class id */
 export const LOADER_OF_CLASS = 100;
 

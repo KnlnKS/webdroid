@@ -1,9 +1,9 @@
 // Walk a flow until it wedges, then dump state. env: TREE=1 LOGS=1 NOMISS=1
 import { mkdir } from "node:fs/promises";
-import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid";
-import { FLOWS } from "../tests/e2e/flows";
-import { executionFlow } from "../tests/e2e/types";
-import { need } from "./args";
+import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid.ts";
+import { FLOWS } from "../tests/e2e/flows/index.ts";
+import { executionFlow } from "../tests/e2e/types.ts";
+import { need } from "./args.ts";
 
 const [app, stopAtArg = "99", outDir = "webdroid-shots/dbg"] = need("bun run dbg <flow> [stopAtStep] [outDir]");
 const stopAt = Number(stopAtArg);

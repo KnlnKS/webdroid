@@ -2,11 +2,11 @@
 // token, uselocale keeps one per thread, and every *_l variant is its base function with the
 // trailing locale_t unread.
 
-import { wrote, mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host";
-import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc";
-import { utf8 as codec } from "../jvm/abi";
-import { format } from "./printf";
+import { wrote, mem } from "./mem.ts";
+import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host.ts";
+import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc.ts";
+import { utf8 as codec } from "../jvm/abi.ts";
+import { format } from "./printf.ts";
 
 const wput = (p: number, s: string): number => { let i = 0; for (const ch of s) mem.st32(p + 4 * i++, ch.codePointAt(0)!); mem.st32(p + 4 * i, 0); return i; };
 const cps = (s: string) => [...s].map((c) => c.codePointAt(0)!);

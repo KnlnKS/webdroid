@@ -2,25 +2,25 @@
 // eventfd, epoll, inotify, timerfd and sockets (socket/), shared by a raw syscall, the ARM32
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
-import { mem, guestAt, anchor } from "./mem";
-import { type HostFn, PTR, ldp, stLong, ARG0 } from "./host";
-import { E } from "./abi";
-import type { Cpu } from "./cpu";
-import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc";
-import { KLAYOUT } from "./syscall";
-import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
-import { remoteFilePath } from "../shell/file-path";
-import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
-import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile";
-import { concat, utf8 as codec } from "../jvm/abi";
-import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
-import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers";
-import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
-import { SIGPIPE } from "./signals";
-import type { Socket, Received } from "./socket/core";
-import type { Epoll } from "./poll";
+import { mem, guestAt, anchor } from "./mem.ts";
+import { type HostFn, PTR, ldp, stLong, ARG0 } from "./host.ts";
+import { E } from "./abi.ts";
+import type { Cpu } from "./cpu.ts";
+import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc.ts";
+import { KLAYOUT } from "./syscall.ts";
+import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs.ts";
+import { remoteFilePath } from "../shell/file-path.ts";
+import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
+import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile.ts";
+import { concat, utf8 as codec } from "../jvm/abi.ts";
+import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd.ts";
+import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers.ts";
+import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi.ts";
+import { SIGPIPE } from "./signals.ts";
+import type { Socket, Received } from "./socket/core.ts";
+import type { Epoll } from "./poll.ts";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
-  processSeekFd, processSyncFd, processTruncateFd, processFcntlFd, processFdStat, processIoctlIntFd, type RemoteDescriptor } from "./process-fd";
+  processSeekFd, processSyncFd, processTruncateFd, processFcntlFd, processFdStat, processIoctlIntFd, type RemoteDescriptor } from "./process-fd.ts";
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
@@ -122,8 +122,9 @@ export class FdScope {
   }
 }
 class FdLease {
+  private number: number; owner: FdScope | undefined;
   private callbacks = new Set<() => void>();
-  constructor(private number: number, public owner: FdScope | undefined) {}
+  constructor(number: number, owner: FdScope | undefined) { this.number = number; this.owner = owner; }
   get fd(): number { return leases.get(this.number) === this && fds.has(this.number) ? this.number : -1; }
   close(): void { if (this.fd >= 0) javaCloseFd(this.fd); }
   onClose(callback: () => void): void { this.callbacks.add(callback); }

@@ -1,18 +1,18 @@
 // The page of boot-probe.ts, also loaded in an iframe of itself (`?frame`) as a second load of the same build.
-import { fetchPlatformJars, jarDexes } from "../../src/android/framework";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { openAot, platformProgram } from "../../src/wasm/host/boot";
-import { prepareApp } from "../../src/wasm/host/appcode";
-import { spawnCompileWorker } from "../../src/wasm/host/compiler";
-import { openPersist } from "../../src/wasm/host/persist";
-import { dexesIn } from "../../src/jvm/dex";
-import { Program } from "../../src/wasm/compiler/program";
-import { World } from "../../src/wasm/link/world";
-import { intrinsics } from "../../src/wasm/link/intrinsics";
-import { hostNet } from "../../src/wasm/host/inet";
-import { guestMemory } from "../../src/wasm/host/guest";
-import { heapUsed } from "../../src/wasm/host/stats";
-import { mountPlatform, natives, startProcess } from "./harness";
+import { fetchPlatformJars, jarDexes } from "../../src/android/framework.ts";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { openAot, platformProgram } from "../../src/wasm/host/boot.ts";
+import { prepareApp } from "../../src/wasm/host/appcode.ts";
+import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
+import { openPersist } from "../../src/wasm/host/persist.ts";
+import { dexesIn } from "../../src/jvm/dex.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { World } from "../../src/wasm/link/world.ts";
+import { intrinsics } from "../../src/wasm/link/intrinsics.ts";
+import { hostNet } from "../../src/wasm/host/inet.ts";
+import { guestMemory } from "../../src/wasm/host/guest.ts";
+import { heapUsed } from "../../src/wasm/host/stats.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
 
 export interface ProbeResult {
   error?: string;

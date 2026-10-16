@@ -2,16 +2,16 @@
 // calls the installed GeocodeProvider service (com.android.location.service.GeocodeProvider; microG's
 // here), bound by the platform itself.
 
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jentry";
-import { once } from "../jvm/suspend";
-import { newArrayList } from "../jvm/natives/jcoll";
-import type { JLocale } from "../jvm/natives/jvalues";
-import { newStub } from "./binder";
-import { PROCESS_PID, PROCESS_UID } from "./os";
-import { resolveService } from "./pm";
-import { bindAsSystem } from "./server/activeservices";
-import type { JIntent, JComponentName } from "./intent";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { once } from "../jvm/suspend.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import type { JLocale } from "../jvm/natives/jvalues.ts";
+import { newStub } from "./binder.ts";
+import { PROCESS_PID, PROCESS_UID } from "./os.ts";
+import { resolveService } from "./pm.ts";
+import { bindAsSystem } from "./server/activeservices.ts";
+import type { JIntent, JComponentName } from "./intent.ts";
 
 // the provider library's GeocoderParams: the request's locale and caller
 class JGeocoderParams extends JObj { locale: JLocale | null = null; pkg: string | null = null; uid = PROCESS_UID; }

@@ -1,15 +1,15 @@
 import { expect, test, describe, beforeAll } from "bun:test";
-import "../src/natives";
-import { TV } from "../src/android/axml";
-import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry";
-import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
-import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop";
-import { BridgeCalls } from "../src/shell/bridgecalls";
-import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
-import { UNAME } from "../src/shell/device-properties";
-import { binderTransport, importBinder } from "../src/android/binder";
-import { procList, procText, procWrite } from "../src/shell/procfs";
+import "../src/natives.ts";
+import { TV } from "../src/android/axml.ts";
+import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry.ts";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
+import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java.ts";
+import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop.ts";
+import { BridgeCalls } from "../src/shell/bridgecalls.ts";
+import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os.ts";
+import { UNAME } from "../src/shell/device-properties.ts";
+import { binderTransport, importBinder } from "../src/android/binder.ts";
+import { procList, procText, procWrite } from "../src/shell/procfs.ts";
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {

@@ -3,10 +3,10 @@
 // (touching spans merged, vertically adjacent bands with the same spans merged, no empty band),
 // so iteration, equality, toString and the boundary path all see the rectangles a device does.
 
-import { declaredField } from "../jvm/runtime";
-import { deref } from "./handles";
-import { type NativePath, type Sink, walkPath } from "./path";
-import type { Box } from "./graphics";
+import { declaredField } from "../jvm/runtime.ts";
+import { deref } from "./handles.ts";
+import { type NativePath, type Sink, walkPath } from "./path.ts";
+import type { Box } from "./graphics.ts";
 
 /** rows [top, bottom) covered by the spans [xs[0], xs[1]), [xs[2], xs[3]), ... */
 interface Band { top: number; bottom: number; xs: readonly number[] }
@@ -179,9 +179,10 @@ function combineSpans(a: readonly number[], b: readonly number[], keep: (a: bool
 }
 
 class Edge {
+  readonly x: number; readonly y0: number; readonly y1: number;
   flags = 0;
   next: Edge | null = null;
-  constructor(readonly x: number, readonly y0: number, readonly y1: number) {}
+  constructor(x: number, y0: number, y1: number) { this.x = x; this.y0 = y0; this.y1 = y1; }
 }
 const Y0_LINK = 1, Y1_LINK = 2, COMPLETE = 3;
 /** SkRegion's find_link: chain each edge to the one starting where it ends */

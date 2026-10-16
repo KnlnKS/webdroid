@@ -7,19 +7,19 @@
 // Reference arrays share one wrapper type, so their class and covariance live in the header vt and the Class objects.
 // Anything that needs a struct type per class (allocation by Class.newInstance, Object.clone, arrays by component class) asks the
 // host for the slot of a generated function for that class.
-import { OP } from "../compiler/code";
-import { HT, T, refNull } from "../compiler/wasmbin";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts";
-import { ACC, sameRuntimePackage, javaName as stripLoader, type JClass } from "../compiler/program";
-import { rt } from "../compiler/rtfns";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
-import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe";
-import { hostReflect, RInfo } from "./reflect";
-import { hostMembers, MInfo } from "./members";
-import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders";
-import { emitRestored } from "./sched";
+import { OP } from "../compiler/code.ts";
+import { HT, T, refNull } from "../compiler/wasmbin.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts.ts";
+import { ACC, sameRuntimePackage, javaName as stripLoader, type JClass } from "../compiler/program.ts";
+import { rt } from "../compiler/rtfns.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
+import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe.ts";
+import { hostReflect, RInfo } from "./reflect.ts";
+import { hostMembers, MInfo } from "./members.ts";
+import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
+import { emitRestored } from "./sched.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -41,7 +41,8 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess, HasClinit, FieldOffset }
+export const Info = { Flags: 0, Primitive: 1, Super: 2, Component: 3, NIfaces: 4, Iface: 5, Inner: 6, NameLen: 7, NameChar: 8, NFields: 9, FieldNameLen: 10, FieldNameChar: 11, FieldType: 12, FieldFlags: 13, AllocSlot: 14, CloneSlot: 15, ArraySlot: 16, ArrayOf: 17, EnsureSlot: 18, FieldDesc: 19, CanAccess: 20, HasClinit: 21, FieldOffset: 22 } as const;
+export type Info = (typeof Info)[keyof typeof Info];
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());

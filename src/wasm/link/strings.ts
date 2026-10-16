@@ -2,14 +2,14 @@
 // for it, the JS string. A String is then an Object like any other (it carries its vtable), so a virtual call needs no test for it,
 // and character access is an array access instead of a call of a wasm:js-string builtin. A native sees the JS string, made and
 // cached on first use; a JS string a native answers is copied into an array once.
-import { Code, OP } from "../compiler/code";
-import { HT, T, ref, refNull, type VT } from "../compiler/wasmbin";
-import { kindOf } from "../compiler/program";
-import { H } from "../compiler/consts";
-import { parseMethodDesc } from "../../jvm/abi";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import { bytesFactory } from "./strfactory";
-import { rt } from "../compiler/rtfns";
+import { Code, OP } from "../compiler/code.ts";
+import { HT, T, ref, refNull, type VT } from "../compiler/wasmbin.ts";
+import { kindOf } from "../compiler/program.ts";
+import { H } from "../compiler/consts.ts";
+import { parseMethodDesc } from "../../jvm/abi.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { bytesFactory } from "./strfactory.ts";
+import { rt } from "../compiler/rtfns.ts";
 
 /** a String constructor is never called: each call site makes the String with `factory` */
 export const stringCtor: Intrinsic = (cx, m, c) => { c.unreachable(); };
@@ -19,8 +19,9 @@ const STRING = "java/lang/String";
 const CHARS = 2, HASH = 3, JS = 4;
 
 export class StructStrings {
+  private cx: Compiler;
   private b = {} as { length: number; fromCharCodeArray: number; intoCharCodeArray: number };
-  constructor(private cx: Compiler) {}
+  constructor(cx: Compiler) { this.cx = cx; }
 
   isString(cls: string): boolean { return cls === STRING; }
   /** the representation has no instance fields: reading or writing one of String's is not translated */

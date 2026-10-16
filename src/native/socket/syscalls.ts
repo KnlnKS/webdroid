@@ -2,22 +2,22 @@
 // wrappers reach) and the ARM32 libc's send, recv, poll, select and resolver functions. Each
 // marshals with abi.ts and hands the socket core JS values.
 
-import { E } from "../abi";
-import type { Cpu } from "../cpu";
-import { hostLib, stLong, type HostFn, type HostRet } from "../host";
-import { mem, anchor } from "../mem";
-import { fail, kernelResult } from "../libc";
-import { fdRead, fdWrite, installSocket, installFile, dropFile, written, socketOf, type OpenFile } from "../fs";
-import { nativePoll, nativeSelect } from "../poll";
-import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address";
+import { E } from "../abi.ts";
+import type { Cpu } from "../cpu.ts";
+import { hostLib, stLong, type HostFn, type HostRet } from "../host.ts";
+import { mem, anchor } from "../mem.ts";
+import { fail, kernelResult } from "../libc.ts";
+import { fdRead, fdWrite, installSocket, installFile, dropFile, written, socketOf, type OpenFile } from "../fs.ts";
+import { nativePoll, nativeSelect } from "../poll.ts";
+import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address.ts";
 import {
   SOL_SOCKET, MSG_CTRUNC, MSG_TRUNC, MSG_CMSG_CLOEXEC, readSockaddr, writeSockaddr, readMsghdr, readCmsgs, writeControl, gather,
   iovecs, guestBuffer, ucredBytes, readTimeval, writeTimeval, TIMEVAL_SIZE, type GuestBuffer, type Cmsg,
-} from "./abi";
-import { record, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core";
-import { inetSocket, IPPROTO_IP, IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP } from "./inet";
-import { unixSocket, unixSocketPair } from "./unix";
-import { RESOLVER } from "./resolver";
+} from "./abi.ts";
+import { record, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core.ts";
+import { inetSocket, IPPROTO_IP, IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP } from "./inet.ts";
+import { unixSocket, unixSocketPair } from "./unix.ts";
+import { RESOLVER } from "./resolver.ts";
 
 const UIO_MAXIOV = 1024;
 

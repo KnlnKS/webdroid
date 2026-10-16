@@ -1,5 +1,5 @@
-import type { Resources } from "./res";
-import type { Locales } from "./resnative";
+import type { Resources } from "./res.ts";
+import type { Locales } from "./resnative.ts";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {

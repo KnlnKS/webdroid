@@ -1,7 +1,7 @@
 // JSON + standalone HTML report. The HTML embeds nothing but relative PNG links, so the whole
 // report/ directory is portable.
-import type { StepRun } from "../capture-webdroid";
-import type { TreeDiff } from "./tree";
+import type { StepRun } from "../capture-webdroid.ts";
+import type { TreeDiff } from "./tree.ts";
 export type StepReport = {
   index: number; id: string; label: string; file: string;
   strictPct: number; tolerantPct: number;

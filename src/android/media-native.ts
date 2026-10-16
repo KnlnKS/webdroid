@@ -1,11 +1,11 @@
 // What the media classes' native halves share: the peer a JNI keeps for a Java object, events
 // posted back through postEventFromNative, and the sources a native half reads.
-import { rt, setDeclared, type JObj } from "../jvm/runtime";
-import { after, callOn, scall, vcall } from "../jvm/natives/jentry";
-import { binderThread } from "./binder";
-import { javaFdSource } from "../native/fs";
-import { SliceFile, type FileSource } from "../shell/lazyfile";
-import { postMain } from "./mainloop";
+import { rt, setDeclared, type JObj } from "../jvm/runtime.ts";
+import { after, callOn, scall, vcall } from "../jvm/natives/jentry.ts";
+import { binderThread } from "./binder.ts";
+import { javaFdSource } from "../native/fs.ts";
+import { SliceFile, type FileSource } from "../shell/lazyfile.ts";
+import { postMain } from "./mainloop.ts";
 
 /** The native halves of a Java class's objects: attached by setup and closed once, by release or
  *  finalize. Given `cls`, an attached object's mNativeContext is non-zero, which is all its Java

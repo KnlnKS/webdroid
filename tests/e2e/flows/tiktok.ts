@@ -2,7 +2,7 @@
 // so every step is positional at the pinned screen, the launch settles for as long as the app
 // takes to reach the feed, and the video steps are captured once after their dwell (a playing
 // video never holds still).
-import { wait, type Flow, Screen } from "../types";
+import { wait, type Flow, type Screen } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2160, densityDpi: 480 };
 const at = (x: number, y: number): [number, number] => [x / SCREEN.width, y / SCREEN.height];

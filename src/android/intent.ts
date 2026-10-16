@@ -1,10 +1,10 @@
 // android.content.Intent and ComponentName are AOSP's own classes; the shell reads and builds them
 // through their Java API with the helpers here. The activities the platform answers through the
 // browser (pickers, share, VIEW) register here too.
-import { awaited, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jentry";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { mkUri } from "./net";
+import { awaited, type JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, vcall } from "../jvm/natives/jentry.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { mkUri } from "./net.ts";
 
 /** an android.content.Intent */
 export type JIntent = JObj;

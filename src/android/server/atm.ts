@@ -3,18 +3,18 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable";
-import { once, shareable } from "../../jvm/suspend";
-import { newArrayList } from "../../jvm/natives/jcoll";
-import { configurations, resizeWindows, setClientVisible } from "./wm";
-import { notifyDisplayChanged } from "../display";
-import { asSystem, systemToken } from "../binder";
-import { appHost } from "../apphost";
-import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
-import { grantResultUris } from "../urigrants";
-import { attached, thisApp, userLaunched, pms, runsHere } from "./am";
+import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
+import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { once, shareable } from "../../jvm/suspend.ts";
+import { newArrayList } from "../../jvm/natives/jcoll.ts";
+import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
+import { notifyDisplayChanged } from "../display.ts";
+import { asSystem, systemToken } from "../binder.ts";
+import { appHost } from "../apphost.ts";
+import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
+import { grantResultUris } from "../urigrants.ts";
+import { attached, thisApp, userLaunched, pms, runsHere } from "./am.ts";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;

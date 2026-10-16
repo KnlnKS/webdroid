@@ -1,15 +1,15 @@
 // A manifest <intent-filter> as the package parser builds it (ParsedIntentInfoUtils.parseIntentInfo,
 // parseData and parseRelRefGroup), matched as PackageManagerService's IntentResolver matches it:
 // with AOSP's own IntentFilter.
-import type { JObj, Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jentry";
-import { newLinkedHashSet } from "../jvm/natives/jcoll";
-import { attr, attrStr, TV, type XmlNode } from "./axml";
-import { mkUri } from "./net";
-import { appHost } from "./apphost";
-import { resString } from "./res";
-import type { IntentQuery } from "./intent";
-import { awaited } from "../jvm/runtime";
+import type { JObj, Gen } from "../jvm/runtime.ts";
+import { newObj, vcall } from "../jvm/natives/jentry.ts";
+import { newLinkedHashSet } from "../jvm/natives/jcoll.ts";
+import { attr, attrStr, TV, type XmlNode } from "./axml.ts";
+import { mkUri } from "./net.ts";
+import { appHost } from "./apphost.ts";
+import { resString } from "./res.ts";
+import type { IntentQuery } from "./intent.ts";
+import { awaited } from "../jvm/runtime.ts";
 
 const S = "Ljava/lang/String;";
 function value(node: XmlNode, name: string): string | null {

@@ -1,13 +1,13 @@
 import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
-import "../src/natives";
-import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
-import { getDeclared } from "../src/jvm/runtime";
-import { loadDex } from "../src/jvm/tier";
-import { hexBytes, i8 } from "../src/jvm/abi";
-import { exportParcel, importParcel } from "../src/android/binder";
-import { nativeParcel } from "../src/android/parcel";
-import { DexFile } from "../src/jvm/dex";
+import "../src/natives.ts";
+import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
+import { getDeclared } from "../src/jvm/runtime.ts";
+import { loadDex } from "../src/jvm/tier.ts";
+import { hexBytes, i8 } from "../src/jvm/abi.ts";
+import { exportParcel, importParcel } from "../src/android/binder.ts";
+import { nativeParcel } from "../src/android/parcel.ts";
+import { DexFile } from "../src/jvm/dex.ts";
 
 
 async function input(bytes: Int8Array) {

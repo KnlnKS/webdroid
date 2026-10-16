@@ -2,15 +2,16 @@
 // can only run asynchronously. The resolution is the production one (the hosts file, numeric forms, the relay's answer), which answers synchronously for
 // everything but a name the relay must look up, for which the strand waits (Block.Net); the objects are made here, by the same call, in the Wasm program. A stack that cannot wait
 // (a plain entry) has a gap for such a name.
-import { OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import type { Intrinsic } from "../compiler/j2w";
-import { Block, emitBlock } from "./sched";
+import { OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import type { Intrinsic } from "../compiler/j2w.ts";
+import { Block, emitBlock } from "./sched.ts";
 
 const STRUCT = "android/system/StructAddrinfo", INET = "java/net/InetAddress", GAI = "android/system/GaiException";
 /** the answer of op 0 for a lookup that cannot finish synchronously */
 export const ASYNC = -0x80000000;
-export const enum NetOp { Resolve, Byte }
+export const NetOp = { Resolve: 0, Byte: 1 } as const;
+export type NetOp = (typeof NetOp)[keyof typeof NetOp];
 
 export const inetIntrinsics = new Map<string, Intrinsic>();
 inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;", (cx, m, c) => {

@@ -1,15 +1,15 @@
 import { existsSync } from "node:fs";
 import type { Page } from "playwright";
-import { androidTool } from "../android-sdk";
-import { openApk } from "../lib";
-import { parseAXML, attrStr } from "../../src/android/axml";
-import { device, type Screen } from "../../src/shell/config";
-import { performAction } from "../../tests/e2e/lib/actions";
-import type { Act } from "../../tests/e2e/lib/probe";
-import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator";
-import type { UiNode } from "../../tests/e2e/types";
-import { matchIdentity, type UiAction } from "./ui-model";
-import { startWebdroid, type WebdroidSession } from "./webdroid-session";
+import { androidTool } from "../android-sdk.ts";
+import { openApk } from "../lib.ts";
+import { parseAXML, attrStr } from "../../src/android/axml.ts";
+import { device, type Screen } from "../../src/shell/config.ts";
+import { performAction } from "../../tests/e2e/lib/actions.ts";
+import type { Act } from "../../tests/e2e/lib/probe.ts";
+import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator.ts";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import { matchIdentity, type UiAction } from "./ui-model.ts";
+import { startWebdroid, type WebdroidSession } from "./webdroid-session.ts";
 
 const STEP_DEADLINE_MS = 5_000;
 export type UiApp = { apk: string; pkg: string; activity: string };
@@ -49,9 +49,11 @@ function pixels(point: { x: number; y: number }, size: UiSize): [string, string]
 }
 
 export class AndroidUiTarget {
+  private readonly adb: (...args: string[]) => Promise<CommandResult>; private readonly app: UiApp; private readonly rotation: Rotation;
   readonly environment: { serial: string; fingerprint: string };
-  private constructor(private readonly adb: (...args: string[]) => Promise<CommandResult>, private readonly app: UiApp,
-    private readonly rotation: Rotation, serial: string, fingerprint: string) {
+  private constructor(adb: (...args: string[]) => Promise<CommandResult>, app: UiApp,
+    rotation: Rotation, serial: string, fingerprint: string) {
+    this.adb = adb; this.app = app; this.rotation = rotation;
     this.environment = { serial, fingerprint };
   }
 
@@ -135,10 +137,12 @@ function webAction(action: UiAction, nodes: readonly UiNode[], size: UiSize): Ac
 }
 
 export class WebdroidUiTarget {
+  private readonly session: WebdroidSession;
   readonly page: Page;
   readonly origin: string;
   readonly errors: string[];
-  private constructor(private readonly session: WebdroidSession) {
+  private constructor(session: WebdroidSession) {
+    this.session = session;
     this.page = session.page; this.origin = session.origin; this.errors = session.errors;
   }
 

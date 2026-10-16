@@ -1,7 +1,7 @@
 // Dex loading through the repo's own parser, without scripts/lib.ts (which drags in the runtime).
-import { dexesIn, isDexEntry, type DexFile } from "../../../src/jvm/dex";
-import { zipTree } from "../../../src/jvm/natives/jzip";
-import { openInstall } from "../../../src/shell/install";
+import { dexesIn, isDexEntry, type DexFile } from "../../../src/jvm/dex.ts";
+import { zipTree } from "../../../src/jvm/natives/jzip.ts";
+import { openInstall } from "../../../src/shell/install.ts";
 
 export const ROOT = new URL("../../../", import.meta.url).pathname;
 

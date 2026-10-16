@@ -1,14 +1,14 @@
 // The registered natives (rt.register specs and rt.registerJni functions) as the Wasm tier's NativeSource.
-import { rt, JObj, type NativeSpec } from "../../jvm/runtime";
-import { JThrowable } from "../../jvm/natives/jthrowable";
-import { splitSig } from "../../jvm/abi";
-import { stringMethods } from "../../jvm/natives/jstring";
-import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
-import { waitsEnded } from "../link/module";
-import { Natives } from "./natives";
-import { refOf } from "./bridge";
-import { hostNatives } from "./hostnatives";
-import { mayWait } from "./suspend";
+import { rt, JObj, type NativeSpec } from "../../jvm/runtime.ts";
+import { JThrowable } from "../../jvm/natives/jthrowable.ts";
+import { splitSig } from "../../jvm/abi.ts";
+import { stringMethods } from "../../jvm/natives/jstring.ts";
+import type { HostFn, HostSpec, NativeSource } from "../link/hostapi.ts";
+import { waitsEnded } from "../link/module.ts";
+import { Natives } from "./natives.ts";
+import { refOf } from "./bridge.ts";
+import { hostNatives } from "./hostnatives.ts";
+import { mayWait } from "./suspend.ts";
 
 export const lookup = (cls: string, key: string, isStatic: boolean) => {
   const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key], id = cls + "." + key;

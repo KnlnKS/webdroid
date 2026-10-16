@@ -4,15 +4,15 @@
 // objects libcore passed in through the table compiled code reads by index (World.pin). The result is unboxed as ART does: null for a primitive is a
 // NullPointerException, a value of another class a ClassCastException, and a checked exception the method does not declare is wrapped in
 // UndeclaredThrowableException.
-import { OP } from "../compiler/code";
-import { T, refNull } from "../compiler/wasmbin";
-import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program";
-import { BOX } from "../compiler/fields";
-import { descToName, parseMethodDesc } from "../../jvm/abi";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { Code } from "../compiler/code";
-import type { World } from "./world";
-import { definingLoader } from "./loaders";
+import { OP } from "../compiler/code.ts";
+import { T, refNull } from "../compiler/wasmbin.ts";
+import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program.ts";
+import { BOX } from "../compiler/fields.ts";
+import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { Code } from "../compiler/code.ts";
+import type { World } from "./world.ts";
+import { definingLoader } from "./loaders.ts";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
 const NM_TABLE = 1, PROXY_FLAG = 0x40000;

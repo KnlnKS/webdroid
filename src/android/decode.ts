@@ -6,18 +6,18 @@
 // pixels come from createImageBitmap (libheif for HEIF), sampled and scaled as the browser decodes
 // them, and become a NativeBitmap without an intermediate raster.
 
-import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime";
-import { handle, ownedHandle, deref, release } from "./handles";
-import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry";
-import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio";
-import { fdInt, readStreamFully } from "../jvm/natives/jio";
-import { u8, concat, unshared } from "../jvm/abi";
-import { processFdBytes, processSeekFd } from "../native/process-fd";
-import { assetBytes } from "./assetmanager";
-import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL, type RGBA } from "./bitmap";
-import { decodeHeif } from "./heif";
-import { edges, setEdges } from "./graphics";
-import { bitmapCanvas } from "./canvas";
+import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime.ts";
+import { handle, ownedHandle, deref, release } from "./handles.ts";
+import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
+import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio.ts";
+import { fdInt, readStreamFully } from "../jvm/natives/jio.ts";
+import { u8, concat, unshared } from "../jvm/abi.ts";
+import { processFdBytes, processSeekFd } from "../native/process-fd.ts";
+import { assetBytes } from "./assetmanager.ts";
+import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL, type RGBA } from "./bitmap.ts";
+import { decodeHeif } from "./heif.ts";
+import { edges, setEdges } from "./graphics.ts";
+import { bitmapCanvas } from "./canvas.ts";
 
 // ── headers
 export interface ImageHeader {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { vfs } from "./vfs";
-import { PrivateFiles } from "./privatefiles";
+import { vfs } from "./vfs.ts";
+import { PrivateFiles } from "./privatefiles.ts";
 
 test("appends keep the writer's spare capacity while every realm reads the new bytes", async () => {
   const other: typeof vfs = (await import("./vfs.ts?other" as string)).vfs;

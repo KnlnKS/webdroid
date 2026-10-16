@@ -5,9 +5,9 @@
 // `bun run textcmp --record` rewrites with the reference AVD booted (with getTextWidths across
 // weights for fwtest, tests/fixtures/textwidths-device.txt). Line ends and hyphen edits must match,
 // and a hyphenated line's glyphs; widths and line extents are reported.
-import { BASE_URL } from "../tests/e2e/lib/util";
-import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
-import { adb, probeSdk, runDex } from "./adb";
+import { BASE_URL } from "../tests/e2e/lib/util.ts";
+import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid.ts";
+import { adb, probeSdk, runDex } from "./adb.ts";
 
 const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
 /** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */

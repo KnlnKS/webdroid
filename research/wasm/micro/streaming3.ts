@@ -1,6 +1,6 @@
 // Do WebAssembly.compile and compileStreaming report the same offsets in a stack trace (the position of a call in a function)?
-import { ModuleBuilder, T } from "../../../src/wasm/compiler/wasmbin";
-import { Code } from "../../../src/wasm/compiler/code";
+import { ModuleBuilder, T } from "../../../src/wasm/compiler/wasmbin.ts";
+import { Code } from "../../../src/wasm/compiler/code.ts";
 import { chromium } from "playwright";
 const mb = new ModuleBuilder(), h = mb.importFunc("h", "f", mb.addFuncType([], []));
 for (let i = 0; i < 300; i++) { const body = new Code(0); for (let k = 0; k < i % 17; k++) body.i32(1).drop(); mb.export("g" + i, "func", mb.addFunc(mb.addFuncType([], []), body.call(h).finish(), "fn" + i)); }

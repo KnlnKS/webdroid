@@ -2,10 +2,10 @@
 // Nothing on the diff path may reach this file; `bun run e2e` must work with no Android SDK.
 // The recorder DEFINES the geometry a golden set is captured at, so it reads the device profile
 // directly rather than a manifest — the manifest is what it writes.
-import { device } from "../../../src/shell/config";
-import { type CaptureScreen, type UiNode } from "../types";
-import { sleep, settleOn } from "../lib/util";
-import { parseUiAutomator } from "../lib/uiautomator";
+import { device } from "../../../src/shell/config.ts";
+import type { CaptureScreen, UiNode } from "../types.ts";
+import { sleep, settleOn } from "../lib/util.ts";
+import { parseUiAutomator } from "../lib/uiautomator.ts";
 
 const ADB = process.env.ADB ?? "adb";
 

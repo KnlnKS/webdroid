@@ -1,6 +1,6 @@
 // Lists methods with underdetermined webs: bun undet.ts <jar-or-apk> [n]
-import { openDexes } from "./load";
-import { inferMethod } from "./infer";
+import { openDexes } from "./load.ts";
+import { inferMethod } from "./infer.ts";
 const [path, n = "5"] = process.argv.slice(2);
 let shown = 0;
 for (const dex of await openDexes(path)) for (let i = 0; i < dex.classDefCount && shown < +n; i++) {

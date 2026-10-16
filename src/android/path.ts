@@ -5,12 +5,12 @@
 // into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
 // which is what iteration, measurement, bounds and every non-native Path2D build read.
 
-import { rt, declaredField } from "../jvm/runtime";
-import { deref, handle, release } from "./handles";
-import { type Mat, mapPoint, snap } from "./matrix";
-import { after } from "../jvm/natives/jentry";
-import { type PathCommands, pathOp as skiaPathOp } from "./skia";
-import type { Box } from "./graphics";
+import { rt, declaredField } from "../jvm/runtime.ts";
+import { deref, handle, release } from "./handles.ts";
+import { type Mat, mapPoint, snap } from "./matrix.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { type PathCommands, pathOp as skiaPathOp } from "./skia.ts";
+import type { Box } from "./graphics.ts";
 
 type PathOp = [string, ...number[]];
 type Verb = number[];
@@ -65,12 +65,13 @@ const nearly = (a: number, b: number) => Math.abs(a - b) <= NEARLY_ZERO;
  * neither when only the position matters.
  */
 class Pen {
+  sink: Sink | null; readonly box: Box | null;
   x = 0; y = 0; sx = 0; sy = 0;
   /** a contour is open: segments continue it rather than starting one at (sx, sy) */
   open = false;
   /** no verb yet: an arc then starts with a moveTo */
   empty = true;
-  constructor(public sink: Sink | null = null, readonly box: Box | null = null) {}
+  constructor(sink: Sink | null = null, box: Box | null = null) { this.sink = sink; this.box = box; }
   clear() { this.x = this.y = this.sx = this.sy = 0; this.open = false; this.empty = true; }
   copy(o: Pen) { this.x = o.x; this.y = o.y; this.sx = o.sx; this.sy = o.sy; this.open = o.open; this.empty = o.empty; }
   private pt(x: number, y: number) {

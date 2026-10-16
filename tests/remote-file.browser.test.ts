@@ -21,7 +21,7 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(server.url.href + "?testClock=controlled");
     const result = await page.evaluate(async () => {
-      const { serveFile } = await import(location.origin + "/file.js") as typeof import("../src/shell/remote-file");
+      const { serveFile } = await import(location.origin + "/file.js") as typeof import("../src/shell/remote-file.ts");
       const source = Uint8Array.of(10, 11, 12, 13);
       let served!: ReturnType<typeof serveFile>;
       const requests: number[] = [];
@@ -62,13 +62,13 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       failure: ["RangeError", "archive unavailable"], closed: "Archive source closed", later: "Archive source closed",
       source: [10, 11, 12, 13], requests: [0, 2, 0, 99, 100] });
     const ownership = await page.evaluate(async () => {
-      const { bootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const { bootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return bootstrapOwnership();
     });
     expect(ownership).toEqual({ eagerReads: 0, superseded: "Archive source closed", failed: true, discarded: ["Archive source closed", "Archive source closed"],
       imeOwners:{replaced:true,retained:true,deadClosed:true,peerSurvives:true},retained: [10], ended: "Archive source closed", isolated: [10], callersClosed: true,displaysClosed:4 });
     const clock = await page.evaluate(async () => {
-      const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return clockBootstrapOwnership();
     });
     expect(clock).toEqual({crash:{expected:false,reason:4,error:true,fatal:{exceptionClassName:"fixture.FatalException",exceptionMessage:"fatal fixture",throwFileName:"Fixture.java",throwLineNumber:17,stackTrace:"fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)"},copied:true},terminals:[{expected:true,reason:1,status:0,error:false,copied:true},{expected:false,reason:1,status:7,error:true,copied:true},{expected:true,reason:10,status:9,error:false,copied:true}],display:true,exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],

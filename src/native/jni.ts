@@ -2,14 +2,14 @@
 // model. What a class, an object, a field, a method or an array is belongs to the Wasm tier (jnivm.ts, wasm/host/jni.ts): a reference here is the
 // Wasm reference itself.
 
-import { mem } from "./mem";
-import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
-import { Cpu, cpuFor, type CallArg } from "./cpu";
-import { rt, type Gen } from "../jvm/runtime";
-import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi";
-import { after, curThread } from "../jvm/natives/jentry";
-import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory";
-import { vm, type JniClass, type JniField } from "./jnivm";
+import { mem } from "./mem.ts";
+import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host.ts";
+import { type Cpu, cpuFor, type CallArg } from "./cpu.ts";
+import { rt, type Gen } from "../jvm/runtime.ts";
+import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
+import { after, curThread } from "../jvm/natives/jentry.ts";
+import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory.ts";
+import { vm, type JniClass, type JniField } from "./jnivm.ts";
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };

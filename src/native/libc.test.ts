@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost } from "./host";
-import { LIBC_SYSCALLS, libcInit } from "./libc";
-import { kernelInit, rawSyscall } from "./syscall";
-import { mem } from "./mem";
-import { procIdentity } from "../shell/procfs";
-import { device } from "../shell/config";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { defineHost, lookupHost } from "./host.ts";
+import { LIBC_SYSCALLS, libcInit } from "./libc.ts";
+import { kernelInit, rawSyscall } from "./syscall.ts";
+import { mem } from "./mem.ts";
+import { procIdentity } from "../shell/procfs.ts";
+import { device } from "../shell/config.ts";
 
 /** a 64-bit process has no HLE libc: its calls reach the kernel by number */
 const syscall = defineHost("test:syscall", (cpu, a) => rawSyscall(cpu, a.i(), a));

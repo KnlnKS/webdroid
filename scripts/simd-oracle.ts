@@ -5,7 +5,7 @@
 // needs nothing but the fixture.
 //
 //   bun scripts/simd-oracle.ts
-import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "../src/native/a64simd.oracle.cases";
+import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "../src/native/a64simd.oracle.cases.ts";
 import { $ } from "bun";
 
 if (process.arch !== "arm64") { console.error("the oracle is this machine's arm64 core; this is " + process.arch); process.exit(1); }

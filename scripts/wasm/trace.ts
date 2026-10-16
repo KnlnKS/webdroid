@@ -1,9 +1,9 @@
 // The checks that need V8, so lazytest.ts runs this under node: JavaScriptCore reports no wasm frame offsets for stack traces, and its
 // stack overflow behaves differently. The Java frames of a throwable thrown three calls deep must come back as method, DEX pc and source line.
 // Run by hand: bun build trace.ts --target=node --outfile=/tmp/trace.mjs && node /tmp/trace.mjs <Ex dex> <boot jar>...
-import { world } from "./lib";
-import { checker } from "./tools";
-import { decodeInstructions } from "../../src/jvm/prepared";
+import { world } from "./lib.ts";
+import { checker } from "./tools.ts";
+import { decodeInstructions } from "../../src/jvm/prepared.ts";
 
 const [dex, ...jars] = process.argv.slice(2), w = world([dex, ...jars]);
 const suite = checker(), { check } = suite;

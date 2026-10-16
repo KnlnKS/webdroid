@@ -8,20 +8,20 @@
 //   - letter spacing adds half before and half after each cluster, except in joining scripts.
 // Script runs within a font run are left to HarfBuzz's guess of the run's script.
 
-import { rt } from "../jvm/runtime";
-import { charsToString } from "../jvm/abi";
-import { after } from "../jvm/natives/jentry";
-import { isLead, isTrail } from "../jvm/natives/jstring";
-import { handle, deref, FINALIZER } from "./handles";
-import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts";
-import { cssFace } from "./cssfonts";
-import { type NativePaint, paintAt } from "./paint";
-import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
-import type { Ctx2D } from "./recording";
-import { END_REPLACE_WITH_HYPHEN, startHyphenString, endHyphenString } from "./hyphenator";
-import type { NativePath } from "./path";
-import { emptyBox, type Box } from "./graphics";
-import { variedAdvances } from "./sfnt";
+import { rt } from "../jvm/runtime.ts";
+import { charsToString } from "../jvm/abi.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { isLead, isTrail } from "../jvm/natives/jstring.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts.ts";
+import { cssFace } from "./cssfonts.ts";
+import { type NativePaint, paintAt } from "./paint.ts";
+import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz.ts";
+import type { Ctx2D } from "./recording.ts";
+import { END_REPLACE_WITH_HYPHEN, startHyphenString, endHyphenString } from "./hyphenator.ts";
+import type { NativePath } from "./path.ts";
+import { emptyBox, type Box } from "./graphics.ts";
+import { variedAdvances } from "./sfnt.ts";
 
 export const f32 = Math.fround;
 export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -154,8 +154,9 @@ export function cssFont(text: string, p: NativePaint): string {
 // ── layout
 /** minikin's Layout as TextShaper's LayoutWrapper holds it: glyphs in visual order */
 export class Layout {
-  constructor(readonly ids: Uint32Array, readonly x: Float32Array, readonly y: Float32Array, readonly fonts: readonly FakedFont[],
-    readonly advance: number, readonly ascent: number, readonly descent: number) {}
+  readonly ids: Uint32Array; readonly x: Float32Array; readonly y: Float32Array; readonly fonts: readonly FakedFont[]; readonly advance: number; readonly ascent: number; readonly descent: number;
+  constructor(ids: Uint32Array, x: Float32Array, y: Float32Array, fonts: readonly FakedFont[],
+    advance: number, ascent: number, descent: number) { this.ids = ids; this.x = x; this.y = y; this.fonts = fonts; this.advance = advance; this.ascent = ascent; this.descent = descent; }
 }
 /** glyph ids of color fonts, by the text they were shaped from: a color glyph has no outline to
  *  draw, so drawGlyphs draws its text in the font instead */
@@ -354,8 +355,9 @@ export function hasGlyph(text: string, rtl: boolean, p: NativePaint): boolean | 
 }
 /** an outline sink placing font units under (x, y) -> (a x + c y + e, d y + f) into a path */
 class PathSink {
+  readonly path: NativePath;
   a = 1; c = 0; d = 1; e = 0; f = 0;
-  constructor(readonly path: NativePath) {}
+  constructor(path: NativePath) { this.path = path; }
   moveTo(x: number, y: number) { this.path.moveTo(this.a * x + this.c * y + this.e, this.d * y + this.f); }
   lineTo(x: number, y: number) { this.path.lineTo(this.a * x + this.c * y + this.e, this.d * y + this.f); }
   quadraticCurveTo(x1: number, y1: number, x: number, y: number) {

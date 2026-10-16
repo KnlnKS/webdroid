@@ -23,18 +23,18 @@
 // bytecode we run and the screenshots we score against come from the same platform build.
 import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
-import { constObject, mountLocalPlatformData, openDexes, writeGenerated } from "./lib";
-import "../src/natives";
-import { loadTier } from "../src/jvm/tier";
-import { descToName } from "../src/jvm/abi";
-import { insnLen } from "../src/jvm/opcodes";
-import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "../src/jvm/bootclasspath";
-import { loadPlatformJar } from "../src/android/framework";
-import { SYSTEM_PACKAGES } from "../src/shell/system-packages";
-import { Arsc } from "../src/android/arsc";
-import { postScriptName } from "../src/android/sfnt";
-import { adb, asRoot, probeSdk, pull, runDex } from "./adb";
-import { buildFixed, identity, recordIdentity, writeProperties } from "./identity";
+import { constObject, mountLocalPlatformData, openDexes, writeGenerated } from "./lib.ts";
+import "../src/natives.ts";
+import { loadTier } from "../src/jvm/tier.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import { insnLen } from "../src/jvm/opcodes.ts";
+import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "../src/jvm/bootclasspath.ts";
+import { loadPlatformJar } from "../src/android/framework.ts";
+import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
+import { Arsc } from "../src/android/arsc.ts";
+import { postScriptName } from "../src/android/sfnt.ts";
+import { adb, asRoot, probeSdk, pull, runDex } from "./adb.ts";
+import { buildFixed, identity, recordIdentity, writeProperties } from "./identity.ts";
 
 const OUT = "vendor/aosp";
 const JAR = `${OUT}/framework.jar`, RES = `${OUT}/framework-res.apk`;
@@ -97,7 +97,7 @@ if (!process.argv.includes("--verify")) {
   // ICU data, the time zone module's files, the system fonts and their configuration, the
   // hyphenation patterns, and bionic's libraries, at their device paths
   const data: Record<string, number> = {};
-  const { DEVICE_LIBS } = await import("../src/native/bionic");
+  const { DEVICE_LIBS } = await import("../src/native/bionic.ts");
   const files = adb("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "/system/fonts", "/system/usr/hyphen-data", "-type", "f").split(/\s+/);
   for (const src of [...files, "/system/etc/fonts.xml", "/system/etc/font_fallback.xml", ...DEVICE_LIBS]) data[src] = await mirror(src);
   Object.assign(data, await recordFontUpdates());
@@ -234,7 +234,7 @@ async function recordSettings() {
   await loadTier();
   for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`${OUT}/${jar}`).arrayBuffer()), i);
   await mountLocalPlatformData();
-  const { publicSettings } = await import("../src/android/settings");
+  const { publicSettings } = await import("../src/android/settings.ts");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
     .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const);
   const DROPPED = new Set(["android_id", "device_name", "bluetooth_name", "bluetooth_address", "bluetooth_addr_valid", "multi_sim_data_call",

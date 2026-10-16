@@ -1,14 +1,14 @@
-import type { DexFile } from "../src/jvm/dex";
-import { dexesFrom } from "./dexes";
-export { dexesOf } from "./dexes";
-import { openInstall } from "../src/shell/install";
-import type { XmlNode } from "../src/android/axml";
+import type { DexFile } from "../src/jvm/dex.ts";
+import { dexesFrom } from "./dexes.ts";
+export { dexesOf } from "./dexes.ts";
+import { openInstall } from "../src/shell/install.ts";
+import type { XmlNode } from "../src/android/axml.ts";
 
 type Zip = Record<string, Uint8Array>;
 
 /** the reference build's files (ICU, tz, bionic) at their device paths, read from vendor/aosp */
 export async function mountLocalPlatformData(): Promise<void> {
-  const { mountPlatformData } = await import("../src/shell/apex");
+  const { mountPlatformData } = await import("../src/shell/apex.ts");
   mountPlatformData((path, size) => ({ size, read: async (at, length) => new Uint8Array(await Bun.file(`vendor/aosp${path}`).slice(at, at + length).arrayBuffer()) }));
 }
 

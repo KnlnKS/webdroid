@@ -1,11 +1,11 @@
-import "../../../src/natives";
-import { loadFramework } from "../../../src/android/framework";
-import { vcall, newObj, scall } from "../../../src/jvm/natives/jentry";
-import { canvasOver } from "../../../src/android/canvas";
-import { edges } from "../../../src/android/graphics";
-import { bootPlatform } from "./boot";
-import { initDeviceLocales } from "../../../src/android/resnative";
-import { applyDeviceConfiguration } from "../../../src/android/resources";
+import "../../../src/natives.ts";
+import { loadFramework } from "../../../src/android/framework.ts";
+import { vcall, newObj, scall } from "../../../src/jvm/natives/jentry.ts";
+import { canvasOver } from "../../../src/android/canvas.ts";
+import { edges } from "../../../src/android/graphics.ts";
+import { bootPlatform } from "./boot.ts";
+import { initDeviceLocales } from "../../../src/android/resnative.ts";
+import { applyDeviceConfiguration } from "../../../src/android/resources.ts";
 
 const STATE_ENABLED = 0x0101009e; // android.R.attr.state_enabled
 const D = "Landroid/graphics/drawable/Drawable;", THEME = "Landroid/content/res/Resources$Theme;", S = "Ljava/lang/String;";

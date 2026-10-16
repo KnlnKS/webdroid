@@ -7,20 +7,21 @@
 // A file another process owns (a process Worker's) is mapped through its owner's lease instead: the
 // bytes are read in when mapped and stores go back through the lease at msync and munmap; stores of
 // other processes reach a mapping only when it is mapped again.
-import { guestAt, mem } from "./mem";
-import { vfs, type VfsFile } from "../shell/vfs";
-import { E } from "./abi";
-import { processFdStat, processMapping, type ProcessMapping } from "./process-fd";
+import { guestAt, mem } from "./mem.ts";
+import { vfs, type VfsFile } from "../shell/vfs.ts";
+import { E } from "./abi.ts";
+import { processFdStat, processMapping, type ProcessMapping } from "./process-fd.ts";
 
 type SharedMapping = { va: bigint; n: number; off: number; base: Uint8Array | null };
 const overlaps = (m: SharedMapping, va: bigint, end: bigint) => m.va < end && va < m.va + BigInt(m.n);
 
 /** the shared mappings of one file */
 export class SharedMaps {
+  readonly file: VfsFile;
   maps: SharedMapping[] = [];
   /** the mapping a flush is writing back, which already holds its bytes */
   private from: SharedMapping | null = null;
-  constructor(readonly file: VfsFile) {}
+  constructor(file: VfsFile) { this.file = file; }
   /** bytes now in the file at off (the page cache, which every mapping of the file shares) */
   wrote(off: number, bytes: Uint8Array): void {
     for (const m of this.maps) {

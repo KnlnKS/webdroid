@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mem } from "./mem";
-import { Cpu, setA64 } from "./cpu";
-import { core, jitStats, JIT_HEAT } from "./core";
-import { finish, pattern, sweep } from "./a64.testkit";
-import { mainThread } from "../jvm/natives/jentry";
-import { RET_SENTINEL } from "./abi";
+import { mem } from "./mem.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { core, jitStats, JIT_HEAT } from "./core.ts";
+import { finish, pattern, sweep } from "./a64.testkit.ts";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { RET_SENTINEL } from "./abi.ts";
 
 let shared: Cpu | null = null;
 function execute(at: number, setup: (c: Cpu) => void): Cpu {

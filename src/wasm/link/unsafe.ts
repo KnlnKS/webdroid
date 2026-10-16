@@ -5,16 +5,16 @@
 // table slot (hostUnsafe); arrays are handled inline: an element of the operation's own width directly, a wider access to a byte[] as
 // little-endian bytes (what heap ByteBuffer views do). Raw addresses (the getInt(long) forms) belong to the native heap and stay
 // with the production natives.
-import { OP } from "../compiler/code";
-import { T, refNull } from "../compiler/wasmbin";
-import { kindOf, type Kind } from "../compiler/program";
-import type { ElemKind } from "../compiler/consts";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
-import { idOfClass } from "./classes";
-import { rt } from "../compiler/rtfns";
-import { nativeLeaf } from "./memory";
+import { OP } from "../compiler/code.ts";
+import { T, refNull } from "../compiler/wasmbin.ts";
+import { kindOf, type Kind } from "../compiler/program.ts";
+import type { ElemKind } from "../compiler/consts.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
+import { idOfClass } from "./classes.ts";
+import { rt } from "../compiler/rtfns.ts";
+import { nativeLeaf } from "./memory.ts";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
@@ -39,7 +39,8 @@ const ELEM: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" }
 const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
 
 /** host.info kinds of this file */
-export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, AllocInstance, StaticGet, StaticPut, ObjGet, ObjPut, ObjCas }
+export const UInfo = { FieldGet: 100, FieldPut: 101, FieldCas: 102, ComponentScale: 103, AllocInstance: 104, StaticGet: 105, StaticPut: 106, ObjGet: 107, ObjPut: 108, ObjCas: 109 } as const;
+export type UInfo = (typeof UInfo)[keyof typeof UInfo];
 /** an access by offset as the access by field id that names the same accessor: offsets are this World's own */
 export const byFieldId = (w: World, kind: number, a: number): [number, number] => {
   const f = kind >= UInfo.ObjGet ? cookies.get(w)?.fields[a / 8 - 1] : undefined;
@@ -47,7 +48,7 @@ export const byFieldId = (w: World, kind: number, a: number): [number, number] =
 };
 /** the table slot of the accessor of field `a` for the operation `kind` (the field's kind must be `b`: 0 int-like, 1 long-like, 2 reference), 0 if there is none;
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
-export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {
+export function hostUnsafe(w: World, kind: number, a: number, b: number): number {
   // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
   if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);

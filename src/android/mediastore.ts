@@ -1,16 +1,16 @@
 import type { Database } from "sql.js";
-import { vfs } from "../shell/vfs";
-import { mimeOf, MIME_EXT } from "../mime";
-import { sqliteStore } from "./sqlite";
-import { clipUris } from "./net";
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jentry";
-import { strArray } from "../jvm/abi";
-import { serviceContext } from "./binder";
-import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";
-import { newFile } from "../jvm/natives/jio";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders";
+import { vfs } from "../shell/vfs.ts";
+import { mimeOf, MIME_EXT } from "../mime.ts";
+import { sqliteStore } from "./sqlite.ts";
+import { clipUris } from "./net.ts";
+import { awaited, rt, type JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { strArray } from "../jvm/abi.ts";
+import { serviceContext } from "./binder.ts";
+import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
+import { newFile } from "../jvm/natives/jio.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders.ts";
 
 const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_type", "_size",
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",

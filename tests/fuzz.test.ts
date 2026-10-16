@@ -3,19 +3,19 @@ import { PNG } from "pngjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addReachedMembers, buildCatalog, parseApiVersions } from "../scripts/fuzz/catalog";
-import { JObj, Runtime, stubs } from "../src/jvm/runtime";
-import { serveCases } from "../scripts/fuzz/case-server";
-import { compareResult, graphicsPrecisionDeltas } from "../scripts/fuzz/compare";
-import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
-import { injectedProbeFailure } from "../scripts/fuzz/injected";
-import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
-import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase, type ProbeResult } from "../scripts/fuzz/model";
-import { UiExplorer } from "../scripts/fuzz/ui-explorer";
-import { generateUiAction, matchIdentity, uiStateKey, validateUiAction } from "../scripts/fuzz/ui-model";
-import { Random } from "../scripts/fuzz/random";
-import { parseUiAutomator } from "./e2e/lib/uiautomator";
-import type { UiNode } from "./e2e/types";
+import { addReachedMembers, buildCatalog, parseApiVersions } from "../scripts/fuzz/catalog.ts";
+import { JObj, Runtime, stubs } from "../src/jvm/runtime.ts";
+import { serveCases } from "../scripts/fuzz/case-server.ts";
+import { compareResult, graphicsPrecisionDeltas } from "../scripts/fuzz/compare.ts";
+import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate.ts";
+import { injectedProbeFailure } from "../scripts/fuzz/injected.ts";
+import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize.ts";
+import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase, type ProbeResult } from "../scripts/fuzz/model.ts";
+import { UiExplorer } from "../scripts/fuzz/ui-explorer.ts";
+import { generateUiAction, matchIdentity, uiStateKey, validateUiAction } from "../scripts/fuzz/ui-model.ts";
+import { Random } from "../scripts/fuzz/random.ts";
+import { parseUiAutomator } from "./e2e/lib/uiautomator.ts";
+import type { UiNode } from "./e2e/types.ts";
 
 describe("fuzz-catalog", () => {
   const XML = `<?xml version="1.0"?>

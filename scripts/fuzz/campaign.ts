@@ -1,10 +1,10 @@
 import { mkdirSync } from "node:fs";
-import { compareResult, graphicsPrecisionDeltas } from "./compare";
-import { generateApiCases, generateGraphicsCases } from "./generate";
-import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import { sameFailure, validateFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
-import { runAndroid, runWebdroid, WebdroidProbeRunner, type PlatformRun } from "./probe-runner";
-import { injectedProbeFailure } from "./injected";
+import { compareResult, graphicsPrecisionDeltas } from "./compare.ts";
+import { generateApiCases, generateGraphicsCases } from "./generate.ts";
+import { minimizeCaseBatched, reproducesTwice } from "./minimize.ts";
+import { sameFailure, validateFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model.ts";
+import { runAndroid, runWebdroid, WebdroidProbeRunner, type PlatformRun } from "./probe-runner.ts";
+import { injectedProbeFailure } from "./injected.ts";
 
 export type ProbeObservation = {
   input: ProbeCase;

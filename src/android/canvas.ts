@@ -3,18 +3,18 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording";
-import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
-import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { newObj, scall } from "../jvm/natives/jentry";
-import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
-import { NativePath, inversePath, pathAt } from "./path";
-import { NativeBitmap, bitmapAt } from "./bitmap";
-import { BlurMask } from "./maskfilter";
-import { strokeRec } from "./patheffect";
-import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
-import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, PLANE, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
-import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds } from "./matrix";
+import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording.ts";
+import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster.ts";
+import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { newObj, scall } from "../jvm/natives/jentry.ts";
+import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
+import { NativePath, inversePath, pathAt } from "./path.ts";
+import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
+import { BlurMask } from "./maskfilter.ts";
+import { strokeRec } from "./patheffect.ts";
+import { NativePaint, copyPaint, beginPaintShadow } from "./paint.ts";
+import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, PLANE, canvasLocalBounds, shaderIdentity, recolor } from "./graphics.ts";
+import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;

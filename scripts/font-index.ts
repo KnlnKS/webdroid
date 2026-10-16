@@ -3,18 +3,18 @@
 // from font_fallback.xml and the font updates, serialized as the system server serializes it for apps.
 // Java runs on the Wasm tier, which reads V8's frames: under Bun the script runs itself under node.
 //   bun scripts/font-index.ts > font-index.json
-import { runUnderNode } from "./wasm/undernode";
+import { runUnderNode } from "./wasm/undernode.ts";
 
 if (process.versions.bun) process.exit(await runUnderNode(import.meta.path, []));
 console.log = console.error; // stdout is the index
-await import("../tests/platform");
-const { rt, awaited } = await import("../src/jvm/runtime");
-await import("../src/natives");
-await (await import("../src/android/mainloop")).startMainLooper();
-const { platformFontIndex, preloadFonts, systemFontMap } = await import("../src/android/fonts");
-const { vcall, callOn, mainThread } = await import("../src/jvm/natives/jentry");
-const { fdInt } = await import("../src/jvm/natives/jio");
-const { fdContents } = await import("../src/android/os");
+await import("../tests/platform.ts");
+const { rt, awaited } = await import("../src/jvm/runtime.ts");
+await import("../src/natives.ts");
+await (await import("../src/android/mainloop.ts")).startMainLooper();
+const { platformFontIndex, preloadFonts, systemFontMap } = await import("../src/android/fonts.ts");
+const { vcall, callOn, mainThread } = await import("../src/jvm/natives/jentry.ts");
+const { fdInt } = await import("../src/jvm/natives/jio.ts");
+const { fdContents } = await import("../src/android/os.ts");
 const fontMap = await callOn(mainThread, () => rt.drive(function* () {
   yield* preloadFonts();
   const memory = yield* systemFontMap();

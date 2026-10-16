@@ -1,8 +1,8 @@
 // Walk every method body in the given APKs; histogram opcodes; validate the walker.
-import { openDexes } from "./lib";
-import { OPS, insnLen } from "../src/jvm/opcodes";
-import { descToName } from "../src/jvm/abi";
-import type { DexFile } from "../src/jvm/dex";
+import { openDexes } from "./lib.ts";
+import { OPS, insnLen } from "../src/jvm/opcodes.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import type { DexFile } from "../src/jvm/dex.ts";
 
 const hist = new Map<number, number>();
 const boots = new Map<string, number>();

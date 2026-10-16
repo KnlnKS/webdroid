@@ -1,6 +1,6 @@
-import { rt } from "../jvm/runtime";
-import { calledMissing } from "../native/host";
-import { errorText } from "./ui";
+import { rt } from "../jvm/runtime.ts";
+import { calledMissing } from "../native/host.ts";
+import { errorText } from "./ui.ts";
 
 export function nativeRequirements(): string[] {
   return [...rt.nativeRequired].map(([library, api]) => `${library} (${api})`)

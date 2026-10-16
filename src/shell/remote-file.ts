@@ -1,4 +1,4 @@
-import type { FileSource } from "./lazyfile";
+import type { FileSource } from "./lazyfile.ts";
 
 /** An immutable archive source crossing a process boundary without a live JS function. */
 export type RemoteFileData = { size: number; port: MessagePort };
@@ -33,11 +33,13 @@ export function serveFile(source: FileSource): { data: RemoteFileData; close(): 
 }
 
 export class RemoteFile implements FileSource {
+  private readonly data: RemoteFileData;
   readonly size: number;
   private nextId = 1;
   private closed = false;
   private pending = new Map<number, { resolve(bytes: Uint8Array): void; reject(error: unknown): void }>();
-  constructor(private readonly data: RemoteFileData) {
+  constructor(data: RemoteFileData) {
+    this.data = data;
     this.size = data.size;
     data.port.onmessage = ({ data: reply }: MessageEvent<Reply>) => {
       if (reply.kind === "close") { this.finish(); return; }

@@ -1,9 +1,9 @@
 // A JavaScript interface: an object's @JavascriptInterface methods, called on the WebView's bridge
 // thread with their arguments and results converted as Chromium's Java bridge converts them.
-import { driven, type Gen, type JObj } from "../jvm/runtime";
-import { PRIM_DESC, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi";
-import { vcall, scall, callOn, type JThread } from "../jvm/natives/jentry";
-import type { WebInterfaces } from "../shell/webbridge";
+import { driven, type Gen, type JObj } from "../jvm/runtime.ts";
+import { PRIM_DESC, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi.ts";
+import { vcall, scall, callOn, type JThread } from "../jvm/natives/jentry.ts";
+import type { WebInterfaces } from "../shell/webbridge.ts";
 
 /** page-side proxies of the interfaces, so the page does not keep the Java objects (and so often its WebView) reachable */
 export function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {

@@ -1,18 +1,18 @@
 import { expect, test, beforeAll, describe } from "bun:test";
-import "../src/natives";
-import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
-import { packages, type PackageRecord } from "../src/android/packages";
-import { setProcessIdentity } from "../src/android/os";
-import { locationTransport } from "../src/android/locationmanager";
-import { hostedService } from "../src/android/binder";
-import { mkUri, uriText, type JUri } from "../src/android/net";
-import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings";
-import { remoteSettings, type SettingsCalls } from "../src/shell/settings";
-import { callProxy, serveCalls } from "../src/shell/process-port";
-import { systemProvider } from "../src/android/systemproviders";
-import { bootApp, packageRecord, thrown } from "./java";
-import { DEVICE_PROPERTIES } from "../src/shell/device-properties";
+import "../src/natives.ts";
+import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
+import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
+import { packages, type PackageRecord } from "../src/android/packages.ts";
+import { setProcessIdentity } from "../src/android/os.ts";
+import { locationTransport } from "../src/android/locationmanager.ts";
+import { hostedService } from "../src/android/binder.ts";
+import { mkUri, uriText, type JUri } from "../src/android/net.ts";
+import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
+import { remoteSettings, type SettingsCalls } from "../src/shell/settings.ts";
+import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { systemProvider } from "../src/android/systemproviders.ts";
+import { bootApp, packageRecord, thrown } from "./java.ts";
+import { DEVICE_PROPERTIES } from "../src/shell/device-properties.ts";
 
 async function install(pkg: string, target: number, permissions: string[], certificate: number): Promise<PackageRecord> {
   const record = await packageRecord(pkg, { target, permissions, certificate });

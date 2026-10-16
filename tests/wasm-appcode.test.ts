@@ -1,10 +1,10 @@
 import { expect, test, spyOn } from 'bun:test';
-import { prepareApp } from '../src/wasm/host/appcode';
-import type { WorkerPort } from '../src/wasm/host/compiler';
-import type { FetchStore } from '../src/wasm/link/aotstore';
-import type { World } from '../src/wasm/link/world';
-import { Persist, memoryBackend } from '../src/wasm/host/persist';
-import type { CompileRequest } from '../src/wasm/host/compile-serve';
+import { prepareApp } from '../src/wasm/host/appcode.ts';
+import type { WorkerPort } from '../src/wasm/host/compiler.ts';
+import type { FetchStore } from '../src/wasm/link/aotstore.ts';
+import type { World } from '../src/wasm/link/world.ts';
+import { Persist, memoryBackend } from '../src/wasm/host/persist.ts';
+import type { CompileRequest } from '../src/wasm/host/compile-serve.ts';
 
 class CompilePort implements WorkerPort {
   onmessage: WorkerPort['onmessage'] = null;

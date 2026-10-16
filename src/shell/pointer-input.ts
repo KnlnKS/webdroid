@@ -1,5 +1,5 @@
 // One page-owned canvas's pointer/wheel stream. Java dispatch stays behind the injected boundary.
-import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue";
+import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue.ts";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number; edgeSlop: number; minScalingSpan: number };
 /** a MotionEvent's action and pointers to the display */

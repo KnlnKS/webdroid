@@ -1,5 +1,5 @@
-import type { LocationAccess } from "../android/locationmanager";
-import type { LocationEvent, LocationFix } from "./geolocation";
+import type { LocationAccess } from "../android/locationmanager.ts";
+import type { LocationEvent, LocationFix } from "./geolocation.ts";
 
 export type LocationCalls = {
   locationAvailable(): Promise<boolean>;

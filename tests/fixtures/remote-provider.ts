@@ -1,21 +1,21 @@
 // bun scripts/wasm/undernode.ts tests/fixtures/remote-provider.ts: another process's provider as the
 // activity manager hands it out and AOSP's ContentProviderProxy reaches it, as one JSON object. The
 // "other process" is this realm behind a loopback binder transport that renames its binders' pid.
-import "../../tests/platform";
-import "../../src/natives";
-import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry";
-import { setAppHost } from "../../src/android/apphost";
-import { testAppHost, fixtureDeadline, loadPlatform } from "../../tests/java";
-import { packages, PackageRecord, packageUid } from "../../src/android/packages";
-import { Resources } from "../../src/android/res";
-import { TV } from "../../src/android/axml";
-import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os";
-import { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder, type ParcelData } from "../../src/android/binder";
-import { providerProcesses } from "../../src/android/server/am";
-import { mkUri } from "../../src/android/net";
-import { startMainLooper } from "../../src/android/mainloop";
-import { box } from "../../src/jvm/natives/jbox";
+import "../../tests/platform.ts";
+import "../../src/natives.ts";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
+import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
+import { setAppHost } from "../../src/android/apphost.ts";
+import { testAppHost, fixtureDeadline, loadPlatform } from "../../tests/java.ts";
+import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
+import { Resources } from "../../src/android/res.ts";
+import { TV } from "../../src/android/axml.ts";
+import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os.ts";
+import { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder, type ParcelData } from "../../src/android/binder.ts";
+import { providerProcesses } from "../../src/android/server/am.ts";
+import { mkUri } from "../../src/android/net.ts";
+import { startMainLooper } from "../../src/android/mainloop.ts";
+import { box } from "../../src/jvm/natives/jbox.ts";
 console.warn = () => {};
 fixtureDeadline();
 

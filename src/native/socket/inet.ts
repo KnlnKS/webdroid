@@ -1,19 +1,19 @@
 // AF_INET and AF_INET6: a TCP connection to another host is a relay connection; TCP to a listener
 // in this process and UDP between this process's sockets stay in the process.
 
-import { DatagramRelay, Relay, syntheticHost, ipv4Key, ipv4Text, parseIpv4 } from "../../shell/relay";
-import { E } from "../abi";
-import { sameBytes } from "../../jvm/abi";
-import { installSocket, socketOf, naming, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../fs";
+import { DatagramRelay, Relay, syntheticHost, ipv4Key, ipv4Text, parseIpv4 } from "../../shell/relay.ts";
+import { E } from "../abi.ts";
+import { sameBytes } from "../../jvm/abi.ts";
+import { installSocket, socketOf, naming, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../fs.ts";
 import {
   AF_UNIX, AF_INET, AF_INET6, V4_ANY, V4_LOOPBACK, V6_LOOPBACK, isAny, isLoopback, isMulticast, addressKey,
   endpointOf, parseIpv6, addressText, INTERFACES, type Endpoint,
-} from "../net-address";
-import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi";
+} from "../net-address.ts";
+import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi.ts";
 import {
   Socket, Loopback, block, record, received, type Stream, type Received, type Accepted,
   SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF, SO_SNDBUF, SO_LINGER, SO_RCVTIMEO,
-} from "./core";
+} from "./core.ts";
 
 export const IPPROTO_IP = 0, IPPROTO_TCP = 6, IPPROTO_UDP = 17, IPPROTO_IPV6 = 41;
 const IPPROTO_ICMP = 1, IPPROTO_ICMPV6 = 58;
@@ -30,10 +30,11 @@ const loopbackOf = (ep: Endpoint) => ep.address.length === 4 ? V4_LOOPBACK : V6_
 const endpoint = (addr: SocketAddress): Endpoint | number => addr.family === AF_UNIX ? -E.AFNOSUPPORT : addr.ep;
 
 abstract class InetSocket extends Socket {
+  readonly family: typeof AF_INET | typeof AF_INET6;
   connected = false;
   peer: Endpoint | null = null;
   local: Endpoint | null = null;
-  constructor(readonly family: typeof AF_INET | typeof AF_INET6, type: number, protocol: number) { super(type, protocol); }
+  constructor(family: typeof AF_INET | typeof AF_INET6, type: number, protocol: number) { super(type, protocol); this.family = family; }
   protected abstract get bound(): Set<InetSocket>;
   /** another socket's port binding that a shared SO_REUSEADDR does not let this one share */
   protected abstract exclusive(other: InetSocket): boolean;

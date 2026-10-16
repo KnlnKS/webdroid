@@ -3,15 +3,15 @@
 // path: ABSTRACT leads with NUL, RESERVED is under /dev/socket, FILESYSTEM is the path. Reads and
 // writes carry SCM_RIGHTS as its recvmsg/sendmsg do: what arrives with the bytes becomes
 // inboundFileDescriptors, and outboundFileDescriptors goes with each write.
-import { rt, type JObj, awaited, driven, getDeclared, setDeclared, type Gen } from "../jvm/runtime";
-import { newObj, after } from "../jvm/natives/jentry";
-import { fdInt, mkFd } from "../jvm/natives/jio";
-import { jarray, u8 } from "../jvm/abi";
-import { strerror } from "../native/abi";
-import { installFile, socketOf } from "../native/fs";
-import { unixAddress } from "../native/socket/abi";
-import type { Socket } from "../native/socket/core";
-import { rightsMessage } from "../native/socket/unix";
+import { rt, type JObj, awaited, driven, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { newObj, after } from "../jvm/natives/jentry.ts";
+import { fdInt, mkFd } from "../jvm/natives/jio.ts";
+import { jarray, u8 } from "../jvm/abi.ts";
+import { strerror } from "../native/abi.ts";
+import { installFile, socketOf } from "../native/fs.ts";
+import { unixAddress } from "../native/socket/abi.ts";
+import type { Socket } from "../native/socket/core.ts";
+import { rightsMessage } from "../native/socket/unix.ts";
 
 const IMPL = "android/net/LocalSocketImpl", FD = "Ljava/io/FileDescriptor;";
 const pathOf = (name: string, namespace: number) => namespace === 0 ? "\0" + name : namespace === 1 ? "/dev/socket/" + name : name;

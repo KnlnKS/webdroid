@@ -3,7 +3,7 @@
 // sensor list is empty, no dynamic or runtime sensor appears, data injection is off, and an event
 // queue or direct channel has no sensor to enable: SensorService answers BAD_VALUE.
 
-import { rt } from "../jvm/runtime";
+import { rt } from "../jvm/runtime.ts";
 
 // android_hardware_Camera.cpp over a CameraService with no cameras: connecting fails with -EACCES
 rt.registerJnis("android/hardware/Camera", {

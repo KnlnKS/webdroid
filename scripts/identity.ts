@@ -4,7 +4,7 @@
 // init takes from the bootloader where the image says what that is, and the kernel's banner. An app
 // reads what the image's SELinux policy (its CIL, as init compiles it) lets untrusted_app read.
 import { existsSync } from "node:fs";
-import { constObject, writeGenerated } from "./lib";
+import { constObject, writeGenerated } from "./lib.ts";
 
 /** Of the properties an app may read, those a build fixes and that describe neither hardware this
  *  device replaces nor its runtime state. Dropped are:

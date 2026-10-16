@@ -2,25 +2,26 @@
 // KeyCharacterMap (KeyCharacterMap.cpp) over the reference device's .kcm files behind
 // KeyCharacterMap's mPtr. KeyEvent, its DispatcherState and KeyCharacterMap run from AOSP bytecode.
 
-import { rt, JObj, declaredField } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { after, newObj, scall } from "../jvm/natives/jentry";
-import { ownedHandle, deref } from "./handles";
-import { type NativeParcel, nativeParcel, readInt, writeInt, readCString, writeCString } from "./parcel";
-import { keyCodes } from "./keycodes";
-import { nextId } from "./motionevent";
-import { uptimeMillis } from "../guest-clock";
+import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { after, newObj, scall } from "../jvm/natives/jentry.ts";
+import { ownedHandle, deref } from "./handles.ts";
+import { type NativeParcel, nativeParcel, readInt, writeInt, readCString, writeCString } from "./parcel.ts";
+import { keyCodes } from "./keycodes.ts";
+import { nextId } from "./motionevent.ts";
+import { uptimeMillis } from "../guest-clock.ts";
 
 const KE = "android/view/KeyEvent", KCM = "android/view/KeyCharacterMap";
 const SOURCE_KEYBOARD = 0x101;
 const labels = [...keyCodes.keys()];
 
 // ── KeyCharacterMap
-const enum Meta {
-  SHIFT = 1, ALT = 2, SYM = 4, FUNCTION = 8, ALT_LEFT = 0x10, ALT_RIGHT = 0x20, SHIFT_LEFT = 0x40, SHIFT_RIGHT = 0x80,
-  CTRL = 0x1000, CTRL_LEFT = 0x2000, CTRL_RIGHT = 0x4000, META = 0x10000, META_LEFT = 0x20000, META_RIGHT = 0x40000,
-  CAPS_LOCK = 0x100000, NUM_LOCK = 0x200000, SCROLL_LOCK = 0x400000,
-}
+const Meta = {
+  SHIFT: 1, ALT: 2, SYM: 4, FUNCTION: 8, ALT_LEFT: 0x10, ALT_RIGHT: 0x20, SHIFT_LEFT: 0x40, SHIFT_RIGHT: 0x80,
+  CTRL: 0x1000, CTRL_LEFT: 0x2000, CTRL_RIGHT: 0x4000, META: 0x10000, META_LEFT: 0x20000, META_RIGHT: 0x40000,
+  CAPS_LOCK: 0x100000, NUM_LOCK: 0x200000, SCROLL_LOCK: 0x400000,
+} as const;
+type Meta = (typeof Meta)[keyof typeof Meta];
 const MODIFIERS: Record<string, number> = {
   shift: Meta.SHIFT, lshift: Meta.SHIFT_LEFT, rshift: Meta.SHIFT_RIGHT, alt: Meta.ALT, lalt: Meta.ALT_LEFT, ralt: Meta.ALT_RIGHT,
   ctrl: Meta.CTRL, lctrl: Meta.CTRL_LEFT, rctrl: Meta.CTRL_RIGHT, meta: Meta.META, lmeta: Meta.META_LEFT, rmeta: Meta.META_RIGHT,
@@ -208,7 +209,7 @@ function sameMap(a: KeyMap, b: KeyMap): boolean {
 }
 
 /** NativeKeyCharacterMap: a device's id and its map, or no map for obtainEmptyMap's */
-class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
+class NativeKeyCharacterMap { readonly deviceId: number; readonly map: KeyMap | null; constructor(deviceId: number, map: KeyMap | null) { this.deviceId = deviceId; this.map = map; } }
 const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 /** a Java KeyCharacterMap over `map` for device `deviceId` */
 export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): JObj | Promise<JObj> =>

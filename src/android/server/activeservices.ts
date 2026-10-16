@@ -5,21 +5,21 @@
 // ServiceRecords own what outlives this process: each service's start state, which this process
 // changes there as it starts, delivers and finishes, and other processes' bindings, which it
 // recreates in a restarted process.
-import { shareable } from "../../jvm/suspend";
-import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall } from "../../jvm/natives/jentry";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable";
-import { notConnected, parceledList, type ParcelData, binderEscape } from "../binder";
-import { encodeIntent, decodeIntent } from "../intentipc";
-import { PROCESS_PID, PROCESS_UID } from "../os";
-import { appHost } from "../apphost";
-import { packages, qualifyComponent, type PackageRecord } from "../packages";
-import { checkPermission } from "../permissions";
-import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent";
-import { startForegroundNotification, stopForegroundNotification } from "../notification";
-import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am";
-import { processState, PROCESS_STATE_SERVICE } from "./atm";
-import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords";
+import { shareable } from "../../jvm/suspend.ts";
+import { awaited, rt, type JObj, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
+import { newObj, vcall } from "../../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { notConnected, parceledList, type ParcelData, binderEscape } from "../binder.ts";
+import { encodeIntent, decodeIntent } from "../intentipc.ts";
+import { PROCESS_PID, PROCESS_UID } from "../os.ts";
+import { appHost } from "../apphost.ts";
+import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
+import { checkPermission } from "../permissions.ts";
+import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
+import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
+import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am.ts";
+import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
+import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords.ts";
 
 /** the services of another process, through the broker; `flags` are bindService's. A binding hears
  *  its service's binder through `connected`, which the broker sends again when the service restarts. */

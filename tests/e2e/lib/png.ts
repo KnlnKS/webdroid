@@ -1,6 +1,6 @@
 // PNG load/save plus the crop and mask operations the diff applies to both sides equally.
 import { PNG } from "pngjs";
-import type { Rect } from "../types";
+import type { Rect } from "../types.ts";
 
 export type Img = { width: number; height: number; data: Buffer };
 

@@ -1,4 +1,4 @@
-import { after, vcall } from "./jentry";
+import { after, vcall } from "./jentry.ts";
 
 export function csText(value: unknown): string | Promise<string> {
   if (value === null || value === undefined) return "";

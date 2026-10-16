@@ -5,16 +5,16 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { caseLine, compare, genCases } from "./cases";
-import { mountPlatform, natives } from "./harness";
-import { ACC } from "../../src/wasm/compiler/program";
-import { irreducibleClass } from "./irfuzz";
-import { Irreducible, Flow } from "../../src/jvm/structure";
-import { prepareMethod } from "../../src/jvm/prepared";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
-import { argv } from "../args";
+import { world } from "./lib.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { mountPlatform, natives } from "./harness.ts";
+import { ACC } from "../../src/wasm/compiler/program.ts";
+import { irreducibleClass } from "./irfuzz.ts";
+import { Irreducible, Flow } from "../../src/jvm/structure.ts";
+import { prepareMethod } from "../../src/jvm/prepared.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { argv } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
 const LEAVES = 8;

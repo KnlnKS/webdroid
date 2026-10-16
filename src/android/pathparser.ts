@@ -2,10 +2,10 @@
 // counts and float points) and VectorDrawableUtils (morphing, and resolving the verbs into an
 // SkPath as PathResolver does).
 
-import { rt } from "../jvm/runtime";
-import { deref, ownedHandle, release } from "./handles";
-import type { NativePath } from "./path";
-import { snap } from "./matrix";
+import { rt } from "../jvm/runtime.ts";
+import { deref, ownedHandle, release } from "./handles.ts";
+import type { NativePath } from "./path.ts";
+import { snap } from "./matrix.ts";
 
 export class PathData {
   verbs: string[] = [];

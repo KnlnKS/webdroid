@@ -6,10 +6,10 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { program, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { PLATFORM_PATHS, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
+import { program, world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
 
 const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
 const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));

@@ -2,16 +2,16 @@
 // one volume, emulated;0, the primary shared storage on internal storage (no fsUuid, so its storage
 // UUID is UUID_DEFAULT), mounted and writable. Shared storage is /sdcard here, the vfs's, where the
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
-import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, scall, linkInit } from "../jvm/natives/jentry";
-import { systemResource } from "./resnative";
-import { newFile } from "../jvm/natives/jio";
-import { hostStub } from "./binder";
-import { vfs, storageEstimate } from "../shell/vfs";
-import { uuidDefault } from "./os";
-import { packages } from "./packages";
-import { logLine } from "../native/libc";
+import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newObj, scall, linkInit } from "../jvm/natives/jentry.ts";
+import { systemResource } from "./resnative.ts";
+import { newFile } from "../jvm/natives/jio.ts";
+import { hostStub } from "./binder.ts";
+import { vfs, storageEstimate } from "../shell/vfs.ts";
+import { uuidDefault } from "./os.ts";
+import { packages } from "./packages.ts";
+import { logLine } from "../native/libc.ts";
 
 const SHARED = "/sdcard", USER = 0;
 const VI = "android/os/storage/VolumeInfo";

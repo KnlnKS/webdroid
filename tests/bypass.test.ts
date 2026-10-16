@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BASELINE, OVERRIDES, hasPlatformJars, overrideBypasses, selfCallsSkipped } from "../scripts/bypass";
+import { BASELINE, OVERRIDES, hasPlatformJars, overrideBypasses, selfCallsSkipped } from "../scripts/bypass.ts";
 
 // A TS method that answers where AOSP's body calls an overridable method on `this` ignores an app's
 // override of it. Known ones are the baseline, a backlog; `bun run bypass --write-baseline` rewrites it.

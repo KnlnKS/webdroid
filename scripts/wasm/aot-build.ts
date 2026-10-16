@@ -7,22 +7,22 @@
 // and a page fetches and compiles what a start needs, so no module should be much larger than that.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
-import { externs } from "../../src/wasm/link/intrinsics";
-import { natives } from "./harness";
-import { rt } from "../../src/jvm/runtime";
-import { hostNatives } from "../../src/wasm/host/hostnatives";
-import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
-import { waitingNatives } from "../../src/wasm/host/nativesource";
-import { Compiler } from "../../src/wasm/compiler/j2w";
-import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
-import { synthModules } from "../../src/wasm/link/apps";
-import type { MethodInfo } from "../../src/wasm/compiler/program";
-import { compileModule } from "../../src/wasm/link/module";
-import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
-import { PLATFORM_PATHS } from "./paths";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { loadDexes, world } from "./lib.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { natives } from "./harness.ts";
+import { rt } from "../../src/jvm/runtime.ts";
+import { hostNatives } from "../../src/wasm/host/hostnatives.ts";
+import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend.ts";
+import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
+import { Compiler } from "../../src/wasm/compiler/j2w.ts";
+import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
+import { synthModules } from "../../src/wasm/link/apps.ts";
+import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { AOT_ROOT, buildKey, sourceKey } from "./aot-key.ts";
+import { PLATFORM_PATHS } from "./paths.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];

@@ -1,10 +1,10 @@
 // A constant a catch handler reads is typed from the state before the instructions that can throw, not from every definition in the try range.
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import "../src/natives";
-import { DexFile } from "../src/jvm/dex";
-import { loadDex } from "../src/jvm/tier";
-import { scall } from "./java";
+import "../src/natives.ts";
+import { DexFile } from "../src/jvm/dex.ts";
+import { loadDex } from "../src/jvm/tier.ts";
+import { scall } from "./java.ts";
 
 test("an int constant in a try range stays an int when the handler reads a float in the same register", async () => {
   loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/FloatHandlerProbe.dex"))), true);

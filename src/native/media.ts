@@ -1,15 +1,15 @@
-import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_FLOAT, TYPE_INTEGER, TYPE_LONG, TYPE_STRING } from "../android/media-format";
-import { fdSlice } from "../android/media-native";
-import { MediaExtractor } from "../android/media-extractor";
-import { createCodec, type Codec, type Info } from "../android/media-codec";
-import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio";
-import { after } from "../jvm/natives/jentry";
-import type { FileSource } from "../shell/lazyfile";
-import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs";
-import { windowOf } from "./libandroid";
-import { mem, anchor } from "./mem";
-import { cstr, hostData, hostLib, PTR, ptr, stp, stpVa, stLong, type HostFn } from "./host";
-import type { Cpu } from "./cpu";
+import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_FLOAT, TYPE_INTEGER, TYPE_LONG, TYPE_STRING } from "../android/media-format.ts";
+import { fdSlice } from "../android/media-native.ts";
+import { MediaExtractor } from "../android/media-extractor.ts";
+import { createCodec, type Codec, type Info } from "../android/media-codec.ts";
+import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
+import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs.ts";
+import { windowOf } from "./libandroid.ts";
+import { mem, anchor } from "./mem.ts";
+import { cstr, hostData, hostLib, PTR, ptr, stp, stpVa, stLong, type HostFn } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
 
 const INVALID = -10004, BAD_OBJECT = -10003, UNSUPPORTED = -10002, IO = -10007;
 let nextHandle = 1;

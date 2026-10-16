@@ -1,13 +1,13 @@
-import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data";
-import { callProxy, processError, type ProcessFailure } from "./process-port";
-import type { WorkerControl } from "./worker-control";
-import { workerControlMethods } from "./worker-control-methods";
-import { attachPointerInput } from "./pointer-input";
-import { createGuestClockPort } from "../guest-clock";
-import { serveAot, serveCompileWorkers } from "../jvm/tier";
-import { sendPlatformJars } from "../android/framework";
-import { displayRate } from "./display-rate";
-import { device } from "./config";
+import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
+import { callProxy, processError, type ProcessFailure } from "./process-port.ts";
+import type { WorkerControl } from "./worker-control.ts";
+import { workerControlMethods } from "./worker-control-methods.ts";
+import { attachPointerInput } from "./pointer-input.ts";
+import { createGuestClockPort } from "../guest-clock.ts";
+import { serveAot, serveCompileWorkers } from "../jvm/tier.ts";
+import { sendPlatformJars } from "../android/framework.ts";
+import { displayRate } from "./display-rate.ts";
+import { device } from "./config.ts";
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** whether a Worker's zygote has had the engine compile the platform code launches use: the code is the tab's, so no later Worker warms it again */

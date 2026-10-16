@@ -2,18 +2,18 @@
 // memory (bionic's __sFILE) so the getc/putc macros and __srget refills work; then dirent
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
-import { mem, wrote, anchor } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort } from "./host";
-import { E } from "./abi";
-import { utf8 as codec } from "../jvm/abi";
-import type { Cpu } from "./cpu";
-import { fail, utf8, logLine, scanSink } from "./libc";
-import { format, scan } from "./printf";
-import { KLAYOUT } from "./syscall";
-import { vfs, storageEstimate } from "../shell/vfs";
+import { mem, wrote, anchor } from "./mem.ts";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort } from "./host.ts";
+import { E } from "./abi.ts";
+import { utf8 as codec } from "../jvm/abi.ts";
+import type { Cpu } from "./cpu.ts";
+import { fail, utf8, logLine, scanSink } from "./libc.ts";
+import { format, scan } from "./printf.ts";
+import { KLAYOUT } from "./syscall.ts";
+import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
-import { POLL_SYSCALLS, epollCreate } from "./poll";
+  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs.ts";
+import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 
 function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
   return value instanceof Promise ? value.then(done) : done(value);

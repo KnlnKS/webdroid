@@ -1,5 +1,5 @@
-import { note, Ev } from "../timeline";
-import type { ProcessEndpoint } from "./processes";
+import { note, Ev } from "../timeline.ts";
+import type { ProcessEndpoint } from "./processes.ts";
 
 type Contract = Record<string, (...args: never[]) => unknown>;
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }

@@ -2,11 +2,11 @@
 // cmsghdr with its SCM payloads, struct ucred, linger and timeval. Pointer-sized offsets are taken
 // from PTR when a call reads them, after the process ABI is set.
 
-import { mem, anchor } from "../mem";
-import { PTR, ldp, ldLong, stLong } from "../host";
-import { E } from "../abi";
-import { concat, utf8 } from "../../jvm/abi";
-import { AF_UNIX, AF_INET, AF_INET6, endpointOf, type Endpoint } from "../net-address";
+import { mem, anchor } from "../mem.ts";
+import { PTR, ldp, ldLong, stLong } from "../host.ts";
+import { E } from "../abi.ts";
+import { concat, utf8 } from "../../jvm/abi.ts";
+import { AF_UNIX, AF_INET, AF_INET6, endpointOf, type Endpoint } from "../net-address.ts";
 
 export const SOL_SOCKET = 1;
 export const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_RAW = 3, SOCK_SEQPACKET = 5, SOCK_NONBLOCK = 0x800;

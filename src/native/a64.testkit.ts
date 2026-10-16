@@ -4,11 +4,11 @@
 // Every program also runs past the heat threshold so its region compiles (synchronously under
 // bun), and the JIT's register file must agree with the interpreter's.
 import { expect } from "bun:test";
-import { mem } from "./mem";
-import { Cpu } from "./cpu";
-import { core, jitStats, JIT_HEAT } from "./core";
-import { mainThread } from "../jvm/natives/jentry";
-import { RET_SENTINEL } from "./abi";
+import { mem } from "./mem.ts";
+import { Cpu } from "./cpu.ts";
+import { core, jitStats, JIT_HEAT } from "./core.ts";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { RET_SENTINEL } from "./abi.ts";
 
 export const RET = 0xd65f03c0;
 /** run c's slices to the return sentinel; a fault's synchronous signal throws with its siginfo */

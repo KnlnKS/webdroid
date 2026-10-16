@@ -1,9 +1,9 @@
 // Unsafe's natives over raw addresses: the process's native heap (sun.nio.fs passes paths through it,
 // sun.nio.ch's NativeObject its iovecs) or an external mapping, whose accesses may suspend. The Wasm
 // tier's intrinsics make every access to a Java object or array, and call these with a null base.
-import { rt } from "../runtime";
-import { mem } from "../../native/mem";
-import { physical, isExternal, externalRead, externalWrite, writeAt } from "./jmemory";
+import { rt } from "../runtime.ts";
+import { mem } from "../../native/mem.ts";
+import { physical, isExternal, externalRead, externalWrite, writeAt } from "./jmemory.ts";
 
 type Get = (view: DataView, at: number) => any;
 type Put = (view: DataView, at: number, v: any) => void;

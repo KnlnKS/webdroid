@@ -1,7 +1,7 @@
-import { rt, JObj } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
-import { mangleStaticField } from "../../src/jvm/abi";
-import { exercise, same, statics, classMirror } from "./harness";
+import { rt, JObj } from "../../src/jvm/runtime.ts";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
+import { mangleStaticField } from "../../src/jvm/abi.ts";
+import { exercise, same, statics, classMirror } from "./harness.ts";
 
 // text: expected values printed by the same calls on the reference AVD
 await exercise("AndroidCharacter (device values)", async () => {

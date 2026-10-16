@@ -1,10 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
-import { openApk, openDexes, dexesOf } from "../lib";
-import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog";
-import { rt } from "../../src/jvm/runtime";
-import { Program, reach } from "../../src/jvm/reach";
-import { reflectiveRoots, rootsOf } from "../../src/jvm/roots";
-import "../../src/natives";
+import { openApk, openDexes, dexesOf } from "../lib.ts";
+import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog.ts";
+import { rt } from "../../src/jvm/runtime.ts";
+import { Program, reach } from "../../src/jvm/reach.ts";
+import { reflectiveRoots, rootsOf } from "../../src/jvm/roots.ts";
+import "../../src/natives.ts";
 
 function option(args: string[], name: string, fallback?: string): string | undefined {
   const inline = args.find((arg) => arg.startsWith(`${name}=`));

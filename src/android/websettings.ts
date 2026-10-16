@@ -1,6 +1,6 @@
-import { rt, JObj, type NativeSpec, stubs, type Gen } from "../jvm/runtime";
-import { staticField } from "../jvm/natives/jentry";
-import { defaultUserAgent } from "./webuseragent";
+import { rt, JObj, type NativeSpec, stubs, type Gen } from "../jvm/runtime.ts";
+import { staticField } from "../jvm/natives/jentry.ts";
+import { defaultUserAgent } from "./webuseragent.ts";
 
 // ── WebSettings: the app reads back what it wrote, so every setter has its value and getter
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {

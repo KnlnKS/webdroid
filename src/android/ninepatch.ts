@@ -1,12 +1,12 @@
 // android.graphics.NinePatch's native half: its chunk (Res_png_9patch, deserialized) and the lattice
 // SkCanvas::drawImageLattice stretches it by.
 
-import { rt } from "../jvm/runtime";
-import { deref, release, ownedHandle } from "./handles";
-import type { NativeBitmap } from "./bitmap";
-import { edges } from "./graphics";
-import { NativeRegion } from "./region";
-import type { Ctx2D } from "./recording";
+import { rt } from "../jvm/runtime.ts";
+import { deref, release, ownedHandle } from "./handles.ts";
+import type { NativeBitmap } from "./bitmap.ts";
+import { edges } from "./graphics.ts";
+import { NativeRegion } from "./region.ts";
+import type { Ctx2D } from "./recording.ts";
 
 /** Res_png_9patch deserialized, as NinePatch's native chunk holds it; colors are per patch (0 transparent) */
 export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number]; colors: number[] }

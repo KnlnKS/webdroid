@@ -8,11 +8,11 @@
 //    inherits from a superclass in a class of their own that the class resolves them in. The class keeps its members, so ids and slots stay put.
 //  - The host object is made when a native first needs it (host/bridge.ts): a Java object that Java code allocated, as a bytecode subclass does,
 //    gets its host object at its first host call, which is its constructor.
-import { ACC, type JClass, type Loader, type MethodInfo } from "../compiler/program";
-import type { Intrinsic } from "../compiler/j2w";
-import { parseMethodDesc } from "../../jvm/abi";
-import { HOSTED, type HostSpec } from "./hostapi";
-import type { World } from "./world";
+import { ACC, type JClass, type Loader, type MethodInfo } from "../compiler/program.ts";
+import type { Intrinsic } from "../compiler/j2w.ts";
+import { parseMethodDesc } from "../../jvm/abi.ts";
+import { HOSTED, type HostSpec } from "./hostapi.ts";
+import type { World } from "./world.ts";
 
 const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell";
 
@@ -25,6 +25,7 @@ const classOf = (name: string, sup: string, ifaces: string[], flags: number): JC
   ({ name, dex: null, def: null, sup, ifaces, flags, isInterface: false, fields: [], methods: [], byKey: new Map() });
 
 export class HostClasses {
+  private w: World;
   private pending = new Map<string, HostSpec>();
   private defined = new Map<string, HostSpec>();
   private byCtor = new Map<Function, HostSpec>();
@@ -33,7 +34,7 @@ export class HostClasses {
   private hosts = new WeakMap<object, object>();
   private shells = new WeakMap<object, object>();
   private settling = false;
-  constructor(private w: World) {}
+  constructor(w: World) { this.w = w; }
 
   add(spec: HostSpec): void {
     this.byCtor.set(spec.ctor, spec); this.pending.set(spec.name, spec); this.specs.set(spec.name, spec);

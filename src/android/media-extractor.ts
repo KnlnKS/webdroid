@@ -1,12 +1,12 @@
 import type { Sample } from "mp4box";
-import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jentry";
-import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio";
-import { fdInt } from "../jvm/natives/jio";
-import { vfs } from "../shell/vfs";
-import { readFully, type FileSource } from "../shell/lazyfile";
-import { fdSlice, nativePeer } from "./media-native";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format.ts";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import { vfs } from "../shell/vfs.ts";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
+import { fdSlice, nativePeer } from "./media-native.ts";
 
 function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   const result = new Uint8Array(units.reduce((n, unit) => n + 4 + unit.data.length, 0));

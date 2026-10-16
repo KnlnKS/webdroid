@@ -1,6 +1,6 @@
-import { openApk, dexesOf, dumpXml } from "./lib";
-import { parseAXML } from "../src/android/axml";
-import { need } from "./args";
+import { openApk, dexesOf, dumpXml } from "./lib.ts";
+import { parseAXML } from "../src/android/axml.ts";
+import { need } from "./args.ts";
 
 const [path] = need("bun run inspect <apk>");
 const zip = await openApk(path);

@@ -1,6 +1,7 @@
 // WebAssembly binary builder, including GC recursive types and subtypes.
-export const enum T { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, i8 = 0x78, i16 = 0x77,
-  funcref = 0x70, externref = 0x6f, anyref = 0x6e, eqref = 0x6d, i31ref = 0x6c, structref = 0x6b, arrayref = 0x6a, exnref = 0x69, nullref = 0x71 }
+export const T = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, v128: 0x7b, i8: 0x78, i16: 0x77,
+  funcref: 0x70, externref: 0x6f, anyref: 0x6e, eqref: 0x6d, i31ref: 0x6c, structref: 0x6b, arrayref: 0x6a, exnref: 0x69, nullref: 0x71 } as const;
+export type T = (typeof T)[keyof typeof T];
 export function uleb(n: number | bigint, out: number[]): void {
   if (typeof n === "number" && n >= 0 && n <= 0xffffffff) {
     for (; n >= 0x80; n = Math.floor(n / 128)) out.push((n % 128) | 0x80);

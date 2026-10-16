@@ -4,14 +4,14 @@
 // relay's CA (installed in the system store, /system/etc/security/cacerts) and a session presents a
 // leaf for the host that CA issued. Hostname verification and the platform trust manager accept it;
 // a pinned key does not match it.
-import { jarray, utf8 } from "../abi";
-import { driven, type Gen } from "../runtime";
-import { newObj, vcall, scall } from "./jentry";
-import { vfs } from "../../shell/vfs";
-import { BytesFile } from "../../shell/lazyfile";
-import { md5, sha1, sha256 } from "./digest";
-import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "./der";
-import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "./pkey";
+import { jarray, utf8 } from "../abi.ts";
+import { driven, type Gen } from "../runtime.ts";
+import { newObj, vcall, scall } from "./jentry.ts";
+import { vfs } from "../../shell/vfs.ts";
+import { BytesFile } from "../../shell/lazyfile.ts";
+import { md5, sha1, sha256 } from "./digest.ts";
+import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "./der.ts";
+import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "./pkey.ts";
 
 const P256 = CURVES.find((c) => c.name === "prime256v1")!;
 const name = (cn: string) => seq(tlv(0x31, seq(oid("2.5.4.10"), tlv(0x0c, utf8.enc.encode("webdroid")))), tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, utf8.enc.encode(cn)))));

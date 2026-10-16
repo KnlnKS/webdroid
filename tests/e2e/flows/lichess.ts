@@ -1,6 +1,6 @@
 // Flutter's native framebuffer has no host view text anchors, so every tap is positional and the
 // flow pins the screen they were measured at.
-import { wait, type Flow, Screen } from "../types";
+import { wait, type Flow, type Screen } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2424, densityDpi: 480 };
 const at = (x: number, y: number): [number, number] => [x / SCREEN.width, y / SCREEN.height];

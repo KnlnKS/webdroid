@@ -4,13 +4,13 @@
 // stack are its Cpu's; the frame a handler runs on is sigframe.ts's; what a fatal signal leaves
 // behind is crash.ts's.
 
-import { mem } from "./mem";
-import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host";
-import { E } from "./abi";
-import { fail } from "./libc";
-import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu";
-import { tidOf } from "./pthread";
-import { dieOfSignal } from "./crash";
+import { mem } from "./mem.ts";
+import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
+import { E } from "./abi.ts";
+import { fail } from "./libc.ts";
+import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu.ts";
+import { tidOf } from "./pthread.ts";
+import { dieOfSignal } from "./crash.ts";
 
 export const SIGQUIT = 3, SIGILL = 4, SIGTRAP = 5, SIGABRT = 6, SIGBUS = 7, SIGFPE = 8, SIGKILL = 9, SIGSEGV = 11, SIGPIPE = 13;
 export const SIGSTKFLT = 16, SIGCHLD = 17, SIGCONT = 18, SIGSTOP = 19, SIGTSTP = 20, SIGTTIN = 21, SIGTTOU = 22, SIGURG = 23;

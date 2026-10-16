@@ -10,14 +10,14 @@
 //    that every class it touches has its D module, so no slot it can call is empty.
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
-import type { ClassRt, World } from "./world";
-import type { SymbolicSite } from "../compiler/sites";
-import type { InfoRecord } from "./classes";
-import type { DexFile } from "../../jvm/dex";
-import { methodCount, type Loader, type MethodInfo } from "../compiler/program";
-import type { Compiler, FnTrace } from "../compiler/j2w";
-import { methodOf } from "../compiler/ids";
-import { uleb } from "../compiler/wasmbin";
+import type { ClassRt, World } from "./world.ts";
+import type { SymbolicSite } from "../compiler/sites.ts";
+import type { InfoRecord } from "./classes.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import { methodCount, type Loader, type MethodInfo } from "../compiler/program.ts";
+import type { Compiler, FnTrace } from "../compiler/j2w.ts";
+import { methodOf } from "../compiler/ids.ts";
+import { uleb } from "../compiler/wasmbin.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -188,6 +188,7 @@ function unleb(b: Uint8Array, at: number[]): number { let n = 0, s = 1; for (;;)
 const LIVE = 1, DEAD = 2, LOADING = 3;
 
 export class AotRuntime {
+  private w: World;
   readonly building: boolean;
   /** the platform classes; the on-demand compiler numbers everything after them */
   nSeeded = 0;
@@ -234,7 +235,8 @@ export class AotRuntime {
   dKeys: string[] = [];
   cKeys: string[] = [];
 
-  constructor(private w: World, build?: AotBuild) {
+  constructor(w: World, build?: AotBuild) {
+    this.w = w;
     this.building = !!build;
     if (!build) return;
     this.nSeeded = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));

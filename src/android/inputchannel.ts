@@ -2,22 +2,23 @@
 // window. The server end publishes an event; the client end's receiver gets it as a callback on its
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
-import { rt, type JObj } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jentry";
-import { handle, deref, release, FINALIZER } from "./handles";
-import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
-import { mangleField } from "../jvm/abi";
-import type { NativeLooper } from "./mainloop";
-import { note, Ev } from "../timeline";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { vcall, newObj } from "../jvm/natives/jentry.ts";
+import { handle, deref, release, FINALIZER } from "./handles.ts";
+import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel.ts";
+import { mangleField } from "../jvm/abi.ts";
+import type { NativeLooper } from "./mainloop.ts";
+import { note, Ev } from "../timeline.ts";
 
 interface Receiver { looper: NativeLooper; receiver: JObj }
 export class Channel {
+  readonly name: string; readonly token: JObj;
   peer: Channel | null = null;
   receiver: Receiver | null = null;
   /** a focus change the client end's receiver has not heard yet */
   focus: boolean | null = null;
   readonly pending = new Map<number, (handled: boolean) => void>();
-  constructor(readonly name: string, readonly token: JObj) {}
+  constructor(name: string, token: JObj) { this.name = name; this.token = token; }
 }
 let nextSeq = 1;
 /** publish `event` on the server end: resolves with whether the window handled it, or false when no

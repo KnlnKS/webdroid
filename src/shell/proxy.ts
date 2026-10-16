@@ -1,7 +1,7 @@
-import { htmlAttribute, webDocument } from "./webhtml";
-import { webScript } from "./webscript";
-import { isGuestHost } from "../native/net-address";
-import type { BridgeCall } from "./webpage/protocol";
+import { htmlAttribute, webDocument } from "./webhtml.ts";
+import { webScript } from "./webscript.ts";
+import { isGuestHost } from "../native/net-address.ts";
+import type { BridgeCall } from "./webpage/protocol.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;

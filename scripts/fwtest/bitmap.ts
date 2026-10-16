@@ -1,7 +1,7 @@
-import { declaredField } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
-import { mangleStaticField } from "../../src/jvm/abi";
-import { exercise, same, thrown, statics, listener, ltrb } from "./harness";
+import { declaredField } from "../../src/jvm/runtime.ts";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
+import { mangleStaticField } from "../../src/jvm/abi.ts";
+import { exercise, same, thrown, statics, listener, ltrb } from "./harness.ts";
 
 // Bitmap, BitmapFactory and BitmapRegionDecoder against the reference AVD: every expected value below
 // was printed by the same calls there (images in tests/fixtures/images). Headless there is no image

@@ -1,11 +1,11 @@
 // Host input: the browser's pointer and wheel streams become Android MotionEvents, so a
 // trackpad's two-finger swipe reaches every app as a phone's one-finger drag.
-import { device } from "./config";
-import { dispatchTouches } from "./device";
-import { imeActive } from "../android/ime";
-import { receiveIme, serveIme } from "./ime-port";
-import { onProcessExit } from "../process-exit";
-import { attachPointerInput } from "./pointer-input";
+import { device } from "./config.ts";
+import { dispatchTouches } from "./device.ts";
+import { imeActive } from "../android/ime.ts";
+import { receiveIme, serveIme } from "./ime-port.ts";
+import { onProcessExit } from "../process-exit.ts";
+import { attachPointerInput } from "./pointer-input.ts";
 let closeInput: (() => void) | undefined;
 onProcessExit(() => closeInput?.());
 if (typeof window !== "undefined") window.addEventListener("pagehide", () => closeInput?.(), { once: true });

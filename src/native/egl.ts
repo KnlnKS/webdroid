@@ -3,14 +3,14 @@
 // ANativeWindow handles and pbuffers of their own. Closed: an extension entry point we do not
 // implement is NULL from eglGetProcAddress.
 
-import { mem } from "./mem";
-import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host";
-import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glsurface";
-import { windowOf } from "./libandroid";
-import { gles1Procs } from "./gles1";
-import { gles3Procs, clientWait } from "./gles3";
-import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current";
-import { noteNativeFrame } from "./cpu";
+import { mem } from "./mem.ts";
+import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host.ts";
+import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glsurface.ts";
+import { windowOf } from "./libandroid.ts";
+import { gles1Procs } from "./gles1.ts";
+import { gles3Procs, clientWait } from "./gles3.ts";
+import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current.ts";
+import { noteNativeFrame } from "./cpu.ts";
 
 const EGL_BAD_ALLOC = 0x3003, EGL_BAD_ATTRIBUTE = 0x3004, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_DISPLAY = 0x3008, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b,
   EGL_BAD_PARAMETER = 0x300c, EGL_BAD_SURFACE = 0x300d;

@@ -1,9 +1,9 @@
 // libm: what Math answers directly, with the C signatures, for an ARM32 process (a 64-bit one runs
 // bionic's). Registered under libm.so and libc.so (bionic exports both).
 
-import { mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, SERVED, fbits, bitsf, dbits, bitsd } from "./host";
-import type { Cpu } from "./cpu";
+import { mem } from "./mem.ts";
+import { hostLib, type HostFn, retF, retD, SERVED, fbits, bitsf, dbits, bitsd } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
 
 /** a long result */
 const retLong = (x: number) => Math.trunc(x) | 0;

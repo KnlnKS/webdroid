@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import "../src/natives";
-import { vcall } from "../src/jvm/natives/jentry";
-import { scall, loadLibcore } from "./java";
+import "../src/natives.ts";
+import { vcall } from "../src/jvm/natives/jentry.ts";
+import { scall, loadLibcore } from "./java.ts";
 
 await loadLibcore();
 

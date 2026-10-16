@@ -6,21 +6,21 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording";
-import { rt } from "../jvm/runtime";
-import { handle, deref, ownedHandle, refBaseHandle, incStrong, decStrong, REFBASE_FINALIZER } from "./handles";
-import { NativePath } from "./path";
-import { perf } from "../perf";
-import type { NativeRenderEffect } from "./rendereffect";
-import { NativePaint, copyPaint, paintAt } from "./paint";
-import { type NativeColorFilter, COMPOSITE } from "./graphics";
-import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt, deviceBounds } from "./matrix";
-import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
-import { drawCircle, drawRoundRect } from "./canvas-draw";
-import { addAnimator, endAnimators } from "./rtanimator";
-import { type RuntimeShaderBuilder } from "./runtime-shader";
-import type { TextureLayer } from "./texturelayer";
-import { drawFunctor, trackingClips, pushClip, popClip } from "./webfunctor";
+import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording.ts";
+import { rt } from "../jvm/runtime.ts";
+import { handle, deref, ownedHandle, refBaseHandle, incStrong, decStrong, REFBASE_FINALIZER } from "./handles.ts";
+import { NativePath } from "./path.ts";
+import { perf } from "../perf.ts";
+import type { NativeRenderEffect } from "./rendereffect.ts";
+import { NativePaint, copyPaint, paintAt } from "./paint.ts";
+import { type NativeColorFilter, COMPOSITE } from "./graphics.ts";
+import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt, deviceBounds } from "./matrix.ts";
+import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas.ts";
+import { drawCircle, drawRoundRect } from "./canvas-draw.ts";
+import { addAnimator, endAnimators } from "./rtanimator.ts";
+import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
+import type { TextureLayer } from "./texturelayer.ts";
+import { drawFunctor, trackingClips, pushClip, popClip } from "./webfunctor.ts";
 
 const f32 = Math.fround, ALPHA_EPSILON = f32(0.001), NON_ZERO_EPSILON = f32(0.001);
 /** MathUtils::isZero */
@@ -28,12 +28,14 @@ const isZero = (v: number) => Math.abs(v) <= NON_ZERO_EPSILON;
 /** RenderProperties' clipping flags */
 const CLIP_TO_BOUNDS = 1, CLIP_TO_CLIP_BOUNDS = 2;
 /** Outline::Type */
-const enum Outline { None, Empty, Path, RoundRect }
+const Outline = { None: 0, Empty: 1, Path: 2, RoundRect: 3 } as const;
+type Outline = (typeof Outline)[keyof typeof Outline];
 let nextId = 1n;
 
 /** RenderNode with its RenderProperties and LayerProperties. Setters answer whether the value
  *  changed, as RP_SET does. */
 export class NativeRenderNode {
+  readonly name: string | null;
   readonly id = nextId++;
   /** the display list, null until one is recorded (RenderNode::isValid) */
   ops: DisplayList | null = null;
@@ -47,7 +49,7 @@ export class NativeRenderNode {
   get camera(): Camera3D { return this.camera3d ??= new Camera3D(); }
   clipFlags = CLIP_TO_BOUNDS; clipL = 0; clipT = 0; clipR = 0; clipB = 0;
   staticMatrix: Mat | null = null; animationMatrix: Mat | null = null;
-  outline = Outline.None; outlineClip = false; outlineAlpha = 0; outlineRadius = 0;
+  outline: Outline = Outline.None; outlineClip = false; outlineAlpha = 0; outlineRadius = 0;
   outlineL = 0; outlineT = 0; outlineR = 0; outlineB = 0; outlinePath: NativePath | null = null;
   revealClip = false; revealX = 0; revealY = 0; revealRadius = 0;
   ambientColor = 0xff000000 | 0; spotColor = 0xff000000 | 0;
@@ -61,7 +63,7 @@ export class NativeRenderNode {
   position: [number, number, number, number] | null = null;
   effectInput: OffscreenCanvas | null = null; effectCanvas: NativeCanvas | null = null;
   drawing = false;
-  constructor(readonly name: string | null) {}
+  constructor(name: string | null) { this.name = name; }
   get width() { return this.right - this.left; }
   get height() { return this.bottom - this.top; }
   get z() { return this.elevation + this.tz; }

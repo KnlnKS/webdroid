@@ -1,11 +1,11 @@
 // RenderEffect's native half: hwui's SkImageFilter graph (jni/RenderEffect.cpp), evaluated over a
 // node's rasterised content. An input of 0 is that content.
-import { rt } from "../jvm/runtime";
-import { handle, deref, FINALIZER } from "./handles";
-import { COMPOSITE, BLEND_MODES, NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics";
-import type { NativeBitmap } from "./bitmap";
-import type { RuntimeShaderBuilder } from "./runtime-shader";
-import type { Ctx2D } from "./recording";
+import { rt } from "../jvm/runtime.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { COMPOSITE, BLEND_MODES, type NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics.ts";
+import type { NativeBitmap } from "./bitmap.ts";
+import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
+import type { Ctx2D } from "./recording.ts";
 
 /** the rasters a blur reuses from one run to the next */
 export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
@@ -73,22 +73,26 @@ export abstract class NativeRenderEffect {
 }
 /** a filter of one input image, which is the source where it has none */
 abstract class Unary extends NativeRenderEffect {
-  constructor(private readonly input: NativeRenderEffect | null) { super(); }
+  private readonly input: NativeRenderEffect | null;
+  constructor(input: NativeRenderEffect | null) { super(); this.input = input; }
   filter(source: Filtered): Filtered { return this.apply(this.input ? this.input.filter(source) : source); }
   protected abstract apply(f: Filtered): Filtered;
 }
 class Offset extends Unary {
-  constructor(private readonly dx: number, private readonly dy: number, input: NativeRenderEffect | null) { super(input); }
+  private readonly dx: number; private readonly dy: number;
+  constructor(dx: number, dy: number, input: NativeRenderEffect | null) { super(input); this.dx = dx; this.dy = dy; }
   protected apply(f: Filtered): Filtered { return { ...f, x: f.x + this.dx, y: f.y + this.dy }; }
 }
 class Blur extends Unary implements BlurCache {
+  private readonly tile: number;
   padded: OffscreenCanvas | null = null;
   blurred: OffscreenCanvas | null = null;
   private work = new Float32Array(0);
   private scratch = new Float32Array(0);
   private readonly sx: number; private readonly sy: number;
-  constructor(rx: number, ry: number, private readonly tile: number, input: NativeRenderEffect | null) {
+  constructor(rx: number, ry: number, tile: number, input: NativeRenderEffect | null) {
     super(input);
+    this.tile = tile;
     this.sx = sigmaOf(rx); this.sy = sigmaOf(ry);
   }
   protected apply(f: Filtered): Filtered {
@@ -143,7 +147,8 @@ class Blur extends Unary implements BlurCache {
 }
 /** SkImageFilters::Image: the bitmap's src rect drawn into dst, whatever the input */
 class BitmapEffect extends NativeRenderEffect {
-  constructor(private readonly bitmap: NativeBitmap, private readonly src: number[], private readonly dst: number[]) { super(); }
+  private readonly bitmap: NativeBitmap; private readonly src: number[]; private readonly dst: number[];
+  constructor(bitmap: NativeBitmap, src: number[], dst: number[]) { super(); this.bitmap = bitmap; this.src = src; this.dst = dst; }
   filter(): Filtered {
     const [sl, st, sr, sb] = this.src, [dl, dt, dr, db] = this.dst, w = Math.max(1, Math.ceil(dr - dl)), h = Math.max(1, Math.ceil(db - dt));
     const c = this.out = sized(this.out, w, h), g = c.getContext("2d")!;
@@ -152,7 +157,8 @@ class BitmapEffect extends NativeRenderEffect {
   }
 }
 class ColorFilterEffect extends Unary {
-  constructor(private readonly cf: NativeColorFilter, input: NativeRenderEffect | null) { super(input); }
+  private readonly cf: NativeColorFilter;
+  constructor(cf: NativeColorFilter, input: NativeRenderEffect | null) { super(input); this.cf = cf; }
   protected apply(f: Filtered): Filtered {
     const c = this.out = flatten(this.out, f), cf = this.cf;
     recolor(c.getContext("2d")!, c.width, c.height, cf.matrix ? null : cf.color, cf.matrix, cf.mode);
@@ -161,7 +167,8 @@ class ColorFilterEffect extends Unary {
 }
 /** SkImageFilters::Blend: src over dst by the mode, over the union of their placements */
 class BlendEffect extends NativeRenderEffect {
-  constructor(private readonly dst: NativeRenderEffect | null, private readonly src: NativeRenderEffect | null, private readonly mode: GlobalCompositeOperation) { super(); }
+  private readonly dst: NativeRenderEffect | null; private readonly src: NativeRenderEffect | null; private readonly mode: GlobalCompositeOperation;
+  constructor(dst: NativeRenderEffect | null, src: NativeRenderEffect | null, mode: GlobalCompositeOperation) { super(); this.dst = dst; this.src = src; this.mode = mode; }
   filter(source: Filtered): Filtered {
     const d = this.dst ? this.dst.filter(source) : source, s = this.src ? this.src.filter(source) : source;
     const x = Math.min(d.x, s.x), y = Math.min(d.y, s.y), w = Math.max(d.x + d.w, s.x + s.w) - x, h = Math.max(d.y + d.h, s.y + s.h) - y;
@@ -174,12 +181,14 @@ class BlendEffect extends NativeRenderEffect {
   }
 }
 class Chain extends NativeRenderEffect {
-  constructor(private readonly outer: NativeRenderEffect, private readonly inner: NativeRenderEffect) { super(); }
+  private readonly outer: NativeRenderEffect; private readonly inner: NativeRenderEffect;
+  constructor(outer: NativeRenderEffect, inner: NativeRenderEffect) { super(); this.outer = outer; this.inner = inner; }
   filter(source: Filtered): Filtered { return this.outer.filter(this.inner.filter(source)); }
 }
 /** SkImageFilters::Shader: the shader over the content's bounds, whatever the input */
 class ShaderEffect extends NativeRenderEffect {
-  constructor(private readonly shader: NativeShader) { super(); }
+  private readonly shader: NativeShader;
+  constructor(shader: NativeShader) { super(); this.shader = shader; }
   filter(source: Filtered): Filtered {
     const c = this.out = sized(this.out, Math.max(1, Math.ceil(source.w)), Math.max(1, Math.ceil(source.h))), g = c.getContext("2d")!;
     g.reset(); g.translate(-source.x, -source.y);
@@ -189,7 +198,8 @@ class ShaderEffect extends NativeRenderEffect {
 }
 /** the input image as a shader in node coordinates, what a runtime shader's child samples */
 class ImageShader extends NativeShader {
-  constructor(private readonly f: Filtered) { super(null); }
+  private readonly f: Filtered;
+  constructor(f: Filtered) { super(null); this.f = f; }
   override pattern(ctx: Ctx2D): CanvasPattern | null {
     const p = ctx.createPattern(this.f.img, "no-repeat");
     p?.setTransform(new DOMMatrix([this.f.w / this.f.img.width, 0, 0, this.f.h / this.f.img.height, this.f.x, this.f.y]));
@@ -199,7 +209,8 @@ class ImageShader extends NativeShader {
 /** SkImageFilters::RuntimeShader: the builder's shader with its child `name` bound to the input. The
  *  uniforms are the builder's at draw time, where hwui copies them when the effect is made. */
 class RuntimeShaderEffect extends NativeRenderEffect {
-  constructor(private readonly builder: RuntimeShaderBuilder, private readonly name: string) { super(); }
+  private readonly builder: RuntimeShaderBuilder; private readonly name: string;
+  constructor(builder: RuntimeShaderBuilder, name: string) { super(); this.builder = builder; this.name = name; }
   filter(source: Filtered): Filtered {
     return new ShaderEffect(this.builder.withChild(this.name, new ImageShader(source))).filter(source);
   }

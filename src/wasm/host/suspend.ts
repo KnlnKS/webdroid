@@ -3,8 +3,8 @@
 // meanwhile. Every other native is a plain import, since a Suspending import suspends even when its function answers a value (about 50 ns against 4).
 // The rule JSPI imposes is that no JS frame may sit between the `promising` entry of a strand and the import that suspends: a native on the
 // Wasm side of an import must not call Java through a plain call and expect that Java to block.
-import type { HostContext, HostFn } from "../link/hostapi";
-import { count } from "./stats";
+import type { HostContext, HostFn } from "../link/hostapi.ts";
+import { count } from "./stats.ts";
 
 const AsyncFunction = (async () => {}).constructor;
 type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, unknown> };

@@ -69,4 +69,4 @@ const LIBCORE = /^(java|javax|jdk|sun|libcore|dalvik|android\/icu|org\/(json|xml
 export const tsSpecViolation = (name: string, reimplements: boolean): boolean =>
   (reimplements || LIBCORE.test(name)) && !tsSpecAllowance(name);
 
-export { PLATFORM_JARS } from "./bootclasspath";
+export { PLATFORM_JARS } from "./bootclasspath.ts";

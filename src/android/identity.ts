@@ -1,4 +1,4 @@
-import { androidIds } from "./identity-data";
+import { androidIds } from "./identity-data.ts";
 
 const secondaryIds = new Set(["system", "radio", "log", "nfc", "bluetooth", "shell", "secure_element", "network_stack"].map((name) => androidIds[name]!));
 const namedId = (name: string) => Object.hasOwn(androidIds, name) ? androidIds[name]! : -1;

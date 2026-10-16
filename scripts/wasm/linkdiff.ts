@@ -4,10 +4,10 @@
 import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDexes, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
+import { loadDexes, world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-lk-")), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const sh = shellIn(out);

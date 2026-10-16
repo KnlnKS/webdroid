@@ -1,14 +1,14 @@
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry";
-import { type JIntent, newIntent, putExtra } from "./intent";
-import { PROCESS_NAME, PROCESS_UID } from "./os";
-import { exportBinder, importBinder, type ParcelData } from "./binder";
-import { encodeIntent, decodeIntent, intentCodec } from "./intentipc";
-import { PendingIntents, type PendingOperation } from "../shell/pendingintents";
-import { broadcastIntent } from "./server/broadcastqueue";
-import { startActivityFor } from "./server/atm";
-import { startService } from "./server/activeservices";
-import { thisApp } from "./server/am";
+import { awaited, type JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
+import { type JIntent, newIntent, putExtra } from "./intent.ts";
+import { PROCESS_NAME, PROCESS_UID } from "./os.ts";
+import { exportBinder, importBinder, type ParcelData } from "./binder.ts";
+import { encodeIntent, decodeIntent, intentCodec } from "./intentipc.ts";
+import { PendingIntents, type PendingOperation } from "../shell/pendingintents.ts";
+import { broadcastIntent } from "./server/broadcastqueue.ts";
+import { startActivityFor } from "./server/atm.ts";
+import { startService } from "./server/activeservices.ts";
+import { thisApp } from "./server/am.ts";
 
 /** PendingIntentRecord.sendInner, in the creator's process with its identity */
 export const executePendingIntent = driven(function* (operation: PendingOperation, fill: ParcelData | null, alarmCount: number): Gen<void> {

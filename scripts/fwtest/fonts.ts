@@ -1,9 +1,9 @@
 // Fonts and shaping: Font, FontFamily, FontFileUtil, Typeface and TextRunShaper over the reference
 // build's /system/fonts.
-import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry";
-import { familyOf, typefaceOf } from "../../src/android/fonts";
-import { loadSystemFonts } from "../../tests/java";
-import { exercise, same, thrown, fontMetrics, ltrb } from "./harness";
+import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry.ts";
+import { familyOf, typefaceOf } from "../../src/android/fonts.ts";
+import { loadSystemFonts } from "../../tests/java.ts";
+import { exercise, same, thrown, fontMetrics, ltrb } from "./harness.ts";
 
 // Expected values are the reference AVD's for its variable Roboto (OS/2 weight 400, revision 196936,
 // hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units) and Noto Serif Bold.

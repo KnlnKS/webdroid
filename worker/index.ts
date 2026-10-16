@@ -1,7 +1,7 @@
-import { WEB_FRAME, WEB_PROXY_WORKER } from "../src/shell/webinject";
-import { forwardDnsMessage, proxyRequest } from "../src/shell/proxy";
-import { WebBridgeSession } from "./bridge";
-import { tcpRelay } from "./tcp";
+import { WEB_FRAME, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
+import { forwardDnsMessage, proxyRequest } from "../src/shell/proxy.ts";
+import { WebBridgeSession } from "./bridge.ts";
+import { tcpRelay } from "./tcp.ts";
 
 export { WebBridgeSession };
 

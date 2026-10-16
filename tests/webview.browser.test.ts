@@ -1,12 +1,12 @@
 // The isolated WebView renderer's document rewriting, history and location, in one browser.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { webDocument } from "../src/shell/webhtml";
-import { webScript } from "../src/shell/webscript";
-import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject";
-import { holdFrames } from "../src/shell/webpage/frames";
-import { webViewBrands } from "../src/shell/webpage/clienthints";
+import { webDocument } from "../src/shell/webhtml.ts";
+import { webScript } from "../src/shell/webscript.ts";
+import { proxyRequest } from "../src/shell/proxy.ts";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
+import { holdFrames } from "../src/shell/webpage/frames.ts";
+import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -680,7 +680,7 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
   try {
     await page.goto(`http://localhost:${server.port}/`);
     const result = await page.evaluate(async ({origin,html}) => {
-      const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port");
+      const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port.ts");
       const canvas = document.createElement("canvas"); canvas.width=720;canvas.height=1280;canvas.style.zIndex="3";document.body.append(canvas);
       const channel = new MessageChannel();
       const close = receiveWebSurfaces(channel.port1,canvas,()=>({density:2,width:720}));
@@ -739,8 +739,8 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
   try {
     await page.goto(`http://localhost:${server.port}/`);
     const result=await page.evaluate(async()=>{
-      const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage");
-      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port");
+      const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage.ts");
+      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port.ts");
       localStorage.setItem("wd:install:org.webdroid.surface.owner","1000");
       localStorage.setItem("wd:install:org.webdroid.surface.foreign","1000");
       const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
@@ -787,12 +787,12 @@ test("dropped WebView frame owners release their surface without destroy", async
   try {
     await page.goto(`http://localhost:${server.port}/`);
     await page.evaluate(async () => {
-      const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes");
+      const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes.ts");
       (globalThis as any).frames = frames;
       (globalThis as any).removed = 0;
       frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
-      const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit");
-      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor");
+      const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit.ts");
+      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor.ts");
       const view = new WebViewChromium();
       view.url = "https://dropped.example";
       view.hold.functor = createFunctor(view.size);

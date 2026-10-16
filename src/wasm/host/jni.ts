@@ -1,14 +1,14 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
-import { rt } from "../../jvm/runtime";
-import { newInstance, refOf, type Bridge } from "./bridge";
-import { idOfClass, typeName } from "../link/classes";
-import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
-import { failed, symbolicImplFor } from "../compiler/linkage";
-import type { World } from "../link/world";
-import type { Strand } from "../link/sched";
-import { ARRAY_SUPERS, classRef, onNestedStrand, runningThread } from "./entry";
-import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm";
+import { rt } from "../../jvm/runtime.ts";
+import { newInstance, refOf, type Bridge } from "./bridge.ts";
+import { idOfClass, typeName } from "../link/classes.ts";
+import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program.ts";
+import { failed, symbolicImplFor } from "../compiler/linkage.ts";
+import type { World } from "../link/world.ts";
+import type { Strand } from "../link/sched.ts";
+import { ARRAY_SUPERS, classRef, onNestedStrand, runningThread } from "./entry.ts";
+import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm.ts";
 
 interface WasmField extends JniField { info: FieldInfo }
 /** the storage kind of a primitive array's elements */

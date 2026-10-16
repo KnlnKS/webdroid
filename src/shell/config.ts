@@ -3,7 +3,7 @@
  * pin one for a run and the shell's settings panel persists one. This file imports only recorded
  * data and treats every host global as optional, because bun scripts import it too.
  */
-import { DEVICE_PROPERTIES } from "./device-properties";
+import { DEVICE_PROPERTIES } from "./device-properties.ts";
 
 /** AOSP DisplayMetrics.DENSITY_DEFAULT: the dpi at which one dp is one px. */
 const DENSITY_DEFAULT = 160;

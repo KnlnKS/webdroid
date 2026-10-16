@@ -1,7 +1,7 @@
 // What the suites share: building their Java fixtures with javac and d8, running them on the JDK, and checking answers.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { androidPlatform, androidTool } from "../android-sdk";
+import { androidPlatform, androidTool } from "../android-sdk.ts";
 
 /** runs `cmd` in `cwd` (feeding it `input`) and answers its stdout; a failure throws with its stderr */
 export function shellIn(cwd: string) {

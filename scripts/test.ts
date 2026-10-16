@@ -5,8 +5,8 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { bundleForNode, removeBundle } from "./wasm/undernode";
-import "./preload";
+import { bundleForNode, removeBundle } from "./wasm/undernode.ts";
+import "./preload.ts";
 
 const root = resolve(import.meta.dir, "..");
 /** a file whose process outlives its tests (a handle left open) is killed and fails */

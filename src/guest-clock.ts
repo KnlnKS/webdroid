@@ -1,5 +1,5 @@
-import { processExited } from "./process-exit";
-import { connectClock, serveClock, type ClockBootstrap, type ClockClient } from "./shell/clock-port";
+import { processExited } from "./process-exit.ts";
+import { connectClock, serveClock, type ClockBootstrap, type ClockClient } from "./shell/clock-port.ts";
 
 export type GuestTimer = ReturnType<typeof setTimeout> | number;
 
@@ -16,6 +16,7 @@ const before = (a: Scheduled, b: Scheduled): boolean =>
   a.at < b.at || (a.at === b.at && (a.realm < b.realm || (a.realm === b.realm && a.sequence < b.sequence)));
 
 export class ControlledGuestClock {
+  nowMs: number;
   private heap: Scheduled[] = [];
   private live = new Map<number, number>();
   private nextId = 1;
@@ -23,7 +24,7 @@ export class ControlledGuestClock {
   private advancing = Promise.resolve();
   private asynchronousAdvances = 0;
 
-  constructor(public nowMs: number) {}
+  constructor(nowMs: number) { this.nowMs = nowMs; }
 
   schedule(callback: () => void, delayMs: number, realm = 0): number {
     return this.enqueue(callback, delayMs, realm, false);

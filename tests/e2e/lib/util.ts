@@ -1,5 +1,5 @@
 // Helpers every harness entry point was re-declaring.
-import { stableFrame } from "./settle";
+import { stableFrame } from "./settle.ts";
 export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
 export function webdroidUrl(): URL {

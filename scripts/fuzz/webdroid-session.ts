@@ -2,8 +2,8 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { device, formatScreen } from "../../src/shell/config";
-import { probeScript } from "../../tests/e2e/lib/probe";
+import { device, formatScreen } from "../../src/shell/config.ts";
+import { probeScript } from "../../tests/e2e/lib/probe.ts";
 
 export type WebdroidSession = {
   origin: string;

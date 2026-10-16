@@ -9,7 +9,7 @@
 // are only right at that aspect ratio, and the flow pins it.
 // The app also bundles an arm64 on-device LLM (liblitertlm_jni.so) behind its camera/AI screen —
 // off this flow; when reached it must surface as nativeRequired (the app's own unavailable state).
-import { wait, type Flow, Screen } from "../types";
+import { wait, type Flow, type Screen } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2424, densityDpi: 480 };
 const N = (x: number, y: number) => ({ x: x / SCREEN.width, y: y / SCREEN.height });

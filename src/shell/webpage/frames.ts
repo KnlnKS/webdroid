@@ -3,7 +3,7 @@
 // sees one of another scheme first. The page holds a frame's URL until then; the policy stops any
 // direct load the holding missed.
 
-import type { FrameInit } from "./protocol";
+import type { FrameInit } from "./protocol.ts";
 
 /** what a form submits: a GET's URL, or a POST's body as the browser encodes it */
 export type FormRequest = { url: string; method: "GET" } | { url: string; method: "POST"; body: ArrayBuffer; contentType?: string };

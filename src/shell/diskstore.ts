@@ -2,7 +2,7 @@
 // handles exist only in workers, so one worker owns them and serves requests in arrival order: a
 // read queued after a write sees it, which lets writes return before the worker has run them.
 
-import type { WritableSource } from "./lazyfile";
+import type { WritableSource } from "./lazyfile.ts";
 
 const WORKER = `
 const handles = new Map(), MAX_OPEN = 128;
@@ -103,7 +103,8 @@ export class DiskStore {
 }
 
 export class DiskFile implements WritableSource {
-  constructor(private readonly store: DiskStore, readonly id: string, public size: number) {}
+  private readonly store: DiskStore; readonly id: string; size: number;
+  constructor(store: DiskStore, id: string, size: number) { this.store = store; this.id = id; this.size = size; }
   read(offset: number, length: number): Promise<Uint8Array> {
     const start = Math.max(0, Math.min(this.size, offset)), end = Math.min(this.size, start + Math.max(0, length));
     if (start === end) return Promise.resolve(new Uint8Array(0));

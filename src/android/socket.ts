@@ -1,21 +1,21 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // core native code shares (src/native/socket/): a descriptor from either side is the same socket.
-import { awaited, rt, JObj, getDeclared, setDeclared, driven } from "../jvm/runtime";
-import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry";
-import { jarray, u8 } from "../jvm/abi";
-import { fdInt, mkFd } from "../jvm/natives/jio";
-import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
-import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, readSocket, dropFile, socketOf, POLLIN, POLLERR } from "../native/fs";
-import { pollEntries, type PollEntry } from "../native/poll";
-import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../native/socket/abi";
-import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, type Socket, type Received, type Accepted } from "../native/socket/core";
-import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet";
-import { socketCreate, socketPair } from "../native/socket/syscalls";
+import { awaited, rt, type JObj, getDeclared, setDeclared, driven } from "../jvm/runtime.ts";
+import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
+import { jarray, u8 } from "../jvm/abi.ts";
+import { fdInt, mkFd } from "../jvm/natives/jio.ts";
+import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os.ts";
+import { E, ERRSTR } from "../native/abi.ts";
+import { javaDup2Fd, readSocket, dropFile, socketOf, POLLIN, POLLERR } from "../native/fs.ts";
+import { pollEntries, type PollEntry } from "../native/poll.ts";
+import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../native/socket/abi.ts";
+import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, type Socket, type Received, type Accepted } from "../native/socket/core.ts";
+import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet.ts";
+import { socketCreate, socketPair } from "../native/socket/syscalls.ts";
 import {
   AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv6, type Endpoint,
-} from "../native/net-address";
-import { parseIpv4 } from "../shell/relay";
+} from "../native/net-address.ts";
+import { parseIpv4 } from "../shell/relay.ts";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";

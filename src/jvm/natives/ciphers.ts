@@ -1,7 +1,7 @@
 // BoringSSL's symmetric primitives, synchronous: AES (FIPS 197, T-tables), DES and 3DES (FIPS 46-3),
 // RC4, and the AEADs AES-GCM (SP 800-38D) and ChaCha20-Poly1305 (RFC 8439). conscrypt.ts drives them
 // through the EVP_CIPHER and EVP_AEAD natives.
-import { be32, le32 } from "./digest";
+import { be32, le32 } from "./digest.ts";
 
 export interface BlockCipher {
   /** transform one block in place at `off` */
@@ -465,7 +465,8 @@ export class Poly1305 {
   }
 }
 export class ChaCha20Poly1305 implements Aead {
-  constructor(private key: Uint8Array) {}
+  private key: Uint8Array;
+  constructor(key: Uint8Array) { this.key = key; }
   private tag(nonce: Uint8Array, aad: Uint8Array, ct: Uint8Array, tagLen: number) {
     const otk = new Int32Array(16), otkBytes = new Uint8Array(32);
     chachaBlock(words(this.key), 0, words(nonce), otk);

@@ -4,19 +4,19 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object a native made (a Struct*) is copied field by field.
-import { failed } from "../compiler/linkage";
-import { demangle, mangleField } from "../../jvm/abi";
-import { rt, JObj } from "../../jvm/runtime";
-import { JThrowable } from "../../jvm/natives/jthrowable";
-import { elemKindOf, type ElemKind } from "../compiler/consts";
-import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
-import type { World } from "../link/world";
-import type { Strand } from "../link/sched";
-import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi";
-import { VIEWS, SIZE, copyFn } from "../compiler/copy";
-import { handleViews } from "../../android/handles";
-import { count } from "./stats";
-import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio";
+import { failed } from "../compiler/linkage.ts";
+import { demangle, mangleField } from "../../jvm/abi.ts";
+import { rt, JObj } from "../../jvm/runtime.ts";
+import { JThrowable } from "../../jvm/natives/jthrowable.ts";
+import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
+import type { World } from "../link/world.ts";
+import type { Strand } from "../link/sched.ts";
+import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
+import { VIEWS, SIZE, copyFn } from "../compiler/copy.ts";
+import { handleViews } from "../../android/handles.ts";
+import { count } from "./stats.ts";
+import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio.ts";
 
 type Fn = (...a: any[]) => any;
 type Caller = { cls: string; key: string; call: Fn; rk: Kind | "V" };
@@ -56,6 +56,7 @@ class Scope implements BridgeScope {
 
 export class Bridge implements HostBridge {
   /** the host form of each Java object a native has seen, so its identity is stable across calls */
+  private w: World; private src?: NativeSource;
   private facades = new WeakMap<object, object>();
   /** the host form of each array the calls in progress reached (a call that is passed one an enclosing call has copied shares the copy, which that call stores back); an array leaves it when the call that copied it ends */
   private live = new Map<object, object>();
@@ -67,7 +68,7 @@ export class Bridge implements HostBridge {
   private accessors = { get: new WeakMap<FieldInfo, Fn>(), set: new WeakMap<FieldInfo, Fn>(), gets: new WeakMap<FieldInfo, Fn>(), sets: new WeakMap<FieldInfo, Fn>() };
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
-  constructor(private w: World, private src?: NativeSource) { handleViews.of = (o) => this.toHost(o); }
+  constructor(w: World, src?: NativeSource) { this.w = w; this.src = src; handleViews.of = (o) => this.toHost(o); }
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
   private get op() {
     if (this.ops) return this.ops;

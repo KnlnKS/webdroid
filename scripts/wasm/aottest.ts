@@ -4,17 +4,17 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot";
-import { defaultLoop } from "../../src/wasm/link/sched";
-import { compileModule } from "../../src/wasm/link/module";
-import { loadDexes, program, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
-import { buildApp } from "../../src/wasm/link/apps";
-import { natives } from "./harness";
-import { nativeSource } from "../../src/wasm/host/nativesource";
-import { Natives } from "../../src/wasm/host/natives";
-import { JAVA, PLATFORM_PATHS } from "./paths";
-import { checker, filesIn, shellIn } from "./tools";
+import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
+import { defaultLoop } from "../../src/wasm/link/sched.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { loadDexes, program, world } from "./lib.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { buildApp } from "../../src/wasm/link/apps.ts";
+import { natives } from "./harness.ts";
+import { nativeSource } from "../../src/wasm/host/nativesource.ts";
+import { Natives } from "../../src/wasm/host/natives.ts";
+import { JAVA, PLATFORM_PATHS } from "./paths.ts";
+import { checker, filesIn, shellIn } from "./tools.ts";
 
 const build = process.env.WEBDROID_AOT;
 if (!build) { console.log("aottest: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }

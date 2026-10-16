@@ -1,7 +1,7 @@
 // DEX file parser. Format: https://source.android.com/docs/core/runtime/dex-format
 // Everything lazy + cached; hot lookups are index math on a DataView.
 
-import { decodeModifiedUtf8, descToName } from "./abi";
+import { decodeModifiedUtf8, descToName } from "./abi.ts";
 
 export const NO_INDEX = 0xffffffff;
 /** access flags of classes, fields and methods */
@@ -67,7 +67,8 @@ interface MethodHandleRef { type: number; idx: number; }
 const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 class Reader {
-  constructor(public bytes: Uint8Array, public pos: number) {}
+  bytes: Uint8Array; pos: number;
+  constructor(bytes: Uint8Array, pos: number) { this.bytes = bytes; this.pos = pos; }
   u8(): number { return this.bytes[this.pos++]; }
   uleb(): number {
     let result = 0, shift = 0, b: number;
@@ -87,8 +88,9 @@ const CACHE_PAGE_SIZE = 1 << CACHE_PAGE_SHIFT;
 const CACHE_PAGE_MASK = CACHE_PAGE_SIZE - 1;
 
 class PagedCache<T> {
+  readonly length: number;
   private pages: (T[] | undefined)[];
-  constructor(readonly length: number) { this.pages = new Array(Math.ceil(length / CACHE_PAGE_SIZE)); }
+  constructor(length: number) { this.length = length; this.pages = new Array(Math.ceil(length / CACHE_PAGE_SIZE)); }
   get(i: number): T | undefined { return this.pages[i >>> CACHE_PAGE_SHIFT]?.[i & CACHE_PAGE_MASK]; }
   set(i: number, value: T): void {
     (this.pages[i >>> CACHE_PAGE_SHIFT] ??= new Array<T>(CACHE_PAGE_SIZE))[i & CACHE_PAGE_MASK] = value;
@@ -96,6 +98,7 @@ class PagedCache<T> {
 }
 
 export class DexFile {
+  bytes: Uint8Array; name;
   view: DataView;
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
   private fieldIdsOff: number; private methodIdsOff: number;
@@ -122,7 +125,8 @@ export class DexFile {
    *  everything before v41; a v41 container holds several headers and their section offsets are
    *  relative to the CONTAINER, so every dex in one keeps the whole buffer and only the header
    *  moves. That is also why nothing below this constructor needs to know about containers. */
-  constructor(public bytes: Uint8Array, public name = "classes.dex", headerOff = 0) {
+  constructor(bytes: Uint8Array, name = "classes.dex", headerOff = 0) {
+    this.bytes = bytes; this.name = name;
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const v = this.view;
     const h = headerOff;

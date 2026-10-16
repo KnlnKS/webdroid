@@ -1,9 +1,9 @@
-import { NativeFont, NativeFamily, NativeTypeface, FontCollection, FakedFont, wrapFont, withFonts } from "../../../src/android/fonts";
-import { cssFace } from "../../../src/android/cssfonts";
-import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping";
-import { NativePaint } from "../../../src/android/paint";
-import type { Ctx2D } from "../../../src/android/recording";
-import { bootPlatform } from "./boot";
+import { NativeFont, NativeFamily, NativeTypeface, FontCollection, FakedFont, wrapFont, withFonts } from "../../../src/android/fonts.ts";
+import { cssFace } from "../../../src/android/cssfonts.ts";
+import { drawGlyphs, shapeTextRun } from "../../../src/android/shaping.ts";
+import { NativePaint } from "../../../src/android/paint.ts";
+import type { Ctx2D } from "../../../src/android/recording.ts";
+import { bootPlatform } from "./boot.ts";
 
 const W = 120, H = 80;
 /** ink box of an alpha channel, and how many pixels are saturated color */

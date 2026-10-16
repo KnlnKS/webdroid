@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { ServiceRecords, type ServiceBinding, type StartItem } from "./servicerecords";
-import { uptimeMillis } from "../guest-clock";
+import { ServiceRecords, type ServiceBinding, type StartItem } from "./servicerecords.ts";
+import { uptimeMillis } from "../guest-clock.ts";
 
 const intent = { bytes: new Uint8Array(0), objects: [] };
 const NOT_CRASHED = { crashed: false, repeated: false };

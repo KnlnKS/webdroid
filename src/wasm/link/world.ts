@@ -5,39 +5,39 @@
 //  - A stub calls host.link(slot), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry,
 //    then calls through the slot; every call between modules is `call_indirect slot`, so a compiled method needs no relinking.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
-import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
-import { compileSymbolicSite } from "../compiler/symbolic";
-import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
-import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
-import { Cha } from "../compiler/cha";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
-import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w";
-import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
-import { rtfns, type Synth } from "../compiler/rtfns";
-import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
-import { HostClasses } from "./hostclass";
-import { mhInvoke } from "./mhandles";
-import { hostText } from "./members";
-import { ASYNC } from "./inet";
-import { generateProxy, type ProxyDefinition } from "./proxy";
-import { hostObject } from "./annotations";
-import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
-import { hasSignatureConstraints, validateSignatures } from "./signatures";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
-import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
-import { insnLen } from "../../jvm/opcodes";
-import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi";
-import { mid, methodOf } from "../compiler/ids";
-import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
-import { NO_INDEX, type DexFile } from "../../jvm/dex";
-import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
-import type { UnitResult, UpgradeJob } from "./unit";
-import { HotUnits } from "./hotunits";
-import { lexicalFrames } from "../../jvm/stack-format";
+import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
+import { compileSymbolicSite } from "../compiler/symbolic.ts";
+import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin.ts";
+import { Code, OP } from "../compiler/code.ts";
+import { type Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { Cha } from "../compiler/cha.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
+import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
+import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
+import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
+import { rtfns, type Synth } from "../compiler/rtfns.ts";
+import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes.ts";
+import { HostClasses } from "./hostclass.ts";
+import { mhInvoke } from "./mhandles.ts";
+import { hostText } from "./members.ts";
+import { ASYNC } from "./inet.ts";
+import { generateProxy, type ProxyDefinition } from "./proxy.ts";
+import { hostObject } from "./annotations.ts";
+import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders.ts";
+import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution.ts";
+import { hasSignatureConstraints, validateSignatures } from "./signatures.ts";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc.ts";
+import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { insnLen } from "../../jvm/opcodes.ts";
+import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
+import { mid, methodOf } from "../compiler/ids.ts";
+import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage.ts";
+import { NO_INDEX, type DexFile } from "../../jvm/dex.ts";
+import { compileModule, hasJspi, suspending } from "./module.ts";
+import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot.ts";
+import type { UnitResult, UpgradeJob } from "./unit.ts";
+import { HotUnits } from "./hotunits.ts";
+import { lexicalFrames } from "../../jvm/stack-format.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
 let lexicalEnter: ((raw: Function | undefined, get: () => Function) => (s: Strand, ...args: unknown[]) => Promise<unknown>) | undefined;
@@ -122,6 +122,7 @@ type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
 export class World {
+  opts: WorldOptions;
   prog: Program;
   cha: Cha;
   table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
@@ -193,7 +194,8 @@ export class World {
   private refreshing = false;
   hotRefreshes = 0;
 
-  constructor(prog: Program, public opts: WorldOptions) {
+  constructor(prog: Program, opts: WorldOptions) {
+    this.opts = opts;
     this.prog = prog;
     this.natives = opts.natives;
     this.bridge = this.natives.bridge(this);
@@ -245,7 +247,7 @@ export class World {
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => {
         const text = this.hostString(name) as string;
-        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode), 0);
+        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode as Lookup), 0);
       },
       dexOpen: (path: unknown, loader: object | null) => park(dexOpen(this, path, loader), null),
       dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(this, buffers, arrays, starts, ends, loader), null),

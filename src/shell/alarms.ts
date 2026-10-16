@@ -1,11 +1,12 @@
-import type { PendingIntents } from "./pendingintents";
-import { clearGuestTimeout, setSystemTimeout, wallMillis, type GuestTimer } from "../guest-clock";
+import type { PendingIntents } from "./pendingintents.ts";
+import { clearGuestTimeout, setSystemTimeout, wallMillis, type GuestTimer } from "../guest-clock.ts";
 
 type Alarm = { type: number; at: number; interval: number; unwatch: () => void };
 export class Alarms {
+  private intents: PendingIntents; private elapsed: () => number; private report: (error: unknown) => void;
   private entries = new Map<number, Alarm>();
   private timer: GuestTimer | null = null;
-  constructor(private intents: PendingIntents, private elapsed: () => number, private report: (error: unknown) => void) {}
+  constructor(intents: PendingIntents, elapsed: () => number, report: (error: unknown) => void) { this.intents = intents; this.elapsed = elapsed; this.report = report; }
   cancel(id: number): void {
     const alarm = this.entries.get(id);
     if (!alarm) return;

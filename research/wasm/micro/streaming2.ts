@@ -1,5 +1,5 @@
-import { ModuleBuilder, T, ref } from "../../../src/wasm/compiler/wasmbin";
-import { Code } from "../../../src/wasm/compiler/code";
+import { ModuleBuilder, T, ref } from "../../../src/wasm/compiler/wasmbin.ts";
+import { Code } from "../../../src/wasm/compiler/code.ts";
 import { chromium } from "playwright";
 const names = ["hello", "", "é", "日本語", "😀", "a".repeat(2000), "line\nbreak", "nul\0x", "tab\t", "\u0001", "x y", "#"];
 const mb = new ModuleBuilder();

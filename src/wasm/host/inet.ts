@@ -1,9 +1,9 @@
 // Linux.android_getaddrinfo's resolution (link/inet.ts): the production one (the hosts file, numeric forms, the relay's answer), which answers
 // synchronously for everything but a name the relay must look up.
-import { resolveHost } from "../../native/net-address";
-import type { HostNet } from "../link/hostapi";
-import { ASYNC, NetOp } from "../link/inet";
-import type { World } from "../link/world";
+import { resolveHost } from "../../native/net-address.ts";
+import type { HostNet } from "../link/hostapi.ts";
+import { ASYNC, NetOp } from "../link/inet.ts";
+import type { World } from "../link/world.ts";
 
 const resolved = new WeakMap<World, number[][]>();
 /** per World, the lookups the relay answered and the one in flight */

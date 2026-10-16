@@ -1,16 +1,16 @@
 import { mkdirSync } from "node:fs";
 import { basename } from "node:path";
 import { PNG } from "pngjs";
-import { diffImages } from "../../tests/e2e/lib/diff";
-import { savePng, type Img } from "../../tests/e2e/lib/png";
-import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes";
-import type { UiNode } from "../../tests/e2e/types";
-import { Random } from "./random";
-import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model";
-import { UiExplorer, type UiPrefix } from "./ui-explorer";
-import { inspectUiApp, openUiTargets, type UiApp } from "./ui-targets";
-import { sameFailure, validateFailure, type Failure } from "./model";
-import { injectedUiFailure } from "./injected";
+import { diffImages } from "../../tests/e2e/lib/diff.ts";
+import { savePng, type Img } from "../../tests/e2e/lib/png.ts";
+import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes.ts";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import { Random } from "./random.ts";
+import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model.ts";
+import { UiExplorer, type UiPrefix } from "./ui-explorer.ts";
+import { inspectUiApp, openUiTargets, type UiApp } from "./ui-targets.ts";
+import { sameFailure, validateFailure, type Failure } from "./model.ts";
+import { injectedUiFailure } from "./injected.ts";
 
 const STEP_DEADLINE_MS = 5_000;
 

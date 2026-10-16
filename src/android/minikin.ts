@@ -11,20 +11,20 @@
 //     their hyphens as MeasuredText and the greedy breaker measure them.
 // Glyph bounds are not known, so no run overhangs.
 
-import { awaited, rt, driven, type Gen } from "../jvm/runtime";
-import { charsToString } from "../jvm/abi";
-import { scall, vcall, after } from "../jvm/natives/jentry";
-import { isLead, isTrail } from "../jvm/natives/jstring";
-import { handle, deref, release, FINALIZER } from "./handles";
-import { perf } from "../perf";
-import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
-import { type NativeTypeface, fontNatives, withFonts } from "./fonts";
+import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { charsToString } from "../jvm/abi.ts";
+import { scall, vcall, after } from "../jvm/natives/jentry.ts";
+import { isLead, isTrail } from "../jvm/natives/jstring.ts";
+import { handle, deref, release, FINALIZER } from "./handles.ts";
+import { perf } from "../perf.ts";
+import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint.ts";
+import { type NativeTypeface, fontNatives, withFonts } from "./fonts.ts";
 import {
   type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
-} from "./hyphenator";
-import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping";
-import { setEdges } from "./graphics";
+} from "./hyphenator.ts";
+import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping.ts";
+import { setEdges } from "./graphics.ts";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
 // Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
@@ -157,10 +157,11 @@ function resolveWordStyle(style: number, lang: string, forcePhrase: boolean): [n
  *  the word breaker on its own boundaries. `plain` are the boundaries without a phrase-based word
  *  style, which phrase_strict_fallback breaks at before breaking inside a word. */
 class Tracker {
+  private readonly text: string; private readonly forcePhrase: boolean;
   private run: Run | null = null;
   retry = false;
   plain: Int32Array | null = null;
-  constructor(private readonly text: string, private readonly forcePhrase: boolean) {}
+  constructor(text: string, forcePhrase: boolean) { this.text = text; this.forcePhrase = forcePhrase; }
   /** the breaker's next boundary after the run's start, or -1 when the run continues the last one's */
   *update(wb: WordBreaker, run: Run): Gen<number> {
     const last = this.run;
@@ -185,9 +186,10 @@ const isChar = (re: RegExp, cp: number) => re.test(String.fromCodePoint(cp));
 /** WordBreaker: ICU's boundaries, filtered as minikin filters them, and URLs and email addresses
  *  broken by the Chicago Manual of Style's rules */
 class WordBreaker {
+  private readonly text: string;
   private bounds: Int32Array = new Int32Array(0);
   private last = 0; private current = 0; private scanOffset = 0; private inEmailOrUrl = false;
-  constructor(private readonly text: string) {}
+  constructor(text: string) { this.text = text; }
   /** the first boundary after i, or -1 (ICU's DONE) */
   private following(i: number): number {
     const b = this.bounds;
@@ -379,8 +381,9 @@ rt.registerJnis("android/graphics/text/MeasuredText", {
 // ── line breaking ─────────────────────────────────────────────────────────────────────────
 /** AndroidLineWidth: the first lines' width, then the rest's, less each line's indent */
 export class LineWidth {
-  constructor(private first: number, private firstCount: number, private rest: number,
-    private indents: Float32Array, private offset: number) {}
+  private first: number; private firstCount: number; private rest: number; private indents: Float32Array; private offset: number;
+  constructor(first: number, firstCount: number, rest: number,
+    indents: Float32Array, offset: number) { this.first = first; this.firstCount = firstCount; this.rest = rest; this.indents = indents; this.offset = offset; }
   getAt(line: number): number {
     const width = line < this.firstCount ? this.first : this.rest, n = this.indents.length;
     return Math.max(0, width - (n ? this.indents[Math.min(line + this.offset, n - 1)] : 0));
@@ -392,7 +395,8 @@ export class LineWidth {
   }
 }
 export class TabStops {
-  constructor(private stops: Float32Array | null, private tabWidth: number) {}
+  private stops: Float32Array | null; private tabWidth: number;
+  constructor(stops: Float32Array | null, tabWidth: number) { this.stops = stops; this.tabWidth = tabWidth; }
   nextTab(widthSoFar: number): number {
     if (this.stops) for (const s of this.stops) if (s > widthSoFar) return s;
     return this.tabWidth ? Math.floor(widthSoFar / this.tabWidth + 1) * this.tabWidth : 0;

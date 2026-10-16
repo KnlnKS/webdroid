@@ -1,5 +1,5 @@
-import { jarray } from "../jvm/abi";
-import { rt } from "../jvm/runtime";
+import { jarray } from "../jvm/abi.ts";
+import { rt } from "../jvm/runtime.ts";
 
 // No audio effect library is loaded: the effects factory lists nothing to query.
 rt.claimNativeLib("audioeffect_jni");

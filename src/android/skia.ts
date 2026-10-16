@@ -1,15 +1,17 @@
 // The tab's CanvasKit, Skia compiled to wasm: SkPathOps and SkStroke for android.graphics.Path, and
 // text drawn into bitmaps through FreeType's rasterizer. A process realm uses its page's: the tab's
 // realms share one thread, so one wasm heap and one set of fonts serve them all.
-import CanvasKitInit from "canvaskit-wasm";
-import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
+import CanvasKitModule from "canvaskit-wasm";
+import canvasKitPackage from "canvaskit-wasm/package.json" with { type: "json" };
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
-import { after } from "../jvm/natives/jentry";
-import { servedFont, platformFontBytes } from "./fonts";
+import { after } from "../jvm/natives/jentry.ts";
+import { servedFont, platformFontBytes } from "./fonts.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
 let kitLoading: Promise<CanvasKit> | null = null;
+// its types declare an ES default export of what is the CommonJS module.exports
+const CanvasKitInit = CanvasKitModule as unknown as typeof CanvasKitModule.default;
 let face: Typeface | null = null;
 let emojiFace: Typeface | null = null;
 let loading: Promise<void> | null = null;
@@ -24,7 +26,7 @@ let fillTypes: FillType[] = [];
 
 function canvasKit(): CanvasKit | Promise<CanvasKit> {
   return kit ?? (kitLoading ??= CanvasKitInit({
-    locateFile: (file) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${file}?v=${canvasKitVersion}`
+    locateFile: (file) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${file}?v=${canvasKitPackage.version}`
       : `${process.cwd()}/node_modules/canvaskit-wasm/bin/${file}`,
   }).then((k) => {
     const plain = k.FillType.Winding, values = (k.FillType as unknown as { values: FillType[] }).values;

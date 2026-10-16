@@ -2,31 +2,32 @@
 // loopers, sensors, assets) and libOpenSLES (no engine, so audio takes the AudioTrack path).
 // A name they lack is NULL from dlsym, as on a device without it.
 
-import { mem, anchor } from "./mem";
-import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, type HostFn, type ArgReader } from "./host";
-import { deref } from "./jni";
-import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface";
-import { activateEglCurrent } from "./egl-current";
-import type { Cpu } from "./cpu";
-import { onMain } from "../android/mainloop";
-import { after, mainThread } from "../jvm/natives/jentry";
-import { dispatchUncaught } from "../jvm/natives/jthrowable";
-import { nativePoll } from "./poll";
-import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
-import { nativeAssets } from "../android/res";
-import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os";
-import { kernelResult } from "./libc";
+import { mem, anchor } from "./mem.ts";
+import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, type HostFn, type ArgReader } from "./host.ts";
+import { deref } from "./jni.ts";
+import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface.ts";
+import { activateEglCurrent } from "./egl-current.ts";
+import type { Cpu } from "./cpu.ts";
+import { onMain } from "../android/mainloop.ts";
+import { after, mainThread } from "../jvm/natives/jentry.ts";
+import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
+import { nativePoll } from "./poll.ts";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
+import { nativeAssets } from "../android/res.ts";
+import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os.ts";
+import { kernelResult } from "./libc.ts";
 
 // ── ANativeWindow: window.h's struct per surface, as a library built against <system/window.h> calls its function pointers
 // (Filament's perform(NATIVE_WINDOW_GET_NEXT_FRAME_ID)). The window has no buffers to dequeue: its frames come from EGL or lock/unlockAndPost.
 class NativeWindow {
+  readonly surface: GlSurface; readonly handle: number;
   refs = 1;
   format = 1;
   bits = 0; size = 0;
   locked = false; lockedWidth = 0; lockedHeight = 0;
   /** the posted frame's RGBA, reused: createImageBitmap has copied it by the time a post finishes, and a window posts one frame at a time */
   pixels = new Uint8ClampedArray(0);
-  constructor(readonly surface: GlSurface, readonly handle: number) {}
+  constructor(surface: GlSurface, handle: number) { this.surface = surface; this.handle = handle; }
 }
 const windows = new Map<number, NativeWindow>();
 const windowBySurface = new WeakMap<GlSurface, NativeWindow>();

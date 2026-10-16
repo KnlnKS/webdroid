@@ -1,6 +1,6 @@
 // Structural diff of two view hierarchies: what the device laid out against what webdroid did.
 
-import type { UiNode } from "../types";
+import type { UiNode } from "../types.ts";
 
 interface NodeDelta {
   key: string;

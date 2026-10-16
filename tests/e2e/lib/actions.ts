@@ -1,5 +1,5 @@
-import type { Act } from "./probe";
-import type { Screen, UiNode } from "../types";
+import type { Act } from "./probe.ts";
+import type { Screen, UiNode } from "../types.ts";
 
 export type EnvironmentConfig = { fixedMs: number | null; storage: [string, string][] };
 

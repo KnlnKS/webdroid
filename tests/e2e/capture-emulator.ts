@@ -7,11 +7,11 @@
 // when the flows change; `bun run e2e --full` then diffs off the committed result with no emulator.
 import { mkdtemp, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import * as emu from "./drivers/emulator";
-import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
-import { E2E_DIR, sleep } from "./lib/util";
-import { device as profile } from "../../src/shell/config";
+import * as emu from "./drivers/emulator.ts";
+import { parseArgs } from "./lib/args.ts";
+import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types.ts";
+import { E2E_DIR, sleep } from "./lib/util.ts";
+import { device as profile } from "../../src/shell/config.ts";
 
 const startup = process.argv.includes("--startup");
 const { flows } = parseArgs(process.argv.slice(2).filter((arg) => arg !== "--startup"), "bun run e2e --record");

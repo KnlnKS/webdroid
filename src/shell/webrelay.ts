@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { BridgeCalls } from "./bridgecalls";
+import { BridgeCalls } from "./bridgecalls.ts";
 
 export type WebRelayData = { kind: "webview"; id: string };
 type Peer = Pick<ServerWebSocket<WebRelayData>, "send" | "close">;

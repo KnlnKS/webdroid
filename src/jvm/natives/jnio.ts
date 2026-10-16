@@ -3,15 +3,15 @@
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, JObj, declaredField } from "../runtime";
-import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry";
-import { mem } from "../../native/mem";
-import { syncShared } from "../../native/mappings";
-import { jarray } from "../abi";
-import { handle, deref, release } from "../../android/handles";
-import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, isLive, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory";
-import { BytesFile, type FileSource } from "../../shell/lazyfile";
+import { rt, type JObj, declaredField } from "../runtime.ts";
+import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
+import { mem } from "../../native/mem.ts";
+import { syncShared } from "../../native/mappings.ts";
+import { jarray } from "../abi.ts";
+import { handle, deref, release } from "../../android/handles.ts";
+import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset.ts";
+import { isExternal, isLive, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
+import { BytesFile, type FileSource } from "../../shell/lazyfile.ts";
 export { isExternal };
 
 /** a java.nio.Buffer */

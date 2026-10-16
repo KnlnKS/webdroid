@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry";
-import { Cpu, setA64, slice } from "./cpu";
-import { dispositions, sigHandler } from "./signals";
-import { defineHost } from "./host";
-import { mem } from "./mem";
-import { futex } from "./pthread";
-import { E, RET_SENTINEL } from "./abi";
-import { jitStats, JIT_HEAT } from "./core";
-import { kernelInit, rawSyscall, syscallEntry } from "./syscall";
+import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64, slice } from "./cpu.ts";
+import { dispositions, sigHandler } from "./signals.ts";
+import { defineHost } from "./host.ts";
+import { mem } from "./mem.ts";
+import { futex } from "./pthread.ts";
+import { E, RET_SENTINEL } from "./abi.ts";
+import { jitStats, JIT_HEAT } from "./core.ts";
+import { kernelInit, rawSyscall, syscallEntry } from "./syscall.ts";
 
 /** `sig` is handled as `d` until the result puts back what was there */
 function install(sig: number, d: ReturnType<typeof sigHandler>): () => void {

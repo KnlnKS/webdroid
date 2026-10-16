@@ -1,11 +1,11 @@
 // The java.lang.Character natives, as java_lang_Character.cpp answers them with ICU4C: the ASCII range of the predicates text loops call inline,
 // every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, which reads the ICU property data through its own
 // loaders. jicu.ts answers the natives this does not.
-import { OP, type Code } from "./code";
-import { T } from "./wasmbin";
-import type { Compiler, Intrinsic } from "./j2w";
-import { mid } from "./ids";
-import { f64bits } from "./consts";
+import { OP, type Code } from "./code.ts";
+import { T } from "./wasmbin.ts";
+import type { Compiler, Intrinsic } from "./j2w.ts";
+import { mid } from "./ids.ts";
+import { f64bits } from "./consts.ts";
 
 export const charIntrinsics = new Map<string, Intrinsic>();
 const UCHARACTER = "android/icu/lang/UCharacter";
@@ -18,7 +18,7 @@ const UCHARACTER = "android/icu/lang/UCharacter";
     m.params.forEach((_, i) => c.lget(i)); extra.forEach((v) => c.i32(v));
     cx.callMethod(c, target);
   };
-  const ascii = (key: string, ret: T.i32, body: Emit, name: string, desc: string) => charIntrinsics.set(`java/lang/Character.${key}`, (cx, m, c) => {
+  const ascii = (key: string, ret: typeof T.i32, body: Emit, name: string, desc: string) => charIntrinsics.set(`java/lang/Character.${key}`, (cx, m, c) => {
     c.lget(0).i32(128).raw(OP.i32_lt_u).if_(ret); body(cx, c); c.else_(); icu(name, desc)(cx, m, c); c.end();
   });
   // c - base <u n

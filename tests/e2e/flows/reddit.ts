@@ -4,7 +4,7 @@
 // Compose draws through canvas ops with no host-view text, so every tap is positional and the
 // flow pins the screen it was measured at. Its reference is launch-only: the quick gate compares
 // the launch step, and the full lane runs it as smoke.
-import { wait, type Flow, Screen, StateCondition } from "../types";
+import { wait, type Flow, type Screen, type StateCondition } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2160, densityDpi: 480 };
 const ONE_TAP = "Add Google account";

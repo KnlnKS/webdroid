@@ -1,8 +1,8 @@
 // Pixel data in guest memory: typed views over it, the pixel-store state an upload or readback
 // reads (tracked here, since glGetIntegerv waits for the GPU), and the extents uploads read.
 
-import { mem, wrote } from "./mem";
-import { g, pbo } from "./gles3-state";
+import { mem, wrote } from "./mem.ts";
+import { g, pbo } from "./gles3-state.ts";
 
 type Ctor<A> = { new (b: ArrayBuffer, off: number, n: number): A; new (b: ArrayBuffer): A; BYTES_PER_ELEMENT: number };
 /** a typed view over guest memory; a misaligned pointer is copied, which GL data rarely is */

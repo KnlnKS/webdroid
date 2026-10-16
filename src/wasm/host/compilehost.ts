@@ -1,7 +1,7 @@
 // The page's compile host. Chrome runs the realms of a page, its Workers included, in one renderer whose V8 heaps share one 4 GB pointer cage, and a large
 // app's compile workers (the app build's World over all its dexes, the second tier's) took a third of it. A sandboxed frame gets a process of its own, with a
 // cage of its own, so the compile workers of every process Worker run there; a browser that keeps such a frame in the page's process runs them as before.
-import { COMPILE_WORKER_URL, startCompileWorker, type CompileWorkerRequest } from "./compiler";
+import { COMPILE_WORKER_URL, startCompileWorker, type CompileWorkerRequest } from "./compiler.ts";
 
 let host: Promise<(req: CompileWorkerRequest) => void> | undefined;
 function compileHost(): Promise<(req: CompileWorkerRequest) => void> {

@@ -3,24 +3,24 @@
 // bytecode, and accounts live in the broker's store, shared by every process. An operation an
 // authenticator answers runs as an AccountManagerService session: bind the authenticator's
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
-import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { boxInt } from "../jvm/natives/jbox";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { appHost } from "./apphost";
-import { PROCESS_PID, PROCESS_UID } from "./os";
-import { packages, qualifyComponent } from "./packages";
-import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountCalls, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts";
-import { attr, attrStr, parseAXML } from "./axml";
-import { servicesMatching } from "./pm";
-import { resString } from "./res";
-import { asSystem, hostStub } from "./binder";
-import { bindAsSystem } from "./server/activeservices";
-import { mkComponentName, newIntent } from "./intent";
-import { deliverBroadcast } from "./server/broadcastqueue";
-import { postMain } from "./mainloop";
+import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { boxInt } from "../jvm/natives/jbox.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { appHost } from "./apphost.ts";
+import { PROCESS_PID, PROCESS_UID } from "./os.ts";
+import { packages, qualifyComponent } from "./packages.ts";
+import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountCalls, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts.ts";
+import { attr, attrStr, parseAXML } from "./axml.ts";
+import { servicesMatching } from "./pm.ts";
+import { resString } from "./res.ts";
+import { asSystem, hostStub } from "./binder.ts";
+import { bindAsSystem } from "./server/activeservices.ts";
+import { mkComponentName, newIntent } from "./intent.ts";
+import { deliverBroadcast } from "./server/broadcastqueue.ts";
+import { postMain } from "./mainloop.ts";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
@@ -107,7 +107,7 @@ type SessionOptions = {
   /** what AccountManagerService does with a result before relaying it, or the error it answers instead */
   process?: (result: JObj) => Gen<JObj | SessionError>;
 };
-class SessionError { constructor(readonly code: number, readonly message: string) {} }
+class SessionError { readonly code: number; readonly message: string; constructor(code: number, message: string) { this.code = code; this.message = message; } }
 class JAccountSession extends JObj {
   response: JObj | null = null; options: SessionOptions = {}; unbind: () => unknown = () => {};
   /** the response to answer, and the session closed unless it waits on an activity */

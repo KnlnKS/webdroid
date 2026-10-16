@@ -1,13 +1,13 @@
 // Readiness over any descriptors: poll(2), select(2) and epoll, over the answer and wakeup fs.ts
 // gives for each descriptor.
 
-import { mem, anchor } from "./mem";
-import { PTR, type HostFn } from "./host";
-import { E } from "./abi";
-import type { Cpu } from "./cpu";
-import { fail } from "./libc";
-import { openFd, installFile, fdBase, pollEvents, watchFd, O_CLOEXEC, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./fs";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
+import { mem, anchor } from "./mem.ts";
+import { PTR, type HostFn } from "./host.ts";
+import { E } from "./abi.ts";
+import type { Cpu } from "./cpu.ts";
+import { fail } from "./libc.ts";
+import { openFd, installFile, fdBase, pollEvents, watchFd, O_CLOEXEC, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./fs.ts";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 
 export interface PollEntry { fd: number; events: number; revents: number }
 /** poll(2) over any descriptors: the number ready, once one is or `timeout` ms pass (-1: forever) */

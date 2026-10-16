@@ -5,12 +5,12 @@
 // A pin that matches no failure is stale, except a `flaky` one, whose result depends on timing. --update rewrites a whole suite's baseline from this run.
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { prepare } from "../conform/prepare";
-import { hash, parseLines, type Outcome } from "../conform/results";
-import { SUITES } from "../conform/suites";
-import { consume } from "../args";
-import { bundleForNode } from "./undernode";
-import { arrayProviderFailures, classSetupFailures } from "./conform-coverage";
+import { prepare } from "../conform/prepare.ts";
+import { hash, parseLines, type Outcome } from "../conform/results.ts";
+import { SUITES } from "../conform/suites.ts";
+import { consume } from "../args.ts";
+import { bundleForNode } from "./undernode.ts";
+import { arrayProviderFailures, classSetupFailures } from "./conform-coverage.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [

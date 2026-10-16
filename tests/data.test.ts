@@ -1,43 +1,43 @@
-import { webStorageTransport } from "../src/android/webstorage";
+import { webStorageTransport } from "../src/android/webstorage.ts";
 import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
-import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, scall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { strArray } from "../src/jvm/abi";
-import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
-import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint";
-import { exitRecordTransport } from "../src/android/server/appexitinfo";
-import { settingsStore, useSettingsStore } from "../src/android/settings";
-import { locationTransport } from "../src/android/locationmanager";
-import { serviceTransport } from "../src/android/server/activeservices";
-import { providerProcesses } from "../src/android/server/am";
-import { broadcastTransport } from "../src/android/server/broadcastqueue";
-import { pendingTransport } from "../src/android/pendingintent";
-import { alarmTransport } from "../src/android/alarm";
-import { activityTransport } from "../src/android/server/atm";
-import { newIntent } from "../src/android/intent";
-import { decodeIntent } from "../src/android/intentipc";
-import { clipboardTransport } from "../src/android/clipboard";
-import { binderTransport, useSystemServiceAccess } from "../src/android/binder";
-import { notificationTransport } from "../src/android/notification";
-import type { BrokerCalls } from "../src/shell/processes";
-import { cookieManager, cookieTransport } from "../src/android/cookies";
-import { useAccountAccess, useAccountStore } from "../src/android/accounts";
-import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions";
-import { PreferenceStore, preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, getPrefs, type PreferenceCalls } from "../src/android/sharedprefs";
-import { AccountStore, canonicalAccountCommands, type AccountCalls } from "../src/shell/accounts";
-import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
-import { WebCookies } from "../src/shell/webcookies";
-import { NativeWindow } from "../src/android/cursorwindow";
-import { handle, release } from "../src/android/handles";
-import { callProxy, serveCalls } from "../src/shell/process-port";
-import { filePathTransport } from "../src/shell/file-path";
-import { descriptorTransport } from "../src/native/process-fd";
-import { vfs } from "../src/shell/vfs";
-import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
-import { mkUri } from "../src/android/net";
-import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from "./java";
+import "../src/natives.ts";
+import { rt, JObj } from "../src/jvm/runtime.ts";
+import { newObj, vcall, scall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
+import { strArray } from "../src/jvm/abi.ts";
+import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite.ts";
+import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint.ts";
+import { exitRecordTransport } from "../src/android/server/appexitinfo.ts";
+import { settingsStore, useSettingsStore } from "../src/android/settings.ts";
+import { locationTransport } from "../src/android/locationmanager.ts";
+import { serviceTransport } from "../src/android/server/activeservices.ts";
+import { providerProcesses } from "../src/android/server/am.ts";
+import { broadcastTransport } from "../src/android/server/broadcastqueue.ts";
+import { pendingTransport } from "../src/android/pendingintent.ts";
+import { alarmTransport } from "../src/android/alarm.ts";
+import { activityTransport } from "../src/android/server/atm.ts";
+import { newIntent } from "../src/android/intent.ts";
+import { decodeIntent } from "../src/android/intentipc.ts";
+import { clipboardTransport } from "../src/android/clipboard.ts";
+import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
+import { notificationTransport } from "../src/android/notification.ts";
+import type { BrokerCalls } from "../src/shell/processes.ts";
+import { cookieManager, cookieTransport } from "../src/android/cookies.ts";
+import { useAccountAccess, useAccountStore } from "../src/android/accounts.ts";
+import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions.ts";
+import { PreferenceStore, preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, getPrefs, type PreferenceCalls } from "../src/android/sharedprefs.ts";
+import { AccountStore, canonicalAccountCommands, type AccountCalls } from "../src/shell/accounts.ts";
+import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
+import { WebCookies } from "../src/shell/webcookies.ts";
+import { NativeWindow } from "../src/android/cursorwindow.ts";
+import { handle, release } from "../src/android/handles.ts";
+import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { filePathTransport } from "../src/shell/file-path.ts";
+import { descriptorTransport } from "../src/native/process-fd.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore.ts";
+import { mkUri } from "../src/android/net.ts";
+import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from "./java.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -644,10 +644,10 @@ describe("mediastore", () => {
 });
 
 test("libcore directory operations await their canonical owner and observe peer metadata", async () => {
-  const {onMain}=await import("../src/android/mainloop");
-  const {filePathTransport,canonicalFilePaths} = await import("../src/shell/file-path");
+  const {onMain}=await import("../src/android/mainloop.ts");
+  const {filePathTransport,canonicalFilePaths} = await import("../src/shell/file-path.ts");
   const previous=filePathTransport.calls,owner=canonicalFilePaths(()=>0),root="/data/data/org.webdroid.test.pathowner",path=root+"/created";
-  const {vfs}=await import("../src/shell/vfs");vfs.mkdir(root);
+  const {vfs}=await import("../src/shell/vfs.ts");vfs.mkdir(root);
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
   filePathTransport.calls=()=>({filePrepare:async()=>{},fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
@@ -667,8 +667,8 @@ test("libcore directory operations await their canonical owner and observe peer 
 });
 
 test("queued IME edits retain their editor generation through the Java main queue", async () => {
-  const { serveInput, showInput, imeInput, imeState, imeTransport } = await import("../src/android/ime");
-  const { onMain } = await import("../src/android/mainloop");
+  const { serveInput, showInput, imeInput, imeState, imeTransport } = await import("../src/android/ime.ts");
+  const { onMain } = await import("../src/android/mainloop.ts");
   const first = await newObj("android/view/inputmethod/BaseInputConnection", "(Landroid/view/inputmethod/InputMethodManager;Z)V", null, 1);
   const second = await newObj("android/view/inputmethod/BaseInputConnection", "(Landroid/view/inputmethod/InputMethodManager;Z)V", null, 1);
   const session = (connection: JObj) => ({text:"",offset:0,start:0,end:0,compStart:-1,compEnd:-1,imeOptions:1,actionId:0,
@@ -695,9 +695,9 @@ test("queued IME edits retain their editor generation through the Java main queu
 });
 
 test("late partial extracted-text reports use the last reported baseline, not the optimistic edit", async () => {
-  const {serveInput,imeInput,imeState,extractedInput}=await import("../src/android/ime");
-  const {declaredField}=await import("../src/jvm/runtime");
-  const {csText}=await import("../src/jvm/natives/jchars");
+  const {serveInput,imeInput,imeState,extractedInput}=await import("../src/android/ime.ts");
+  const {declaredField}=await import("../src/jvm/runtime.ts");
+  const {csText}=await import("../src/jvm/natives/jchars.ts");
   const connection=await newObj("android/view/inputmethod/BaseInputConnection","(Landroid/view/inputmethod/InputMethodManager;Z)V",null,1);
   const session={text:"",offset:0,start:0,end:0,compStart:-1,compEnd:-1,imeOptions:1,actionId:0,
     call:(name:string,args:string,...values:unknown[])=>vcall(connection,name,`(${args})Z`,...values)};

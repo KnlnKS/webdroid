@@ -12,11 +12,11 @@
 // sentinel at the first point where ICU would set the flag, and then succeeds unconditionally,
 // so its first match in ICU's search order uses the sentinel exactly when the flag was set.
 
-import { rt, driven, type Gen } from "../runtime";
-import { jarray } from "../abi";
-import { javaClassSets } from "../regex-sets";
-import { newObj } from "./jentry";
-import { handle, deref, release } from "../../android/handles";
+import { rt, driven, type Gen } from "../runtime.ts";
+import { jarray } from "../abi.ts";
+import { javaClassSets } from "../regex-sets.ts";
+import { newObj } from "./jentry.ts";
+import { handle, deref, release } from "../../android/handles.ts";
 
 interface Derived { find: RegExp; sticky: RegExp; whole: RegExp }
 interface CompiledPattern {
@@ -32,7 +32,8 @@ interface CompiledPattern {
   /** hitEnd/requireEnd patterns per sentinel, compiled on first use; null when they do not compile */
   derived?: Map<string, [Derived, Derived] | null>;
 }
-const enum Op { None, LookingAt, Matches }
+const Op = { None: 0, LookingAt: 1, Matches: 2 } as const;
+type Op = (typeof Op)[keyof typeof Op];
 interface MatcherState {
   pattern: CompiledPattern;
   input: string;
@@ -97,7 +98,8 @@ function captures(source: string): (string | null)[] {
 /** what a first pass over the Java source learns: its groups, and flags set by embedded groups
  *  (applied pattern-wide, as javaToJs folds them) */
 interface Shape { names: (string | null)[]; multiline: boolean; dotall: boolean; unix: boolean; anchored: boolean }
-const enum Mode { Main, Hit, Req, Plain }
+const Mode = { Main: 0, Hit: 1, Req: 2, Plain: 3 } as const;
+type Mode = (typeof Mode)[keyof typeof Mode];
 interface Ctx extends Shape {
   src: string; i: number; mode: Mode; s: string; look: number;
   depth: number; first: boolean; anchorDepth: number; closedBelow: number;

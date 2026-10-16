@@ -1,9 +1,9 @@
 import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { prepareSystemPackages } from "./system-packages";
-import { PLATFORM_JARS } from "../src/jvm/provenance";
-import { PLATFORM_DATA } from "../src/jvm/bootclasspath";
-import { AOT_ROOT, sourceKey, type AotManifest } from "./wasm/aot-key";
+import { prepareSystemPackages } from "./system-packages.ts";
+import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
+import { PLATFORM_DATA } from "../src/jvm/bootclasspath.ts";
+import { AOT_ROOT, sourceKey, type AotManifest } from "./wasm/aot-key.ts";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;

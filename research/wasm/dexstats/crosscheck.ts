@@ -1,8 +1,8 @@
 // Cross-check: this prototype's resolution of const / const-wide against the repo's own constant typing
 // (prepared.ts annotateConstants -> constKind "F" | "D"). bun crosscheck.ts <jar-or-apk>
-import { openDexes } from "./load";
-import { inferMethod, F, D } from "./infer";
-import { decodeInstructions, prepareMethod } from "../../../src/jvm/prepared";
+import { openDexes } from "./load.ts";
+import { inferMethod, F, D } from "./infer.ts";
+import { decodeInstructions, prepareMethod } from "../../../src/jvm/prepared.ts";
 const path = process.argv[2];
 let both = 0, repoF = 0, mineF = 0, agreeF = 0, repoD = 0, mineD = 0, agreeD = 0, consts = 0, mineAmbig = 0;
 const diffs: string[] = [];

@@ -1,14 +1,14 @@
 import index from "./index.html";
-import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
-import { webDocument } from "./src/shell/webhtml";
-import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy";
-import { openInstall } from "./src/shell/install";
-import { EXT_MIME } from "./src/mime";
-import { prepareSystemPackages } from "./scripts/system-packages";
-import { aotFile, aotManifest } from "./scripts/wasm/aot-serve";
+import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject.ts";
+import { webDocument } from "./src/shell/webhtml.ts";
+import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy.ts";
+import { openInstall } from "./src/shell/install.ts";
+import { EXT_MIME } from "./src/mime.ts";
+import { prepareSystemPackages } from "./scripts/system-packages.ts";
+import { aotFile, aotManifest } from "./scripts/wasm/aot-serve.ts";
 
-import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
-import { parseIpv4 } from "./src/shell/relay";
+import { WebRelay, type WebRelayData } from "./src/shell/webrelay.ts";
+import { parseIpv4 } from "./src/shell/relay.ts";
 import dns from "node:dns/promises";
 
 await prepareSystemPackages();

@@ -2,7 +2,7 @@
 // itself on the app's window (RendererReady) and takes its task with a port (RendererTask); the page it
 // loads then talks to the app over that port (PageMessage one way, AppMessage the other) and calls its
 // JavaScript interfaces through the bridge (BridgeCall), as the proxy calls the client's callbacks.
-import type { ClientHints } from "./clienthints";
+import type { ClientHints } from "./clienthints.ts";
 
 /** a cookie as document.cookie shows it, and when it expires (0: with the session) */
 export type DocumentCookie = { text: string; expires: number };

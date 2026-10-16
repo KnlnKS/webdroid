@@ -1,9 +1,9 @@
-import { E } from "./abi";
+import { E } from "./abi.ts";
 import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
-  javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
-import { isMutablePath } from "../shell/file-path";
-import { vfs } from "../shell/vfs";
-import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors";
+  javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs.ts";
+import { isMutablePath } from "../shell/file-path.ts";
+import { vfs } from "../shell/vfs.ts";
+import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors.ts";
 
 export type RemoteDescriptor = { token: number; calls: () => DescriptorCalls; close: Promise<number> | null };
 /** Bound lazily after the process is registered; the page's kernel never installs this. */

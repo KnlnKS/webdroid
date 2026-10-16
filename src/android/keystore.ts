@@ -4,23 +4,23 @@
 // the key material, the authorizations KeyMint enforces, and the certificates of asymmetric keys.
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
-import { once } from "../jvm/suspend";
-import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { concat, jarray } from "../jvm/abi";
-import { after, newObj, scall } from "../jvm/natives/jentry";
-import { unbox } from "../jvm/natives/jbox";
-import { hostStub } from "./binder";
-import { PROCESS_UID } from "./os";
-import { device } from "../shell/config";
-import { DIGESTS, Hmac } from "../jvm/natives/digest";
-import { aes, ctr, AesGcm } from "../jvm/natives/ciphers";
+import { once } from "../jvm/suspend.ts";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { concat, jarray } from "../jvm/abi.ts";
+import { after, newObj, scall } from "../jvm/natives/jentry.ts";
+import { unbox } from "../jvm/natives/jbox.ts";
+import { hostStub } from "./binder.ts";
+import { PROCESS_UID } from "./os.ts";
+import { device } from "../shell/config.ts";
+import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
+import { aes, ctr, AesGcm } from "../jvm/natives/ciphers.ts";
 import {
   CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
   oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength, equal,
   EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
-} from "../jvm/natives/pkey";
-import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der";
-import type { PackageState } from "../shell/packagedata";
+} from "../jvm/natives/pkey.ts";
+import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 
 // KeyMint's constants (android.hardware.security.keymint)
 const TAG = {

@@ -1,13 +1,13 @@
 // IShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run from bytecode.
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
-import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { after, vcall } from "../jvm/natives/jentry";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { device } from "../shell/config";
-import { hostStub, parceledList } from "./binder";
-import { mkComponentName } from "./intent";
-import { launcherActivity } from "./pm";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { after, vcall } from "../jvm/natives/jentry.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { device } from "../shell/config.ts";
+import { hostStub, parceledList } from "./binder.ts";
+import { mkComponentName } from "./intent.ts";
+import { launcherActivity } from "./pm.ts";
 
 const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
 const FLAG_DYNAMIC = 1, MATCH_DYNAMIC = 2, CLONE_REMOVE_FOR_CREATOR = 9;

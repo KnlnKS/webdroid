@@ -3,14 +3,14 @@
 // Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: bun run wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
-import { loadDexes, world } from "./lib";
-import { externs } from "../../src/wasm/link/intrinsics";
-import { Program } from "../../src/wasm/compiler/program";
-import { Compiler } from "../../src/wasm/compiler/j2w";
-import { natives } from "./harness";
-import { mid } from "../../src/wasm/compiler/ids";
-import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module";
-import { PLATFORM_PATHS, ROOT } from "./paths";
+import { loadDexes, world } from "./lib.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { Compiler } from "../../src/wasm/compiler/j2w.ts";
+import { natives } from "./harness.ts";
+import { mid } from "../../src/wasm/compiler/ids.ts";
+import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module.ts";
+import { PLATFORM_PATHS, ROOT } from "./paths.ts";
 
 const KNOWN = [/^native: /];
 // Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.

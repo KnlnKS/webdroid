@@ -2,12 +2,12 @@ import { mkdir, readdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { gzipSync, zipSync } from "fflate";
-import { centralDir, entryBytes } from "../src/jvm/natives/jzip";
-import { parsePackageArchive } from "../src/android/packagearchive";
-import { verifyApkSignature } from "../src/android/apksignature";
-import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages";
-import type { PackedArchiveIndex } from "../src/shell/packedarchive";
-import { isDexEntry } from "../src/jvm/dex";
+import { centralDir, entryBytes } from "../src/jvm/natives/jzip.ts";
+import { parsePackageArchive } from "../src/android/packagearchive.ts";
+import { verifyApkSignature } from "../src/android/apksignature.ts";
+import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages.ts";
+import type { PackedArchiveIndex } from "../src/shell/packedarchive.ts";
+import { isDexEntry } from "../src/jvm/dex.ts";
 
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 async function writeFile(path: string, data: Uint8Array | string): Promise<void> {

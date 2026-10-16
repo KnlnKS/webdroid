@@ -1,8 +1,8 @@
 // java.util's collections run from libcore. TS builds and reads the ones it exchanges with Java
 // through their Java API, an ArrayMap by its own fields.
-import { mangleField } from "../abi";
-import { driven, type Gen } from "../runtime";
-import { vcall, newObj } from "./jentry";
+import { mangleField } from "../abi.ts";
+import { driven, type Gen } from "../runtime.ts";
+import { vcall, newObj } from "./jentry.ts";
 
 type Obj = Record<string, any>;
 

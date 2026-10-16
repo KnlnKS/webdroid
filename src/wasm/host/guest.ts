@@ -1,8 +1,8 @@
 // The native core's memory as the Wasm tier's guest memory (hostapi.ts GuestMemory): direct buffers are blocks of its allocator, at the address the guest knows.
-import { core, memory } from "../../native/core";
-import { mem, wrote } from "../../native/mem";
-import { PAGE_SHIFT } from "../../native/abi";
-import type { GuestMemory } from "../link/hostapi";
+import { core, memory } from "../../native/core.ts";
+import { mem, wrote } from "../../native/mem.ts";
+import { PAGE_SHIFT } from "../../native/abi.ts";
+import type { GuestMemory } from "../link/hostapi.ts";
 
 export const guestMemory: GuestMemory = {
   memory,

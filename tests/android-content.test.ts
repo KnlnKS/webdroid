@@ -1,36 +1,36 @@
 import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
-import "../src/natives";
-import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { jarray } from "../src/jvm/abi";
-import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
-import { mkUri } from "../src/android/net";
-import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
-import { vfs } from "../src/shell/vfs";
-import { pickFiles } from "../src/shell/hostfs";
-import { centralDir, zipTree } from "../src/jvm/natives/jzip";
-import { mergeInstall } from "../src/shell/install";
-import { BytesFile, readFully } from "../src/shell/lazyfile";
-import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive";
-import { registerPackage, FLAG_IS_GAME } from "../src/android/pm";
-import { hostedService } from "../src/android/binder";
-import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
-import { Resources, NativeTheme, rvString, newSV } from "../src/android/res";
-import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
-import { mkComponentName, newIntent } from "../src/android/intent";
-import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
-import { uptimeMillis } from "../src/guest-clock";
-import { createProcessEndpoint } from "../src/shell/process-endpoint";
-import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes";
-import { NOT_CRASHED } from "../src/android/server/appexitinfo";
-import { PendingIntents } from "../src/shell/pendingintents";
-import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent";
-import { alarmTransport } from "../src/android/alarm";
-import { callProxy, serveCalls } from "../src/shell/process-port";
-import { javaReadFd } from "../src/native/fs";
-import { Arsc } from "../src/android/arsc";
-import { scall, loadLibcore, bootApp, packageRecord } from "./java";
+import "../src/natives.ts";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
+import { jarray } from "../src/jvm/abi.ts";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants.ts";
+import { mkUri } from "../src/android/net.ts";
+import { packages, PackageRecord, signaturePermissions } from "../src/android/packages.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { pickFiles } from "../src/shell/hostfs.ts";
+import { centralDir, zipTree } from "../src/jvm/natives/jzip.ts";
+import { mergeInstall } from "../src/shell/install.ts";
+import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
+import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";
+import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
+import { hostedService } from "../src/android/binder.ts";
+import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
+import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
+import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
+import { mkComponentName, newIntent } from "../src/android/intent.ts";
+import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc.ts";
+import { uptimeMillis } from "../src/guest-clock.ts";
+import { createProcessEndpoint } from "../src/shell/process-endpoint.ts";
+import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
+import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
+import { PendingIntents } from "../src/shell/pendingintents.ts";
+import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
+import { alarmTransport } from "../src/android/alarm.ts";
+import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { javaReadFd } from "../src/native/fs.ts";
+import { Arsc } from "../src/android/arsc.ts";
+import { scall, loadLibcore, bootApp, packageRecord } from "./java.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -201,7 +201,7 @@ describe("package-intent-filters", () => {
     ] }] };
     packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
     try {
-      const { resolveActivity } = await import("../src/android/pm");
+      const { resolveActivity } = await import("../src/android/pm.ts");
       const resolve = async (url: string) => {
         const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", "android.intent.action.VIEW", await mkUri(url));
         await vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);

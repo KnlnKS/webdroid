@@ -1,4 +1,4 @@
-import type { UiNode } from "../types";
+import type { UiNode } from "../types.ts";
 
 const decode = (value: string): string => value
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')

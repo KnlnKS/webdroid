@@ -1,8 +1,8 @@
 // Fetches and compiles the modules of the platform build a start of the process wants in workers of their own. The engine takes a streamed module's bytes on the thread that
 // fetched them, which for 130 MB of modules keeps the page's main thread from anything else for hundreds of milliseconds; a compiled module crosses to the page as it is. Several
 // workers share the files, as the machine has threads for them.
-import { COMPILE_OPTIONS } from "../link/module";
-import type { FetchStore } from "../link/aotstore";
+import { COMPILE_OPTIONS } from "../link/module.ts";
+import type { FetchStore } from "../link/aotstore.ts";
 
 // each worker keeps a few requests in flight (link/aotstore.ts WIDTH: Chrome fails requests once about 1,600 are pending)
 const SOURCE = `onmessage = async ({ data: { base, files, options, width } }) => {

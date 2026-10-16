@@ -1,13 +1,14 @@
 // Class-hierarchy analysis over a loaded class set (closed-world assumption, see REPORT).
-import type { DexFile } from "../../../src/jvm/dex";
+import type { DexFile } from "../../../src/jvm/dex.ts";
 
 export interface ClassInfo { desc: string; sup: string | null; ifaces: string[]; flags: number; methods: Map<string, number>; }
 export const ACC_FINAL = 0x10, ACC_INTERFACE = 0x200, ACC_ABSTRACT = 0x400, ACC_STATIC = 0x8, ACC_PRIVATE = 0x2;
 
 export class Universe {
+  readonly base?: Universe;
   classes = new Map<string, ClassInfo>();
   kids = new Map<string, string[]>();
-  constructor(readonly base?: Universe) {}
+  constructor(base?: Universe) { this.base = base; }
   get(d: string): ClassInfo | undefined { return this.classes.get(d) ?? this.base?.get(d); }
   children(d: string): string[] {
     const a = this.kids.get(d), b = this.base?.children(d);

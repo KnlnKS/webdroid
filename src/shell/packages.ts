@@ -1,5 +1,5 @@
-import { vfs } from "./vfs";
-import { openDb, txDone } from "./idb";
+import { vfs } from "./vfs.ts";
+import { openDb, txDone } from "./idb.ts";
 
 let database: Promise<IDBDatabase> | null = null;
 const store = () => database ??= openDb("webdroid-packages", "apks");

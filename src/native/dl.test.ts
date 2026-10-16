@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { mainThread } from "../jvm/natives/jentry";
-import { vfs } from "../shell/vfs";
-import { Cpu, setA64 } from "./cpu";
-import { libdl, linkerHooks, modules } from "./dl";
-import { defineHost } from "./host";
-import { mem } from "./mem";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { vfs } from "../shell/vfs.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { libdl, linkerHooks, modules } from "./dl.ts";
+import { defineHost } from "./host.ts";
+import { mem } from "./mem.ts";
 
 /** an AArch64 image whose DT_INIT_ARRAY and DT_FINI_ARRAY call the host functions given, with a
  *  16-byte PT_TLS segment */

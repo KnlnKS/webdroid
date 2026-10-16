@@ -3,10 +3,10 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-nest-")), sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Nest.java")]);

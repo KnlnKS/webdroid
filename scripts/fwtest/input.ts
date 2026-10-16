@@ -1,10 +1,10 @@
 // android.view's input classes against the reference AVD: InputProbe (scripts/InputProbe.java) runs
 // here over our natives and hosted IInputManager, and its output is compared line by line with
 // what it printed on the device (tests/fixtures/input-probe.txt, scripts/input-probe.ts).
-import { DexFile } from "../../src/jvm/dex";
-import { jarray, mangleStaticField } from "../../src/jvm/abi";
-import { newObj, scall, vcall } from "../../src/jvm/natives/jentry";
-import { exercise, loader, statics } from "./harness";
+import { DexFile } from "../../src/jvm/dex.ts";
+import { jarray, mangleStaticField } from "../../src/jvm/abi.ts";
+import { newObj, scall, vcall } from "../../src/jvm/natives/jentry.ts";
+import { exercise, loader, statics } from "./harness.ts";
 
 /** event ids are random; the AVD has input devices beyond the two this host models */
 const comparable = (lines: string[]) => lines

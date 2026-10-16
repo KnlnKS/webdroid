@@ -1,18 +1,18 @@
 import { expect, test, describe } from "bun:test";
-import "../src/natives";
-import { driven, type Gen, rt } from "../src/jvm/runtime";
-import { Cpu, setA64 } from "../src/native/cpu";
-import { mem } from "../src/native/mem";
-import { mainThread, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry";
-import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi";
-import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host";
-import { libcInit } from "../src/native/libc";
-import { kernelInit } from "../src/native/syscall";
-import { eglInit } from "../src/native/egl";
-import { gl } from "../src/android/gl";
-import { EglContext } from "../src/android/glsurface";
-import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current";
-import { gles3Init } from "../src/native/gles3";
+import "../src/natives.ts";
+import { driven, type Gen, rt } from "../src/jvm/runtime.ts";
+import { Cpu, setA64 } from "../src/native/cpu.ts";
+import { mem } from "../src/native/mem.ts";
+import { mainThread, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry.ts";
+import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi.ts";
+import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host.ts";
+import { libcInit } from "../src/native/libc.ts";
+import { kernelInit } from "../src/native/syscall.ts";
+import { eglInit } from "../src/native/egl.ts";
+import { gl } from "../src/android/gl.ts";
+import { EglContext } from "../src/android/glsurface.ts";
+import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current.ts";
+import { gles3Init } from "../src/native/gles3.ts";
 
 
 /** Host-call arguments: integer-class reads consume `ints`, 64-bit reads `longs`, string reads `strings`. */

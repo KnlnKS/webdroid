@@ -30,9 +30,9 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, webkit, type BrowserContext } from "playwright";
-import { installLatencyObserver } from "./observe";
-import { matchesState, compileDeltas, type Expectation } from "./expect";
-import { consume } from "../args";
+import { installLatencyObserver } from "./observe.ts";
+import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
+import { consume } from "../args.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";

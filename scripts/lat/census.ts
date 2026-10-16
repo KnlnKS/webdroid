@@ -3,7 +3,7 @@
 // hop). Calls the main thread made are split out, since only those hold up a frame. It sizes batching SQLite, caching Settings and moving
 // system_server off the page.
 //   bun scripts/lat/census.ts <run.json> ... [--windows]
-import { brokerMethods } from "../../src/shell/processes";
+import { brokerMethods } from "../../src/shell/processes.ts";
 
 const THREAD = 17, CALL = 20, ANSWER = 21, SERVE = 25, MAIN = 1;
 type Mark = [number, number, number];

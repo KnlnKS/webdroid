@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { setA64, type Cpu } from "./cpu";
-import { runCases, RET } from "./a64.testkit";
-import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases";
+import { setA64, type Cpu } from "./cpu.ts";
+import { runCases, RET } from "./a64.testkit.ts";
+import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases.ts";
 
 // The emitter against a real AArch64 core: scripts/simd-oracle.ts ran every instruction in
 // a64simd.oracle.cases.ts on this Mac and recorded v0-v3, x2-x5 and NZCV afterwards. Results

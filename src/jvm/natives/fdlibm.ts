@@ -1,4 +1,4 @@
-import { rt } from "../runtime";
+import { rt } from "../runtime.ts";
 // fdlibm 5.3, which StrictMath is specified by and ART's StrictMath natives link, ported bit for
 // bit: JS engines' Math functions are not fdlibm's (JavaScriptCore's differ in the last bit, V8's
 // hypot is its own). Each function follows the C source it names; HI/LO are C's __HI/__LO.

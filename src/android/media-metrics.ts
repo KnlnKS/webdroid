@@ -1,8 +1,8 @@
 // IMediaMetricsManager, under AOSP's MediaMetricsManager, its sessions, events and LogSessionId:
 // MediaMetricsManagerService hands out 12 random bytes as an unpadded URL-safe base64 session id
 // and turns reports into statsd atoms, which nothing on this device reads.
-import { JObj, rt, noops } from "../jvm/runtime";
-import { hostStub } from "./binder";
+import { JObj, rt, noops } from "../jvm/runtime.ts";
+import { hostStub } from "./binder.ts";
 
 const sessionId = () => crypto.getRandomValues(new Uint8Array(12)).toBase64({ alphabet: "base64url", omitPadding: true });
 const M = "android/media/metrics/", S = "Ljava/lang/String;";

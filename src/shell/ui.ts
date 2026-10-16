@@ -1,4 +1,4 @@
-import { device, parseScreen, storeScreen, type Screen } from "./config";
+import { device, parseScreen, storeScreen, type Screen } from "./config.ts";
 
 type SessionState =
   | { kind: "loading"; file: string; stage: string }

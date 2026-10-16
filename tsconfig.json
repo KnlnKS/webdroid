@@ -1,14 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "nodenext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUnusedLocals": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true,
-    "types": ["@types/bun"]
+    "types": ["node"]
   },
-  "include": ["src", "server.ts", "scripts", "tests"]
+  "include": ["src", "server.ts", "scripts", "tests", "vite.config.ts"]
 }

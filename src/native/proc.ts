@@ -3,17 +3,17 @@
 // and the calls a sandboxed app process cannot make (fork, exec, ptrace), which fail as they
 // would on a device at its process limit or under its sandbox.
 
-import { wrote, mem } from "./mem";
-import { hostLib, hostData, type HostFn, PTR, stp, vaList, ARG0, ptr, guestSort } from "./host";
-import { E } from "./abi";
-import { type Cpu, cpuByOsTid } from "./cpu";
-import { setAbortMessage } from "./crash";
-import { SIGNAL_LIBC } from "./signals";
-import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto } from "./libc";
-import { format } from "./printf";
-import { device } from "../shell/config";
-import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
-import { appUserName, procIdentity } from "../shell/procfs";
+import { wrote, mem } from "./mem.ts";
+import { hostLib, hostData, type HostFn, PTR, stp, vaList, ARG0, ptr, guestSort } from "./host.ts";
+import { E } from "./abi.ts";
+import { type Cpu, cpuByOsTid } from "./cpu.ts";
+import { setAbortMessage } from "./crash.ts";
+import { SIGNAL_LIBC } from "./signals.ts";
+import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto } from "./libc.ts";
+import { format } from "./printf.ts";
+import { device } from "../shell/config.ts";
+import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties.ts";
+import { appUserName, procIdentity } from "../shell/procfs.ts";
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;

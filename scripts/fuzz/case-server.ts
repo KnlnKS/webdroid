@@ -1,4 +1,4 @@
-import { validateProbeCase, validateProbeResult, type ProbeCase, type ProbeResult } from "./model";
+import { validateProbeCase, validateProbeResult, type ProbeCase, type ProbeResult } from "./model.ts";
 
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type" };
 

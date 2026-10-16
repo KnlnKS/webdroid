@@ -1,7 +1,7 @@
-import { E } from "../native/abi";
-import { vfs, type FileAttributes } from "./vfs";
-import { procIdentity } from "./procfs";
-import { mkdirPath, accessPath, renamePath, removePath, createPath } from "../native/fs";
+import { E } from "../native/abi.ts";
+import { vfs, type FileAttributes } from "./vfs.ts";
+import { procIdentity } from "./procfs.ts";
+import { mkdirPath, accessPath, renamePath, removePath, createPath } from "../native/fs.ts";
 export type PathStat = { directory: boolean; size: number; mtime: number; uid: number; gid: number; mode: number };
 export type PathReply<T> = { errno: number; value: T };
 export type FilePathCalls = {

@@ -1,10 +1,10 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { rt, declaredField } from "../jvm/runtime";
-import { classNameOf } from "../jvm/natives/jentry";
-import type { NativeBitmap } from "./bitmap";
-import { isRecording, transformOf, type Ctx2D } from "./recording";
-import { localBounds, type Affine } from "./matrix";
+import { rt, declaredField } from "../jvm/runtime.ts";
+import { classNameOf } from "../jvm/natives/jentry.ts";
+import type { NativeBitmap } from "./bitmap.ts";
+import { isRecording, transformOf, type Ctx2D } from "./recording.ts";
+import { localBounds, type Affine } from "./matrix.ts";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -65,14 +65,16 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
  * The Lighting and ColorMatrix setters update `matrix` in place, and a paint holding it sees them.
  */
 export class NativeColorFilter {
-  constructor(readonly matrix: Float32Array | null, readonly color = 0, readonly mode = "DST") {}
+  readonly matrix: Float32Array | null; readonly color; readonly mode;
+  constructor(matrix: Float32Array | null, color = 0, mode = "DST") { this.matrix = matrix; this.color = color; this.mode = mode; }
 }
 /**
  * A Shader's native instance: what it paints, under the local matrix it was created with (null
  * for identity). It never changes; Shader discards it and makes another when the Java side does.
  */
 export abstract class NativeShader {
-  constructor(readonly local: Affine | null) {}
+  readonly local: Affine | null;
+  constructor(local: Affine | null) { this.local = local; }
   abstract pattern(ctx: Ctx2D): CanvasGradient | CanvasPattern | null;
   /** the pattern is made for the target a draw lands on, so a display list makes it at replay */
   get atReplay(): boolean { return false; }
@@ -81,9 +83,10 @@ export const shaderIdentity: Affine = [1, 0, 0, 1, 0, 0];
 const bitmapShaderTiles = new WeakMap<NativeBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
 /** tileX/tileY: Shader.TileMode's nativeInt (CLAMP, REPEAT, MIRROR, DECAL) */
 export class NativeBitmapShader extends NativeShader {
+  readonly bitmap: NativeBitmap; readonly tileX: number; readonly tileY: number;
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
-  constructor(local: Affine | null, readonly bitmap: NativeBitmap, readonly tileX: number, readonly tileY: number) { super(local); }
+  constructor(local: Affine | null, bitmap: NativeBitmap, tileX: number, tileY: number) { super(local); this.bitmap = bitmap; this.tileX = tileX; this.tileY = tileY; }
   // its pattern() covers the target's canvas
   override get atReplay(): boolean { return true; }
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
@@ -152,10 +155,11 @@ export function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: NativeSh
 }
 /** ComposeShader: `src` blended onto `dst` by the mode, rasterized over the target once per transform */
 export class NativeComposeShader extends NativeShader {
+  readonly dst: NativeShader; readonly src: NativeShader; readonly op: GlobalCompositeOperation | null;
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
   /** `op` is null for DST, which keeps the destination shader alone */
-  constructor(local: Affine | null, readonly dst: NativeShader, readonly src: NativeShader, readonly op: GlobalCompositeOperation | null) { super(local); }
+  constructor(local: Affine | null, dst: NativeShader, src: NativeShader, op: GlobalCompositeOperation | null) { super(local); this.dst = dst; this.src = src; this.op = op; }
   override pattern(ctx: Ctx2D): CanvasPattern {
     const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
     const key = `${width},${height}:${matrix.toString()}:${this.local}`;
@@ -179,7 +183,8 @@ export class NativeComposeShader extends NativeShader {
 export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
   new NativeComposeShader(local, dst, src, mode === 2 ? null : COMPOSITE[BLEND_MODES[mode]] ?? "source-over");
 export class NativeGradient extends NativeShader {
-  constructor(local: Affine | null, readonly grad: CanvasGradient) { super(local); }
+  readonly grad: CanvasGradient;
+  constructor(local: Affine | null, grad: CanvasGradient) { super(local); this.grad = grad; }
   override pattern(): CanvasGradient { return this.grad; }
 }
 let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;

@@ -1,7 +1,7 @@
 // Boot an apk headless with the native host-call trace on, wait, then dump wd.native state and logs.
 //   bun scripts/ndbg.ts <apk> [waitMs] [traceRegex]
-import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
-import { BASE_URL, sleep } from "../tests/e2e/lib/util";
+import { WebdroidDriver } from "../tests/e2e/drivers/webdroid.ts";
+import { BASE_URL, sleep } from "../tests/e2e/lib/util.ts";
 
 const [apk, waitMs = "8000", re] = process.argv.slice(2);
 const drv = await WebdroidDriver.launch();

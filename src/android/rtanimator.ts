@@ -5,14 +5,14 @@
 // BaseRenderNodeAnimator: requests staged from Java resolve on the next frame, which animates at
 // the frame's time and reports a finish to the Java listener.
 
-import { rt } from "../jvm/runtime";
-import { scall } from "../jvm/natives/jentry";
-import { deref, handle, ownedHandle, take } from "./handles";
-import { type NativePaint } from "./paint";
-import { NativeRenderNode, prop as canvasProperty } from "./rendernode";
-import { interpolatePaths, PathData } from "./pathparser";
-import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable";
-import { detached } from "../jvm/natives/jthrowable";
+import { rt } from "../jvm/runtime.ts";
+import { scall } from "../jvm/natives/jentry.ts";
+import { deref, handle, ownedHandle, take } from "./handles.ts";
+import type { NativePaint } from "./paint.ts";
+import { type NativeRenderNode, prop as canvasProperty } from "./rendernode.ts";
+import { interpolatePaths, PathData } from "./pathparser.ts";
+import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
 
 // ── Interpolator.cpp
 export type Interpolator = (t: number) => number;
@@ -65,6 +65,7 @@ const START = 0, REVERSE = 1, RESET = 2, END = 4;
 const NONE = 0, ACTION_RESET = 1, ACTION_END = 2;
 
 abstract class RenderAnimator {
+  final: number;
   state = NOT_STARTED;
   stagingState = NOT_STARTED;
   readonly requests: number[] = [];
@@ -75,7 +76,7 @@ abstract class RenderAnimator {
   pendingAction = NONE;
   interpolator: Interpolator = (t) => t;
   from = 0; delta = 0; hasStart = false;
-  constructor(public final: number) {}
+  constructor(final: number) { this.final = final; }
   protected abstract getValue(): number;
   protected abstract setValue(v: number): void;
   protected onPlayTimeChanged(_playTime: number): void {}
@@ -160,10 +161,11 @@ const NODE_PROPERTIES: [get: (n: NativeRenderNode) => number, set: (n: NativeRen
   [(n) => n.alpha, (n, v) => { n.alpha = Math.min(1, Math.max(0, v)); }],
 ];
 class NodeAnimator extends RenderAnimator {
+  readonly read: (n: NativeRenderNode | null) => number; readonly write: (n: NativeRenderNode | null, v: number) => void;
   target: NativeRenderNode | null = null;
   /** the Java RenderNodeAnimator a finish is reported to, once */
   listener: object | null = null;
-  constructor(final: number, readonly read: (n: NativeRenderNode | null) => number, readonly write: (n: NativeRenderNode | null, v: number) => void) { super(final); }
+  constructor(final: number, read: (n: NativeRenderNode | null) => number, write: (n: NativeRenderNode | null, v: number) => void) { super(final); this.read = read; this.write = write; }
   protected getValue(): number { return this.read(this.target); }
   protected setValue(v: number): void { this.write(this.target, v); }
   protected onFinished(): void {
@@ -253,30 +255,36 @@ abstract class Holder {
   }
 }
 class GroupHolder extends Holder {
-  constructor(readonly group: Group, readonly id: number, readonly from: number, readonly to: number) { super(); }
+  readonly group: Group; readonly id: number; readonly from: number; readonly to: number;
+  constructor(group: Group, id: number, from: number, to: number) { super(); this.group = group; this.id = id; this.from = from; this.to = to; }
   set(f: number): void { this.group.set(this.id, this.value(this.from, this.to, f, lerp)); }
 }
 class PathHolder extends Holder {
-  constructor(readonly path: FullPath, readonly id: number, readonly from: number, readonly to: number, readonly color: boolean) { super(); }
+  readonly path: FullPath; readonly id: number; readonly from: number; readonly to: number; readonly color: boolean;
+  constructor(path: FullPath, id: number, from: number, to: number, color: boolean) { super(); this.path = path; this.id = id; this.from = from; this.to = to; this.color = color; }
   set(f: number): void { this.path.animate(this.id, this.value(this.from, this.to, f, this.color ? colorLerp : lerp), this.color); }
 }
 class PathDataHolder extends Holder {
+  readonly path: VPath; readonly from: PathData; readonly to: PathData;
   private readonly out = new PathData();
-  constructor(readonly path: VPath, readonly from: PathData, readonly to: PathData) { super(); }
+  constructor(path: VPath, from: PathData, to: PathData) { super(); this.path = path; this.from = from; this.to = to; }
   set(f: number): void { interpolatePaths(this.out, this.from, this.to, f); this.path.setData(this.out); }
 }
 class RootAlphaHolder extends Holder {
-  constructor(readonly tree: Tree, readonly from: number, readonly to: number) { super(); }
+  readonly tree: Tree; readonly from: number; readonly to: number;
+  constructor(tree: Tree, from: number, to: number) { super(); this.tree = tree; this.from = from; this.to = to; }
   set(f: number): void { this.tree.alpha = this.value(this.from, this.to, f, lerp); }
 }
 
 // ── PropertyValuesAnimatorSet.cpp
 const REPEAT_REVERSE = 2, UINT32_MAX = 0xffffffff;
 class PropertyAnimator {
+  readonly holder: Holder; readonly interpolator: Interpolator; readonly delay: number; readonly duration: number; readonly mode: number;
   readonly repeat: number;
   readonly total: number;
   private latest = -1;
-  constructor(readonly holder: Holder, readonly interpolator: Interpolator, readonly delay: number, readonly duration: number, repeat: number, readonly mode: number) {
+  constructor(holder: Holder, interpolator: Interpolator, delay: number, duration: number, repeat: number, mode: number) {
+    this.holder = holder; this.interpolator = interpolator; this.delay = delay; this.duration = duration; this.mode = mode;
     this.repeat = repeat < 0 ? UINT32_MAX : repeat;
     this.total = (this.repeat + 1) * duration + delay;
   }

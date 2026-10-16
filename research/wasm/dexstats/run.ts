@@ -2,17 +2,17 @@
 //   bun run.ts [--only label,label] [--limit N]
 // Writes out/<label>.json per corpus. Platform universe (framework.jar + boot jars) is the CHA base.
 import { readdirSync, writeFileSync } from "node:fs";
-import { ROOT, openDexes } from "./load";
-import type { DexFile } from "../../../src/jvm/dex";
-import { decodeInstructions, prepareMethod, switchCases } from "../../../src/jvm/prepared";
-import { Flow } from "../../../src/jvm/structure";
-import { isInvoke, isInstanceInvoke } from "../../../src/wasm/compiler/opinfo";
-import { buildCfg } from "../../../src/wasm/compiler/cfg";
-import { FAMILY } from "./families";
-import { isReducible } from "./reducible";
-import { parseMethodDesc } from "../../../src/jvm/abi";
-import { inferMethod, retOf, KIND_NAMES } from "./infer";
-import { Universe, ACC_FINAL, ACC_INTERFACE } from "./cha";
+import { ROOT, openDexes } from "./load.ts";
+import type { DexFile } from "../../../src/jvm/dex.ts";
+import { decodeInstructions, prepareMethod, switchCases } from "../../../src/jvm/prepared.ts";
+import { Flow } from "../../../src/jvm/structure.ts";
+import { isInvoke, isInstanceInvoke } from "../../../src/wasm/compiler/opinfo.ts";
+import { buildCfg } from "../../../src/wasm/compiler/cfg.ts";
+import { FAMILY } from "./families.ts";
+import { isReducible } from "./reducible.ts";
+import { parseMethodDesc } from "../../../src/jvm/abi.ts";
+import { inferMethod, retOf, KIND_NAMES } from "./infer.ts";
+import { Universe, ACC_FINAL, ACC_INTERFACE } from "./cha.ts";
 
 const args = process.argv.slice(2);
 const only = args.includes("--only") ? args[args.indexOf("--only") + 1].split(",") : null;

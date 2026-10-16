@@ -7,10 +7,10 @@
 import { join } from "node:path";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { aotFile, aotManifest } from "./aot-serve";
-import type { ProbeResult } from "./boot-probe-page";
-import { JAVA, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { aotFile, aotManifest } from "./aot-serve.ts";
+import type { ProbeResult } from "./boot-probe-page.ts";
+import { JAVA, ROOT } from "./paths.ts";
+import { filesIn, shellIn } from "./tools.ts";
 
 const here = import.meta.dir;
 // the page has no files of its own (harness.ts is given the jars it fetched)

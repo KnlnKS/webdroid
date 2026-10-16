@@ -1,4 +1,4 @@
-import type { NativeCanvas } from "./canvas";
+import type { NativeCanvas } from "./canvas.ts";
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type Operation = (ctx: Ctx2D) => void;
@@ -116,7 +116,7 @@ type Method = (this: Context, ...args: unknown[]) => unknown;
 type Members = Record<string, unknown>;
 /** What a recording context is: the mirror's members, each answered by the mirror, recorded, or both */
 function contextClass(mirror: Ctx2D): new (mirror: Ctx2D, rec: Recording) => Ctx2D {
-  class Recording2D { constructor(readonly mirror: Ctx2D, readonly rec: Recording) {} }
+  class Recording2D { readonly mirror: Ctx2D; readonly rec: Recording; constructor(mirror: Ctx2D, rec: Recording) { this.mirror = mirror; this.rec = rec; } }
   const proto = Object.getPrototypeOf(mirror) as object;
   for (const name of Object.getOwnPropertyNames(proto)) {
     const d = Object.getOwnPropertyDescriptor(proto, name)!;

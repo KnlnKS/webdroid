@@ -1,9 +1,9 @@
 // The charsets served here, and their converters as ICU's behave on the reference device: libcore's
 // CharsetICU codecs reach them through NativeConverter (jnio.ts), and String's encode and decode
 // (a VM built-in) through encodeString/decodeString. The single-byte tables are the device's.
-import { utf8, charsToString } from "./abi";
-import { rt, declaredField } from "./runtime";
-import { SINGLE_BYTE_CHARSETS } from "./charset-tables";
+import { utf8, charsToString } from "./abi.ts";
+import { rt, declaredField } from "./runtime.ts";
+import { SINGLE_BYTE_CHARSETS } from "./charset-tables.ts";
 
 type Kind = "utf8" | "utf16" | "utf32" | "ascii" | "latin1" | "table";
 /** A charset's converter model: `little` is its byte order, and a marked charset (UTF-16, UTF-32)
@@ -109,6 +109,7 @@ const INVALID = -1, NEED_MORE = -2, MARK = -3;
  *  they reached and ICU's error code; `invalid` counts the units of the last error. */
 export class Converter {
   /** a sequence's bytes read so far (ICU's toUBytes) */
+  readonly cs: CharsetInfo;
   private partial: number[] = [];
   private endian: boolean | null = null;
   /** output that did not fit (ICU's error buffers), written first by the next call */
@@ -122,7 +123,7 @@ export class Converter {
   onMalformed = REPORT; onUnmappable = REPORT;
   subChars = "\ufffd";
   subBytes: ArrayLike<number>;
-  constructor(readonly cs: CharsetInfo) { this.subBytes = cs.replacement; }
+  constructor(cs: CharsetInfo) { this.cs = cs; this.subBytes = cs.replacement; }
   resetToUnicode(): void { this.partial.length = 0; this.endian = null; this.chars.length = 0; this.invalid = 0; }
   resetFromUnicode(): void { this.lead = 0; this.marked = false; this.bytes.length = 0; this.invalid = 0; }
 

@@ -1,7 +1,7 @@
 // Basic blocks and exception edges for one method body.
-import type { CodeItem } from "../../jvm/dex";
-import { NO_THROW } from "./opinfo";
-import { branchTargets, endsBlock, type PreparedInstruction } from "../../jvm/prepared";
+import type { CodeItem } from "../../jvm/dex.ts";
+import { NO_THROW } from "./opinfo.ts";
+import { branchTargets, endsBlock, type PreparedInstruction } from "../../jvm/prepared.ts";
 
 interface Cfg {
   n: number;

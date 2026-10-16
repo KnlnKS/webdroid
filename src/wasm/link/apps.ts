@@ -1,11 +1,11 @@
 // An app compiled ahead on top of the platform build (aot.ts `extend`): the code of the methods it is likely to run, in code modules a<k>.wasm of the classes' groups, and the
 // numbering that code relies on. A World at the platform build's state that has the app's dexes takes it as it takes the platform's own modules, and compiles the rest on demand.
-import { Compiler } from "../compiler/j2w";
-import { mid } from "../compiler/ids";
-import { compileModule } from "./module";
-import { APP_VERSION, packModule, unitHeader, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot";
-import { methodCount, type MethodInfo } from "../compiler/program";
-import type { World } from "./world";
+import { Compiler } from "../compiler/j2w.ts";
+import { mid } from "../compiler/ids.ts";
+import { compileModule } from "./module.ts";
+import { APP_VERSION, packModule, unitHeader, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot.ts";
+import { methodCount, type MethodInfo } from "../compiler/program.ts";
+import type { World } from "./world.ts";
 
 /** the estimated size of a code module (the bytes per dex code unit and per method aot-build measured) where the next class starts another */
 const MODULE_BYTES = 1 << 20, BYTES_PER_METHOD = 150, BYTES_PER_UNIT = 14;

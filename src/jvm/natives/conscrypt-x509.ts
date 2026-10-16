@@ -1,17 +1,17 @@
 // NativeCrypto's certificate natives: X509 handles, their fields, signature checks, the BIO
 // streams conscrypt's CertificateFactory reads PEM and DER through, and PKCS#7/PkiPath bundles.
 
-import { rt, driven, type Gen, type JObj } from "../runtime";
-import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles";
-import { concat, i8, jarray, u8 } from "../abi";
-import { vcall } from "./jentry";
-import { boxInt } from "./jbox";
-import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
+import { rt, driven, type Gen, type JObj } from "../runtime.ts";
+import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles.ts";
+import { concat, i8, jarray, u8 } from "../abi.ts";
+import { vcall } from "./jentry.ts";
+import { boxInt } from "./jbox.ts";
+import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
-  KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509";
-import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, equal, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der";
-import { hashOf, sha1 } from "./digest";
+  KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509.ts";
+import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, equal, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey.ts";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der.ts";
+import { hashOf, sha1 } from "./digest.ts";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
 const x509Of = (h: bigint): X509 => {

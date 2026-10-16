@@ -2,23 +2,23 @@
 // each SkCanvas::drawXxx as its geometry, drawn through the paint by NativeCanvas.drawShape or,
 // for text and images, through the paint's alpha, blend mode and filters.
 
-import { isRecording, recordOrRun, type Ctx2D } from "./recording";
-import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster";
-import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia";
-import { rt } from "../jvm/runtime";
-import { charsToString } from "../jvm/abi";
-import { deref } from "./handles";
-import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
-import { type NativeRegion } from "./region";
-import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
-import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping";
-import { fontNatives } from "./fonts";
-import { paintAdvance } from "./minikin";
-import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
-import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics";
-import { type NinePatchChunk, drawNinePatch } from "./ninepatch";
-import { applyMatrix, matrixAt } from "./matrix";
-import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas";
+import { isRecording, recordOrRun, type Ctx2D } from "./recording.ts";
+import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
+import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
+import { rt } from "../jvm/runtime.ts";
+import { charsToString } from "../jvm/abi.ts";
+import { deref } from "./handles.ts";
+import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
+import type { NativeRegion } from "./region.ts";
+import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap.ts";
+import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping.ts";
+import { fontNatives } from "./fonts.ts";
+import { paintAdvance } from "./minikin.ts";
+import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
+import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
+import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
+import { applyMatrix, matrixAt } from "./matrix.ts";
+import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas.ts";
 
 function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
   if (tryBitmapPath(nc, p, path)) return;

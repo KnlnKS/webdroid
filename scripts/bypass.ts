@@ -6,17 +6,17 @@
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { rt } from "../src/jvm/runtime";
-import { ACC } from "../src/jvm/dex";
-import { descToName } from "../src/jvm/abi";
-import type { ClassDef } from "../src/jvm/dex";
-import { prepareMethod } from "../src/jvm/prepared";
-import { PLATFORM_JARS } from "../src/jvm/provenance";
+import { rt } from "../src/jvm/runtime.ts";
+import { ACC } from "../src/jvm/dex.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import type { ClassDef } from "../src/jvm/dex.ts";
+import { prepareMethod } from "../src/jvm/prepared.ts";
+import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
 
-import "../src/natives";
-import { jarDexes } from "../src/android/framework";
-import { openDexes } from "./lib";
-import { corpusApks } from "./apk-corpus";
+import "../src/natives.ts";
+import { jarDexes } from "../src/android/framework.ts";
+import { openDexes } from "./lib.ts";
+import { corpusApks } from "./apk-corpus.ts";
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dir, "..");

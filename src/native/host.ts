@@ -1,12 +1,12 @@
 // Host-call plumbing: trampoline slots dispatched by PC, the AAPCS argument cursor, return
 // writers, virtual host libraries, and the logging stubs unresolved imports bind to.
 
-import type { Cpu } from "./cpu";
-import { mem } from "./mem";
-import { NativeFault, BadAddress } from "./core";
-import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL, E } from "./abi";
-import { perf } from "../perf";
-import { core, CORE_LIBC } from "./core";
+import type { Cpu } from "./cpu.ts";
+import { mem } from "./mem.ts";
+import { NativeFault, BadAddress } from "./core.ts";
+import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL, E } from "./abi.ts";
+import { perf } from "../perf.ts";
+import { core, CORE_LIBC } from "./core.ts";
 
 export const NORET: unique symbol = Symbol("noret");
 /** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
@@ -85,7 +85,8 @@ export class Args extends Cursor {
 
 /** the ILP32 va_list: a flat cursor over the caller's stack */
 class VaList extends Cursor {
-  constructor(private a: number) { super(); }
+  private a: number;
+  constructor(a: number) { super(); this.a = a; }
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
   l(): bigint { this.a = (this.a + 7) & ~7; const v = mem.ld64(this.a); this.a += 8; return v; }
   d(): number { this.a = (this.a + 7) & ~7; const v = mem.ldf64(this.a); this.a += 8; return v; }
@@ -96,9 +97,10 @@ class VaList extends Cursor {
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
 class VaList64 extends Cursor {
+  private readonly at: number;
   private stack = -1; private grTop = -1; private vrTop = -1; private grOffs = 0; private vrOffs = 0;
   private loaded = false;
-  constructor(private readonly at: number) { super(); }
+  constructor(at: number) { super(); this.at = at; }
   // libc reads the list only when a conversion needs an argument: a caller with none may pass
   // junk, and one whose arguments all sit in one area leaves the other area's top pointer
   // uninitialized (clang builds the struct from whatever the slots held) — the guest never

@@ -1,5 +1,5 @@
-import { SCHEMA_VERSION, type ApiCall, type ApiCase, type GraphicsCase, type GraphicsCommand, type ProbeArgument } from "./model";
-import { Random } from "./random";
+import { SCHEMA_VERSION, type ApiCall, type ApiCase, type GraphicsCase, type GraphicsCommand, type ProbeArgument } from "./model.ts";
+import { Random } from "./random.ts";
 
 const i = (value: number): ProbeArgument => ({ kind: "int", value });
 const f = (value: number): ProbeArgument => ({ kind: "float", value });

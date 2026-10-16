@@ -3,14 +3,14 @@
 // JobServiceContext runs it: bind the job's service (in whichever process declares it), start it
 // through the service's IJobService, and hear back through the IJobCallback its parameters carry.
 
-import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { bindAsSystem } from "./server/activeservices";
-import { asSystem, hostStub, parceledList } from "./binder";
-import { batteryLow, netUp } from "./services";
-import { device } from "../shell/config";
-import type { JComponentName } from "./intent";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { bindAsSystem } from "./server/activeservices.ts";
+import { asSystem, hostStub, parceledList } from "./binder.ts";
+import { batteryLow, netUp } from "./services.ts";
+import { device } from "../shell/config.ts";
+import type { JComponentName } from "./intent.ts";
 
 /** what the scheduler needs of a JobInfo, read once when the job is scheduled */
 type JobSpec = {

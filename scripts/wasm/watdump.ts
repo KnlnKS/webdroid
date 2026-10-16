@@ -2,9 +2,9 @@
 // built whose function names contain the filter. Run: bun run wasm watdump <workload> <method-name-filter> (needs the dex g1.ts builds)
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
-import { program, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths";
+import { program, world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
 
 const [workload, filter] = process.argv.slice(2);
 const dex = join(G1_DIR, "classes.dex");

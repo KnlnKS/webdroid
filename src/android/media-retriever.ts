@@ -1,14 +1,14 @@
-import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { concat } from "../jvm/abi";
-import { after } from "../jvm/natives/jentry";
-import { fdInt } from "../jvm/natives/jio";
-import type { FileSource } from "../shell/lazyfile";
-import { NativeBitmap, javaBitmap } from "./bitmap";
-import { MediaExtractor } from "./media-extractor";
-import { TYPE_LONG } from "./media-format";
-import { definitionFor, parameterSets, videoConfig } from "./media-codec";
-import { inspectMp3 } from "./media-mp3";
-import { dataSourceFile, fdSlice, nativePeer } from "./media-native";
+import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime.ts";
+import { concat } from "../jvm/abi.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
+import { NativeBitmap, javaBitmap } from "./bitmap.ts";
+import { MediaExtractor } from "./media-extractor.ts";
+import { TYPE_LONG } from "./media-format.ts";
+import { definitionFor, parameterSets, videoConfig } from "./media-codec.ts";
+import { inspectMp3 } from "./media-mp3.ts";
+import { dataSourceFile, fdSlice, nativePeer } from "./media-native.ts";
 
 class Retriever {
   extractor: MediaExtractor | null = null;

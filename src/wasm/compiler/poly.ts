@@ -1,17 +1,17 @@
 // invoke-polymorphic on VarHandle access modes (AtomicInteger, AtomicReference, ForkJoinPool, ConcurrentLinkedQueue, ...).
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
-import { OP } from "./code";
-import { T, ref, refNull, type VT } from "./wasmbin";
-import { ACC, kindOf, type Kind } from "./program";
-import { elemKindOf } from "./consts";
-import { descToName, isWide, varHandleValues } from "../../jvm/abi";
-import { emitStoreCheck, classMethod, typeName, Info } from "../link/classes";
-import { UInfo } from "../link/unsafe";
-import type { PreparedInstruction as Ins } from "../../jvm/prepared";
-import type { Compiler } from "./j2w";
-import type { Code } from "./code";
-import type { MC } from "./method";
-import { emitHandleCall } from "../link/mhandles";
+import { OP } from "./code.ts";
+import { T, ref, refNull, type VT } from "./wasmbin.ts";
+import { ACC, kindOf, type Kind } from "./program.ts";
+import { elemKindOf } from "./consts.ts";
+import { descToName, isWide, varHandleValues } from "../../jvm/abi.ts";
+import { emitStoreCheck, classMethod, typeName, Info } from "../link/classes.ts";
+import { UInfo } from "../link/unsafe.ts";
+import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import type { Compiler } from "./j2w.ts";
+import type { Code } from "./code.ts";
+import type { MC } from "./method.ts";
+import { emitHandleCall } from "../link/mhandles.ts";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Family = "I" | "F" | "J" | "D" | "L";

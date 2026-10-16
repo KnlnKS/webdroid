@@ -1,10 +1,10 @@
 // Shared by the shell, the dev server's /asset route and the bun scripts, so an xapk is an apk
 // everywhere or nowhere.
 
-import { parseAXML, attrStr } from "../android/axml";
-import { isDexEntry } from "../jvm/dex";
-import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip";
-import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
+import { parseAXML, attrStr } from "../android/axml.ts";
+import { isDexEntry } from "../jvm/dex.ts";
+import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip.ts";
+import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
@@ -71,10 +71,12 @@ async function entrySource(source: FileSource, entry: ZEntry): Promise<FileSourc
   return new BytesFile(inflateEntry(await readFully(source, offset, entry.csize), entry));
 }
 export class ZipEntryFile implements FileSource {
+  private readonly archive: FileSource; private readonly entry: ZEntry;
   readonly size: number;
   private resolved: Promise<FileSource> | null = null;
 
-  constructor(private readonly archive: FileSource, private readonly entry: ZEntry) {
+  constructor(archive: FileSource, entry: ZEntry) {
+    this.archive = archive; this.entry = entry;
     this.size = entry.size;
   }
 

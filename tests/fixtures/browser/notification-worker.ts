@@ -1,11 +1,11 @@
 // Actual application Worker entry plus a framework-only diagnostic command. APK code is unchanged.
-import "../../../src/process-worker";
-import { rt, awaited, type Gen } from "../../../src/jvm/runtime";
-import { onMain } from "../../../src/android/mainloop";
-import { newObj, vcall } from "../../../src/jvm/natives/jentry";
-import { startForegroundNotification, stopForegroundNotification } from "../../../src/android/notification";
-import { PROCESS_PID, PROCESS_UID } from "../../../src/android/os";
-import { serviceContext, hostedService, exportBinder } from "../../../src/android/binder";
+import "../../../src/process-worker.ts";
+import { rt, awaited, type Gen } from "../../../src/jvm/runtime.ts";
+import { onMain } from "../../../src/android/mainloop.ts";
+import { newObj, vcall } from "../../../src/jvm/natives/jentry.ts";
+import { startForegroundNotification, stopForegroundNotification } from "../../../src/android/notification.ts";
+import { PROCESS_PID, PROCESS_UID } from "../../../src/android/os.ts";
+import { serviceContext, hostedService, exportBinder } from "../../../src/android/binder.ts";
 
 const channelId = "webdroid-worker-contract", B = "Landroid/app/Notification$Builder;", N = "Landroid/app/Notification;";
 const bootstrap = globalThis.onmessage;

@@ -3,16 +3,16 @@
 // backtrace, the abort message) and leaves debuggerd's tombstone (tombstone.ts) for the exit
 // status; the handler debuggerd_init installs reaches the same report.
 
-import { defineHost } from "./host";
-import type { Cpu } from "./cpu";
-import { backtrace, backtracePcs, tombstoneFrame } from "./dl";
-import { tombstoneProto, signalCodeName } from "./tombstone";
-import { SIGNAL_NAMES, SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV, SIGSTKFLT, SIGSYS, SA_SIGINFO, SA_ONSTACK, SA_RESTART, dispositions, dumpsCore, sigHandler } from "./signals";
-import { loadContext, readSiginfo, type SigInfo } from "./sigframe";
-import { propertyValue } from "../shell/properties";
-import { procIdentity } from "../shell/procfs";
-import { wallMillis } from "../guest-clock";
-import { exitProcess, never, processExited } from "../process-exit";
+import { defineHost } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
+import { backtrace, backtracePcs, tombstoneFrame } from "./dl.ts";
+import { tombstoneProto, signalCodeName } from "./tombstone.ts";
+import { SIGNAL_NAMES, SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV, SIGSTKFLT, SIGSYS, SA_SIGINFO, SA_ONSTACK, SA_RESTART, dispositions, dumpsCore, sigHandler } from "./signals.ts";
+import { loadContext, readSiginfo, type SigInfo } from "./sigframe.ts";
+import { propertyValue } from "../shell/properties.ts";
+import { procIdentity } from "../shell/procfs.ts";
+import { wallMillis } from "../guest-clock.ts";
+import { exitProcess, never, processExited } from "../process-exit.ts";
 
 /** exit_group(2): the process ends with `code`, and the calling thread never returns */
 export function exitGroup(cpu: Cpu, code: number, how: string): Promise<never> {

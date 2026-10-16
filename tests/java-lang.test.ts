@@ -1,13 +1,13 @@
 import { expect, test, describe } from "bun:test";
-import "../src/natives";
+import "../src/natives.ts";
 import { readFileSync } from "node:fs";
-import { jarray, longBitsToDouble } from "../src/jvm/abi";
-import { DexFile } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
-import { JObj, rt } from "../src/jvm/runtime";
-import { loadDex } from "../src/jvm/tier";
-import { scall, thrown, loadLibcore, mountApexData } from "./java";
-import { detached } from "../src/jvm/natives/jthrowable";
+import { jarray, longBitsToDouble } from "../src/jvm/abi.ts";
+import { DexFile } from "../src/jvm/dex.ts";
+import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry.ts";
+import { JObj, rt } from "../src/jvm/runtime.ts";
+import { loadDex } from "../src/jvm/tier.ts";
+import { scall, thrown, loadLibcore, mountApexData } from "./java.ts";
+import { detached } from "../src/jvm/natives/jthrowable.ts";
 
 await loadLibcore();
 await mountApexData();
@@ -403,7 +403,7 @@ describe("dex-class-loaders", () => {
     expect(await vcall(second, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).not.toBe(cls);
     expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
     expect([await vcall(buffer, "position", "()I"), await vcall(buffer, "limit", "()I")]).toEqual([8, 8 + bytes.length]);
-    const { readOnlyBuffer } = await import("../src/jvm/natives/jnio");
+    const { readOnlyBuffer } = await import("../src/jvm/natives/jnio.ts");
     const mapped = await readOnlyBuffer(bytes);
     const paged = await newObj("dalvik/system/InMemoryDexClassLoader", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V", mapped, null);
     const loaded = await vcall(paged,"loadClass","(Ljava/lang/String;)Ljava/lang/Class;","JvmTierProbe");

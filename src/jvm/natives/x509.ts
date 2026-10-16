@@ -1,24 +1,25 @@
 // X.509 certificates (RFC 5280) as BoringSSL parses them for conscrypt's natives: the raw fields,
 // the extensions it caches (key usage, basic constraints, ...), and names printed per RFC 2253.
 
-import { concat } from "../abi";
+import { concat } from "../abi.ts";
 import {
   children, parseOne, expect, oidToString, tlv, bytesToBig, DerError,
   SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID, BOOLEAN, type Tlv,
-} from "./der";
-import { equal } from "./pkey";
+} from "./der.ts";
+import { equal } from "./pkey.ts";
 
 export type Extension = { oid: string; critical: boolean; value: Uint8Array; raw: Uint8Array };
 export type Time = { ms: number; fields: [number, number, number, number, number, number] };
 export class X509 {
+  readonly der: Uint8Array; readonly tbs: Uint8Array; readonly serial: Uint8Array; readonly sigOid: string; readonly sigParams: Uint8Array | null; readonly signature: Uint8Array; readonly issuer: Uint8Array; readonly subject: Uint8Array; readonly notBefore: Time; readonly notAfter: Time; readonly spki: Uint8Array; readonly issuerUid: Uint8Array | null; readonly subjectUid: Uint8Array | null; readonly exts: Extension[];
   version = 0;
   constructor(
-    readonly der: Uint8Array, readonly tbs: Uint8Array, readonly serial: Uint8Array,
-    readonly sigOid: string, readonly sigParams: Uint8Array | null, readonly signature: Uint8Array,
-    readonly issuer: Uint8Array, readonly subject: Uint8Array, readonly notBefore: Time, readonly notAfter: Time,
-    readonly spki: Uint8Array, readonly issuerUid: Uint8Array | null, readonly subjectUid: Uint8Array | null,
-    readonly exts: Extension[],
-  ) {}
+    der: Uint8Array, tbs: Uint8Array, serial: Uint8Array,
+    sigOid: string, sigParams: Uint8Array | null, signature: Uint8Array,
+    issuer: Uint8Array, subject: Uint8Array, notBefore: Time, notAfter: Time,
+    spki: Uint8Array, issuerUid: Uint8Array | null, subjectUid: Uint8Array | null,
+    exts: Extension[],
+  ) { this.der = der; this.tbs = tbs; this.serial = serial; this.sigOid = sigOid; this.sigParams = sigParams; this.signature = signature; this.issuer = issuer; this.subject = subject; this.notBefore = notBefore; this.notAfter = notAfter; this.spki = spki; this.issuerUid = issuerUid; this.subjectUid = subjectUid; this.exts = exts; }
   ext(oid: string) { return this.exts.find((e) => e.oid === oid); }
 }
 

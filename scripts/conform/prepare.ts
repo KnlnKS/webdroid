@@ -1,8 +1,8 @@
 // Fetches a suite's jars and test sources and compiles them with ConformRunner to dex under conform-cache/<suite>
 // (cached by runner source content), for scripts/wasm/conform.ts.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
-import { androidPlatform, androidTool } from "../android-sdk";
-import { SUITES } from "./suites";
+import { androidPlatform, androidTool } from "../android-sdk.ts";
+import { SUITES } from "./suites.ts";
 
 export const CACHE = "conform-cache";
 export async function prepare(suiteName: string): Promise<{ suite: (typeof SUITES)[string]; classes: string[]; dexDir: string }> {

@@ -1,10 +1,10 @@
 // AOSP's Resources as the shell builds them, the way LoadedApk has ResourcesManager build an app's,
 // and the device configuration they take.
 
-import { awaited, driven, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime";
-import { newObj, vcall, scall } from "../jvm/natives/jentry";
-import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative";
-import { device } from "../shell/config";
+import { awaited, driven, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime.ts";
+import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
+import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative.ts";
+import { device } from "../shell/config.ts";
 
 /** the device's DisplayMetrics, as Display.getMetrics fills one */
 const deviceMetrics = driven(function* deviceMetrics(): Gen<JObj> {

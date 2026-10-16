@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { defineHost, ldp } from "./host";
-import { libCalls } from "./calls.testkit";
-import { mem } from "./mem";
-import { aaudioInit } from "./aaudio";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { defineHost, ldp } from "./host.ts";
+import { libCalls } from "./calls.testkit.ts";
+import { mem } from "./mem.ts";
+import { aaudioInit } from "./aaudio.ts";
 
 test("AAudio copies builder settings and exposes actual stream state at either pointer width", async () => {
   for (const a64 of [false, true]) {

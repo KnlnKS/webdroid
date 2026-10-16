@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { discardedEntries, loadTimeAbiReads, sharedSuspensions, undelegatedGenerators } from "../scripts/generators";
+import { discardedEntries, loadTimeAbiReads, sharedSuspensions, undelegatedGenerators } from "../scripts/generators.ts";
 
 test("every driven generator a native calls is run", () => {
   expect(undelegatedGenerators()).toEqual([]);

@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
-import "../natives";
-import { NativeLooper } from "../android/mainloop";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
-import { ndkInit, nativeWindowFor } from "./libandroid";
-import { eglInit } from "./egl";
-import { mem } from "./mem";
-import type { GlSurface } from "../android/glsurface";
+import "../natives.ts";
+import { NativeLooper } from "../android/mainloop.ts";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { lookupHost } from "./host.ts";
+import { ndkInit, nativeWindowFor } from "./libandroid.ts";
+import { eglInit } from "./egl.ts";
+import { mem } from "./mem.ts";
+import type { GlSurface } from "../android/glsurface.ts";
 
 test("Java and NDK code share one thread looper without preparing unrelated threads", async () => {
   setA64(true); ndkInit();

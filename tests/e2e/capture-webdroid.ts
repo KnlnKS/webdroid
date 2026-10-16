@@ -3,12 +3,12 @@
 // The entry point is run.ts; this module only captures.
 import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
-import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types";
-import { parseScreen } from "../../src/shell/config";
-import type { Act, Hang, Settled, StepResult } from "./lib/probe";
-import { readProcesses, type ProcessSnapshot } from "./lib/processes";
+import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid.ts";
+import { E2E_DIR } from "./lib/util.ts";
+import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types.ts";
+import { parseScreen } from "../../src/shell/config.ts";
+import type { Act, Hang, Settled, StepResult } from "./lib/probe.ts";
+import { readProcesses, type ProcessSnapshot } from "./lib/processes.ts";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -55,7 +55,8 @@ type CaptureMode = "full" | "fast";
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
 export type FlowRun = { mode: CaptureMode; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[]; aborted?: { step: string; error: string } };
 export class CaptureAborted extends Error {
-  constructor(cause: unknown, readonly runs: StepRun[]) { super(String(cause), { cause }); }
+  readonly runs: StepRun[];
+  constructor(cause: unknown, runs: StepRun[]) { super(String(cause), { cause }); this.runs = runs; }
 }
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */

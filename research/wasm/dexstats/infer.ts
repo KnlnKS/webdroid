@@ -1,7 +1,7 @@
 // Corpus statistics over the compiler's web analysis (src/wasm/compiler/infer.ts): conflicts, underdetermined webs, multi-kind vregs, local counts.
-import type { CodeItem, DexFile } from "../../../src/jvm/dex";
-import { decodeInstructions, type PreparedInstruction } from "../../../src/jvm/prepared";
-import { analyzeWebs, components, retOf, I, F, R, J, D } from "../../../src/wasm/compiler/infer";
+import type { CodeItem, DexFile } from "../../../src/jvm/dex.ts";
+import { decodeInstructions, type PreparedInstruction } from "../../../src/jvm/prepared.ts";
+import { analyzeWebs, components, retOf, I, F, R, J, D } from "../../../src/wasm/compiler/infer.ts";
 
 const KIND_NAMES: Record<number, string> = { [I]: "I", [F]: "F", [R]: "R", [J]: "J", [D]: "D" };
 

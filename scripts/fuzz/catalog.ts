@@ -1,9 +1,9 @@
-import { androidPlatform } from "../android-sdk";
-import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, type NativeSupport } from "../native-surface";
-import type { DexFile } from "../../src/jvm/dex";
-import type { Runtime } from "../../src/jvm/runtime";
-import { descToName } from "../../src/jvm/abi";
-import { API_RECIPE_MEMBER_IDS } from "./generate";
+import { androidPlatform } from "../android-sdk.ts";
+import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, type NativeSupport } from "../native-surface.ts";
+import type { DexFile } from "../../src/jvm/dex.ts";
+import type { Runtime } from "../../src/jvm/runtime.ts";
+import { descToName } from "../../src/jvm/abi.ts";
+import { API_RECIPE_MEMBER_IDS } from "./generate.ts";
 
 export type ApiKind = "class" | "method" | "field";
 export type ApiSource = "public" | "reached-hidden";

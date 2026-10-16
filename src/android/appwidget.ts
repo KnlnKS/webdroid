@@ -4,10 +4,10 @@
 // parseAppWidgetProviderInfo does (decoded from the reference AVD's services.jar); no host has
 // bound a widget id, so every id is unknown, updates to one reach nothing, and pinning is
 // unsupported.
-import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry";
-import { callingIdentity, parceledList, hostStub, serviceContext } from "./binder";
-import { packages } from "./packages";
+import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry.ts";
+import { callingIdentity, parceledList, hostStub, serviceContext } from "./binder.ts";
+import { packages } from "./packages.ts";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";

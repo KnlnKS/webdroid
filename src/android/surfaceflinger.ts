@@ -4,20 +4,20 @@
 // frame an EGL swap or a decoder produced; queueing it latches the buffer on its layer, and the
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
-import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { asSystem } from "./binder";
-import { handle, deref, release, FINALIZER } from "./handles";
-import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel";
-import { canvasOf } from "./canvas";
-import { cssColor } from "./graphics";
-import { perf } from "../perf";
-import { uptimeMillis } from "../guest-clock";
-import { frameDrawn } from "./vsync";
-import { note, Ev } from "../timeline";
-import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "./glsurface";
-import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor";
-import { detached } from "../jvm/natives/jthrowable";
+import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
+import { asSystem } from "./binder.ts";
+import { handle, deref, release, FINALIZER } from "./handles.ts";
+import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel.ts";
+import { canvasOf } from "./canvas.ts";
+import { cssColor } from "./graphics.ts";
+import { perf } from "../perf.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { frameDrawn } from "./vsync.ts";
+import { note, Ev } from "../timeline.ts";
+import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "./glsurface.ts";
+import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
@@ -26,6 +26,7 @@ const LAYER_HIDDEN = 0x1;
 
 let nextLayerId = 1;
 export class Layer {
+  readonly name: string;
   readonly id = nextLayerId++;
   parent: Layer | null = null;
   readonly children: Layer[] = [];
@@ -45,7 +46,8 @@ export class Layer {
   relativeOf: Layer | null = null;
   readonly relatives: Layer[] = [];
   removed = false;
-  constructor(readonly name: string, flags: number) {
+  constructor(name: string, flags: number) {
+    this.name = name;
     this.hidden = !!(flags & HIDDEN);
     if ((flags & FX_SURFACE_MASK) === FX_SURFACE_EFFECT) this.color = [0, 0, 0];
   }

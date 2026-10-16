@@ -1,19 +1,19 @@
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
 // per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run.
-import { Program, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program";
-import { defineProxy, type ProxyDefinition } from "../link/proxy";
-import { World } from "../link/world";
-import { buildApp, type AppBuild } from "../link/apps";
-import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit";
-import type { AppIndex, Demand, Numbering } from "../link/aot";
-import type { Intrinsic } from "../compiler/j2w";
-import type { NativeBinder } from "../link/hostapi";
-import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach";
-import { parseBaselineProfile } from "../../jvm/baselineprof";
-import { rootsOf } from "../../jvm/roots";
-import { dexesIn, type DexFile } from "../../jvm/dex";
-import { methodOf } from "../compiler/ids";
+import { Program, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program.ts";
+import { defineProxy, type ProxyDefinition } from "../link/proxy.ts";
+import { World } from "../link/world.ts";
+import { buildApp, type AppBuild } from "../link/apps.ts";
+import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit.ts";
+import type { AppIndex, Demand, Numbering } from "../link/aot.ts";
+import type { Intrinsic } from "../compiler/j2w.ts";
+import type { NativeBinder } from "../link/hostapi.ts";
+import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach.ts";
+import { parseBaselineProfile } from "../../jvm/baselineprof.ts";
+import { rootsOf } from "../../jvm/roots.ts";
+import { dexesIn, type DexFile } from "../../jvm/dex.ts";
+import { methodOf } from "../compiler/ids.ts";
 
 /** what the worker's realm provides: the platform's dex files, the registered natives and the intrinsics, which must be the page's for the code to be the page's */
 export interface CompileEnv {

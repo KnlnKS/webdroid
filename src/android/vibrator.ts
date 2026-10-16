@@ -1,12 +1,12 @@
 // IVibratorManagerService, the TS half of AOSP's SystemVibratorManager and SystemVibrator: one
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall, iof } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { systemResource } from "./resnative";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { settingsAccess } from "./settings";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, scall, vcall, iof } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { systemResource } from "./resnative.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { settingsAccess } from "./settings.ts";
 
 const VIBRATOR_ID = 1;
 /** VibrationSettings' fallbacks for prebaked effects a motor without effects cannot play (CLICK,

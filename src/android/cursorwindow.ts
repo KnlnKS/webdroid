@@ -3,11 +3,11 @@
 // or the Java putters, and serialized into a Parcel in our own layout (both ends are ours); and the
 // SQLiteException mapping both share (android_database_SQLiteCommon.cpp).
 
-import { rt, declaredField, type JObj } from "../jvm/runtime";
-import { utf8, utf8Length } from "../jvm/abi";
-import { ownedHandle, deref, release } from "./handles";
+import { rt, declaredField, type JObj } from "../jvm/runtime.ts";
+import { utf8, utf8Length } from "../jvm/abi.ts";
+import { ownedHandle, deref, release } from "./handles.ts";
 import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, writeByteArray, createByteArray, nativeParcel, outOfLine,
-  type NativeParcel } from "./parcel";
+  type NativeParcel } from "./parcel.ts";
 
 // ── errors, as throw_sqlite3_exception raises them
 export const SQLITE_BUSY = 5, SQLITE_LOCKED = 6, SQLITE_INTERRUPT = 9, SQLITE_CANTOPEN = 14, SQLITE_TOOBIG = 18, SQLITE_CONSTRAINT = 19,
@@ -42,12 +42,13 @@ type Value = null | number | bigint | string | Int8Array;
 const SLOT = 16, INLINE = 8;
 
 export class NativeWindow {
+  readonly name: string; readonly size: number; readonly readOnly;
   rows = 0;
   cols = 0;
   used = 0;
   types: number[] = [];
   values: Value[] = [];
-  constructor(readonly name: string, readonly size: number, readonly readOnly = false) {}
+  constructor(name: string, size: number, readOnly = false) { this.name = name; this.size = size; this.readOnly = readOnly; }
   clear(cols = 0) { this.rows = this.used = 0; this.cols = cols; this.types.length = this.values.length = 0; }
   allocRow(): boolean {
     const used = this.used + this.cols * SLOT;

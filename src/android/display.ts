@@ -2,14 +2,14 @@
 // profile's one built-in display. Geometry, density and refresh rate come from the profile; the
 // rest is what the reference AVD answers an app (app_process as uid 2000: getDisplayInfo(0),
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { mangleField, jarray } from "../jvm/abi";
-import { newObj, scall, vcall, staticField } from "../jvm/natives/jentry";
-import { hostStub, binderEscape } from "./binder";
-import { handle, deref, FINALIZER } from "./handles";
-import { nativeParcel, readInt, writeInt } from "./parcel";
-import { device } from "../shell/config";
-import { detached } from "../jvm/natives/jthrowable";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { mangleField, jarray } from "../jvm/abi.ts";
+import { newObj, scall, vcall, staticField } from "../jvm/natives/jentry.ts";
+import { hostStub, binderEscape } from "./binder.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { nativeParcel, readInt, writeInt } from "./parcel.ts";
+import { device } from "../shell/config.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
 
 const INFO = "android/view/DisplayInfo";
 /** a Display.Mode for the panel, in its natural (portrait) orientation */

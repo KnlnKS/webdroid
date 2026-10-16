@@ -67,6 +67,7 @@ function addFunction(table: WebAssembly.Table, sig: string, fn: (...args: number
 }
 
 export class HarfBuzz {
+  private readonly x: Exports;
   private u8!: Uint8Array; private u16!: Uint16Array; private i32!: Int32Array; private u32!: Uint32Array;
   private scratch: Ptr; private text: Ptr = 0; private textCap = 0;
   private readonly buffer: Ptr;
@@ -76,7 +77,8 @@ export class HarfBuzz {
   private readonly faces = new WeakMap<ArrayBufferLike, Map<string, Face>>();
   private readonly released = new FinalizationRegistry<Map<string, Face>>((faces) => this.destroy(faces));
 
-  constructor(private readonly x: Exports) {
+  constructor(x: Exports) {
+    this.x = x;
     x.__wasm_call_ctors();
     this.scratch = x.malloc(64);
     this.buffer = x.hb_buffer_create();

@@ -1,11 +1,11 @@
-import { inventory } from "./fuzz/inventory";
-import { replayBundle, runCampaign } from "./fuzz/campaign";
-import { generateApiCases, generateGraphicsCases } from "./fuzz/generate";
-import { validateProbeCase } from "./fuzz/model";
-import { Random, randomSeed } from "./fuzz/random";
-import { replayUiBundle, runUi } from "./fuzz/ui";
-import { generateUiAction } from "./fuzz/ui-model";
-import { runInjectedSmoke } from "./fuzz/self-test";
+import { inventory } from "./fuzz/inventory.ts";
+import { replayBundle, runCampaign } from "./fuzz/campaign.ts";
+import { generateApiCases, generateGraphicsCases } from "./fuzz/generate.ts";
+import { validateProbeCase } from "./fuzz/model.ts";
+import { Random, randomSeed } from "./fuzz/random.ts";
+import { replayUiBundle, runUi } from "./fuzz/ui.ts";
+import { generateUiAction } from "./fuzz/ui-model.ts";
+import { runInjectedSmoke } from "./fuzz/self-test.ts";
 
 const [command, ...args] = process.argv.slice(2);
 

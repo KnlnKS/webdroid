@@ -3,21 +3,21 @@
 // which answers the wrapper's way (-1 with errno set); Cpu.syscallReturn turns that into -errno.
 // The handlers here are the calls whose kernel shape differs from any wrapper's.
 
-import { mem, anchor } from "./mem";
-import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { calledMissing, markKernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
-import { E, PAGE_SIZE } from "./abi";
-import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu";
-import { exitGroup, installDebuggerdHandlers } from "./crash";
-import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals";
-import { writeSiginfo } from "./sigframe";
-import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
-import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
-import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
-import { NET_SYSCALLS } from "./socket/syscalls";
-import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll";
-import { PROC_SYSCALLS } from "./proc";
-import { device } from "../shell/config";
+import { mem, anchor } from "./mem.ts";
+import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
+import { calledMissing, markKernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host.ts";
+import { E, PAGE_SIZE } from "./abi.ts";
+import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu.ts";
+import { exitGroup, installDebuggerdHandlers } from "./crash.ts";
+import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals.ts";
+import { writeSiginfo } from "./sigframe.ts";
+import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc.ts";
+import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs.ts";
+import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread.ts";
+import { NET_SYSCALLS } from "./socket/syscalls.ts";
+import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll.ts";
+import { PROC_SYSCALLS } from "./proc.ts";
+import { device } from "../shell/config.ts";
 
 /** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
 const KERNEL32 = {

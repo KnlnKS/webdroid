@@ -1,9 +1,9 @@
 // What the real framework dex contains, and what it would ask of us.
 // bun scripts/fwscan.ts [vendor/aosp/framework.jar] [class-name-prefix]
-import { ACC } from "../src/jvm/dex";
-import { descToName } from "../src/jvm/abi";
-import { openDexes } from "./lib";
-import { frameworkSurface } from "./fuzz/catalog";
+import { ACC } from "../src/jvm/dex.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import { openDexes } from "./lib.ts";
+import { frameworkSurface } from "./fuzz/catalog.ts";
 
 const [jar = "vendor/aosp/framework.jar", prefix] = process.argv.slice(2);
 const dexes = await openDexes(jar);

@@ -1,11 +1,11 @@
 // The request and error values the WebView provider hands its clients, and its clients' answer to a
 // request: WebViewClient.shouldInterceptRequest.
-import { awaited, rt, JObj, type Gen } from "../jvm/runtime";
-import { vcall, callOn, newObj, type JThread } from "../jvm/natives/jentry";
-import { readStreamFully } from "../jvm/natives/jio";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { mkUri } from "./net";
-import type { WebRequest, WebResponse } from "../shell/webbridge";
+import { awaited, rt, JObj, type Gen } from "../jvm/runtime.ts";
+import { vcall, callOn, newObj, type JThread } from "../jvm/natives/jentry.ts";
+import { readStreamFully } from "../jvm/natives/jio.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { mkUri } from "./net.ts";
+import type { WebRequest, WebResponse } from "../shell/webbridge.ts";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 export class JReq extends JObj { url = ""; main = true; gesture = false; method = "GET"; headers: unknown = null; }

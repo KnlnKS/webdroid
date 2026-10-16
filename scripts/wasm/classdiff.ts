@@ -4,16 +4,16 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { program, world } from "./lib";
-import { intrinsics } from "../../src/wasm/link/intrinsics";
-import { mountPlatform, natives } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
-import { ACC, declaredMethod } from "../../src/wasm/compiler/program";
-import { Cha } from "../../src/wasm/compiler/cha";
-import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe";
-import { OP } from "../../src/wasm/compiler/code";
-import { T } from "../../src/wasm/compiler/wasmbin";
+import { program, world } from "./lib.ts";
+import { intrinsics } from "../../src/wasm/link/intrinsics.ts";
+import { mountPlatform, natives } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { ACC, declaredMethod } from "../../src/wasm/compiler/program.ts";
+import { Cha } from "../../src/wasm/compiler/cha.ts";
+import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe.ts";
+import { OP } from "../../src/wasm/compiler/code.ts";
+import { T } from "../../src/wasm/compiler/wasmbin.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = shellIn(out);

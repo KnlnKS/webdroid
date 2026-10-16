@@ -10,12 +10,12 @@
 import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { G1Config, G1Result } from "./g1run";
-import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
-import { sourceKey } from "./aot-key";
+import type { G1Config, G1Result } from "./g1run.ts";
+import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { sourceKey } from "./aot-key.ts";
 import { createHash } from "node:crypto";
-import { sampleError } from "./g1report";
+import { sampleError } from "./g1report.ts";
 
 const here = import.meta.dir;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };

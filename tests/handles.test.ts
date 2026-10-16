@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import "../src/natives";
-import { declaredField } from "../src/jvm/runtime";
-import { newObj } from "../src/jvm/natives/jentry";
-import { handle, deref, release } from "../src/android/handles";
+import "../src/natives.ts";
+import { declaredField } from "../src/jvm/runtime.ts";
+import { newObj } from "../src/jvm/natives/jentry.ts";
+import { handle, deref, release } from "../src/android/handles.ts";
 
 const SLOT = 0xffffff;
 

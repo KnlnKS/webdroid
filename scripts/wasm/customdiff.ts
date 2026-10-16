@@ -3,27 +3,27 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { loadDexes, program, world } from "./lib";
-import { ACC, Program } from "../../src/wasm/compiler/program";
-import type { World } from "../../src/wasm/link/world";
-import { caseLine, compare, genCases } from "./cases";
-import { Pool, u2, u4 } from "./classfile";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
-import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
-import { bootstrapReferences } from "../../src/wasm/link/callsites";
-import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory";
-import { mem } from "../../src/native/mem";
-import { defaultLoop } from "../../src/wasm/link/sched";
-import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe";
-import { decodeInstructions } from "../../src/jvm/prepared";
-import { BytesFile } from "../../src/shell/lazyfile";
-import { vfs } from "../../src/shell/vfs";
-import { definingLoader } from "../../src/wasm/link/loaders";
-import { idOfClass } from "../../src/wasm/link/classes";
-import { definitionReady } from "../../src/wasm/link/resolution";
-import { androidPlatform } from "../android-sdk";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { loadDexes, program, world } from "./lib.ts";
+import { ACC, Program } from "../../src/wasm/compiler/program.ts";
+import type { World } from "../../src/wasm/link/world.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { Pool, u2, u4 } from "./classfile.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles.ts";
+import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
+import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
+import { mem } from "../../src/native/mem.ts";
+import { defaultLoop } from "../../src/wasm/link/sched.ts";
+import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe.ts";
+import { decodeInstructions } from "../../src/jvm/prepared.ts";
+import { BytesFile } from "../../src/shell/lazyfile.ts";
+import { vfs } from "../../src/shell/vfs.ts";
+import { definingLoader } from "../../src/wasm/link/loaders.ts";
+import { idOfClass } from "../../src/wasm/link/classes.ts";
+import { definitionReady } from "../../src/wasm/link/resolution.ts";
+import { androidPlatform } from "../android-sdk.ts";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
@@ -210,7 +210,7 @@ const assertEagerFieldAccessors = (tier: typeof w) => {
   const info = tier.host.info;
   tier.host.info = (kind: number, a: number, b: number) => {
     const slot = info(kind, a, b);
-    if ([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut].includes(kind) && slot) {
+    if (([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut] as number[]).includes(kind) && slot) {
       const state = tier.slotAt(slot);
       if (state?.k !== "synth" || !state.done) throw new Error("field accessor still needs lazy admission");
     }

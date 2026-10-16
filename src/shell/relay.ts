@@ -1,4 +1,4 @@
-import { unshared } from "../jvm/abi";
+import { unshared } from "../jvm/abi.ts";
 
 const EMPTY_CHUNK = new Uint8Array(0);
 
@@ -55,9 +55,10 @@ const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) =>
   `${socketOrigin()}/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
 
 export class DatagramRelay {
+  private readonly onPacket: (data: Uint8Array, source: Ipv4, port: number) => void;
   private transport: Promise<WebSocket> | null = null;
   private closed = false;
-  constructor(private readonly onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) {}
+  constructor(onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) { this.onPacket = onPacket; }
   private open(): Promise<WebSocket> {
     const transport = new WebSocket(`${socketOrigin()}/udp`);
     transport.binaryType = "arraybuffer";

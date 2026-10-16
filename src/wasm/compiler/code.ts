@@ -1,6 +1,7 @@
-import { T, sleb, uleb, vt, type VT, type FuncBytes, functionIndex } from "./wasmbin";
+import { T, sleb, uleb, vt, type VT, type FuncBytes, functionIndex } from "./wasmbin.ts";
 /** instruction emitter for one function body */
 export class Code {
+  nparams: number;
   b: FuncBytes = [];
   /** locals declared beyond params: type per local index offset */
   localTypes: VT[] = [];
@@ -9,7 +10,7 @@ export class Code {
   marks: number[] = [];
   /** length of the local declarations finish() prepends */
   prefixLen = 0;
-  constructor(public nparams: number) {}
+  constructor(nparams: number) { this.nparams = nparams; }
   private scratchI32 = -1;
   /** an i32 local for values that live within one expression */
   scratch(): number { return this.scratchI32 < 0 ? (this.scratchI32 = this.newLocal(T.i32)) : this.scratchI32; }

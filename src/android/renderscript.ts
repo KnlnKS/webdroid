@@ -1,10 +1,10 @@
 // RenderScript's natives (librs_jni over the CPU reference driver), as far as apps use the
 // deprecated API: elements, 2D types, allocations over bitmaps, and ScriptIntrinsicBlur. Any
 // other intrinsic or script kernel is an RSRuntimeException, as a driver without it reports.
-import { rt } from "../jvm/runtime";
-import { bitmapOf } from "./bitmap";
-import { clampedBlur, type BlurCache } from "./rendereffect";
-import { handle, deref, release } from "./handles";
+import { rt } from "../jvm/runtime.ts";
+import { bitmapOf } from "./bitmap.ts";
+import { clampedBlur, type BlurCache } from "./rendereffect.ts";
+import { handle, deref, release } from "./handles.ts";
 
 type Element = { kind: "element" };
 type Type = { kind: "type"; element: bigint; x: number; y: number };

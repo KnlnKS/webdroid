@@ -2,10 +2,11 @@
 // unlocked object, strand id << 8 | count for a thin lock, and INFLATED | index for a monitor of this table. A lock another strand holds,
 // a count past 255 or the first wait inflates it; an inflated monitor with no owner, entrants, waiters or pending re-entries is deflated
 // when released. Waiting is cooperative: an entrant or a waiter is a promise the releasing or notifying strand resolves.
-import type { Strand, ThreadRec } from "./sched";
+import type { Strand, ThreadRec } from "./sched.ts";
 
 /** what a blocking or synchronizing operation answers; the compiled code turns it into the exception (sched.ts blockStatus) */
-export const enum St { Ok = 0, Interrupted = 1, Imse = 2, Nbs = 3, Neg = 4, Nanos = 5, Proceed = 6, Block = 7 }
+export const St = { Ok: 0, Interrupted: 1, Imse: 2, Nbs: 3, Neg: 4, Nanos: 5, Proceed: 6, Block: 7 } as const;
+export type St = (typeof St)[keyof typeof St];
 const INFLATED = 0x80000000 | 0;
 const THIN_MAX = 255;
 
@@ -14,13 +15,14 @@ export interface Header { lock(obj: object): number; setLock(obj: object, lock: 
 interface Entrant { strand: Strand; depth: number; go: () => void }
 interface Waiter { strand: Strand; notify: () => void }
 class Monitor {
+  readonly index: number; readonly obj: object;
   owner: Strand | null = null;
   depth = 0;
   entrants: Entrant[] = [];
   waiters: Waiter[] = [];
   /** waiters that were woken and have not got the lock back yet: the monitor stays inflated for them */
   pending = 0;
-  constructor(readonly index: number, readonly obj: object) {}
+  constructor(index: number, obj: object) { this.index = index; this.obj = obj; }
 }
 
 /** whether `s` holds what `owner` holds: the same strand, a strand that native code of the other entered Java on (the same thread, up the chain of `parent`s), or
@@ -35,10 +37,11 @@ const owns = (owner: Strand | null | undefined, s: Strand): boolean => {
 };
 
 export class Monitors {
+  private header: Header; private strands: (Strand | undefined)[]; private after: (ms: number, fn: () => void) => () => void;
   private table: (Monitor | undefined)[] = [];
   private free: number[] = [];
   /** the strand each id names, while it lives: a lock whose owner has ended is free */
-  constructor(private header: Header, private strands: (Strand | undefined)[], private after: (ms: number, fn: () => void) => () => void) {}
+  constructor(header: Header, strands: (Strand | undefined)[], after: (ms: number, fn: () => void) => () => void) { this.header = header; this.strands = strands; this.after = after; }
 
   private inflate(obj: object, owner: Strand | null, depth: number): Monitor {
     const index = this.free.pop() ?? this.table.length, m = new Monitor(index, obj);

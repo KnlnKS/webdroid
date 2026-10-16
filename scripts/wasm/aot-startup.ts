@@ -2,9 +2,9 @@
 // compile them in parallel before the World runs. Run: WEBDROID_AOT=<dir> bun run wasm aot-startup
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { PLATFORM_PATHS, ROOT } from "./paths";
+import { world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { PLATFORM_PATHS, ROOT } from "./paths.ts";
 
 const dir = process.env.WEBDROID_AOT;
 if (!dir) throw new Error("set WEBDROID_AOT to a build");

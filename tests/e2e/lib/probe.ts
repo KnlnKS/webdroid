@@ -1,9 +1,9 @@
 // The page-side half of the webdroid driver. `probeScript` is installed as an init script before
 // any page script runs; `installProbe` is serialised into it, so it must stay self-contained and
 // reach the runtime only through `globalThis.wd`.
-import { stableFrame } from "./settle";
-import { environmentScript, performAction } from "./actions";
-import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types";
+import { stableFrame } from "./settle.ts";
+import { environmentScript, performAction } from "./actions.ts";
+import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types.ts";
 
 type ProbeConfig = {
   /** the instant Date is pinned to; null runs on the wall clock */

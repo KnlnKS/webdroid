@@ -1,12 +1,12 @@
 // java.lang.String over JS string primitives: the methods implemented here, called with the string as `this`, replace their bytecode.
 
-import { rt } from "../runtime";
-import { mangleMethod, charsToString, utf8, stringHash } from "../abi";
-import { encodeString } from "../charset";
-import { once } from "../suspend";
-import { csText } from "./jchars";
-import { stringMatches, stringReplace, stringSplit } from "./jregex";
-import { after, linkInit, scall, vcall } from "./jentry";
+import { rt } from "../runtime.ts";
+import { mangleMethod, charsToString, utf8, stringHash } from "../abi.ts";
+import { encodeString } from "../charset.ts";
+import { once } from "../suspend.ts";
+import { csText } from "./jchars.ts";
+import { stringMatches, stringReplace, stringSplit } from "./jregex.ts";
+import { after, linkInit, scall, vcall } from "./jentry.ts";
 
 /** String's methods implemented here, by `name(desc)` */
 export const stringMethods = new Map<string, (this: string, ...a: any[]) => unknown>();

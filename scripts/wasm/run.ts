@@ -31,8 +31,8 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AOT_ROOT, type AotManifest } from "./aot-key";
-import { runUnderNode } from "./undernode";
+import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
+import { runUnderNode } from "./undernode.ts";
 
 interface Script { node: boolean }
 /** tests pass or fail; `all` runs the ones marked so, in this order */

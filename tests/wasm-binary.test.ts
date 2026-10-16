@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { ModuleBuilder, T } from "../src/wasm/compiler/wasmbin";
-import { Code, OP } from "../src/wasm/compiler/code";
+import { ModuleBuilder, T } from "../src/wasm/compiler/wasmbin.ts";
+import { Code, OP } from "../src/wasm/compiler/code.ts";
 
 test("Wasm imports retain Unicode and long module names across repeated builds", () => {
   const mb = new ModuleBuilder(), signature = mb.addFuncType([], []), expected: WebAssembly.ModuleImportDescriptor[] = [];

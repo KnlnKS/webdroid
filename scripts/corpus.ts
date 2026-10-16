@@ -1,11 +1,11 @@
 // Boot every apk in the tree headlessly and rank the gaps by how many apks they block.
 //   bun run corpus [apk ...] [--json out.json] [--wait ms] [--observe ms]
-import { type Page } from "playwright";
-import { argv } from "./args";
-import { corpusApks } from "./apk-corpus";
-import { webdroidUrl } from "../tests/e2e/lib/util";
-import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
-import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
+import type { Page } from "playwright";
+import { argv } from "./args.ts";
+import { corpusApks } from "./apk-corpus.ts";
+import { webdroidUrl } from "../tests/e2e/lib/util.ts";
+import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid.ts";
+import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait", "--observe"]);

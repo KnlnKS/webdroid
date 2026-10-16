@@ -1,6 +1,6 @@
-import { device, type Screen } from "../../src/shell/config";
-export type { Screen } from "../../src/shell/config";
-import type { perf } from "../../src/perf";
+import { device, type Screen } from "../../src/shell/config.ts";
+export type { Screen } from "../../src/shell/config.ts";
+import type { perf } from "../../src/perf.ts";
 // Shared vocabulary for the visual E2E harness.
 //
 // A flow declares steps once, semantically. Two drivers interpret them: the emulator driver
@@ -257,7 +257,7 @@ export const deviceScreen = (): CaptureScreen =>
   ({ width: device.width, height: device.height, densityDpi: device.densityDpi, statusBarDp: device.statusBarDp });
 
 /** the `?screen=` the shell parses, and what setup-avd.sh prints */
-export { formatScreen as screenParam } from "../../src/shell/config";
+export { formatScreen as screenParam } from "../../src/shell/config.ts";
 
 export const sameDimensions = (a: Screen, b: Screen): boolean =>
   a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi;

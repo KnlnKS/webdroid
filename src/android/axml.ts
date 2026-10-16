@@ -1,6 +1,6 @@
 // Android binary XML (AXML) + shared string-pool / Res_value bits (also used by arsc.ts)
-import { u8, utf8 } from "../jvm/abi";
-import { perf } from "../perf";
+import { u8, utf8 } from "../jvm/abi.ts";
+import { perf } from "../perf.ts";
 
 export const TV = { // typed value dataType
   NULL: 0x00, REFERENCE: 0x01, ATTRIBUTE: 0x02, STRING: 0x03, FLOAT: 0x04,

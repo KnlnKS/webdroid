@@ -1,11 +1,11 @@
-import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared";
-import { kindOf, type Kind, type MethodInfo } from "./program";
-import { inferTyping, R, J, D, type Typing } from "./infer";
-import type { Compiler } from "./j2w";
-import { T } from "./wasmbin";
-import type { MC } from "./method";
-import { initiatedInstruction } from "../link/resolution";
-import type { World } from "../link/world";
+import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { kindOf, type Kind, type MethodInfo } from "./program.ts";
+import { inferTyping, R, J, D, type Typing } from "./infer.ts";
+import type { Compiler } from "./j2w.ts";
+import { T } from "./wasmbin.ts";
+import type { MC } from "./method.ts";
+import { initiatedInstruction } from "../link/resolution.ts";
+import type { World } from "../link/world.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 

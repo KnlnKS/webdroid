@@ -1,20 +1,20 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex), timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { AotStore } from "../../src/wasm/link/aot";
-import { FetchStore } from "../../src/wasm/link/aotstore";
-import { compileBytes } from "../../src/wasm/link/module";
-import { loadDexes, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
-import { externs } from "../../src/wasm/link/intrinsics";
-import { prepareApp } from "../../src/wasm/host/appcode";
-import { spawnCompileWorker } from "../../src/wasm/host/compiler";
-import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
-import type { World } from "../../src/wasm/link/world";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
-import { HEAP_LIMIT } from "../../src/jvm/abi";
-import { heapUsed } from "../../src/wasm/host/stats";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import type { AotStore } from "../../src/wasm/link/aot.ts";
+import { FetchStore } from "../../src/wasm/link/aotstore.ts";
+import { compileBytes } from "../../src/wasm/link/module.ts";
+import { loadDexes, world } from "./lib.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { prepareApp } from "../../src/wasm/host/appcode.ts";
+import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
+import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
+import type { World } from "../../src/wasm/link/world.ts";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
+import { heapUsed } from "../../src/wasm/host/stats.ts";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 
 /** the build is opened the way the app opens it: the index and the modules a start loads are compiled before the World runs. A page fetches them (and a module it lacks is a miss);
  *  node reads them, and reads any other module when it is wanted. An installed app (g1app.ts) brings its saved build and the list of platform modules its launches load. */

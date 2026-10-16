@@ -1,4 +1,4 @@
-import { installCounterReceipt } from "./shell/perf-receipts";
+import { installCounterReceipt } from "./shell/perf-receipts.ts";
 // Cheap always-on counters. Increments only — no strings, no timers in the hot path
 // beyond the three performance.now() pairs the frame loop already needs.
 export const perf = {

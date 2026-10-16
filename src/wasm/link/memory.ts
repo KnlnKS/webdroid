@@ -3,12 +3,12 @@
 // memory instead (no array, `buffer` is null), freed when the MemoryRef is collected. Java code, natives and native code then read the same bytes.
 // An address in the first 4 GiB above the core's reserved low pages is read and written by runtime functions over that memory (guest.ts); another is
 // an external mapping or a higher plane, which the production natives answer.
-import { Code, OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import { rtfns } from "../compiler/rtfns";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { MethodInfo } from "../compiler/program";
-import "./guest";
+import { Code, OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { rtfns } from "../compiler/rtfns.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { MethodInfo } from "../compiler/program.ts";
+import "./guest.ts";
 
 /** the guest's first mapped address (src/native/abi.ts LOW) */
 const LOW = 0x1_0000n;

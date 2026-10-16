@@ -3,16 +3,16 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { dexesIn } from "../../src/jvm/dex";
-import { descToName } from "../../src/jvm/abi";
-import { insnLen } from "../../src/jvm/opcodes";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { ACC } from "../../src/wasm/compiler/program";
-import { namesWasmFrames } from "../../src/wasm/link/exc";
-import { caseLine, compare, genCases } from "./cases";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
+import { world } from "./lib.ts";
+import { dexesIn } from "../../src/jvm/dex.ts";
+import { descToName } from "../../src/jvm/abi.ts";
+import { insnLen } from "../../src/jvm/opcodes.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { ACC } from "../../src/wasm/compiler/program.ts";
+import { namesWasmFrames } from "../../src/wasm/link/exc.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-"));
 const sh = shellIn(out);

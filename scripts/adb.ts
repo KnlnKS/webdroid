@@ -1,6 +1,6 @@
 // The reference device over adb, for the scripts that record from it.
 import { basename } from "node:path";
-import { androidPlatform, androidTool } from "./android-sdk";
+import { androidPlatform, androidTool } from "./android-sdk.ts";
 
 export function adb(...args: string[]): string {
   const r = Bun.spawnSync([androidTool("adb"), ...args], { stderr: "pipe", stdout: "pipe" });

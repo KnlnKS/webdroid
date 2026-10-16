@@ -3,28 +3,28 @@
 // stands where a native's JThrowable does. A call from host code that no Java frame is under (an event, a Suspending native after its first wait) runs on a new
 // strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
-import { rt, JObj } from "../../jvm/runtime";
-import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit, type Entry } from "../../jvm/natives/jentry";
-import { Strand as HostStrand } from "../../jvm/suspend";
-import { processExited, never } from "../../process-exit";
-import { mangleField } from "../../jvm/abi";
-import { JThrowable } from "../../jvm/natives/jthrowable";
-import type { JavaClass } from "../../jvm/tier";
-import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
-import type { World } from "../link/world";
-import { waitsEnded } from "../link/module";
-import type { Strand, ThreadRec } from "../link/sched";
-import type { Compiler } from "../compiler/j2w";
-import { OP, type Code } from "../compiler/code";
-import { fromBits, refOf, toBits, type Bridge } from "./bridge";
-import { failed } from "../compiler/linkage";
-import { UInfo } from "../link/unsafe";
-import { constClass } from "../link/classes";
-import { box } from "../link/mhandles";
-import { count } from "./stats";
-import { note, Ev } from "../../timeline";
-import { procTasks, processTid } from "../../shell/procfs";
-import { cpus, nameThread } from "../../native/cpu";
+import { rt, JObj } from "../../jvm/runtime.ts";
+import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit, type Entry } from "../../jvm/natives/jentry.ts";
+import { Strand as HostStrand } from "../../jvm/suspend.ts";
+import { processExited, never } from "../../process-exit.ts";
+import { mangleField } from "../../jvm/abi.ts";
+import { JThrowable } from "../../jvm/natives/jthrowable.ts";
+import type { JavaClass } from "../../jvm/tier.ts";
+import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
+import type { World } from "../link/world.ts";
+import { waitsEnded } from "../link/module.ts";
+import type { Strand, ThreadRec } from "../link/sched.ts";
+import type { Compiler } from "../compiler/j2w.ts";
+import { OP, type Code } from "../compiler/code.ts";
+import { fromBits, refOf, toBits, type Bridge } from "./bridge.ts";
+import { failed } from "../compiler/linkage.ts";
+import { UInfo } from "../link/unsafe.ts";
+import { constClass } from "../link/classes.ts";
+import { box } from "../link/mhandles.ts";
+import { count } from "./stats.ts";
+import { note, Ev } from "../../timeline.ts";
+import { procTasks, processTid } from "../../shell/procfs.ts";
+import { cpus, nameThread } from "../../native/cpu.ts";
 
 const OBJECT = "Ljava/lang/Object;";
 /** the classes and interfaces every array class is a subtype of */

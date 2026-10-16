@@ -1,13 +1,13 @@
-import { diagnostics, browserFailures } from "./lib/diagnostics";
+import { diagnostics, browserFailures } from "./lib/diagnostics.ts";
 import { rm } from "node:fs/promises";
-import { captureFlow, launchFor, loadManifest, CaptureAborted, type StepRun } from "./capture-webdroid";
-import { defaultJobs, parseArgs } from "./lib/args";
-import { FLOWS } from "./flows";
-import type { Flow } from "./types";
-import { loadPng } from "./lib/png";
-import { diffImages } from "./lib/diff";
-import { E2E_DIR, runQueue } from "./lib/util";
-import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
+import { captureFlow, launchFor, loadManifest, CaptureAborted, type StepRun } from "./capture-webdroid.ts";
+import { defaultJobs, parseArgs } from "./lib/args.ts";
+import { FLOWS } from "./flows/index.ts";
+import type { Flow } from "./types.ts";
+import { loadPng } from "./lib/png.ts";
+import { diffImages } from "./lib/diff.ts";
+import { E2E_DIR, runQueue } from "./lib/util.ts";
+import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types.ts";
 
 // Live flows depend on upstream content and networks, so they join the lane only when named or
 // with --live; the default lane is reproducible from the repository and local APKs alone.

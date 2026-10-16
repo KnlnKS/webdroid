@@ -1,6 +1,6 @@
-import { PLATFORM_DATA } from "../jvm/bootclasspath";
-import { vfs } from "./vfs";
-import { RangeFile, type FileSource } from "./lazyfile";
+import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
+import { vfs } from "./vfs.ts";
+import { RangeFile, type FileSource } from "./lazyfile.ts";
 
 const sources = new Map<string, FileSource>();
 /** the reference build's ICU and time zone files at their device paths, read on first use. A large

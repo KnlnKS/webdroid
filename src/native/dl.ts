@@ -2,16 +2,16 @@
 // stubs), dlopen/dlsym over virtual host libs and APK-shipped libraries, exidx lookup for the
 // guest's own unwinder.
 
-import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
-import { mem } from "./mem";
-import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host";
-import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu";
-import type { TombstoneFrame } from "./tombstone";
-import { trampSlot, RET_SENTINEL } from "./abi";
-import { rt, type Gen } from "../jvm/runtime";
-import { curThread } from "../jvm/natives/jentry";
-import { shareable } from "../jvm/suspend";
-import { vfs } from "../shell/vfs";
+import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
+import { mem } from "./mem.ts";
+import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host.ts";
+import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu.ts";
+import type { TombstoneFrame } from "./tombstone.ts";
+import { trampSlot, RET_SENTINEL } from "./abi.ts";
+import { rt, type Gen } from "../jvm/runtime.ts";
+import { curThread } from "../jvm/natives/jentry.ts";
+import { shareable } from "../jvm/suspend.ts";
+import { vfs } from "../shell/vfs.ts";
 
 export const modules: Module[] = [];
 const byName = new Map<string, Module>();

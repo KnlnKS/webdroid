@@ -1,7 +1,7 @@
 // Argument generation and the Wasm-vs-JDK comparison shared by the differential harnesses.
-import { mangleField } from "../../src/jvm/abi";
-import { kindOf, type MethodInfo } from "../../src/wasm/compiler/program";
-import { db, fb, fmt } from "./harness";
+import { mangleField } from "../../src/jvm/abi.ts";
+import { kindOf, type MethodInfo } from "../../src/wasm/compiler/program.ts";
+import { db, fb, fmt } from "./harness.ts";
 
 const pool: Record<string, bigint[]> = {
   I: [0, 1, -1, 2, 3, 5, 7, 9, 10, 16, 31, 32, 33, 36, 48, 57, 63, 64, 65, 90, 97, 100, 122, 255, 65536, 123456789, 0x7fffffff, -0x80000000].map(BigInt),

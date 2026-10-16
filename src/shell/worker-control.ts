@@ -1,22 +1,22 @@
-import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os";
-import { appHost } from "../android/apphost";
-import { rt } from "../jvm/runtime";
-import { realmWd } from "./realmwd";
-import { processExited } from "../process-exit";
-import { dispatchTouches, pressBack, SCREEN_W, SCREEN_H } from "./device";
-import type { TouchPointer } from "./pointer-queue";
-import { yieldStats, timedParks } from "../jvm/yield";
-import { webViewInfo } from "../android/webframes";
-import { mainDbg, onMain } from "../android/mainloop";
-import { swipe } from "./gesture";
-import { imeInput, imeAction, imeState } from "../android/ime";
-import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync";
-import { pendingTransitions } from "../android/server/atm";
-import { perf } from "../perf";
-import { processPresentation } from "./process-endpoint";
-import { nativeRequirements } from "./diagnostics";
-import { existingAotProfile } from "./aot-profile";
-import { timelineSince } from "../timeline";
+import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os.ts";
+import { appHost } from "../android/apphost.ts";
+import { rt } from "../jvm/runtime.ts";
+import { realmWd } from "./realmwd.ts";
+import { processExited } from "../process-exit.ts";
+import { dispatchTouches, pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
+import type { TouchPointer } from "./pointer-queue.ts";
+import { yieldStats, timedParks } from "../jvm/yield.ts";
+import { webViewInfo } from "../android/webframes.ts";
+import { mainDbg, onMain } from "../android/mainloop.ts";
+import { swipe } from "./gesture.ts";
+import { imeInput, imeAction, imeState } from "../android/ime.ts";
+import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync.ts";
+import { pendingTransitions } from "../android/server/atm.ts";
+import { perf } from "../perf.ts";
+import { processPresentation } from "./process-endpoint.ts";
+import { nativeRequirements } from "./diagnostics.ts";
+import { existingAotProfile } from "./aot-profile.ts";
+import { timelineSince } from "../timeline.ts";
 
 /** Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => string) {

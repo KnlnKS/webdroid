@@ -41,7 +41,7 @@ beforeAll(async () => {
 }, PAGE_TIMEOUT);
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
-type Probes = typeof import("./fixtures/browser/index");
+type Probes = typeof import("./fixtures/browser/index.ts");
 
 /** A fixture's probe result, from a fresh page: the runtime's globals are per realm. */
 async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnType<Probes[K]>>> {

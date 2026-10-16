@@ -1,5 +1,5 @@
 // bun scripts/findstr.ts <apk> <needle> — grep an APK's dex string pools.
-import { openDexes } from "./lib";
+import { openDexes } from "./lib.ts";
 
 const [apk, needle] = process.argv.slice(2);
 if (!apk || !needle) { console.error("usage: bun scripts/findstr.ts <apk> <needle>"); process.exit(2); }

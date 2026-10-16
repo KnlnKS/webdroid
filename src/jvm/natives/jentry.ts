@@ -2,9 +2,9 @@
 // Strand: rt.cur, curThread its thread), and the calls native code makes into Java on it (vcall,
 // scall, newObj, callOn, after).
 
-import { rt, JObj } from "../runtime";
-import type { JavaClass } from "../tier";
-import { Strand } from "../suspend";
+import { rt, JObj } from "../runtime.ts";
+import type { JavaClass } from "../tier.ts";
+import { Strand } from "../suspend.ts";
 
 /** the main thread's identity from here, for code that reads it while no Java runs (a native thread parked) */
 export function releaseThread(): void { resumeAs(mainThread.root); }

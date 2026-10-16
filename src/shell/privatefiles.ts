@@ -1,7 +1,7 @@
-import type { vfs, FileAttributes } from "./vfs";
-import { knownUid } from "../android/packages";
-import { openDb, txDone } from "./idb";
-import { DiskFile, DiskStore } from "./diskstore";
+import type { vfs, FileAttributes } from "./vfs.ts";
+import { knownUid } from "../android/packages.ts";
+import { openDb, txDone } from "./idb.ts";
+import { DiskFile, DiskStore } from "./diskstore.ts";
 
 type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number; attributes?: FileAttributes };
 type DiskValue = Extract<FileValue, { kind: "disk" }>;

@@ -2,20 +2,20 @@
 // gai_strerror and inet_pton/ntop, over net-address.ts's resolver and interfaces. (A 64-bit
 // process's bionic resolves through netd's dnsproxyd, unix.ts.)
 
-import { parseIpv4 } from "../../shell/relay";
-import { E } from "../abi";
-import { utf8 } from "../../jvm/abi";
-import type { Cpu } from "../cpu";
-import { stp, ptr, cstr, type HostFn } from "../host";
-import { mem, anchor } from "../mem";
-import { fail } from "../libc";
+import { parseIpv4 } from "../../shell/relay.ts";
+import { E } from "../abi.ts";
+import { utf8 } from "../../jvm/abi.ts";
+import type { Cpu } from "../cpu.ts";
+import { stp, ptr, cstr, type HostFn } from "../host.ts";
+import { mem, anchor } from "../mem.ts";
+import { fail } from "../libc.ts";
 import {
   AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, V4_LOOPBACK,
   parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,
-} from "../net-address";
-import { SOCK_STREAM, SOCK_DGRAM, sockaddrOf, readEndpoint } from "./abi";
-import { record } from "./core";
-import { IPPROTO_TCP, IPPROTO_UDP } from "./inet";
+} from "../net-address.ts";
+import { SOCK_STREAM, SOCK_DGRAM, sockaddrOf, readEndpoint } from "./abi.ts";
+import { record } from "./core.ts";
+import { IPPROTO_TCP, IPPROTO_UDP } from "./inet.ts";
 
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
 const EAI_BADFLAGS = 3, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;

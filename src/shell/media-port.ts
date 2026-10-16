@@ -2,8 +2,8 @@
 // mixes every process's graph, as AudioFlinger mixes every client's tracks; a Worker holds proxies for
 // the nodes, buffers and elements it made, and the page posts back its clock, ended sources, decoded
 // buffers, element state with each event, and the video frames the Worker asks for.
-import type { AudioData, AudioGain, AudioNodeLike, AudioOut, AudioPcm, AudioSource } from "../android/audio-output";
-import type { Handler, MediaElement } from "../android/mediaplayer";
+import type { AudioData, AudioGain, AudioNodeLike, AudioOut, AudioPcm, AudioSource } from "../android/audio-output.ts";
+import type { Handler, MediaElement } from "../android/mediaplayer.ts";
 
 type Command =
   | { op: "gain" | "source" | "disconnect" | "free" | "resume"; id: number }
@@ -73,8 +73,10 @@ export function sendMedia(port: MessagePort): { audio: AudioOut; createElement: 
     return id;
   }
   class Pcm implements AudioPcm {
+    readonly length: number; readonly sampleRate: number;
     readonly channels: Float32Array<ArrayBuffer>[];
-    constructor(count: number, readonly length: number, readonly sampleRate: number) {
+    constructor(count: number, length: number, sampleRate: number) {
+      this.length = length; this.sampleRate = sampleRate;
       this.channels = Array.from({ length: count }, () => new Float32Array(length));
     }
     get duration() { return this.length / this.sampleRate; }

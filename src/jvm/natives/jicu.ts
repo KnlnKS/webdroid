@@ -2,11 +2,11 @@
 // android.icu bytecode over the reference build's ICU data, where the device runs ICU4C over the
 // same data. Each follows what AOSP's C++ computes; the charset and regex natives are separate.
 
-import { rt, driven, type Gen } from "../runtime";
-import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry";
-import type { JavaClass } from "../tier";
-import { jarray } from "../abi";
-import { cString, icuItem, icuRead } from "./icudata";
+import { rt, driven, type Gen } from "../runtime.ts";
+import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry.ts";
+import type { JavaClass } from "../tier.ts";
+import { jarray } from "../abi.ts";
+import { cString, icuItem, icuRead } from "./icudata.ts";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 

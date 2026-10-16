@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import "../natives";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
-import { mem } from "./mem";
-import { javaBytesFd, javaCloseFd } from "./fs";
-import { mediaInit } from "./media";
+import "../natives.ts";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { lookupHost } from "./host.ts";
+import { mem } from "./mem.ts";
+import { javaBytesFd, javaCloseFd } from "./fs.ts";
+import { mediaInit } from "./media.ts";
 
 // 0.3 seconds of 32x32 red H.264 (10 fps, key interval 2, no B frames) and 8 kHz AAC.
 test("NDK extraction owns its descriptor and preserves samples, timestamps and sync seeking", async () => {
