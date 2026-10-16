@@ -1,8 +1,7 @@
-import type { ServerWebSocket } from "bun";
 import { BridgeCalls } from "./bridgecalls.ts";
 
-export type WebRelayData = { kind: "webview"; id: string };
-type Peer = Pick<ServerWebSocket<WebRelayData>, "send" | "close">;
+/** the renderer's end of a bridge: a WebSocket */
+type Peer = { send(message: string): void; close(code?: number, reason?: string): void };
 
 export class WebRelay {
   private peers = new Map<string, Peer>();
