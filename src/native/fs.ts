@@ -30,7 +30,7 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_
 /** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
  *  open write ends, the last of which closing is its readers' end of file. `closed` also stands for
  *  a reader gone (or shut down), which a writer meets as EPIPE. */
-interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean }
+interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean; named?: boolean }
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share */
 export interface OpenFile {
@@ -56,12 +56,30 @@ const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: 
  *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
  *  variables signal through them */
 const fifos = new WeakMap<VfsFile, Pipe>();
-export function makeFifo(cpu: Cpu, path: string): number {
+/** this process's pipes for fifos another realm names; their contents stay per process */
+const remoteFifos = new Map<string, Pipe>();
+const namedPipe = (): Pipe => ({ ...newPipe(0), named: true });
+/** a name only: volatile, as a fifo that outlived a reload would come back a regular file */
+export function makeFifo(cpu: Cpu | null, path: string): number {
   const p = vfs.norm(path), taken = newName(cpu, p);
   if (taken) return taken;
+  vfs.markVolatile(p);
   vfs.write(p, new Uint8Array(0));
-  fifos.set(vfs.open(p)!, newPipe(0));
+  fifos.set(vfs.open(p)!, namedPipe());
   return 0;
+}
+export const isFifo = (path: string): boolean => { const file = vfs.open(path); return !!file && fifos.has(file); };
+function openFifo(path: string, content: VfsFile, fifo: Pipe, flags: number): number {
+  const acc = flags & O_ACCMODE;
+  if (acc !== 0) { fifo.writers++; fifo.closed = false; }
+  return put({ ...fdBase(path), content, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
+    statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+}
+/** opens this process's pipe for a fifo the owning realm names */
+export function openRemoteFifo(path: string, flags: number): number {
+  let fifo = remoteFifos.get(path);
+  if (!fifo) remoteFifos.set(path, fifo = namedPipe());
+  return openFifo(path, fdBase(path).content, fifo, flags);
 }
 const inotifies = new Set<Inotify>();
 function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
@@ -252,11 +270,7 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   }
   if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
   const existing = vfs.open(path), fifo = existing && fifos.get(existing);
-  if (fifo) {
-    if (acc !== 0) { fifo.writers++; fifo.closed = false; }
-    return put({ ...fdBase(path), content: existing, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
-      statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
-  }
+  if (fifo) return openFifo(path, existing, fifo, flags);
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
@@ -406,7 +420,17 @@ export function renameProcess(cpu: Cpu | null, from: string, to: string): number
 }
 export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
   const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileRemove(vfs.norm(path),directory)) : removePath(cpu,path,directory);
+  if (!calls) return removePath(cpu,path,directory);
+  const p = vfs.norm(path);
+  remoteFifos.delete(p);
+  return kernelResult(cpu,calls.fileRemove(p,directory));
+}
+/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
+export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
+  const type = mode & 0xf000, p = vfs.norm(path), calls = remoteFilePath(p);
+  if (type === S_IFIFO) return calls ? kernelResult(cpu,calls.fileFifo(p)) : makeFifo(cpu,p);
+  if (type === 0 || type === S_IFREG) return calls ? kernelResult(cpu,calls.fileCreate(p)) : createPath(cpu,p);
+  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
 }
 export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
   if (mode & ~7) return fail(cpu,E.INVAL);
@@ -420,7 +444,7 @@ export function statProcess(cpu: Cpu, path: string, buf: number): number | Promi
   return calls.fileStat(normalized).then(reply => {
     if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
     const stat = reply.value;
-    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized,undefined,stat);
+    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized,undefined,stat,stat.fifo);
     return 0;
   });
 }
@@ -604,7 +628,7 @@ export function dropFile(f: Fd): void {
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   // a pipe nobody reads: its writers meet EPIPE (a fifo's outlives its descriptors)
-  if (f.rpipe && fifos.get(f.content) !== f.rpipe) f.rpipe.closed = true;
+  if (f.rpipe && !f.rpipe.named) f.rpipe.closed = true;
   f.socket?.close();
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
@@ -648,10 +672,10 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir)): void {
+export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir), fifo = !!file && fifos.has(file)): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : file && fifos.has(file) ? S_IFIFO : S_IFREG) | attributes.mode);
+  mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : fifo ? S_IFIFO : S_IFREG) | attributes.mode);
   mem.st32(buf + KLAYOUT.ST_NLINK, 1);
   mem.st32(buf + KLAYOUT.ST_UID, attributes.uid); mem.st32(buf + KLAYOUT.ST_GID, attributes.gid);
   mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
@@ -908,6 +932,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     return typeof to !== "string" ? to : renameProcess(cpu, from, to);
   },
   mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirProcess(cpu, path) : path; },
+  mknodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mknodProcess(cpu, path, a.i()) : path; },
   ftruncate: (cpu, a) => kernelResult(cpu,processTruncateFd(a.i(),offArg(a))),
   truncate: (cpu, a) => {
     const file = vfs.open(a.str()), n = offArg(a);

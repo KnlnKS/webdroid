@@ -651,7 +651,7 @@ test("libcore directory operations await their canonical owner and observe peer 
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
   filePathTransport.calls=()=>({filePrepare:async()=>{},fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
-    fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),
+    fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),fileFifo:async p=>owner.fileFifo(p),
     fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}});
   try {
     const file=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",path));

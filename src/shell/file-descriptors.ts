@@ -1,7 +1,7 @@
 import { E } from "../native/abi";
 import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
+  detachFdScope, fdBase, installFile, isFifo, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
 import { writable } from "./lazyfile";
 
@@ -25,7 +25,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingRelease"; fd: number }
   | { kind: "mappingSync"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
-export type DescriptorReply = { result: number; directory?: boolean; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
+export type DescriptorReply = { result: number; directory?: boolean; fifo?: boolean; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number; immutable: boolean } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -133,6 +133,8 @@ export class FileDescriptors {
       const path = vfs.norm(request.path);
       const denied = session.authorize(path, !!(request.flags & (O_ACCMODE | O_CREAT | O_TRUNC)));
       if (denied) return {result:-denied};
+      // the name only: a process keeps its own pipe behind it
+      if (isFifo(path)) return {result:0,fifo:true};
       const existed = vfs.exists(path), fd = javaOpenFd(path,request.flags);
       if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
       const result = this.put(session,fd);

@@ -1,8 +1,8 @@
 import { E } from "../native/abi";
 import { vfs, type FileAttributes } from "./vfs";
 import { procIdentity } from "./procfs";
-import { mkdirPath, accessPath, renamePath, removePath, createPath } from "../native/fs";
-export type PathStat = { directory: boolean; size: number; mtime: number; uid: number; gid: number; mode: number };
+import { mkdirPath, accessPath, renamePath, removePath, createPath, makeFifo, isFifo } from "../native/fs";
+export type PathStat = { directory: boolean; fifo: boolean; size: number; mtime: number; uid: number; gid: number; mode: number };
 export type PathReply<T> = { errno: number; value: T };
 export type FilePathCalls = {
   filePrepare(pkg: string): Promise<void>;
@@ -13,6 +13,7 @@ export type FilePathCalls = {
   fileRename(from: string, to: string): Promise<number>;
   fileRemove(path: string, directory?: boolean): Promise<number>;
   fileCreate(path: string): Promise<number>;
+  fileFifo(path: string): Promise<number>;
   fileSetAttributes(path: string, change: Partial<FileAttributes>): Promise<number>;
 }
 /** Only mutable app/shared paths cross; platform archives and procfs stay in their owning realm. */
@@ -22,7 +23,7 @@ export const remoteFilePath = (path: string): FilePathCalls | undefined => isMut
 /** stat of normalized `p` in this realm's VFS */
 export function pathStat(p: string): PathReply<PathStat | null> {
   const directory = vfs.isDir(p), stat = directory ? null : vfs.stat(p);
-  return {errno: directory || stat ? 0 : E.NOENT, value: directory || stat ? {directory, size: directory ? 0 : stat!.size, mtime: vfs.mtime(p),...vfs.attributes(p,directory)} : null};
+  return {errno: directory || stat ? 0 : E.NOENT, value: directory || stat ? {directory, fifo: !directory && isFifo(p), size: directory ? 0 : stat!.size, mtime: vfs.mtime(p),...vfs.attributes(p,directory)} : null};
 }
 export function changeFileAttributes(path: string, change: Partial<FileAttributes>, uid = procIdentity.uid): number {
   for (const value of [change.uid,change.gid]) if (value !== undefined && (!Number.isInteger(value) || value < -1 || value > 0xffffffff)) return -E.INVAL;
@@ -61,6 +62,7 @@ export function canonicalFilePaths(authorize: (path: string, write: boolean) => 
     },
     fileRemove(path: string, directory?: boolean): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : removePath(null,p,directory); },
     fileCreate(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : created(p,createPath(null,p)); },
+    fileFifo(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : created(p,makeFifo(null,p)); },
     fileAccess(path: string, mode: number): number { const p = vfs.norm(path), denied = authorize(p, !!(mode & 2)); return denied ? -denied : accessPath(null, p, mode); },
     fileList(path: string): PathReply<string[] | null> {
       const p = vfs.norm(path), denied = authorize(p, false);

@@ -518,7 +518,7 @@ const unixError = (e: number) => {
 const unixSys = (result: number): number => { if (result < 0) throw unixError(-result); return result; };
 const cpath = (address: bigint) => mem.cstr(mem.txVa(BigInt.asUintN(64, address)));
 const bytesOf = (s: string) => i8(utf8.enc.encode(s));
-const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
+const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFIFO = 0o010000, AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
 /** a name relative to directory descriptor `dfd`, as the *at calls resolve it */
 function atPath(dfd: number, address: bigint): string {
   const name = cpath(address);
@@ -538,7 +538,7 @@ function fillAttrs(attrs: JObj, path: string, st: PathStat): void {
   a[p[0]] = modeOf(st); a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = st.uid; a[p[5]] = st.gid; a[p[6]] = BigInt(st.directory ? 4096 : st.size);
   for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
 }
-const modeOf = (st: PathStat) => (st.directory ? S_IFDIR : S_IFREG) | st.mode;
+const modeOf = (st: PathStat) => (st.directory ? S_IFDIR : st.fifo ? S_IFIFO : S_IFREG) | st.mode;
 /** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
 function pathReply(path: string) { const p = vfs.norm(path); return remoteFilePath(p)?.fileStat(p) ?? pathStat(p); }
 function statPath(path: string, attrs: JObj | null): number | Promise<number> {
@@ -610,7 +610,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     const st = javaFdStat(fd);
     if (!st) throw unixError(E.BADF);
     const path = st.path ?? "", directory = (st.mode & S_IFMT) === S_IFDIR;
-    fillAttrs(attrs, path, { directory, size: st.size, mtime: vfs.mtime(path), ...vfs.attributes(path, directory) });
+    fillAttrs(attrs, path, { directory, fifo: (st.mode & S_IFMT) === S_IFIFO, size: st.size, mtime: vfs.mtime(path), ...vfs.attributes(path, directory) });
   },
   "chmod0(JI)V": (path: bigint) => after(statPath(cpath(path), null), () => {}),
   "fchmod(II)V": (fd: number) => { fdPath(fd); },

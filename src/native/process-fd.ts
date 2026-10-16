@@ -1,6 +1,6 @@
 import { E } from "./abi";
 import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
-  javaPwriteFd, javaSeekFd, javaTruncateFd, javaAllocateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
+  javaPwriteFd, javaSeekFd, javaTruncateFd, javaAllocateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, openRemoteFifo, type OpenFile } from "./fs";
 import { isMutablePath } from "../shell/file-path";
 import { vfs } from "../shell/vfs";
 import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors";
@@ -59,6 +59,7 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
   if (!calls) return javaOpenFd(normalized,flags);
   return calls().fileDescriptor({kind:"open",path:normalized,flags}).then(reply => {
     if (reply.result < 0) return reply.result;
+    if (reply.fifo) return openRemoteFifo(normalized,flags);
     return installRemote(reply.result,calls,normalized,flags,reply.directory);
   });
 }

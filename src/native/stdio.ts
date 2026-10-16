@@ -12,7 +12,7 @@ import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs, storageEstimate } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
+  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
 import { processAllocateFd } from "./process-fd";
 
@@ -238,7 +238,7 @@ export function stdioInit(): void {
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
     chmod: () => 0, chown: () => 0,
     unlink: (cpu, a) => removePath(cpu, a.str(), false),
-    mkfifo: (cpu, a) => makeFifo(cpu, a.str()),
+    mkfifo: (cpu, a) => mknodProcess(cpu, a.str(), 0x1000 | a.i()),
     remove: (cpu, a) => removePath(cpu, a.str()),
     rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
     mkdir: (cpu, a) => mkdirPath(cpu, a.str()),

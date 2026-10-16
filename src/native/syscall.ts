@@ -37,7 +37,7 @@ export let KLAYOUT = KERNEL32;
  *  ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */
 const SAME64: Record<number, string> = {
   17: "getcwd", 19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 23: "dup", 24: "dup3", 25: "fcntl",
-  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch", 29: "ioctl", 32: "flock", 34: "mkdirat", 35: "unlinkat",
+  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch", 29: "ioctl", 32: "flock", 33: "mknodat", 34: "mkdirat", 35: "unlinkat",
   43: "statfs", 44: "fstatfs", 45: "truncate", 46: "ftruncate", 49: "chdir", 52: "fchmod", 53: "fchmodat", 55: "fchown",
   56: "openat", 57: "close", 59: "pipe2", 62: "lseek", 63: "read", 64: "write", 65: "readv", 66: "writev", 67: "pread64",
   68: "pwrite64", 71: "sendfile", 78: "readlinkat", 79: "fstatat", 80: "fstat", 82: "fsync", 83: "fdatasync",
