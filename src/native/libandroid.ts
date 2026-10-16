@@ -62,6 +62,8 @@ const windowFunctions = () => windowFns ??= (() => {
 export function nativeWindowFor(surface: GlSurface): number {
   const existing = windowBySurface.get(surface);
   if (existing) { existing.refs++; return existing.handle; }
+  // window.h: android_native_base_t (magic, version, reserved[4], incRef, decRef), then flags, min and maxSwapInterval,
+  // xdpi and ydpi, oem[4] at pointer alignment, and the window's ten functions
   const common = 8 + 6 * PTR, oem = common + 20 + PTR - 1 & -PTR, size = oem + 14 * PTR, at = mem.malloc(size);
   if (!at) return 0;
   mem.memset(at, 0, size);
