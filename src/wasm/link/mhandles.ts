@@ -175,18 +175,22 @@ export function unbox(cx: Compiler, c: Code, desc: string): void {
 
 /** Box a DEX polymorphic site for the canonical MethodHandle or VarHandle dispatcher. */
 export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: string): void {
-  const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret);
-  const handle = c.newLocal(T.anyref), arr = c.newLocal(T.anyref);
+  const { code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret);
+  const handle = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
-  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
+  emitBoxedInvoke(mc, ins, params, ret, 1, () => c.lget(handle), `${accessMode ? accessMode + "@" : ""}(${params.join("")})${ret}`, accessMode ? VAR_HANDLE_INVOKE : exact ? 1 : 0);
+}
+/** a dispatcher import invoked with the site's arguments from register `firstReg` boxed into an
+ *  Object[], its Object result taken as `ret`: dropped, unboxed or cast */
+export function emitBoxedInvoke(mc: MC, ins: Ins, params: string[], ret: string, firstReg: number, handle: () => void, site: string, mode: number): void {
+  const { cx, code: c } = mc, arr = c.newLocal(T.anyref);
   cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
-  params.forEach((p, i) => {
+  for (let i = 0, ri = firstReg; i < params.length; ri += isWide(params[i++]) ? 2 : 1) {
+    const p = params[i];
     c.lget(arr); objects(cx, c).i32(i);
-    mc.get(kindOf(p), regs[i]);
-    if (BOX[p]) box(cx, c, p);
-    c.arraySet(cx.tData.ref);
-  });
-  emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(arr), `${accessMode ? accessMode + "@" : ""}(${params.join("")})${ret}`, accessMode ? VAR_HANDLE_INVOKE : exact ? 1 : 0);
+    mc.get(kindOf(p), ins.regs[ri]); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
+  }
+  emitInvokeImport(cx, c, handle, () => c.lget(arr), site, mode);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
