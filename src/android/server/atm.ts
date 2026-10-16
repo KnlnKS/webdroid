@@ -305,10 +305,10 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
 
 const AI = "android/content/pm/ActivityInfo";
 const isActivity = (info: JObj, ref: ComponentRef) => getDeclared<string>(info, AI, "packageName") === ref.pkg && getDeclared<string>(info, AI, "name") === ref.cls;
-/** ActivityStarter.execute up to the start itself: the resolved activity starts here, or through the
- *  broker in its own process (`remote`, which the caller awaits), or an error code */
-function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number):
-  Gen<{ run: () => Gen<unknown>; remote: boolean } | number> {
+/** a resolved start: it runs here, or `remote`ly through the broker in the activity's own process */
+type Start = { run: () => Gen<unknown>; remote: boolean };
+/** ActivityStarter.execute up to the start itself: the resolved activity's start, or an error code */
+function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number): Gen<Start | number> {
   const info = yield* resolveActivity(intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA);
   // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
   const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
@@ -328,18 +328,15 @@ function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, res
     } : undefined);
   } };
 }
-/** a resolved start: the pause a local start waits for runs on the caller's main thread, so the
- *  call returns once it is under way, as ActivityStarter returns once the pause is scheduled */
-function* runStarts(starts: { run: () => Gen<unknown>; remote: boolean }[]): Gen<void> {
-  if (starts.length === 1 && starts[0].remote) { yield* starts[0].run(); return; }
-  detached(() => rt.drive(function* () { for (const start of starts) yield* start.run(); }()), logUncaught);
-}
+/** runs `starts` in order off the caller: the pause a local start waits for runs on the caller's main thread,
+ *  so the call returns once it is under way, as ActivityStarter returns once the pause is scheduled */
+const detachStarts = (starts: Start[]) => detached(() => rt.drive(function* () { for (const start of starts) yield* start.run(); }()), logUncaught);
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
   try {
     const start = yield* resolveStart(app, intent, resolvedType, resultTo, resultWho, requestCode);
     if (typeof start === "number") return start;
-    yield* runStarts([start]);
+    if (start.remote) yield* start.run(); else detachStarts([start]);
     return START_SUCCESS;
   } finally { transitions--; }
 });
@@ -347,13 +344,13 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
 const startActivities = driven(function* (app: JObj, intents: JObj[], resolvedTypes: (string | null)[] | null, resultTo: JObj | null): Gen<number> {
   transitions++;
   try {
-    const starts = [];
+    const starts: Start[] = [];
     for (const [i, intent] of intents.entries()) {
       const start = yield* resolveStart(app, intent, resolvedTypes?.[i] ?? null, i ? null : resultTo, null, -1);
       if (typeof start === "number") return start;
       starts.push(start);
     }
-    yield* runStarts(starts);
+    detachStarts(starts);
     return START_SUCCESS;
   } finally { transitions--; }
 });
