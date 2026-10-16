@@ -30,7 +30,7 @@ const present = (set: EncAnnotation[] | undefined, type: string) => visible(set)
 /** the executables of a class the host last counted for `ExecAt` */
 let listed: number[] = [];
 
-export function hostMembers(w: World, kind: number, a: number, b: number): number {
+export function hostMembers(w: World, kind: MInfo, a: number, b: number): number {
   const cls = (id: number) => w.prog.get(w.nameOf(id));
   switch (kind) {
     case MInfo.ExecCount: {

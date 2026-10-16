@@ -408,7 +408,7 @@ export class Sched {
   }
 
   // ---------- host.sync
-  sync(op: number, obj: object | null, a: number): number {
+  sync(op: Sync, obj: object | null, a: number): number {
     const s = this.current();
     switch (op) {
       case Sync.Try: return this.plain(this.monitors.tryEnter(obj!, s));
@@ -452,7 +452,7 @@ export class Sched {
   }
 
   // ---------- host.block
-  block(op: number, obj: object | null, a: number, b: number): Promise<number> | number {
+  block(op: Block, obj: object | null, a: number, b: number): Promise<number> | number {
     const s = this.current();
     switch (op) {
       case Block.Enter: return this.monitors.enter(obj!, s).then(() => St.Ok);

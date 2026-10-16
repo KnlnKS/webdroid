@@ -73,7 +73,7 @@ export const infoRecord = (w: World, kind: number, a: number, b: number): InfoRe
 /** asks again, in a World that numbers its classes differently, for what `infoRecord` recorded */
 export function replayInfo(w: World, [kind, cls, index, b]: InfoRecord): void { hostInfo(w, kind, fieldInfo(kind) ? w.idOf(cls) << 12 | index : w.idOf(cls), b); }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
-  if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
+  if (kind >= MInfo.ExecCount) return hostMembers(w, kind as MInfo, a, b);
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
   if (kind >= UInfo.FieldGet) return hostUnsafe(w, kind, a, b);
   const name = w.nameOf(a), jc = w.prog.get(name), arr = name[0] === "[", fields = jc?.def ? jc.fields : [];
