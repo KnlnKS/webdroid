@@ -512,11 +512,18 @@ pub fn Emit(comptime wide: bool) type {
         fn storeIc(e: *Self) void {
             e.b.emit(.{ get(L_CPU), get(L_IC), mo(O.i64_store, OFF_IC) });
         }
+        // A spill or reload is not a use of the register by the region's code.
         fn spillRegs(e: *Self, mask: u32) void {
+            const watched = e.b.nwatch;
+            defer e.b.nwatch = watched;
+            e.b.nwatch = 0;
             var n: u8 = 0;
             while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), OFF_X + 8 * @as(u32, n)) });
         }
         fn loadRegs(e: *Self, mask: u32) void {
+            const watched = e.b.nwatch;
+            defer e.b.nwatch = watched;
+            e.b.nwatch = 0;
             var n: u8 = 0;
             while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), OFF_X + 8 * @as(u32, n)), set(L_X + n) });
         }
@@ -595,10 +602,10 @@ pub fn Emit(comptime wide: bool) type {
         pub fn fallback(e: *Self, pc: u32, k: u32) void {
             const b = e.b;
             if (e.rw.fr | e.rw.fw != 0) e.settle(15);
-            e.spillRegs(e.rw.r | e.rw.w);
+            e.spillRegs((e.rw.r | e.rw.w) & e.used);
             if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
-            e.loadRegs(e.rw.w);
+            e.loadRegs(e.rw.w & e.used);
             e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
@@ -614,12 +621,12 @@ pub fn Emit(comptime wide: bool) type {
         pub fn fallbackIt(e: *Self, pc: u32, end: u32, k: u32) void {
             const b = e.b;
             e.settle(15);
-            e.spillRegs(e.rw.r | e.rw.w);
+            e.spillRegs((e.rw.r | e.rw.w) & e.used);
             e.spillFlags();
             e.countIc(k - 1);
             e.storeIc();
             b.emit(.{ get(L_CPU), c32(@bitCast(pc)), c32(@bitCast(end)), call(F_IT32), set(L_R) });
-            e.loadRegs(e.rw.w);
+            e.loadRegs(e.rw.w & e.used);
             e.loadFlags(15);
             e.eager(15);
             b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_R) });
@@ -1261,7 +1268,26 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     e.lin = lin;
     var live: u4 = 0;
     for (lin[0..n]) |l| live |= l;
-    if (wide) {
+    if (!wide) {
+        // The ARM emitters name registers only through their locals, so emitting each block once
+        // into a buffer that keeps nothing finds the registers it reads and writes.
+        var dry = Buf.init(abi.LOW, 0);
+        dry.watch = L_X;
+        dry.nwatch = 15;
+        var d = e;
+        d.b = &dry;
+        e.used = 0;
+        e.written = 0;
+        for (0..n) |i| {
+            dry.reads = 0;
+            dry.writes = 0;
+            emitBlock(isa, &d, @intCast(i));
+            writes[i] = dry.writes;
+            e.used |= dry.reads | dry.writes;
+            e.written |= dry.writes;
+        }
+    }
+    {
         changed = true;
         while (changed) {
             changed = false;
@@ -1276,10 +1302,6 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
                 };
             }
         }
-    } else {
-        e.used = 0x7fff;
-        e.written = 0x7fff;
-        @memset(wb[0..n], 0x7fff);
     }
     b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 3, wasm.V128 });
     if (wide) b.emit(.{ 32, wasm.V128 });
@@ -1291,39 +1313,11 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     b.u(n);
     for (0..n) |i| b.u(i);
     b.u(0);
-    for (r.blocks[0..n], 0..) |blk, i| {
+    for (0..n) |i| {
         b.byte(O.end);
-        e.blk = @intCast(i);
-        e.chain_depth = n - @as(u32, @intCast(i));
-        e.wcur = wb[i];
-        e.pk = .none;
-        e.pdirty = 0;
-        e.vloaded = 0;
-        const page = blockPage(blk).?;
-        var pc = blk.pc;
-        var j: u32 = 0;
-        var ended = false;
-        while (j < blk.n) : (j += 1) {
-            e.pc = pc;
-            const len = ilen(isa, pc);
-            const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
-            if (wide) {
-                e.rw = rwOf(o);
-                e.wcur |= e.rw.w;
-            }
-            if (forcedFallback(pc)) {
-                if (wide) e.rw = ALL;
-                e.fallback(pc, j + 1);
-                ended = false;
-            } else ended = switch (isa) {
-                .a64 => e.emitOp(o, pc, j + 1),
-                .arm => jit32.emitArm(&e, pc, j + 1),
-                .thumb => jit32.emitThumb(&e, pc, j + 1),
-            };
-            pc += len;
-            if (ended) break;
-        }
-        if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
+        // ARM instructions' register sets are known per block only
+        e.wcur = wb[i] | (if (wide) 0 else writes[i]);
+        emitBlock(isa, &e, @intCast(i));
     }
     b.emit(.{ O.end, O.end });
     e.storeIc();
@@ -1333,6 +1327,40 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     e.spillFlags();
     e.storeIc();
     b.emit(.{ get(L_RET), O.end });
+}
+fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
+    const wide = isa == .a64;
+    const blk = e.r.blocks[i];
+    e.blk = i;
+    e.chain_depth = e.r.nblocks - i;
+    e.pk = .none;
+    e.pdirty = 0;
+    e.vloaded = 0;
+    const page = blockPage(blk).?;
+    var pc = blk.pc;
+    var j: u32 = 0;
+    var ended = false;
+    while (j < blk.n) : (j += 1) {
+        e.pc = pc;
+        const len = ilen(isa, pc);
+        const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
+        if (wide) {
+            e.rw = rwOf(o);
+            e.wcur |= e.rw.w;
+        }
+        if (forcedFallback(pc)) {
+            if (wide) e.rw = ALL;
+            e.fallback(pc, j + 1);
+            ended = false;
+        } else ended = switch (isa) {
+            .a64 => e.emitOp(o, pc, j + 1),
+            .arm => jit32.emitArm(e, pc, j + 1),
+            .thumb => jit32.emitThumb(e, pc, j + 1),
+        };
+        pc += len;
+        if (ended) break;
+    }
+    if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
 }
 fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
     const b = e.b;
