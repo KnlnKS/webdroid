@@ -1503,21 +1503,15 @@ export class World {
     return sites;
   }
   /** a method's static and direct calls before its first branch (return, throw, goto, switch or if), which every run makes: only that much is decoded */
-  private entrySites = new Map<MethodInfo, PreparedInstruction[]>();
   private entryCalls(m: MethodInfo): PreparedInstruction[] {
-    let entry = this.entrySites.get(m);
-    if (!entry) {
-      const insns = m.dex.code(m.codeOff).insns;
-      entry = [];
-      for (let pc = 0; pc < insns.length;) {
-        const op = insns[pc] & 0xff;
-        if (!op && insns[pc] >> 8) { pc += insnLen(insns, pc); continue; }
-        if (op >= 0x0e && op <= 0x11 || op >= 0x27 && op <= 0x2c || op >= 0x32 && op <= 0x3d) break;
-        const ins = decodeInstruction(insns, pc);
-        if (op === 0x70 || op === 0x71 || op === 0x76 || op === 0x77) entry.push(ins);
-        pc += ins.len;
-      }
-      this.entrySites.set(m, entry);
+    const insns = m.dex.code(m.codeOff).insns, entry: PreparedInstruction[] = [];
+    for (let pc = 0; pc < insns.length;) {
+      const op = insns[pc] & 0xff;
+      if (!op && insns[pc] >> 8) { pc += insnLen(insns, pc); continue; }
+      if (op >= 0x0e && op <= 0x11 || op >= 0x27 && op <= 0x2c || op >= 0x32 && op <= 0x3d) break;
+      const ins = decodeInstruction(insns, pc);
+      if (op === 0x70 || op === 0x71 || op === 0x76 || op === 0x77) entry.push(ins);
+      pc += ins.len;
     }
     return entry;
   }
