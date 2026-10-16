@@ -1,5 +1,5 @@
 // Natives that enter Java (File.list0 asks the File for its path): each entry takes a JSPI stack of its own, which the engine frees only when the stack the native runs on waits
-// and refuses past about 1,400. A Java loop of 3,000 File.list() calls in one entry must not end in StackOverflowError. Run: bun run wasm nested
+// and refuses past about 1,400. A Java loop of 3,000 File.list() calls in one entry must not end in StackOverflowError. Run: pnpm wasm nested
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

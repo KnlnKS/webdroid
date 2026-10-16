@@ -1,6 +1,6 @@
 // Unresolved references (java/lk): a class or member the dex names that the running program lacks must fail at its use site with the error and
 // message ART gives, and execution up to it must be unaffected. The error class is compared with the JDK; the messages are ART's (class_linker.cc,
-// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: bun run wasm linkdiff
+// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: pnpm wasm linkdiff
 import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -1,6 +1,6 @@
 // Class-model differential test: the static int(int) methods of java/C.java, compiled lazily over the AOSP boot dex, against the
 // JDK. Each method runs once in a fresh World (class initialization state persists).
-// Needs javac, d8 and java on PATH. Run: bun run wasm classdiff [method-name-filter]
+// Needs javac, d8 and java on PATH. Run: pnpm wasm classdiff [method-name-filter]
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

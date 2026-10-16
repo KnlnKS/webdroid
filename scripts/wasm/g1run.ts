@@ -1,6 +1,5 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex), timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
 import { readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { FetchStore } from "../../src/wasm/link/aotstore.ts";
 import { compileBytes } from "../../src/wasm/link/module.ts";
@@ -26,7 +25,7 @@ let appReadMs = 0;
 if (appDir) {
   const t0 = performance.now();
   const names = inPage ? await (await fetch("/app/files.json")).json() as string[] : readdirSync(appDir);
-  appFiles = new Map(await Promise.all(names.map(async (n) => [n, inPage ? new Uint8Array(await (await fetch(`/app/${n}`)).arrayBuffer()) : new Uint8Array(readFileSync(join(appDir, n)))] as [string, Uint8Array])));
+  appFiles = new Map(await Promise.all(names.map(async (n) => [n, inPage ? new Uint8Array(await (await fetch(`/app/${n}`)).arrayBuffer()) : new Uint8Array(readFileSync(`${appDir}/${n}`))] as [string, Uint8Array])));
   appReadMs = performance.now() - t0;
 }
 const startupList = async (read: (f: string) => Uint8Array | Promise<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
@@ -38,7 +37,7 @@ if (aotDir) {
     await store.prefetch(await startupList((f) => store.fetchBytes(f)));
     (globalThis as { G1_STORE?: AotStore }).G1_STORE = store;
   } else {
-    const ahead = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(join(aotDir, f)));
+    const ahead = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(`${aotDir}/${f}`));
     await Promise.all((await startupList(file)).map(async (f) => ahead.set(f, await compileBytes(file(f)))));
     (globalThis as { G1_STORE?: AotStore }).G1_STORE = { get: (f) => ahead.get(f) ?? file(f) };
   }
@@ -67,7 +66,7 @@ function workloadProgram(cfg: G1Config) {
 /** a launch of the installed app as the page makes one (host/boot.ts, host/appcode.ts): the app's Program over the platform's, the saved build found and its modules compiled
  *  before the World is made, the host's classes, and in a page the compile worker that takes the second tier */
 async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: () => Promise<void> }> {
-  const { dexes, prog } = workloadProgram(cfg), key = basename(aotDir!), persist = new Persist(memoryBackend());
+  const { dexes, prog } = workloadProgram(cfg), key = aotDir!.split("/").pop()!, persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
   const code = await prepareApp({ dexes, aot: { base: `/aot/${key}/`, key } as unknown as FetchStore, persist, roots: { launch: [] },
     spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return spawnCompileWorker(undefined, "/wasm-compile-worker.js"); } });
@@ -131,8 +130,4 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
 }
 (globalThis as { g1run?: typeof g1run }).g1run = g1run;
 const arg = (globalThis as { process?: { argv: string[] } }).process?.argv[2];
-if (arg && !(globalThis as { document?: unknown }).document) {
-  const keep = setInterval(() => {}, 1 << 30); // the yield channel is unref'd
-  console.log("G1" + JSON.stringify(await g1run(JSON.parse(arg))));
-  clearInterval(keep);
-}
+if (arg && !inPage) console.log("G1" + JSON.stringify(await g1run(JSON.parse(arg))));

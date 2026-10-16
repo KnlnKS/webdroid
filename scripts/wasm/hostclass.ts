@@ -1,6 +1,6 @@
 // Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on a
 // World with the registered classes added to it and must answer as java/hc/expected.txt records; then the Wasm tier's own rules: what dies together, and what the tables keep.
-// Run: bun run wasm hostclass
+// Run: pnpm wasm hostclass
 import { runInNewContext } from "node:vm";
 import { setFlagsFromString } from "node:v8";
 import { join } from "node:path";

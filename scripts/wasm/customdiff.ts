@@ -1,5 +1,5 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
-// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
+// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: pnpm wasm customdiff
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

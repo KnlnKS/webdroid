@@ -1,5 +1,5 @@
 // The framework delegates' exercises (scripts/fwtest/*) over a World: AOSP's own bytecode for the cut classes runs as Wasm against our delegates, and host code
-// drives it through the entry seam. Run: bun run fwtest [prefix ...]
+// drives it through the entry seam. Run: pnpm fwtest [prefix ...]
 import { DEFAULT_CUTS } from "../fwtest/cuts.ts";
 import { BYTECODE, isBytecode } from "../../src/jvm/provenance.ts";
 

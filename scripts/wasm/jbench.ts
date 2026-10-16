@@ -1,8 +1,6 @@
 // Each scripts/jbench workload, cut out of Bench.java as its own static method, runs lazily compiled over the AOSP boot dex and must answer as
 // scripts/jbench/expected.json records: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
-// VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
-// does not give, so run.ts runs it bundled under node (undernode.ts).
-// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: bun run wasm jbench [workload ...] [-v]
+// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: pnpm wasm jbench [workload ...] [-v]
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

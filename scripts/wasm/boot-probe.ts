@@ -3,46 +3,40 @@
 // then an iframe of the same page does it again.
 // The page also runs an app (the Pst fixture) in the World: the first load has no saved build, so a Worker compiles the app's likely methods and the page keeps them in OPFS, and runs a
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
-//   bun run wasm boot-probe          (after bun run aot)
+//   pnpm wasm boot-probe          (after pnpm aot)
 import { join } from "node:path";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileResponse, serve } from "../serve.ts";
 import { aotFile, aotManifest } from "./aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
+import { bundleFor, filesIn, shellIn } from "./tools.ts";
 
-const here = import.meta.dir;
 // the page has no files of its own (harness.ts is given the jars it fetched)
-const built = await Bun.build({ entrypoints: [join(here, "boot-probe-page.ts")], target: "browser", define: { "import.meta.main": "false" }, plugins: [{ name: "probe", setup(b) {
-  b.onResolve({ filter: /^node:fs$/ }, () => ({ path: join(here, "g1fs.ts") }));
-} }] });
-if (!built.success) throw new Error(built.logs.join("\n"));
-const bundle = built.outputs[0];
-const worker = await Bun.build({ entrypoints: [join(here, "../../src/wasm/host/compile-worker.ts")], target: "browser" });
-if (!worker.success) throw new Error(worker.logs.join("\n"));
+const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
+const worker = await bundleFor("browser", join(ROOT, "src/wasm/host/compile-worker.ts"));
 const appDir = mkdtempSync(join(tmpdir(), "wasm-probe-app-")), sh = shellIn(appDir);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", appDir, join(JAVA, "Pst.java")]);
 sh(["d8", "--release", "--output", appDir, ...filesIn(appDir, /\.class$/)]);
 
-const server = Bun.serve({ port: 0, async fetch(req) {
+const server = await serve({ fetch(req) {
   const p = new URL(req.url).pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
   if (p === "/probe.js") return new Response(bundle, { headers: { "content-type": "text/javascript" } });
-  if (p === "/wasm-compile-worker.js") return new Response(worker.outputs[0], { headers: { "content-type": "text/javascript" } });
-  if (p === "/app.dex") return new Response(Bun.file(join(appDir, "classes.dex")));
+  if (p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript" } });
+  if (p === "/app.dex") return fileResponse(join(appDir, "classes.dex"), req);
   if (p === "/aot/current.json") return aotManifest();
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);
-  if (aot) return aotFile(aot[1], aot[2]);
-  const file = join(ROOT, p);
-  return p.startsWith("/vendor/aosp/") && !p.includes("..") && existsSync(file) ? new Response(Bun.file(file)) : new Response("", { status: 404 });
+  if (aot) return aotFile(req, aot[1], aot[2]);
+  return p.startsWith("/vendor/aosp/") && !p.includes("..") ? fileResponse(join(ROOT, p), req) : new Response("", { status: 404 });
 } });
 
 const { chromium } = await import("playwright");
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("page error:", String(e).slice(0, 500)));
-await page.goto(`http://localhost:${server.port}/`);
+await page.goto(server.url.href);
 const run = async (name: string) => { await page.waitForFunction(`window.${name} !== undefined`, null, { timeout: 120000 }); return page.evaluate(`window.${name}`) as Promise<ProbeResult>; };
 const tab = await run("probe");
 await page.evaluate(() => { const f = document.createElement("iframe"); f.src = "/?frame"; document.body.append(f); });

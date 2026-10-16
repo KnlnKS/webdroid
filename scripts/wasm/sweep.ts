@@ -1,7 +1,7 @@
 // Validation sweep: every method with code in the given jars or APKs (default: the first six boot jars, up to framework.jar, and apks/FitNotes.apk) is compiled alone by the
 // Wasm compiler against the whole boot class path, and each failure is reported by cause: a gap (a construct with no translation, recorded by
 // Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
-// Run from the repository root: bun run wasm sweep [path ...] [-v]
+// Run from the repository root: pnpm wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";

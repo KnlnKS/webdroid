@@ -1,7 +1,7 @@
 // The G1 dex as an installed app: the build production saves for an app (host/appcode.ts: made by the compile worker, refined with what a launch compiled on demand) after a
 // launch that ran the workloads, written to a directory `g1 --installed DIR` attaches as a launch finds a saved build. Beside it, startup.json lists the platform modules a start
 // and the workloads' first calls load, as a launch profile would for this app (aot-profile.ts), so a page compiles them ahead.
-//   WEBDROID_AOT=<platform build> bun run wasm g1app --out DIR [workload ...]
+//   WEBDROID_AOT=<platform build> pnpm wasm g1app --out DIR [workload ...]
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Program } from "../../src/wasm/compiler/program.ts";

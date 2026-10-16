@@ -1,8 +1,8 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
-// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH; node runs it with --experimental-wasm-jspi (run.ts).
-// Run: bun run wasm threads [case,case,... | substrate]
+// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH.
+// Run: pnpm wasm threads [case,case,... | substrate]
 import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -19,7 +19,6 @@ import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
 import { defaultLoop, emitRestored } from "../../src/wasm/link/sched.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { resumeAs } from "../../src/jvm/natives/jentry.ts";
-import { hasJspi } from "../../src/wasm/link/module.ts";
 import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
@@ -27,7 +26,6 @@ import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { filesIn, shellIn } from "./tools.ts";
 
-if (!hasJspi()) { console.error("threads needs JSPI: run it with bun run wasm threads (node --experimental-wasm-jspi)"); process.exit(2); }
 const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);

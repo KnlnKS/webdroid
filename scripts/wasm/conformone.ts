@@ -1,5 +1,5 @@
 // One conformance class on the Wasm tier, in this process: prints "\u0001" and ConformRunner's lines.
-// Run by conform.ts under node: conformone.ts <dex directory> <runner class> <class> [filter]
+// Run by conform.ts: conformone.ts <dex directory> <runner class> <class> [filter]
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";

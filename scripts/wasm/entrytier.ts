@@ -1,5 +1,5 @@
 // The entry cases through the page's seam: the platform and the fixture loaded through tier.loadDex; its answers are java/E.expected.txt.
-// It is the second half of `bun run wasm entry`, in a process of its own because entry.ts installs a World of its own as the current one.
+// It is the second half of `pnpm wasm entry`, in a process of its own because entry.ts installs a World of its own as the current one.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import "../../src/natives.ts";

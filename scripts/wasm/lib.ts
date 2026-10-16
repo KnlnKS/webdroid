@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { dexesFrom } from "../dexes.ts";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
@@ -21,13 +20,13 @@ export function loadDexes(path: string) {
 /** WEBDROID_AOT=<dir> runs the harnesses over the precompiled platform assets (aot-build.ts) in <dir> */
 const AOT = typeof process === "undefined" ? (globalThis as { G1_AOT?: string }).G1_AOT : process.env.WEBDROID_AOT;
 /** a page fetches the build as the app does (g1run.ts makes G1_STORE); node reads the files */
-const aotStore = (dir: string): AotStore => (globalThis as { G1_STORE?: AotStore }).G1_STORE ?? { get: (file) => new Uint8Array(readFileSync(join(dir, file))) };
+const aotStore = (dir: string): AotStore => (globalThis as { G1_STORE?: AotStore }).G1_STORE ?? { get: (file) => new Uint8Array(readFileSync(`${dir}/${file}`)) };
 export function program(paths: string[]) {
   // precompiled code is numbered by the platform's classes, so all of them come first, in class path order, before the app's
   const platform = (p: string) => p.includes("/vendor/aosp/");
   if (AOT) {
     const root = paths.find(platform)?.split("/vendor/aosp/")[0];
-    if (root) paths = [...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), ...paths.filter((p) => !platform(p))];
+    if (root) paths = [...PLATFORM_JARS.map((j) => `${root}/vendor/aosp/${j}`), ...paths.filter((p) => !platform(p))];
   }
   const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
   return prog;

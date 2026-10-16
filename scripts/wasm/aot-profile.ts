@@ -1,7 +1,7 @@
 // Profiles every process World through first frames.
 // --classes records called classes with platform code withheld; rebuild AOT to group those classes.
 // Then run without --classes to record startup modules and the methods a zygote warms, and export saved app builds.
-// WEBDROID_URL=http://localhost:4090 bun run wasm aot-profile [--classes] [apk ...]
+// WEBDROID_URL=http://localhost:4090 pnpm wasm aot-profile [--classes] [apk ...]
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
 import { tmpdir } from "node:os";

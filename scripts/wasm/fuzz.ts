@@ -1,6 +1,6 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm and on the JDK; results must be bit-identical.
-// Run from the repository root: bun run wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
+// Run from the repository root: pnpm wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
 // (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

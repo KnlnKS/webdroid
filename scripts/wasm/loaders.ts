@@ -1,6 +1,6 @@
 // Class loaders: two DexClassLoaders over dex files that define the same class name (tests/fixtures/wasm/java/Ldr.java) keep distinct classes, statics and Class
 // objects, see the app's interface through their parent, and answer Class.forName, loadClass, getClassLoader and reflection each in its own namespace.
-// Needs javac and d8. Run: bun run wasm loaders
+// Needs javac and d8. Run: pnpm wasm loaders
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { zipSync } from "fflate";
 import { tmpdir } from "node:os";

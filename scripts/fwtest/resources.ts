@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { rt, declaredField, JObj } from "../../src/jvm/runtime.ts";
 import { newObj, vcall, scall, iof } from "../../src/jvm/natives/jentry.ts";
@@ -33,9 +33,9 @@ function windowRoot(): JObj {
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
 // through Resources, Theme, TypedArray and XmlBlock as an app reads them.
 if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
-  const read = async (p: string) => new Uint8Array(await Bun.file(p).arrayBuffer());
-  installFramework(await read("vendor/aosp/framework-res.apk"));
-  const app = openInstall(await read("apks/FitNotes.apk"));
+  const read = (p: string) => new Uint8Array(readFileSync(p));
+  installFramework(read("vendor/aosp/framework-res.apk"));
+  const app = openInstall(read("apks/FitNotes.apk"));
   const appTable = new Arsc(app.zip["resources.arsc"], (path: string) => app.zip[path] ?? null);
   const manifest = parseAXML(app.zip["AndroidManifest.xml"]);
   const pkg = manifest.attrs.find((a) => a.name === "package")!.str!;

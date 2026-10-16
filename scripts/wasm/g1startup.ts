@@ -1,7 +1,7 @@
-// The startup list of a platform build made with the G1 dex as its app (bun run wasm aot-build --out DIR --app <G1_DIR>/classes.dex): the modules a start and the first call of
+// The startup list of a platform build made with the G1 dex as its app (pnpm wasm aot-build --out DIR --app <G1_DIR>/classes.dex): the modules a start and the first call of
 // each workload load, as a launch profile records them for an installed app (aot-profile.ts). With it a page compiles the app's code and the platform modules the workloads
 // use before the World runs, the way a saved app build is loaded at launch (host/appcode.ts).
-//   WEBDROID_AOT=DIR bun run wasm g1startup <workload ...>
+//   WEBDROID_AOT=DIR pnpm wasm g1startup <workload ...>
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";

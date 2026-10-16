@@ -1,5 +1,5 @@
 // The entry seam (B1): host code calls Java through jentry's names over a World, and the answers, the exceptions that leave the calls and the identity
-// of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: bun run wasm entry
+// of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: pnpm wasm entry
 import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";
 import { mangleField } from "../../src/jvm/abi.ts";

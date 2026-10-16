@@ -1,5 +1,5 @@
 // Records which module files a start of the process (the state ActivityThread.main leaves) loads, into startup.json beside the build, so that a page can fetch and
-// compile them in parallel before the World runs. Run: WEBDROID_AOT=<dir> bun run wasm aot-startup
+// compile them in parallel before the World runs. Run: WEBDROID_AOT=<dir> pnpm wasm aot-startup
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
