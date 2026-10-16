@@ -73,7 +73,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   // the frames of Java code: a method the host implements is not one
   rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   rt.userClassLoader = () => {
-    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return objectOfLoader(w, loader); }
+    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
     return null;
   };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
