@@ -77,8 +77,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
      walks) was a stale handle long naming a reused slot (history, YouTube). The full lane's video-open tap is a
      coordinate that can land on a live Short.
-   - *Cut the Rope:* the intro video stalls or shows black; gameplay beyond the level-one sample (36 frames/s at
-     1080×2160) is unmeasured on an idle host. Player ID/backend paths are unvalidated; it has no full-matrix flow.
+   - *Cut the Rope:* the intro plays and level one completes from a swipe; frame rate beyond the level-one sample
+     (36 frames/s at 1080×2160) is unmeasured on an idle host. Player ID/backend paths are unvalidated; it has no
+     full-matrix flow.
    - *Graphics parity:* minimize the 132 differences of the two larger API-33 graphics fuzz campaigns (58 and 74
      of 1,000 cases) before changing common renderer behavior; the small retained seeds report 0 of 100.
    - *Explorer and Integrity:* run the saved-state UI explorer over a small, diverse corpus with matched Android
