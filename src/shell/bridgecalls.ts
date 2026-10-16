@@ -1,4 +1,4 @@
-interface BridgePeer { send(message: string): number | void }
+interface BridgePeer { send(message: string): void }
 
 export class BridgeCalls<Peer extends BridgePeer> {
   private pending = new Map<number, { peer: Peer; finish: (response: Response) => void }>();
@@ -23,10 +23,7 @@ export class BridgeCalls<Peer extends BridgePeer> {
       const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), wait);
       this.pending.set(seq, { peer, finish });
       request.signal.addEventListener("abort", abort, { once: true });
-      try {
-        const sent = peer.send(`${seq}\n${body}`);
-        if (typeof sent === "number" && sent < 0) finish(new Response("bridge unavailable", { status: 503 }));
-      } catch { finish(new Response("bridge unavailable", { status: 410 })); }
+      try { peer.send(`${seq}\n${body}`); } catch { finish(new Response("bridge unavailable", { status: 410 })); }
     });
   }
 
