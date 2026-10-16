@@ -41,6 +41,17 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
+On Node, pnpm and Vite+ (`knlnks/node-migration`, 2026-10-16), with other checkouts' browsers holding the host at a load
+of 12-32: typecheck passes; 1,158 unit tests pass under Vitest; 31 of 31 `fwtest` exercises and all 16 `wasm all`
+suites pass; `build:prod` and `worker:check` pass; `textcmp FitNotes.apk` matches 108 of 108 layouts and 184 of 184
+hyphenated lines. The quick e2e gate reaches 6 of 7 flows, Doodle Jump failing as below; interleaved with `2f48474e` on
+Bun, both stacks drew its title loop at the same cost (history, "Doodle Jump under load"). `conform` guava
+(368,772/368,794) and jsr166 (3,209/3,211) have no regressions; ojluni-time reports 4 `TestTextParserWithLocale` names
+missing on both stacks, since its non-ISO `chronoLocalDate` names carry today's date and the baseline was taken on
+2026-10-13. `lat` fails on both stacks alike: Mihon's launch is unavailable (once, at a load of 32, its process died of a
+`NullPointerException` instead; four reruns did not repeat it), and Komikku's `start`, `more` and
+`appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each.
+
 At the merge of `knlnks/maps-wasm` (2026-10-16): typecheck passes; 1,158 unit tests pass (the "End Of Central
 Directory" flake failed four browser tests once, and they pass on a rerun); all 16 `wasm all` suites pass. The `--jobs 1`
 quick e2e gate reaches 6 of 7 flows with no missing APIs, errors, required natives, draw errors, settle timeouts or
@@ -57,7 +68,7 @@ pixel rule's readbacks stretch past the bound (history, "FitNotes under host loa
 clean and 31 of 31 `fwtest` exercises passed; the default five-at-a-time run missed four flows on worker-diagnostic and
 completion timeouts while another checkout's sweep held the host at a load of about 14.
 
-Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
+Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
 
 ## Open work, in priority order
