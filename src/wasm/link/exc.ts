@@ -13,8 +13,11 @@ export function deepStack(limit = 128): Error {
 }
 /** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
 export const HOT_BUDGET = 5000;
-/** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. Scratch for natives starts after them. */
+/** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
+/** After the counters, a fixed window the host bridge copies arrays through: growing memory during a native would detach the views it holds of its
+ *  arguments. Scratch for natives starts after it. */
+export const TRANSFER_BASE = COUNT_BASE + 4 * COUNT_SLOTS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
 /** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: World.warm calls methods to have the engine compile them. */
 export const WARM_AT = 0;
 /** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is

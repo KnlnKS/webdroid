@@ -26,7 +26,7 @@ import { hostObject } from "./annotations";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SCRATCH_BASE, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
 import { insnLen } from "../../jvm/opcodes";
 import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi";
@@ -165,8 +165,8 @@ export class World {
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
-  mem = new WebAssembly.Memory({ initial: Math.ceil((COUNT_BASE + 4 * COUNT_SLOTS) / 65536) + 1 });
-  sp = new WebAssembly.Global({ value: "i32", mutable: true }, COUNT_BASE + 4 * COUNT_SLOTS);
+  mem = new WebAssembly.Memory({ initial: Math.ceil(SCRATCH_BASE / 65536) + 1 });
+  sp = new WebAssembly.Global({ value: "i32", mutable: true }, SCRATCH_BASE);
   natives: NativeBinder;
   bridge: HostBridge;
   /** the classes the host implements (hostclass.ts) */
