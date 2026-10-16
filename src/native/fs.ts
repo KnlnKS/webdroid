@@ -757,7 +757,8 @@ function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
     const destination = anchor(buf);
     return Promise.resolve(processFdStat(fd)).then(stat => {
       if (!stat) return fail(cpu,E.BADF);
-      fillStat(destination(),false,stat.size,stat.mtime,stat.path ?? fds.get(fd)?.path ?? "",undefined,{...stat,mode:stat.mode & 0o7777});
+      const dir = (stat.mode & 0xf000) === S_IFDIR;
+      fillStat(destination(),dir,dir ? 4096 : stat.size,stat.mtime,stat.path ?? fds.get(fd)?.path ?? "",undefined,{...stat,mode:stat.mode & 0o7777});
       return 0;
     });
   }
