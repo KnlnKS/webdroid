@@ -72,19 +72,19 @@ export function usePermissionStore(store: PermissionStore) {
   permissionAccess = canonicalPermissionCommands(store, () => {});
 }
 export function usePermissionAccess(access: PermissionCalls): void { permissionAccess = access; }
-/** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
- *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
+/** signature|appop|pre23 permissions, the special access a user grants in Settings: held at install
+ *  by a requesting app targeting below 23 or a system one, otherwise once granted on its screen */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
 export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
 function permissionHeld(store: PermissionStore, pkg: string, name: string): boolean {
   const record = packages.get(pkg);
-  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23 || store.get(pkg).has(name)));
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
 export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
 export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
-  RUNTIME_PERMISSIONS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : permissionHeld(permissionStore, pkg, name);
+  RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : permissionHeld(permissionStore, pkg, name);
 /** whether a package holds a platform permission no third-party app is granted at install: it is a
  *  system package that requests it (privileged or preinstalled), or the special access above */
 export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
@@ -110,6 +110,13 @@ registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(f
   yield putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
   yield putExtra(result, PERMISSIONS + "RESULTS", yield* awaited(grantPermissions([...names])), "[I");
   return result;
+}));
+// Settings' "Display over other apps" list, which the app asking for it opens (the package an
+// intent names is not preselected since Android 11), answered by the same policy for that app
+registerSystemActivity("android.settings.action.MANAGE_OVERLAY_PERMISSION", driven(function* (): Gen<null> {
+  const pkg = appHost?.pkg ?? "", name = "android.permission.SYSTEM_ALERT_WINDOW";
+  if (packages.get(pkg)?.permissions.has(name)) yield* awaited(grantPrompted(pkg, name));
+  return null;
 }));
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   for (const owner of packages.values()) {
