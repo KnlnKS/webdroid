@@ -13,7 +13,7 @@ export const H = <O extends object>(tbl: (O | null)[], h: number): O | null => (
 
 export const TEXTURE0 = 0x84c0;
 const ACTIVE_TEXTURE = 0x84e0, CURRENT_PROGRAM = 0x8b8d;
-export const IDENTITY_SWIZZLE = 0x688;
+const IDENTITY_SWIZZLE = 0x688;
 const ETC2_EAC_FIRST = 0x9270, ETC2_EAC_LAST = 0x9279;
 const etc2Contexts = new WeakSet<GL>();
 export function glForTextureFormat(format: number): GL {

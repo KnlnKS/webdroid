@@ -15,7 +15,7 @@ export type Screen = { width: number; height: number; densityDpi: number };
 type DeviceOrientation = 1 | 2; // Configuration.ORIENTATION_PORTRAIT / LANDSCAPE
 
 /** Fixed ActivityInfo requests. Sensor/user/unspecified requests keep the display as it is. */
-export function orientationForRequest(request: number): DeviceOrientation | null {
+function orientationForRequest(request: number): DeviceOrientation | null {
   if (request === 0 || request === 6 || request === 8 || request === 11) return 2;
   if (request === 1 || request === 7 || request === 9 || request === 12) return 1;
   return null;

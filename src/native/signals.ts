@@ -24,7 +24,7 @@ const SIG_IGN = 1;
 
 /** `sig`'s bit in a sigset_t */
 export const sigbit = (sig: number): bigint => 1n << BigInt(sig - 1);
-export const sigset = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | sigbit(sig), 0n);
+const sigset = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | sigbit(sig), 0n);
 export const blocked = (mask: bigint, sig: number): boolean => (mask & sigbit(sig)) !== 0n;
 /** the signals a mask can hold: SIGKILL and SIGSTOP are never blocked */
 export const BLOCKABLE = ~sigset(SIGKILL, SIGSTOP) & 0xffff_ffff_ffff_ffffn;

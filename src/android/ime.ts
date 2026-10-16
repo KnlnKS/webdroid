@@ -66,7 +66,7 @@ function textDiff(previous: string, text: string): [number, number, number] {
 }
 const IME_FLAG_NO_ENTER_ACTION = 0x40000000, IME_ACTION_NONE = 1;
 export const imeActive = () => !!served && imeVisible;
-export const imeHasAction = () => !!served && !(served.imeOptions & IME_FLAG_NO_ENTER_ACTION) && (served.imeOptions & 0xff) !== IME_ACTION_NONE;
+const imeHasAction = () => !!served && !(served.imeOptions & IME_FLAG_NO_ENTER_ACTION) && (served.imeOptions & 0xff) !== IME_ACTION_NONE;
 export function imeInput(text: string, start = text.length, end = start, composing = false, expectedGeneration?: number) {
   return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;

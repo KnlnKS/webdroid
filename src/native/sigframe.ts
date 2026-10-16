@@ -10,7 +10,7 @@ import { BLOCKABLE } from "./signals";
 
 /** siginfo's si_code and si_addr, for a signal an instruction raised */
 export type SigInfo = { code: number; addr: bigint };
-export const SIGINFO_SIZE = 0x80;
+const SIGINFO_SIZE = 0x80;
 const SI_TKILL = -6, FPSIMD_MAGIC = 0x46508001, VFP_MAGIC = 0x56465001;
 
 /** siginfo_t: si_signo, si_code and a fault's si_addr */

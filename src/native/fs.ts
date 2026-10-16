@@ -819,7 +819,7 @@ export function fdFallocate(fd: number, offset: number, len: number): number {
   return 0;
 }
 /** a directory's entries as readdir lists them */
-export const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
+const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
 /** a directory's entries as readdir lists them, or a negative errno */
