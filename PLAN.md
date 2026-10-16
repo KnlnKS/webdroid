@@ -49,7 +49,10 @@ Bun, both stacks drew its title loop at the same cost (history, "Doodle Jump und
 (368,772/368,794), jsr166 (3,209/3,211) and ojluni-time (30,596/30,602) have no regressions, once ojluni-time's
 clock-derived non-ISO dates in test names hash stably. `lat` fails on both stacks alike: Mihon's launch is unavailable (once, at a load of 32, its process died of a
 `NullPointerException` instead; four reruns did not repeat it), and Komikku's `start`, `more` and
-`appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each.
+`appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each. After the review cleanup,
+at a load of 4-12, the same checks pass and the `--jobs 1` quick gate reaches 6 of 7 flows: Doodle Jump passes, and Mihon
+onboarding's process dies at launch of the ICU `NullPointerException` that concurrent launches reproduce at the cleanup's
+start too (history, "Mihon's ICU data under concurrent launches").
 
 At the merge of `knlnks/maps-wasm` (2026-10-16): typecheck passes; 1,158 unit tests pass (the "End Of Central
 Directory" flake failed four browser tests once, and they pass on a rerun); all 16 `wasm all` suites pass. The `--jobs 1`
