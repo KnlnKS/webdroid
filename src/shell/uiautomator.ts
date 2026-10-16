@@ -11,7 +11,8 @@ interface UiNode {
   text: string; desc: string; cls: string; resId: string; bounds: [number, number, number, number];
   clickable: boolean; enabled: boolean; editable: boolean; scrollable: boolean;
 }
-const HOST_VIEW_ID = -1, FLAG_SERVICE_REQUESTS_REPORT_VIEW_IDS = 0x100, NODE_INFO = "android/view/accessibility/AccessibilityNodeInfo";
+const HOST_VIEW_ID = -1, FLAG_SERVICE_REQUESTS_REPORT_VIEW_IDS = 0x100, NODE_INFO = "android/view/accessibility/AccessibilityNodeInfo",
+  ID_MANAGER = "android/view/accessibility/AccessibilityNodeIdManager";
 
 function* describe(node: JObj, rect: JObj): Gen<UiNode | null> {
   if (!(yield vcall(node, "isVisibleToUser", "()Z"))) return null;
@@ -39,12 +40,13 @@ function* walkVirtual(host: JObj, provider: JObj, id: number, rect: JObj, out: U
   out.push(ui);
   const count: number = yield vcall(node, "getChildCount", "()I");
   for (let i = 0; i < count; i++) {
-    // a node can list a view of its own (addChild(View)): that child is the view, not the provider's host
+    // a node can list a view of its own (addChild(View)): that child is the view, not the provider's host. Since Q
+    // AccessibilityInteractionController finds it by id in AccessibilityNodeIdManager rather than by traversal.
     const child: bigint = yield vcall(node, "getChildId", "(I)J", i);
     const virtual: number = yield scall(NODE_INFO, "getVirtualDescendantId", "(J)I", child);
     if (virtual !== HOST_VIEW_ID) { yield* walkVirtual(host, provider, virtual, rect, out); continue; }
-    const root = yield vcall(host, "getRootView", "()Landroid/view/View;");
-    const view = yield vcall(root, "findViewByAccessibilityIdTraversal", "(I)Landroid/view/View;", yield scall(NODE_INFO, "getAccessibilityViewId", "(J)I", child));
+    const ids = yield scall(ID_MANAGER, "getInstance", `()L${ID_MANAGER};`);
+    const view = yield vcall(ids, "findView", "(I)Landroid/view/View;", yield scall(NODE_INFO, "getAccessibilityViewId", "(J)I", child));
     if (view && view !== host) yield* walkView(view, rect, out);
   }
 }
