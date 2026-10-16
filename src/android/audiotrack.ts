@@ -19,7 +19,8 @@ class Track extends PcmOutput {
   readonly bufBytes: number;
   stopped = true; origin = 0; period = 0; marker = 0; markerSent = false;
   timer: ReturnType<typeof setInterval> | null = null;
-  position(): number { return this.stopped && this.idle ? 0 : Math.floor(this.head() - this.origin); }
+  /** AudioTrack::getPosition: 0 once stopped (a stopping track plays out its queue and keeps counting), whatever is written before the next start */
+  position(): number { return this.stopped && !this.playing ? 0 : Math.floor(this.head() - this.origin); }
   /** refill until ~3 periods are queued: each NATIVE_EVENT_NEW_POS is one write of one period */
   tick(): void {
     if (!this.playing) return;
