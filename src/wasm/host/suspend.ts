@@ -123,19 +123,25 @@ export function hostForm(fn: HostFn): HostFn {
   return function (this: unknown, ...a: unknown[]) { return drive(g.apply(this, a), calling); };
 }
 /** runs a generator native: each value it yields is awaited, an exception of a rejected one is thrown into it; the strand is the running one again after each wait,
- *  until the native waits again (other turns run at the top level then) */
+ *  until the native waits again (other turns run at the top level then), as Runtime.drive keeps it. A step that follows a value yielded at once is still
+ *  the strand's: without it, Java the native enters there runs as the host's current thread */
 async function drive(it: Generator<unknown, unknown, unknown>, ctx: HostContext | null): Promise<unknown> {
   const strand = ctx?.sched.running ?? null;
-  let step = it.next();
-  while (!step.done) {
-    let v = step.value, threw = false, waited = false;
-    if (v instanceof Promise) {
-      try { v = await v; } catch (e) { v = e; threw = true; }
-      if (ctx) { ctx.sched.running = strand; waited = true; }
+  let resumed = false;
+  try {
+    let step = it.next();
+    while (!step.done) {
+      let v = step.value, threw = false;
+      if (v instanceof Promise) {
+        if (resumed) ctx!.sched.running = null;
+        try { v = await v; } catch (e) { v = e; threw = true; }
+        resumed = ctx !== null;
+      }
+      if (resumed) ctx!.sched.running = strand;
+      step = threw ? it.throw(v) : it.next(v);
     }
-    try { step = threw ? it.throw(v) : it.next(v); } finally { if (waited) ctx!.sched.running = null; }
-  }
-  return step.value;
+    return step.value;
+  } finally { if (resumed) ctx!.sched.running = null; }
 }
 
 /** the services the host implements behind binder: what they call may wait, and they take arrays (out parameters) */

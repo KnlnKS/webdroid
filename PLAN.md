@@ -52,7 +52,10 @@ clock-derived non-ISO dates in test names hash stably. `lat` fails on both stack
 `appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each. After the review cleanup,
 at a load of 4-12, the same checks pass and the `--jobs 1` quick gate reaches 6 of 7 flows: Doodle Jump passes, and Mihon
 onboarding's process dies at launch of the ICU `NullPointerException` that concurrent launches reproduce at the cleanup's
-start too (history, "Mihon's ICU data under concurrent launches").
+start too. A generator native that dropped its strand after a wait entered Java as the main thread (history, "Mihon's ICU
+initialization under concurrent launches"); with it kept, unit tests, `wasm all` and `fwtest` pass and the `--jobs 1` gate
+reaches 7 of 7 flows with no missing APIs, errors, required natives or draw errors. The 5-job gate at a load of about 20
+fails other flows on starvation with and without the change alike.
 
 At the merge of `knlnks/maps-wasm` (2026-10-16): typecheck passes; 1,158 unit tests pass (the "End Of Central
 Directory" flake failed four browser tests once, and they pass on a rerun); all 16 `wasm all` suites pass. The `--jobs 1`
