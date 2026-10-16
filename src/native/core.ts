@@ -111,7 +111,7 @@ if (shared) {
 }
 const MEMORY_IMPORT = [3, ..."env", 6, ..."memory", 2, 1].map((c) => typeof c === "string" ? c.charCodeAt(0) : c);
 /** the core's import of `memory`, which the build declares unshared, as the memory was made */
-function imported(bytes: Uint8Array): Uint8Array {
+function imported(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   if (!shared) return bytes;
   const at = bytes.findIndex((_, i) => MEMORY_IMPORT.every((b, j) => bytes[i + j] === b));
   bytes[at + MEMORY_IMPORT.length - 1] = 0x03; // limits: shared, with a maximum
