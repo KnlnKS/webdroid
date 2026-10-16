@@ -1,12 +1,19 @@
 // One page-owned canvas's pointer/wheel stream. Java dispatch stays behind the injected boundary.
-import { queuePointer, type PointerSample } from "./pointer-queue";
+import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number };
+/** a MotionEvent's action and pointers to the display */
+export type PointerDispatch = (action: number, pointers: TouchPointer[]) => Promise<void>;
+const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
+/** InputReader's MAX_POINTERS: a touchscreen reports no more */
+const MAX_POINTERS = 16;
+/** the key of the second finger a modifier-held press mirrors; browser pointerIds are never negative */
+const MIRROR = -1;
 const attached = new Set<() => void>();
-/** step every canvas's wheel gesture: once per display frame */
+/** send every canvas's batched finger moves and step its wheel gesture: once per display frame */
 export function drainPointers(): void { for (const drain of attached) drain(); }
 export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
-  dispatch: (action: number, x: number, y: number) => Promise<void>, onDown: () => void = () => {}, source: HTMLElement = canvas) {
+  dispatch: PointerDispatch, onDown: () => void = () => {}, source: HTMLElement = canvas) {
   const listeners = new AbortController();
   let closed = false;
   const device = { get width() { return geometry().width; }, get height() { return geometry().height; },
@@ -18,7 +25,12 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   // getBoundingClientRect forces layout, so the rect a gesture maps through is read once when the
   // gesture starts, not per move.
   let rect = new DOMRect(0, 0, 1, 1);
-  let down = false;
+  /** the gesture's pointers by browser pointerId (MIRROR for the mirrored finger) */
+  const touches = new Map<number, TouchPointer>();
+  /** the pointer whose press is mirrored through the screen's centre, and the mirror's marker */
+  let mirrored: number | null = null;
+  let marker: HTMLElement | null = null;
+  let moved = false;
   let pointerPending = false;
   const pendingPointers: PointerSample[] = [];
 
@@ -33,11 +45,52 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
       return;
     }
     pointerPending = true;
-    void dispatch(sample.action, sample.x, sample.y).catch(error => { if (!closed) console.error("[input]", error); }).finally(() => {
+    void dispatch(sample.action, sample.pointers).catch(error => { if (!closed) console.error("[input]", error); }).finally(() => {
       pointerPending = false;
       const next = closed ? undefined : pendingPointers.shift();
       if (next) sendPointer(next);
     });
+  }
+
+  /** the gesture's pointers in id order, copied so a queued sample keeps them as they were */
+  const snapshot = () => [...touches.values()].sort((a, b) => a.id - b.id).map(p => ({ ...p }));
+  /** One MOVE for every pointer that moved since the last, as InputReader reports one per sync */
+  function flushMove() {
+    if (!moved) return;
+    moved = false;
+    if (touches.size) sendPointer({ action: ACTION_MOVE, pointers: snapshot() });
+  }
+  /** A pointer goes down with the lowest id not in use, as InputReader assigns them; the first
+   *  is DOWN, any other POINTER_DOWN with its index among the pointers. */
+  function press(key: number, x: number, y: number) {
+    let id = 0;
+    while ([...touches.values()].some(p => p.id === id)) id++;
+    touches.set(key, { id, x, y });
+    const pointers = snapshot();
+    sendPointer({ action: pointers.length === 1 ? ACTION_DOWN : ACTION_POINTER_DOWN | pointers.findIndex(p => p.id === id) << 8, pointers });
+  }
+  /** POINTER_UP still carries the lifting pointer; the last pointer up is UP */
+  function lift(key: number) {
+    const { id } = touches.get(key)!, pointers = snapshot();
+    touches.delete(key);
+    sendPointer({ action: pointers.length === 1 ? ACTION_UP : ACTION_POINTER_UP | pointers.findIndex(p => p.id === id) << 8, pointers });
+  }
+  /** move a pointer to where the event is, and the mirrored finger opposite it */
+  function track(key: number, e: PointerEvent): TouchPointer | undefined {
+    const p = touches.get(key);
+    if (!p) return;
+    [p.x, p.y] = at(e);
+    const mirror = key === mirrored ? touches.get(MIRROR) : undefined;
+    if (mirror) {
+      mirror.x = device.width - p.x; mirror.y = device.height - p.y;
+      marker?.style.setProperty("translate", `${rect.left + rect.right - e.clientX}px ${rect.top + rect.bottom - e.clientY}px`);
+    }
+    return p;
+  }
+  function endMirror() {
+    mirrored = null;
+    marker?.remove();
+    marker = null;
   }
 
   // The synthetic finger a wheel burst drives: where it went down, how far the deltas have carried
@@ -52,11 +105,11 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   function send(action: number, x: number, y: number) {
     lx = x; ly = y;
     pending++;
-    void dispatch(action, x, y).catch(error => { if (!closed) console.error("[input]", error); }).finally(() => { pending--; });
+    void dispatch(action, [{ id: 0, x, y }]).catch(error => { if (!closed) console.error("[input]", error); }).finally(() => { pending--; });
   }
 
   function cancelWheel() {
-    if (armed) void dispatch(3, lx, ly);
+    if (armed) void dispatch(ACTION_CANCEL, [{ id: 0, x: lx, y: ly }]);
     live = armed = false;
   }
 
@@ -64,35 +117,55 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   function listen() {
     listenOn("pointerdown", (e) => {
       if (live) cancelWheel();
-      down = true;
-      rect = canvas.getBoundingClientRect();
+      if (touches.has(e.pointerId) || touches.size === MAX_POINTERS) return;
+      if (!touches.size) rect = canvas.getBoundingClientRect();
       try { source.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      flushMove();
       const [x, y] = at(e);
-      sendPointer({ action: 0, x, y });
+      press(e.pointerId, x, y);
+      // A mouse or pen has one pointer, so with Alt held its press brings a second finger,
+      // mirrored through the screen's centre as the emulator's pinch does: dragging toward or
+      // away from the centre pinches, and around it rotates.
+      if (e.altKey && e.pointerType !== "touch" && touches.size === 1) {
+        mirrored = e.pointerId;
+        press(MIRROR, device.width - x, device.height - y);
+        marker = document.createElement("div");
+        marker.style.cssText = "position:fixed;left:-10px;top:-10px;width:20px;height:20px;border-radius:50%;pointer-events:none;"
+          + "z-index:2147483647;background:rgb(255 255 255/.35);box-shadow:0 0 0 2px rgb(0 0 0/.35)";
+        document.body.append(marker);
+        track(e.pointerId, e);
+      }
       onDown();
     });
     listenOn("pointermove", (e) => {
-      if (!down) return;
-      const [x, y] = at(e);
-      sendPointer({ action: 2, x, y });
+      if (!track(e.pointerId, e)) return;
+      // Each finger's move is an event of its own, with a microtask checkpoint after it, so the
+      // moves of several fingers wait for the frame's drain: Chrome dispatches a frame's moves just
+      // before its animation frame callbacks. One browser pointer moves at once, as before.
+      moved = true;
+      if (touches.size - +(mirrored !== null) === 1) flushMove();
     });
     listenOn("pointerup", (e) => {
-      if (!down) return;
-      down = false;
-      const [x, y] = at(e);
-      sendPointer({ action: 1, x, y });
+      if (!touches.has(e.pointerId)) return;
+      flushMove();
+      track(e.pointerId, e);
+      lift(e.pointerId);
+      if (e.pointerId === mirrored) { lift(MIRROR); endMirror(); }
     });
-    listenOn("pointercancel", () => {
-      if (!down) return;
-      down = false;
-      sendPointer({ action: 3, x: 0, y: 0 });
+    listenOn("pointercancel", (e) => {
+      if (!touches.has(e.pointerId)) return;
+      // the whole gesture is cancelled; the pointers still down are ignored until they lift
+      moved = false;
+      sendPointer({ action: ACTION_CANCEL, pointers: snapshot() });
+      touches.clear();
+      endMirror();
     });
     listenOn("wheel", (e) => {
       // the page must not scroll under the phone, and a horizontal swipe must not walk history.
       // Chrome hands over non-cancelable wheels once its compositor owns a scroll; calling
       // preventDefault on one of those only logs.
       if (e.cancelable) e.preventDefault();
-      if (down) return;
+      if (touches.size) return;
       if (!live) {
         rect = canvas.getBoundingClientRect();
         [ox, oy] = at(e);
@@ -117,6 +190,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
    * instead, and dispatch where the fingers have reached once the previous one has landed.
    */
   function drain() {
+    flushMove(); // several fingers' moves this frame
     if (closed || !live || pending) return;
     const idle = performance.now() - lastWheel > WHEEL_IDLE_MS;
     if (!armed) {
@@ -147,6 +221,8 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
     attached.delete(drain);
     listeners.abort();
     pendingPointers.length = 0;
-    down = live = armed = false;
+    touches.clear();
+    endMirror();
+    moved = live = armed = false;
   } };
 }

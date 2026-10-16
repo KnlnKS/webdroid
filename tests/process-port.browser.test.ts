@@ -130,7 +130,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return pointerInputOwnership();
     });
-    expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,0,0],[1,2,60,80],[1,1,80,100]],closed:true});
+    expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,10,12],[1,2,60,80],[1,1,80,100]],closed:true});
     const locationResult = await page.evaluate(async () => {
       const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return locationOwnership();

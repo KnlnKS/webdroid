@@ -338,7 +338,7 @@ export class ProcessBroker {
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.dataset.pid = String(entry.pid); canvas.dataset.pkg = pkg;
       canvas.hidden = true;
-      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
+      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1;touch-action:none";
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
       try {
         spare ??= spawnProcessWorker(this.workerUrl(entry.pid, wide), entry.pid);

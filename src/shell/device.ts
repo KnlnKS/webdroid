@@ -40,6 +40,7 @@ import { configurationChanged, displayHooks, orientationRequest } from "../andro
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
 import { toThread } from "../jvm/natives/jthrowable";
 import { note, Ev } from "../timeline";
+import type { TouchPointer } from "./pointer-queue";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 let displayChanged = () => {};
@@ -261,12 +262,15 @@ export async function testFrame(): Promise<void> {
 export function redraw(): void { scheduleComposite(); }
 
 let touchDown = 0n;
-/** a pointer event to the window under it, as InputDispatcher delivers it; charged to
+/** a touch event to the window under its first pointer, as InputDispatcher delivers it; charged to
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
-export function dispatchPointer(action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> {
+export function dispatchTouches(action: number, pointers: readonly TouchPointer[], eventTime = uptimeMillis()): Promise<void> {
   const t0 = performance.now();
   noteInput(); note(Ev.InputIn, action);
   const now = BigInt(Math.floor(eventTime));
   if (action === 0) touchDown = now;
-  return dispatchTouch(action, x, y, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
+  return dispatchTouch(action, pointers, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
+/** a one-finger touch event */
+export const dispatchPointer = (action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> =>
+  dispatchTouches(action, [{ id: 0, x, y }], eventTime);

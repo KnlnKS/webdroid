@@ -271,7 +271,7 @@ const wd = {
 
 hostFrames(time => {
   if (!processPresentation.visible) return;
-  drainPointers(); // a wheel's synthetic drag steps once per display frame
+  drainPointers(); // several fingers' moves and a wheel's synthetic drag, once per display frame
   if (recordVsync(time)) wd.ticks++;
 });
 

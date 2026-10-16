@@ -1,7 +1,7 @@
 // Host input: the browser's pointer and wheel streams become Android MotionEvents, so a
 // trackpad's two-finger swipe reaches every app as a phone's one-finger drag.
 import { device } from "./config";
-import { dispatchPointer } from "./device";
+import { dispatchTouches } from "./device";
 import { imeActive } from "../android/ime";
 import { receiveIme, serveIme } from "./ime-port";
 import { onProcessExit } from "../process-exit";
@@ -16,7 +16,7 @@ export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement, s
   let closed = false, focusTimer: ReturnType<typeof setTimeout> | undefined, stop: (() => void) | undefined;
   const channel = new MessageChannel(), keyboard = receiveIme(channel.port2, canvas, kbd);
   void serveIme(channel.port1).then(close => { if (closed) close(); else stop = close; });
-  const pointers = attachPointerInput(canvas, () => device, dispatchPointer, () => {
+  const pointers = attachPointerInput(canvas, () => device, dispatchTouches, () => {
     if (!imeActive()) return;
     clearTimeout(focusTimer);
     focusTimer = setTimeout(() => { if (!closed) keyboard.focus(); }, 0);

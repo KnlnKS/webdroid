@@ -594,7 +594,7 @@ export async function pointerInputOwnership() {
   worker.postMessage({port:channel.port2},[channel.port2]);
   const canvases=[1,2].map(()=>{const c=document.createElement("canvas");c.style.cssText="position:fixed;left:0;top:0;width:100px;height:100px";document.body.append(c);return c;});
   const bindings=canvases.map((canvas,i)=>attachPointerInput(canvas,()=>({width:200,height:200,scrollUnit:128,touchSlop:16}),
-    (action,x,y)=>client.endpoint.pointer(i+1,action,x,y)));
+    (action,pointers)=>client.endpoint.pointer(i+1,action,pointers[0].x,pointers[0].y)));
   const pointer=(i:number,type:string,x:number,y:number)=>canvases[i].dispatchEvent(new PointerEvent(type,{clientX:x,clientY:y,pointerId:i+1}));
   try {
     pointer(0,"pointerdown",10,20);
