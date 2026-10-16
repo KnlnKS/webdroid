@@ -71,6 +71,8 @@ export interface WorldOptions {
   dexes?: (path: string) => DexFile[] | undefined | Promise<DexFile[] | undefined>;
   /** whether the second tier waits, inline or in the worker: the host is starting an app, and what is hot now is mostly code that runs once */
   holdUpgrades?: () => boolean;
+  /** whether the host is answering input, when work that lengthens a collection's pause waits */
+  answering?: () => boolean;
   /** an app compiled ahead on top of `aot` (apps.ts): used when this World is where it starts, the platform build attached and nothing numbered since */
   app?: { index: AppIndex; store: AotStore };
   /** compiles second-tier units elsewhere (a worker); without it, or when it declines, they are compiled here */
@@ -95,8 +97,9 @@ const AHEAD_UNIT = 16, AHEAD_ROOTS = 4096, AHEAD_MAX = 8192;
 const MERGE_AT = 1024, MERGE_MAX = 512;
 /** A unit merged away is freed by the collection after nothing holds it, and freeing a module costs that collection's pause some 40 µs (the engine's
  *  second-pass weak callbacks free its native code): the thousands a launch's merges leave would stop the thread for 100-170 ms at once. They are dropped
- *  RETIRE_BATCH at a time instead, the next batch once the last one has been collected, or after RETIRE_WAIT_MS if something else still holds one */
-const RETIRE_BATCH = 32, RETIRE_WAIT_MS = 5000;
+ *  a batch at a time instead, the next once a collection has freed one of the last, or after RETIRE_WAIT_MS: RETIRE_BATCH while the app answers input,
+ *  RETIRE_MAX otherwise, since units held until they are freed keep their external memory, which drives full collections */
+const RETIRE_BATCH = 32, RETIRE_MAX = 512, RETIRE_WAIT_MS = 5000;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
 type StubRequest = Kinds & { slot: number };
@@ -1235,16 +1238,16 @@ export class World {
     return true;
   }
   private retired: Function[] = [];
-  private retiring = 0;
-  private retiredCollected = new FinalizationRegistry<number>((batch) => { this.stats.collected++; if (batch === this.retireBatch && --this.retiring === 0) this.dropRetired(); });
+  private retiring = false;
+  private retiredCollected = new FinalizationRegistry<number>((batch) => { this.stats.collected++; if (batch === this.retireBatch) this.dropRetired(); });
   private retireBatch = 0;
   private retire(units: Function[]): void {
     this.retired.push(...units);
     if (!this.retiring) this.dropRetired();
   }
   private dropRetired(): void {
-    const batch = this.retired.splice(0, RETIRE_BATCH), id = ++this.retireBatch;
-    this.retiring = batch.length;
+    const batch = this.retired.splice(0, this.opts.answering?.() ? RETIRE_BATCH : RETIRE_MAX), id = ++this.retireBatch;
+    this.retiring = batch.length > 0;
     if (!batch.length) return;
     for (const f of batch) this.retiredCollected.register(f, id);
     this.stats.retired += batch.length;
