@@ -12,7 +12,7 @@ export const compileBytes = (bytes: Uint8Array): Promise<WebAssembly.Module> => 
 // JSPI (stack switching for Wasm): a Suspending import may wait on a promise, a promising export runs on a stack of its own and answers one
 type Jspi = { Suspending: new (fn: (...a: never[]) => unknown) => Function; promising: (f: Function) => Function };
 const jspiApi = (): Jspi | undefined => (WebAssembly as unknown as Partial<Jspi>).Suspending ? (WebAssembly as unknown as Jspi) : undefined;
-/** whether the engine has JSPI (node needs --experimental-wasm-jspi; Bun's JavaScriptCore has none) */
+/** whether the engine has JSPI (node 24 needs --experimental-wasm-jspi; JavaScriptCore has none) */
 export const hasJspi = (): boolean => !!jspiApi();
 // The engine keeps a suspended stack, and all its frames reach, until its Promise settles, even after its page is gone (a reload keeps the
 // renderer), so each pending wait stays settleable by endWaits.

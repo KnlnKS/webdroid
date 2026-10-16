@@ -40,5 +40,5 @@ export function perfReset() {
   for (const k of Object.keys(perf) as (keyof typeof perf)[]) if (k !== "bootMs") perf[k] = 0;
 }
 
-/** a point on the launch timeline: a performance mark "wd:<name>" in the realm that made it (scripts/wasm/timeline.ts reads them from every realm) */
+/** a point on the launch timeline: a performance mark "wd:<name>" in the realm that made it (scripts/lat/run.ts collects the page's and the app Worker's) */
 export const mark = (name: string): void => { performance.mark("wd:" + name); };

@@ -255,7 +255,7 @@ export function loadedHarfBuzz(): HarfBuzz {
   if (!ready) throw new Error("HarfBuzz is not loaded");
   return ready;
 }
-/** where the page serves one of harfbuzzjs' builds; Bun reads it from node_modules */
+/** where the page serves one of harfbuzzjs' builds; node reads it from node_modules */
 const wasmUrl = (name: string) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${name}`
   : `file://${process.cwd()}/node_modules/harfbuzzjs/dist/${name}`;
 async function instantiate(name: string, imports: WebAssembly.Imports): Promise<WebAssembly.Exports> {

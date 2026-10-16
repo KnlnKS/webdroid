@@ -690,7 +690,7 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
   }
 }));
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference
-// device's values (bun run gen-framework)
+// device's values (pnpm gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
   const constants = linkClass("android/system/OsConstants");
   constants.setStatics(Object.entries(OS_CONSTANTS), "I");

@@ -3,7 +3,7 @@
 // of that path.
 //
 // It is vendor/aosp/framework-res.apk, the table the platform's own R classes were compiled
-// against (`bun run gen-framework` checks the pairing). android.R and com.android.internal.R
+// against (`pnpm gen-framework` checks the pairing). android.R and com.android.internal.R
 // come from framework.jar.
 
 import { yieldToLoop } from "../jvm/yield.ts";
@@ -61,7 +61,7 @@ export const platformJarUrl = (jar: string): string => `/vendor/aosp/${jar}`;
 export function fetchPlatformJars(): Promise<Uint8Array[]> {
   return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
     const res = await fetch(platformJarUrl(jar));
-    if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: bun run gen-framework`);
+    if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: pnpm gen-framework`);
     return new Uint8Array(await res.arrayBuffer());
   }));
 }
@@ -78,7 +78,7 @@ export function loadPlatformDex(): Promise<void> {
 export function loadFramework(): Promise<Arsc> {
   return pending ??= (async () => {
     const res = await fetch("/vendor/aosp/framework-res.apk");
-    if (!res.ok) throw new Error(`no framework package (${res.status}) — run: bun run gen-framework`);
+    if (!res.ok) throw new Error(`no framework package (${res.status}) — run: pnpm gen-framework`);
     return installFramework(new Uint8Array(await res.arrayBuffer()));
   })();
 }

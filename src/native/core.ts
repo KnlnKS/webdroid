@@ -159,7 +159,7 @@ const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 
 core.jit_config((TAIL ? 1 : 0) | (shared ? 2 : 0));
 let nextSlot = JIT_SLOT0;
 const freeSlots: number[] = [];
-/** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */
+/** whether this engine compiles synchronously (node does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;
 /** the linked batches, oldest first, each with the table slots it holds */
 const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];

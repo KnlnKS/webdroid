@@ -1,4 +1,4 @@
-// Shared by the shell, the dev server's /asset route and the bun scripts, so an xapk is an apk
+// Shared by the shell, the dev server's /asset route and the node scripts, so an xapk is an apk
 // everywhere or nowhere.
 
 import { parseAXML, attrStr } from "../android/axml.ts";

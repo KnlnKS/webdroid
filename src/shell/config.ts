@@ -1,7 +1,7 @@
 /**
  * The one device profile. The screen is resolved at module init: `?screen=` / `WEBDROID_SCREEN`
  * pin one for a run and the shell's settings panel persists one. This file imports only recorded
- * data and treats every host global as optional, because bun scripts import it too.
+ * data and treats every host global as optional, because the node scripts import it too.
  */
 import { DEVICE_PROPERTIES } from "./device-properties.ts";
 

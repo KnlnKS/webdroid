@@ -8,7 +8,7 @@
 // The `long` a framework class holds in mNativePtr is a handle (handles.ts): framework Java owns
 // the handle, we own the object.
 //
-// Nothing in this file is written from a list. `bun run fwtest` runs the real bytecode with
+// Nothing in this file is written from a list. `pnpm fwtest` runs the real bytecode with
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 

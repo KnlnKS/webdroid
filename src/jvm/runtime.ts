@@ -202,7 +202,7 @@ export class Runtime {
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
-      // V8: "Cannot read properties of null"; JavaScriptCore (Bun): "null is not an object"
+      // V8: "Cannot read properties of null"; JavaScriptCore (Safari): "null is not an object"
       if (/null|undefined/.test(m) && /read|call|properties|is not an object/i.test(m)) {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
