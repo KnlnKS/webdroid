@@ -152,7 +152,7 @@ export class Relay {
     const transport = (this.transport = new WebSocket(relayUrl(host, port, tls, alpn)));
     transport.binaryType = "arraybuffer";
     let settled = false;
-    const wake = () => { for (const waiter of this.waiters) waiter(); this.waiters.clear(); };
+    const wake = () => this.wakeWaiters();
     const done = () => { this.eof = true; wake(); };
     this.ready = new Promise<void>((resolve, reject) => {
       transport.onmessage = (event) => {
@@ -228,7 +228,8 @@ export class Relay {
   close(): void {
     try { this.transport.close(); } catch { /* already gone */ }
     this.eof = true;
-    for (const waiter of this.waiters) waiter();
-    this.waiters.clear();
+    this.wakeWaiters();
   }
+  /** each waiter once: one that subscribes again while woken waits for the next change */
+  private wakeWaiters(): void { const waiters = [...this.waiters]; this.waiters.clear(); for (const waiter of waiters) waiter(); }
 }

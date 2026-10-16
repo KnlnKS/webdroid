@@ -94,7 +94,8 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
       remove();
       entry.pending |= pollEvents(fd, entry.events);
       for (const wake of ep.wake) wake();
-      queueMicrotask(watch);
+      // at once: a change before a deferred re-arm would find no watcher, and its edge would be lost
+      watch();
     });
   };
   entry.cancel = () => { active = false; remove(); };
