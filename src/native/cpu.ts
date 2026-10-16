@@ -650,7 +650,7 @@ export class Cpu {
         // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
         // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
         const now = performance.now();
-        if (!this.foreground(now) && (answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS))
+        if ((answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS) && !this.foreground(now))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
