@@ -94,8 +94,10 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `pnpm aot`
    there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
    content); do not raise the limit.
-3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
-   launch budget is not rechecked). With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
+3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches). A cold launch needs about
+   48 s to its first gate, so the quick lane's 20 s launch wait fails on this branch and its base alike; under
+   `--full` the flow reaches the feed and plays through both swipes (2026-10-16), though liveness probes can stall
+   past 3 s while the interests and first swipe steps compile cold code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
    native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. At its feed the main
    process holds ~1.16 GB after a full collection, against 1.35 GB before one lazy-link stub per signature and the
    slimmer Program/dex metadata (2026-10-16). Its e2e flow now picks an adult birthdate on the guest birthdate screen.
