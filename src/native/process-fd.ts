@@ -1,6 +1,6 @@
 import { E } from "./abi";
 import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
-  javaPwriteFd, javaSeekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
+  javaPwriteFd, javaSeekFd, javaTruncateFd, javaAllocateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, type OpenFile } from "./fs";
 import { isMutablePath } from "../shell/file-path";
 import { vfs } from "../shell/vfs";
 import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors";
@@ -106,6 +106,10 @@ export function processSeekFd(fd: number, offset: number, whence: number): numbe
 export function processTruncateFd(fd: number, length: number): number | Promise<number> {
   const remote = openFd(fd)?.remote;
   return remote ? result(remote,{kind:"truncate",length}) : javaTruncateFd(fd,length);
+}
+export function processAllocateFd(fd: number, offset: number, length: number): number | Promise<number> {
+  const remote = openFd(fd)?.remote;
+  return remote ? result(remote,{kind:"allocate",offset,length}) : javaAllocateFd(fd,offset,length);
 }
 export function processSyncFd(fd: number): number | Promise<number> {
   const remote = openFd(fd)?.remote;

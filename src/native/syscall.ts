@@ -11,8 +11,9 @@ import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu";
 import { exitGroup, installDebuggerdHandlers } from "./crash";
 import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals";
 import { writeSiginfo } from "./sigframe";
-import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
-import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
+import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, kernelResult, readTs } from "./libc";
+import { FS_SYSCALLS, fsInit, faccessatPath, getdents64 } from "./fs";
+import { processAllocateFd } from "./process-fd";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
 import { NET_SYSCALLS } from "./socket/syscalls";
 import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll";
@@ -65,8 +66,7 @@ const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
 const A64: Record<number, HostFn> = {
   47: (cpu, a) => {                                                              // fallocate: mode 0 grows the file
     const fd = a.i(), mode = a.i(), off = Number(a.l()), len = Number(a.l());
-    const e = mode ? E.NOTSUP : fdFallocate(fd, off, len);
-    return e ? fail(cpu, e) : 0;
+    return mode ? fail(cpu, E.NOTSUP) : kernelResult(cpu, processAllocateFd(fd, off, len));
   },
   48: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), 0),                 // faccessat has no flags
   61: (cpu, a) => getdents64(cpu, a.i(), a.p(), a.u()),

@@ -810,11 +810,11 @@ function syncFd(cpu: Cpu | null, fd: number): number {
   if (!f) return fail(cpu, E.BADF);
   return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log || f.socket ? fail(cpu, E.INVAL) : 0;
 }
-/** posix_fallocate: grow the file to cover the range; it reports the error number itself */
-export function fdFallocate(fd: number, offset: number, len: number): number {
+/** fallocate's mode 0: grow the file to cover the range; 0 or a negative errno */
+export function javaAllocateFd(fd: number, offset: number, len: number): number {
   const f = fds.get(fd);
-  if (!f) return E.BADF;
-  if (offset < 0 || len <= 0) return E.INVAL;
+  if (!f || (f.statusFlags & O_ACCMODE) === 0) return -E.BADF;
+  if (offset < 0 || len <= 0) return -E.INVAL;
   if (offset + len > f.content.len) vfs.resize(f.content, offset + len);
   return 0;
 }

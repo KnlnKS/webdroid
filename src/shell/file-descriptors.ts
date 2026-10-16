@@ -1,6 +1,6 @@
 import { E } from "../native/abi";
 import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
-  javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
+  javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
 import { writable } from "./lazyfile";
@@ -14,6 +14,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "pwrite"; fd: number; bytes: Uint8Array; offset: number }
   | { kind: "seek"; fd: number; offset: number; whence: number }
   | { kind: "truncate"; fd: number; length: number }
+  | { kind: "allocate"; fd: number; offset: number; length: number }
   | { kind: "fcntl"; fd: number; command: number; arg: number }
   | { kind: "dup"; fd: number; cloexec: boolean }
   | { kind: "stage" | "unstage"; fd: number }
@@ -189,6 +190,7 @@ export class FileDescriptors {
         case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,operation.offset)}; break;
         case "seek": reply = {result:javaSeekFd(fd,operation.offset,operation.whence)}; break;
         case "truncate": reply = {result:javaTruncateFd(fd,operation.length)}; break;
+        case "allocate": reply = {result:javaAllocateFd(fd,operation.offset,operation.length)}; break;
         case "sync": {
           const result = javaSyncFd(fd);
           if (result === 0) await vfs.flush();

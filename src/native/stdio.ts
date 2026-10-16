@@ -11,9 +11,10 @@ import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs, storageEstimate } from "../shell/vfs";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2,
   statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
+import { processAllocateFd } from "./process-fd";
 
 function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
   return value instanceof Promise ? value.then(done) : done(value);
@@ -243,8 +244,9 @@ export function stdioInit(): void {
     mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
     rmdir: (cpu, a) => removePath(cpu, a.str(), true),
     ftruncate64: (cpu, a) => truncateFd(cpu, a.i(), Number(a.l())),
-    posix_fallocate: (_c, a) => fdFallocate(a.i(), a.i(), a.i()),
-    posix_fallocate64: (_c, a) => fdFallocate(a.i(), Number(a.l()), Number(a.l())),
+    // they report the error number itself
+    posix_fallocate: (_c, a) => complete(processAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
+    posix_fallocate64: (_c, a) => complete(processAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
     sync: () => {},
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
