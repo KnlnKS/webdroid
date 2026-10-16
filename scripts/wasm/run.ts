@@ -66,17 +66,26 @@ function buildAot(args: string[]): number {
   return 0;
 }
 
+let builtAot: string | undefined;
+process.on("exit", () => { if (builtAot) rmSync(builtAot, { recursive: true, force: true }); });
+/** the platform build the AOT suites run over: WEBDROID_AOT's, or a small one built once per run (the build's status when it fails) */
+function aotDir(): string | number {
+  const built = process.env.WEBDROID_AOT ?? builtAot;
+  if (built) return built;
+  const dir = mkdtempSync(join(tmpdir(), "wasm-aot-")), status = exec("aot-build", ["--out", dir, "--jars", "4"]);
+  if (status) { rmSync(dir, { recursive: true, force: true }); return status; }
+  return builtAot = dir;
+}
+
 function runSuite(name: string, args: string[]): number {
   if (name === "conform-quick") return exec("conform", ["quick"]);
   if (name === "aot") return buildAot(args);
   if (name === "fuzz" && !args.length) return FUZZ_SEEDS.map((seed) => exec(name, ["--seed", String(seed)])).find(Boolean) ?? 0;
   if (name === "entry") return exec(name, args) || exec("entrytier", []);
   if (name === "hostclass" && !process.env.WEBDROID_AOT && exec(name, args)) return 1;
-  if ((name !== "aottest" && name !== "persist" && name !== "hostclass") || process.env.WEBDROID_AOT) return exec(name, args);
-  const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
-  try {
-    return exec("aot-build", ["--out", dir, "--jars", "4"]) || exec(name, args, { ...process.env, WEBDROID_AOT: dir });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  if (name !== "aottest" && name !== "persist" && name !== "hostclass") return exec(name, args);
+  const dir = aotDir();
+  return typeof dir === "number" ? dir : exec(name, args, { ...process.env, WEBDROID_AOT: dir });
 }
 
 const [name, ...args] = process.argv.slice(2);
