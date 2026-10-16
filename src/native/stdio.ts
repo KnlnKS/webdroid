@@ -12,7 +12,7 @@ import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs, storageEstimate } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
+  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
 import { processAllocateFd } from "./process-fd";
 
@@ -158,7 +158,7 @@ function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, in
   mem.st32(entry + FTS.pathlen, pathlen); mem.st32(entry + FTS.namelen, namelen);
   mem.st32(entry + FTS.ino, inoOf(path)); mem.st32(entry + FTS.dev, 1); mem.st32(entry + FTS.nlink, 1);
   mem.st16(entry + FTS.level, level); mem.st16(entry + FTS.info, info); stp(entry + FTS.statp, statp);
-  const file = vfs.stat(path); fillStat(statp, info === 1 || info === 6, file?.size ?? 4096, Date.now(), path);
+  fillStat(statp, path, localStat(path, info === 1 || info === 6 ? S_IFDIR : S_IFREG, vfs.stat(path)?.size ?? 4096, Date.now()));
   mem.putCstr(entry + FTS.name, name);
   return entry;
 }

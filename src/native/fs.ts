@@ -8,7 +8,7 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
-import { vfs, EMPTY, storageEstimate, type VfsFile, type FileAttributes } from "../shell/vfs";
+import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile";
@@ -17,7 +17,7 @@ import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag 
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
 import { SIGPIPE } from "./signals";
-import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
@@ -26,8 +26,17 @@ import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWr
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
 const O_RDWR = 2;
-const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
-
+export const S_IFMT = 0xf000, S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000;
+const S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
+/** stat(2)'s answer: st_mode with the file type, st_size (a directory's one block), st_mtime in milliseconds and the owner */
+export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
+/** the type of a file this realm names */
+export const pathType = (p: string): number => vfs.isDir(p) ? S_IFDIR : isFifo(p) ? S_IFIFO : S_IFREG;
+/** the stat of a file this realm holds, of `size` bytes unless it is a directory */
+export function localStat(path: string, type: number, size: number, mtime: number, file = vfs.opened(path)): FileStat {
+  const { mode, uid, gid } = file?.attributes ?? vfs.attributes(path, type === S_IFDIR);
+  return { mode: type | mode, size: type === S_IFDIR ? 4096 : size, mtime, uid, gid };
+}
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share */
 export interface OpenFile {
@@ -358,11 +367,11 @@ export const javaFcntlFd = (fd: number, cmd: number, arg: number): number => fdF
 export function javaIoctlIntFd(fd: number, request: number): number {
   return fds.has(fd) && request !== FIONREAD ? -E.NOTTY : fionread(fd);
 }
-export function javaFdStat(fd: number): { mode: number; size: number; path: string | null; uid: number; gid: number; mtime: number } | null {
+export function javaFdStat(fd: number): FileStat & { path: string | null } | null {
   const f = fds.get(fd);
   if (!f || f.remote) return null;
   const path = f.dir ? f.path : f.content.path, attributes = f.content.attributes ?? vfs.attributes(path,f.dir);
-  return { mode: fdMode(f), size: f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
+  return { mode: fdMode(f), size: f.dir ? 4096 : f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
 }
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
@@ -424,7 +433,7 @@ export function statProcess(cpu: Cpu, path: string, buf: number): number | Promi
   return calls.fileStat(normalized).then(reply => {
     if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
     const stat = reply.value;
-    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized,undefined,stat,stat.fifo);
+    fillStat(destination(),normalized,stat);
     return 0;
   });
 }
@@ -640,16 +649,16 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir), fifo = !!fifoOf(file)): void {
+export function fillStat(buf: number, path: string, { mode, size, mtime, uid, gid }: FileStat): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : fifo ? S_IFIFO : S_IFREG) | attributes.mode);
+  mem.st32(buf + KLAYOUT.ST_MODE, mode);
   mem.st32(buf + KLAYOUT.ST_NLINK, 1);
-  mem.st32(buf + KLAYOUT.ST_UID, attributes.uid); mem.st32(buf + KLAYOUT.ST_GID, attributes.gid);
+  mem.st32(buf + KLAYOUT.ST_UID, uid); mem.st32(buf + KLAYOUT.ST_GID, gid);
   mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
   mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
   mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
-  const sec = Math.floor(mtimeMs / 1000);
+  const sec = Math.floor(mtime / 1000);
   for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stLong(buf + o, sec);
   mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
 }
@@ -711,13 +720,12 @@ export const javaInotifyAddWatch = (fd: number, path: string, mask: number): num
 export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
 export function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
-  if (isRandomDevice(path)) { fillStat(buf, false, 0, Date.now(), path); return 0; }
+  if (isRandomDevice(path)) { fillStat(buf, path, localStat(path, S_IFREG, 0, Date.now())); return 0; }
   const s = procText(path);
-  if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
-  if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
-  const file = vfs.stat(path);
-  if (!file) return fail(cpu, E.NOENT);
-  fillStat(buf, false, file.size, Date.now(), path);
+  if (s !== null) { fillStat(buf, path, localStat(path, S_IFREG, utf8(s).length, Date.now())); return 0; }
+  const file = vfs.isDir(path) ? null : vfs.stat(path);
+  if (!file && !vfs.isDir(path)) return fail(cpu, E.NOENT);
+  fillStat(buf, path, localStat(path, pathType(path), file?.size ?? 0, Date.now()));
   return 0;
 }
 function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
@@ -725,15 +733,13 @@ function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
     const destination = anchor(buf);
     return Promise.resolve(processFdStat(fd)).then(stat => {
       if (!stat) return fail(cpu,E.BADF);
-      const dir = (stat.mode & 0xf000) === S_IFDIR;
-      fillStat(destination(),dir,dir ? 4096 : stat.size,stat.mtime,stat.path ?? fds.get(fd)?.path ?? "",undefined,{...stat,mode:stat.mode & 0o7777});
+      fillStat(destination(),stat.path ?? fds.get(fd)?.path ?? "",stat);
       return 0;
     });
   }
-  const f = fds.get(fd);
-  if (!f) return fail(cpu, E.BADF);
-  fillStat(buf, f.dir, f.content.len, Date.now(), f.path, f.content);
-  mem.st32(buf + KLAYOUT.ST_MODE, fdMode(f));
+  const f = fds.get(fd), stat = javaFdStat(fd);
+  if (!f || !stat) return fail(cpu, E.BADF);
+  fillStat(buf, f.path, { ...stat, mtime: Date.now() });
   return 0;
 }
 /** st_mode of an open file: /dev/null stdio and /dev/random are character devices, and eventfd,
