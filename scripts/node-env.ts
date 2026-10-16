@@ -4,13 +4,13 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type * as LolHtml from "html-rewriter-wasm";
 
-Uint8Array.fromBase64 ??= (s: string) => {
-  // as strict as the native decoder: Buffer skips what is not base64
-  const text = s.replace(/[\t\n\f\r ]/g, "");
+Uint8Array.fromBase64 ??= (s: string, o?: { alphabet?: "base64" | "base64url" }) => {
+  // as strict as the native decoder: Buffer skips what is not of the alphabet
+  const text = s.replace(/[\t\n\f\r ]/g, ""), url = o?.alphabet === "base64url";
   // padding completes its chunk of four; unpadded, a last chunk of one character holds no byte
   const complete = text.endsWith("=") ? text.length % 4 === 0 : text.length % 4 !== 1;
-  if (!complete || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) throw new SyntaxError("Invalid base64 string");
-  return new Uint8Array(Buffer.from(text, "base64"));
+  if (!complete || !(url ? /^[\w-]*={0,2}$/ : /^[A-Za-z0-9+/]*={0,2}$/).test(text)) throw new SyntaxError("Invalid base64 string");
+  return new Uint8Array(Buffer.from(text, url ? "base64url" : "base64"));
 };
 Uint8Array.prototype.toHex ??= function (this: Uint8Array) { return Buffer.from(this).toString("hex"); };
 Uint8Array.prototype.toBase64 ??= function (this: Uint8Array, o?: { alphabet?: "base64" | "base64url"; omitPadding?: boolean }) {
