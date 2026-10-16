@@ -33,7 +33,8 @@ export async function respond(req: IncomingMessage, res: ServerResponse, fetch: 
 
 /** serves `fetch` on `port` (0: any free one), listening once this resolves. On 127.0.0.1, which browsers also reach
  *  as localhost and its subdomains, where "localhost" can bind ::1 alone. */
-export function serve({ port = 0, hostname = "127.0.0.1", fetch }: { port?: number; hostname?: string; fetch: Handler }): Promise<Served> {
+export function serve({ port = 0, fetch }: { port?: number; fetch: Handler }): Promise<Served> {
+  const hostname = "127.0.0.1";
   const server = createServer((req, res) => void respond(req, res, fetch));
   return new Promise((resolve, reject) => {
     server.once("error", reject).listen(port, hostname, () => {
