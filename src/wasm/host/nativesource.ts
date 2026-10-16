@@ -4,6 +4,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable";
 import { splitSig } from "../../jvm/abi";
 import { stringMethods } from "../../jvm/natives/jstring";
 import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
+import { waitsEnded } from "../link/module";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
 import { hostNatives } from "./hostnatives";
@@ -47,8 +48,9 @@ export const nativeSource: NativeSource = {
     const java = refOf(e);
     if (java) return { cls: "", msg: null, java };
     // a JS error escaping a native is the Java throwable rt.jx makes of it: a TypeError on null is a NullPointerException, a typed array too long an OutOfMemoryError.
-    // A suspension the engine refused is the harness's to see, and a stack overflow the World turns into a StackOverflowError at the boundary
-    if (e instanceof Error && e.name !== "SuspendError" && !(e instanceof RangeError && e.message.includes("call stack"))) e = rt.jx(e);
+    // A suspension the engine refused is the harness's to see, the page's end (endWaits) unwinds Java unhandled, and a stack overflow the World
+    // turns into a StackOverflowError at the boundary
+    if (e instanceof Error && e.name !== "SuspendError" && !waitsEnded() && !(e instanceof RangeError && e.message.includes("call stack"))) e = rt.jx(e);
     return e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined;
   },
 };

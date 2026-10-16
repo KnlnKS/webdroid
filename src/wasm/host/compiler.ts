@@ -44,6 +44,7 @@ export function spawnCompileWorker(host: MessagePort | undefined, url: string): 
     terminate: () => { ctl.port1.postMessage(0); data.port1.close(); fetcher.port1.close(); },
   };
   data.port1.onmessage = (e) => worker.onmessage?.(e);
+  data.port1.onmessageerror = () => worker.onerror?.({ message: "a message from the compile worker could not be read" } as ErrorEvent);
   ctl.port1.onmessage = ({ data: message }) => worker.onerror?.({ message } as ErrorEvent);
   return worker;
 }

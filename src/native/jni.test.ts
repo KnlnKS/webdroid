@@ -178,7 +178,7 @@ for (const a64 of abis) test(`${abi(a64)} strings cross as Java strings: UTF-8 a
   expect(Array.from({ length: 4 }, (_, i) => String.fromCharCode(mem.ld16u(buf + 2 * i))).join("")).toBe("éllo");
   await j.call(S.GetStringUTFRegion, s, 1, 4, buf);
   expect(mem.cstr(buf)).toBe("éllo");
-  const made = await j.call(S.NewString, buf, 0);
+  const made = await j.call(S.NewString, 0, 0);
   expect(await j.call(S.GetStringLength, made)).toBe(0);
   // Java gets the string it is given, and a string Java makes comes back as one
   const probe = await j.cls("JniProbe");

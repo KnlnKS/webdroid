@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-13
+# Webdroid status — 2026-10-15
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -31,16 +31,20 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before
-  the Wasm tier, and need re-verification.
+  the Wasm tier, and need re-verification. Google Maps (2026-10-15) draws its vector map, searches, and shows
+  places and driving routes.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
-At `de7ba895`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
-natives, draw errors, settle timeouts or wedges; 1,147 unit tests pass (the browser tests' "End Of Central
-Directory" flake recurred once); FitNotes `smoke` is clean; all 17 `wasm all` suites and 31 of 31 `fwtest`
-exercises pass.
+At `01e96bf7` (2026-10-15): the `--jobs 1` quick e2e gate passes 7 of 7 flows in 170.9 s with no new missing APIs,
+errors, required natives, draw errors, settle timeouts or wedges, with diagnostics from the page and every Worker, and
+every flow upgrades methods to the second tier (31-483 per flow). 1,148 unit tests pass; the FitNotes and boot-jar
+sweep is clean; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass. With 24 busy loops beside the gate (load
+about 45) FitNotes failed 11 steps on this branch and 14 at `89868cac`, all completion timeouts: its off-screen spinners
+keep vsync requested, as on the reference AVD, and the pixel rule's readbacks stretch past the bound (history, "FitNotes
+under host load").
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
@@ -86,8 +90,8 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
      `?attestation=1` but gets HTTP 500 (`DF-DFERH-01`): DroidGuard supplied zero bytes and microG had no auth token.
      A licensed Play Store oracle is needed before attributing that to webdroid.
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
-     bar arbitration; Google Maps zoom, active navigation and backup transport. A native fault converted into a
-     Java exception can still leave native locks held.
+     bar arbitration; Google Maps pinch zoom (single-pointer input), sign-in and backup transport. A native fault
+     converted into a Java exception can still leave native locks held.
    - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
@@ -123,6 +127,8 @@ Unranked; each needs a measurement or a check against the current code before wo
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
+- **Input:** the shell dispatches a single pointer (`src/shell/pointer-input.ts`, `MotionEvent.obtain(JJIFFI)` in
+  `wm.ts`), so multi-touch gestures such as pinch zoom cannot be made.
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
 - **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
   lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.

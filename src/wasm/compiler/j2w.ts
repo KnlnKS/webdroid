@@ -69,6 +69,7 @@ const HOST_IMPORTS = {
   dexOpenMemory: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
   galloc: { params: [T.externref, T.i32], results: [T.i64] },
   gwrote: { params: [T.i32, T.i32], results: [] },
+  gblock: { params: [T.i32], results: [T.i32] },
   hot: { params: [T.i32], results: [] },
   long: { params: [T.i32], results: [] },
   mhInvoke: { params: [T.externref, T.externref, T.externref, T.i32], results: [T.externref] },
@@ -383,6 +384,13 @@ export class Compiler implements Base {
     if (f.absent) this.absent.push([f.absent, this.assumer]);
     c.i32(this.w.linkId(f.message));
     this.callThrower(c, f.thrower);
+  }
+  /** throws a new `cls` made by its constructor of no arguments, or of the String `message` */
+  throwNew(c: Code, cls: string, message?: string): void {
+    const local = c.newLocal(T.anyref);
+    this.emitEnsure(c, cls); this.emitNew(c, cls); c.ltee(local);
+    if (message !== undefined) this.str.literal(c, message);
+    this.callMethod(c, this.prog.resolve(cls, "<init>", message === undefined ? "()V" : "(Ljava/lang/String;)V")!); c.lget(local).throw_(this.tag);
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {

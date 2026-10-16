@@ -103,7 +103,10 @@ rt.register({ name: "webdroid/InputMethodSession", ctor: class extends JObj {}, 
     "appPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)V", "finishSession()V", "removeImeSurface()V",
     "updateCursorAnchorInfo(Landroid/view/inputmethod/CursorAnchorInfo;)V"),
 } });
-const methodSession = once(() => newObj("webdroid/InputMethodSession"));
+// a proxy, as an input method in its own process gives: IInputMethodSessionInvoker posts each call to
+// a local session with the editor's arguments unparceled, and the editor reuses its ExtractedText
+const methodSession = once(() => after(newObj("webdroid/InputMethodSession"), (session) =>
+  newObj("com/android/internal/inputmethod/IInputMethodSession$Stub$Proxy", "(Landroid/os/IBinder;)V", session)));
 
 const emptyInfoList = () => after(newArrayList(), list => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", list));
@@ -124,12 +127,16 @@ rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JO
     (_client: JObj, window: JObj, _token: JObj, _flags: number, _tool: number, receiver: JObj | null) => softInput(window, true, receiver),
   [`hideSoftInput(${CLIENT}Landroid/os/IBinder;Landroid/view/inputmethod/ImeTracker$Token;ILandroid/os/ResultReceiver;I)Z`]:
     (_client: JObj, window: JObj, _token: JObj, _flags: number, receiver: JObj | null) => softInput(window, false, receiver),
-  ...stubs(0, `getInputMethodWindowVisibleHeight(${CLIENT})I`, "isImeTraceEnabled()Z", "isStylusHandwritingAvailableAsUser(IZ)Z"),
+  // the browser keyboard takes no handwriting, so no editor accepts a delegation (IMMS answers false)
+  [`acceptStylusHandwritingDelegationAsync(${CLIENT}ILjava/lang/String;Ljava/lang/String;ILcom/android/internal/inputmethod/IBooleanListener;)V`]:
+    (_client: JObj, _user: number, _delegate: string, _delegator: string, _flags: number, callback: JObj) => vcall(callback, "onResult", "(Z)V", 0),
+  ...stubs(0, `getInputMethodWindowVisibleHeight(${CLIENT})I`, "isImeTraceEnabled()Z", "isStylusHandwritingAvailableAsUser(IZ)Z",
+    `acceptStylusHandwritingDelegation(${CLIENT}ILjava/lang/String;Ljava/lang/String;I)Z`),
   ...stubs(null, "getCurrentInputMethodInfoAsUser(I)Landroid/view/inputmethod/InputMethodInfo;",
     "getCurrentInputMethodSubtype(I)Landroid/view/inputmethod/InputMethodSubtype;", "getLastInputMethodSubtype(I)Landroid/view/inputmethod/InputMethodSubtype;",
     "getImeTrackerService()Lcom/android/internal/inputmethod/IImeTracker;"),
   ...noops(`addClient(${CLIENT}Lcom/android/internal/inputmethod/IRemoteInputConnection;I)V`, "removeImeSurface()V",
     "removeImeSurfaceFromWindowAsync(Landroid/os/IBinder;)V", "reportPerceptibleAsync(Landroid/os/IBinder;Z)V",
-    `showInputMethodPickerFromClient(${CLIENT}I)V`),
+    `showInputMethodPickerFromClient(${CLIENT}I)V`, `prepareStylusHandwritingDelegation(${CLIENT}ILjava/lang/String;Ljava/lang/String;)V`),
 } });
 hostStub("input_method", "webdroid/InputMethodManagerService");

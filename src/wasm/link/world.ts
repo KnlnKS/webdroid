@@ -117,7 +117,7 @@ const MEGAMORPHIC = 32;
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
 /** when a unit's compile began, and the compile time accounted by then (World.accountCompilation) */
 type Clock = { start: number; accounted: number };
-type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
+type Built = { bytes: Uint8Array; traces: FnTrace[] };
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
@@ -239,6 +239,7 @@ export class World {
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       gwrote: (address: number, length: number) => opts.guest!.wrote(address >>> 0, length >>> 0),
+      gblock: (address: number) => this.blockSizes.get(address >>> 0) ?? 0,
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
@@ -1217,7 +1218,7 @@ export class World {
     this.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
-    return { unit, imports, built: { bytes: result.module, traces } };
+    return { unit, imports, built: { bytes: result.bytes, traces } };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
@@ -1909,14 +1910,15 @@ export class World {
     }
     return i;
   }
-  /** the native blocks of the direct buffers, freed when the object that owns each is collected */
-  private blocks = new FinalizationRegistry<bigint>((address) => this.opts.guest!.free(address));
+  /** the native blocks of the direct buffers, freed when the object that owns each is collected, and their sizes by address */
+  private blocks = new FinalizationRegistry<bigint>((address) => { this.blockSizes.delete(Number(address)); this.opts.guest!.free(address); });
+  private blockSizes = new Map<number, number>();
   /** a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0 */
   private allocGuest(owner: object, n: number): bigint {
     const guest = this.opts.guest;
     if (!guest) throw new Error("this World has no guest memory");
     const address = guest.alloc(n);
-    if (address) this.blocks.register(owner, address);
+    if (address) { this.blocks.register(owner, address); this.blockSizes.set(Number(address), n); }
     return address;
   }
   /** whether the guest memory is shared, which a module that imports it must declare */

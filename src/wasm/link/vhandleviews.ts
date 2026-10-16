@@ -19,25 +19,21 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
       const st = cx.structFor(owner);
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(owner, cx.prog.resolveField(owner, name, desc)!));
     };
-    const failure = (cls: string) => {
-      const local = c.newLocal(T.anyref); cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local);
-      cx.callMethod(c, cx.prog.resolve(cls, "<init>", "()V")!); c.lget(local).throw_(cx.tag);
-    };
     const receiver = c.newLocal(T.anyref), bytes = c.newLocal(T.anyref), index = c.newLocal(T.i32), offset = c.newLocal(T.i32), length = c.newLocal(T.i32), address = c.newLocal(T.i64);
     value(1); c.ltee(receiver).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
     value(2); unbox(cx, c, "I"); c.lset(index);
     if (array) { c.lget(receiver).ltee(bytes).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2).refAsNonNull().arrayLen(); c.lset(length); }
     else {
-      if (!/^get(Volatile|Acquire|Opaque)?$/.test(mode)) { field(receiver, BB, "isReadOnly", "Z"); c.if_(); failure("java/nio/ReadOnlyBufferException"); c.end(); }
+      if (!/^get(Volatile|Acquire|Opaque)?$/.test(mode)) { field(receiver, BB, "isReadOnly", "Z"); c.if_(); cx.throwNew(c, "java/nio/ReadOnlyBufferException"); c.end(); }
       field(receiver, "java/nio/Buffer", "limit", "I"); c.lset(length);
       field(receiver, "java/nio/Buffer", "address", "J"); c.lset(address);
       field(receiver, BB, "hb", "[B"); c.lset(bytes);
       c.lget(address).raw(OP.i64_eqz).if_(); field(receiver, BB, "offset", "I"); c.lset(offset); c.end();
     }
-    c.lget(length).i32(width).raw(OP.i32_sub).lget(index).raw(OP.i32_lt_s).lget(index).i32(0).raw(OP.i32_lt_s, OP.i32_or).if_(); failure("java/lang/IndexOutOfBoundsException"); c.end();
+    c.lget(length).i32(width).raw(OP.i32_sub).lget(index).raw(OP.i32_lt_s).lget(index).i32(0).raw(OP.i32_lt_s, OP.i32_or).if_(); cx.throwNew(c, "java/lang/IndexOutOfBoundsException"); c.end();
     c.lget(index).lget(offset).raw(OP.i32_add).lset(index);
     if (mode !== "get" && mode !== "set") {
-      c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(BigInt(width - 1)).raw(OP.i64_and, OP.i64_eqz, OP.i32_eqz).if_(); failure("java/lang/IllegalStateException"); c.end();
+      c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(BigInt(width - 1)).raw(OP.i64_and, OP.i64_eqz, OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/IllegalStateException"); c.end();
     }
     const byteIndex = (i: number) => c.lget(index).i32(i).raw(OP.i32_add);
     const memoryAddress = (i: number) => { c.lget(address); byteIndex(i); c.raw(OP.i64_extend_i32_u, OP.i64_add); };

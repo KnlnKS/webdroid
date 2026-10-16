@@ -19,6 +19,8 @@ import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
 import type { Numbering } from "../link/aot";
 import { externs, intrinsics } from "../link/intrinsics";
+import { objectOfLoader } from "../link/loaders";
+import { endWaits } from "../link/module";
 import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
 import { wasmJni } from "./jni";
@@ -71,7 +73,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   // the frames of Java code: a method the host implements is not one
   rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   rt.userClassLoader = () => {
-    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return loader.object; }
+    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return objectOfLoader(w, loader); }
     return null;
   };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
@@ -92,7 +94,8 @@ export async function bootWasmTier(): Promise<TierBackend> {
   };
   onProcessExit(close);
   if (processExited()) close();
-  if (typeof window !== "undefined") window.addEventListener("pagehide", close, { once: true });
+  // the page's end ends its waits as well, which the engine would otherwise keep, with all they reach, past the page
+  if (typeof window !== "undefined") window.addEventListener("pagehide", () => { close(); endWaits(new Error("the page closed")); }, { once: true });
   const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>();
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {

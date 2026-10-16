@@ -125,14 +125,9 @@ export function resolveHandleMember(w: World, referrer: MethodInfo, index: numbe
 
 export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, index: number): boolean {
   const dex = referrer.dex, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
-  const error = (cls: string, message: string) => {
-    const local = c.newLocal(T.anyref);
-    cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, message);
-    cx.callMethod(c, prog.resolve(cls, "<init>", "(Ljava/lang/String;)V")!); c.lget(local).throw_(cx.tag);
-  };
   const member = resolveHandleMember(cx.w, referrer, index);
   if ("thrower" in member) { cx.linkError(c, member); return false; }
-  if ("errorClass" in member) { error(member.errorClass, member.message); return false; }
+  if ("errorClass" in member) { cx.throwNew(c, member.errorClass, member.message); return false; }
   let kind: number, art: bigint, ret: string, params: string[];
   if ("field" in member) {
     const stat = h.type <= 1, put = h.type === 0 || h.type === 2, f = member.field;

@@ -11,8 +11,6 @@ import { longVersionCode, queryReceivers } from "./pm";
 import { packages } from "./packages";
 import { checkUidPermission } from "./permissions";
 import { sendIntent } from "./pendingintent";
-import { attr } from "./axml";
-import { resString } from "./res";
 import type { PackageDataChange } from "../shell/packagedata";
 import type { Receiver } from "../shell/processes";
 import { detached } from "../jvm/natives/jthrowable";
@@ -118,8 +116,7 @@ const uninstaller = driven(function* (intent: JIntent): Gen<SystemResult> {
   const record = pkg ? packages.get(pkg) : undefined;
   let code = DELETE_FAILED_INTERNAL_ERROR;
   if (record && !record.system) {
-    const label = record.application && attr(record.application, "label"), name = label ? label.str ?? resString(record.res, label.data) : "";
-    code = yield* awaited(deletePackage(record.pkg, `${name || record.pkg}\n\nDo you want to uninstall this app?`));
+    code = yield* awaited(deletePackage(record.pkg, `${record.label()}\n\nDo you want to uninstall this app?`));
   }
   if (callback) yield vcall(callback, "onUninstallComplete", `(${S}I${S})V`, pkg, code, code === DELETE_FAILED_ABORTED ? "Cancelled by user" : null);
   if (!(yield vcall(intent, "getBooleanExtra", `(${S}Z)Z`, "android.intent.extra.RETURN_RESULT", 0))) return null;
