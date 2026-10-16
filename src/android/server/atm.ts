@@ -501,12 +501,15 @@ function* callingActivity(token: JObj): Gen<JObj | null> {
 // IAppTask: this process's one task
 const TASK_ID = 1;
 const component = (r: ActivityRecord | undefined) => r ? vcall(r.info, "getComponentName", "()Landroid/content/ComponentName;") : null;
+// Task.RemoteToken: every TaskInfo carries it, and TaskInfo.writeToParcel writes it unchecked
+rt.register({ name: "webdroid/TaskToken", ctor: class extends JObj {}, sup: "android/window/IWindowContainerToken$Stub", methods: {} });
+const taskToken = once(() => after(newObj("webdroid/TaskToken"), (token) => newObj("android/window/WindowContainerToken", "(Landroid/window/IWindowContainerToken;)V", token)));
 rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "android/app/IAppTask$Stub", methods: {
   "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": driven(function* () {
-    const info = yield newObj("android/app/ActivityManager$RecentTaskInfo");
+    const info = yield newObj("android/app/ActivityManager$RecentTaskInfo"), base = yield component(stack[0]);
     return setDeclared(info, "android/app/ActivityManager$RecentTaskInfo", {
-      id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
-      baseIntent: stack[0]?.intent ?? null, baseActivity: yield component(stack[0]), topActivity: yield component(stack.at(-1)) });
+      id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0), token: yield taskToken(),
+      baseIntent: stack[0]?.intent ?? null, baseActivity: base, realActivity: base, topActivity: yield component(stack.at(-1)) });
   }),
   "finishAndRemoveTask()V": () => detached(() => rt.drive(clearAbove(null)), logUncaught),
   // one task is shown at a time, and there are no recents to exclude it from
