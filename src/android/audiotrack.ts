@@ -45,8 +45,8 @@ class Track extends PcmOutput {
 const tracks = nativePeer<Track>(null, "Unable to retrieve AudioTrack pointer", (tr) => tr.close());
 const T = tracks.on;
 /** a write of `count` samples starting at `off`, answered in samples (bytes for byte[]) as the JNI does */
-function writeSamples(t: JObj, data: Int16Array | Int8Array | Float32Array, off: number, count: number, format: number, blocking: number) {
-  const tr = tracks.find(t);
+function writeSamples(this: JObj, data: Int16Array | Int8Array | Float32Array, off: number, count: number, format: number, blocking: number) {
+  const tr = tracks.find(this);
   if (!tr) return -3;
   if (PCM_BYTES[format] !== tr.bytesPerSample) return -2;
   const unit = data instanceof Int8Array ? tr.bytesPerSample : 1;
@@ -76,11 +76,11 @@ rt.registerJnis(AT, {
   "native_flush()V": T((tr) => { if (!tr.playing) { tr.flush(); tr.origin = 0; } }),
   "native_release()V": tracks.detach,
   "native_finalize()V": tracks.detach,
-  "native_write_byte([BIIIZ)I": function (this: JObj, d: Int8Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
-  "native_write_short([SIIIZ)I": function (this: JObj, d: Int16Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
-  "native_write_float([FIIIZ)I": function (this: JObj, d: Float32Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
+  "native_write_byte([BIIIZ)I": writeSamples,
+  "native_write_short([SIIIZ)I": writeSamples,
+  "native_write_float([FIIIZ)I": writeSamples,
   "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
-    return after(readBufferBytes(buffer,pos,n), bytes => writeSamples(this,new Int8Array(bytes.buffer,bytes.byteOffset,bytes.length),0,n,f,b));
+    return after(readBufferBytes(buffer,pos,n), bytes => writeSamples.call(this,new Int8Array(bytes.buffer,bytes.byteOffset,bytes.length),0,n,f,b));
   },
   "native_get_position()I": T((tr) => tr.position() | 0),
   "native_get_timestamp([J)I": T((tr, out: BigInt64Array) => {
