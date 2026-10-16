@@ -200,12 +200,14 @@ export interface HostLoop {
 }
 const channel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 const turns: (() => void)[] = [];
-if (channel) { channel.port1.onmessage = () => turns.shift()?.(); (channel.port1 as unknown as { unref?: () => void }).unref?.(); }
+// node: a pending turn holds the process open, an idle port lets it exit
+const hold = channel?.port1 as unknown as { ref?: () => void; unref?: () => void } | undefined;
+if (channel) { channel.port1.onmessage = () => { turns.shift()?.(); if (!turns.length) hold!.unref?.(); }; hold!.unref?.(); }
 let turnStart = 0;
 export const defaultLoop: HostLoop = {
   yield: () => new Promise<void>((r) => {
     turns.push(() => { turnStart = performance.now(); r(); });
-    if (channel) channel.port2.postMessage(0); else setTimeout(() => turns.shift()?.(), 0);
+    if (channel) { hold!.ref?.(); channel.port2.postMessage(0); } else setTimeout(() => turns.shift()?.(), 0);
   }),
   due: () => performance.now() - turnStart >= 8,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },

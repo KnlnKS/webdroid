@@ -10,16 +10,18 @@ import { note, Ev } from "../timeline.ts";
 const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 const waiters: (() => void)[] = [], woken: (() => void)[] = [];
 let posted = false;
-const post = (): void => { if (!posted) { posted = true; chan!.port2.postMessage(0); } };
+// node: a posted turn holds the process open and an idle port does not, so a script awaiting a turn
+// runs on and one whose work is done exits
+const hold = chan?.port1 as unknown as { ref?: () => void; unref?: () => void } | undefined;
+const post = (): void => { if (!posted) { posted = true; hold!.ref?.(); chan!.port2.postMessage(0); } };
 if (chan) {
   chan.port1.onmessage = () => {
-    posted = false; yieldStats.fires++; turnArmed = false; note(Ev.Turn);
+    posted = false; hold!.unref?.(); yieldStats.fires++; turnArmed = false; note(Ev.Turn);
     for (const f of woken.splice(0)) f();
     waiters.shift()?.();
     if (waiters.length) post();
   };
-  // an open port keeps a bun/node process alive after its work is done (tests, scripts)
-  (chan.port1 as unknown as { unref?: () => void }).unref?.();
+  hold!.unref?.();
 }
 /** How long the current macrotask has held the JS thread, from the first time this turn asked: a
  *  turn ends at its own message, or when the yield channel starts the next. */
