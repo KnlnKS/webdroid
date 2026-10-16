@@ -138,10 +138,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   const split = site.lastIndexOf("#"), index = Number(site.slice(split + 1)), referrer = methodOf(w.prog, site.slice(0, split))!;
   let dexes = linked.get(w); if (!dexes) linked.set(w, dexes = new WeakMap());
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
-  const signature = () => {
-    const proto = referrer.dex.proto((referrer.dex.callSite(index)[2] as { idx: number }).idx);
-    return `(${proto.params.map(t => referrer.dex.type(t)).join("")})${referrer.dex.type(proto.ret)}`;
-  };
+  const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
   const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
   const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), 1, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
@@ -154,7 +151,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(CS, field));
       const target = c.newLocal(T.anyref); c.lset(target).lget(target).refIsNull().if_(); error(cx, c, "java/lang/ClassCastException", "Bootstrap method returned a CallSite with a null target"); c.end();
       c.lget(target); cx.callMethod(c, cx.prog.resolve(MH, "type", `()L${MT};`)!);
-      if (!emitTypeValue(cx, c, referrer.dex, (referrer.dex.callSite(index)[2] as { idx: number }).idx)) return;
+      if (!emitTypeValue(cx, c, referrer.dex, referrer.dex.callSiteProto(index))) return;
       cx.callMethod(c, cx.prog.resolve(MT, "equals", "(Ljava/lang/Object;)Z")!);
       c.raw(OP.i32_eqz).if_(); error(cx, c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap target is not of the requested type"); c.end().lget(local);
     }, parent)(candidate) as object | Promise<object>;

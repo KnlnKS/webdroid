@@ -331,7 +331,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
     let params: string[] = [];
     try {
       if (op === 0xfa || op === 0xfb) params = dex.protoParamTypes(c);
-      else if (op === 0xfc || op === 0xfd) params = dex.protoParamTypes((dex.callSite(b)[2] as { idx: number }).idx);
+      else if (op === 0xfc || op === 0xfd) params = dex.protoParamTypes(dex.callSiteProto(b));
       else params = dex.protoParamTypes(dex.method(b).proto);
     } catch { return E(x.regs.flatMap((r) => [r, N32])); }
     let k = 0;
@@ -355,7 +355,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
 function retOf(dex: DexFile, x: PreparedInstruction): string | null {
   try {
     if (x.op === 0xfa || x.op === 0xfb) return dex.type(dex.proto(x.c).ret);
-    if (x.op === 0xfc || x.op === 0xfd) return dex.type(dex.proto((dex.callSite(x.b)[2] as { idx: number }).idx).ret);
+    if (x.op === 0xfc || x.op === 0xfd) return dex.type(dex.proto(dex.callSiteProto(x.b)).ret);
     return dex.type(dex.proto(dex.method(x.b).proto).ret);
   } catch { return null; }
 }

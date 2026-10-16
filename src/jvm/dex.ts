@@ -314,11 +314,12 @@ export class DexFile {
   methodDesc(i: number): string { return this.protoDesc(this.method(i).proto); }
   private typesCache: ({ params: string[]; ret: string } | undefined)[] = [];
   /** the parameter and return types of method index i, as parseMethodDesc gives them for its descriptor */
-  methodTypes(i: number): { params: string[]; ret: string } {
-    const pi = this.method(i).proto;
+  methodTypes(i: number): { params: string[]; ret: string } { return this.protoTypes(this.method(i).proto); }
+  protoTypes(pi: number): { params: string[]; ret: string } {
     return this.typesCache[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.proto(pi).ret) };
   }
-  private protoDesc(pi: number): string {
+  /** full descriptor "(params)ret" of proto index pi */
+  protoDesc(pi: number): string {
     let d = this.descCache[pi];
     if (d === undefined) {
       const p = this.proto(pi);
@@ -498,6 +499,12 @@ export class DexFile {
     const sec = this.section(0x0007);
     if (!sec || i >= sec.size) throw new Error(`call_site ${i} out of range in ${this.name}`);
     return this.encodedArray(this.view.getUint32(sec.off + i * 4, true));
+  }
+  /** the proto index of the method type a call site is linked with */
+  callSiteProto(i: number): number {
+    const type = this.callSite(i)[2];
+    if (typeof type !== "object" || type === null || Array.isArray(type) || type.kind !== "proto") throw new Error(`call_site ${i} has no method type in ${this.name}`);
+    return type.idx;
   }
 
   /** Encoded tags distinguish integer/float/double bootstrap arguments that the value-only API cannot. */
