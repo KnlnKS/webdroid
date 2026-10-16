@@ -60,7 +60,8 @@ const EXT: [string, string][] = [
   ["EXT_texture_filter_anisotropic", "GL_EXT_texture_filter_anisotropic"], ["EXT_texture_norm16", "GL_EXT_texture_norm16"], ["EXT_float_blend", "GL_EXT_float_blend"],
 ];
 // ES2 extensions that ES 3.0 core subsumes without a new entry point; an engine gating on the name sees them
-const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax";
+// and SurfaceTexture's external textures, which shaders' samplerExternalOES read as 2D storage (gles3-state.ts); EGL makes no EGLImage
+const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3";
 const extsOf = new WeakMap<GL, string[]>();
 /** glClientWaitSync's wait, which EGL's fences share: a wait longer than the fence takes is spent yielding, one macrotask per look */
 export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeoutNs: bigint): Promise<number> {
