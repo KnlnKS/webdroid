@@ -2,12 +2,14 @@
 // StaticLayout runs over our minikin natives in a page (text measurement needs Canvas2D) and lays
 // out the paragraphs below under every break strategy, without and with letter spacing; the
 // device's layouts of the same paragraphs are tests/fixtures/textlayout-device.txt, which
-// `bun run textcmp --record` rewrites with the reference AVD booted (with getTextWidths across
+// `pnpm textcmp --record` rewrites with the reference AVD booted (with getTextWidths across
 // weights for fwtest, tests/fixtures/textwidths-device.txt). Line ends and hyphen edits must match,
 // and a hyphenated line's glyphs; widths and line extents are reported.
+import { readFileSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
 import { BASE_URL } from "../tests/e2e/lib/util.ts";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid.ts";
-import { adb, probeSdk, runDex } from "./adb.ts";
+import { adb, probeSdk, runDex, tempDir } from "./adb.ts";
 
 const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
 /** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
@@ -32,15 +34,15 @@ const PARAGRAPHS: [string, number, number, string?, number?][] = [
 const WIDTH_CASES = [100, 300, 400, 500, 700, 900].flatMap((w) => [10, 12, 13.5, 14, 16, 18, 20, 24, 32, 40].map((s) => `${w} ${s}`));
 
 if (process.argv.includes("--record")) {
-  const dir = (await Bun.$`mktemp -d`.text()).trim(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t")).join("\n") + "\n";
-  await Bun.write(`${dir}/cases.txt`, cases);
-  await Bun.write(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
+  const dir = tempDir(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t")).join("\n") + "\n";
+  writeFileSync(`${dir}/cases.txt`, cases);
+  writeFileSync(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
   adb("push", `${dir}/cases.txt`, "/data/local/tmp/webdroid-textlayout.txt");
   adb("push", `${dir}/widths.txt`, "/data/local/tmp/webdroid-textwidths.txt");
   const out = (await runDex("scripts/TextLayoutProbe.java", { sdk: probeSdk(), args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] })).split("\n");
   const layouts = out.filter((l) => !l.startsWith("widths "));
-  await Bun.write(FIXTURE, `${cases.trimEnd().split("\n").map((c, i) => `case ${i}\t${c}`).join("\n")}\n${layouts.join("\n")}\n`);
-  await Bun.write(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");
+  writeFileSync(FIXTURE, `${cases.trimEnd().split("\n").map((c, i) => `case ${i}\t${c}`).join("\n")}\n${layouts.join("\n")}\n`);
+  writeFileSync(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");
   console.log(`${FIXTURE}: ${layouts.length} rows; ${WIDTHS}`);
   process.exit(0);
 }
@@ -56,7 +58,7 @@ await page.evaluate((a) => void globalThis.wd.boot(a), apk);
 await page.waitForFunction(() => globalThis.wd.perf.bootMs > 0, null, { timeout: 120_000 });
 // LineBreakConfig reads the application's target SDK: wait for bindApplication, which follows boot
 while (!await page.evaluate(async () => await globalThis.wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
-  await Bun.sleep(250);
+  await setTimeout(250);
 const ours: string[] = await page.evaluate(async (paras) => {
   const wd = globalThis.wd, out: string[] = [], P = "Landroid/graphics/Paint;", B = "Landroid/text/StaticLayout$Builder;";
   const config = await wd.vcall(await wd.vcall(await wd.vcall(await wd.newObj("android/graphics/text/LineBreakConfig$Builder", "()V"),
@@ -100,7 +102,7 @@ const ours: string[] = await page.evaluate(async (paras) => {
 const missing: string[] = await page.evaluate(() => [...globalThis.wd.rt.missing]);
 await browser.close();
 
-const recorded = (await Bun.file(FIXTURE).text()).trim().split("\n");
+const recorded = readFileSync(FIXTURE, "utf8").trim().split("\n");
 const device = recorded.filter((l) => /^\d/.test(l)), layouts = ours.filter((l) => /^\d/.test(l));
 const lines = (row: string) => row.split(" ").slice(3).map((l) => l.split(":").map(Number));
 let same = 0, worstWidth = 0, metrics = 0;

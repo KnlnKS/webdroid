@@ -1,7 +1,7 @@
 // Load an apk's native library headless and run its JNI_OnLoad: the fastest way to shake out the
 // CPU/libc/JNI layers without a browser.
 //
-//   bun scripts/nrun.ts <apk> <libname.so> [--link]
+//   pnpm ts scripts/nrun.ts <apk> <libname.so> [--link]
 //
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.

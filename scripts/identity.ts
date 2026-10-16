@@ -3,7 +3,9 @@
 // partitions, merged and derived as init does (property_service.cpp PropertyLoadBootDefaults), what
 // init takes from the bootloader where the image says what that is, and the kernel's banner. An app
 // reads what the image's SELinux policy (its CIL, as init compiles it) lets untrusted_app read.
-import { existsSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, renameSync } from "node:fs";
 import { constObject, writeGenerated } from "./lib.ts";
 
 /** Of the properties an app may read, those a build fixes and that describe neither hardware this
@@ -45,20 +47,28 @@ type Read = (path: string) => string | null;
  *  partitions' ext4 images extracted */
 async function factoryImage(url: string) {
   const name = url.slice(url.lastIndexOf("/") + 1), cache = `${process.env.HOME}/.cache/webdroid/${name.replace(/\.zip$/, "")}`, zip = `${cache}/${name}`;
-  await Bun.$`mkdir -p ${cache}`.quiet();
-  if (!existsSync(zip)) await Bun.$`curl -fL -o ${zip}.part ${url} && mv ${zip}.part ${zip}`;
-  const sha256 = (await Bun.$`shasum -a 256 ${zip}`.text()).split(" ")[0];
+  mkdirSync(cache, { recursive: true });
+  if (!existsSync(zip)) {
+    execFileSync("curl", ["-fL", "-o", `${zip}.part`, url], { stdio: "inherit" });
+    renameSync(`${zip}.part`, zip);
+  }
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(zip)) hash.update(chunk);
+  const sha256 = hash.digest("hex");
   // a factory image's name carries its digest's first 8 digits
   if (!sha256.startsWith(/-([0-9a-f]{8})\.zip$/.exec(name)![1])) throw new Error(`${name} has sha256 ${sha256}`);
   const images = `${cache}/image.zip`;
-  if (!existsSync(images)) await Bun.$`unzip -p ${zip} '*/image-*.zip' > ${images}`;
-  const entries = new Set((await Bun.$`unzip -Z1 ${images}`.text()).split("\n"));
-  for (const entry of ["android-info.txt", "boot.img", ...["system", "system_ext", "product", "vendor", "system_dlkm", "vendor_dlkm", "odm", "odm_dlkm"].map((p) => `${p}.img`)]) {
-    if (entries.has(entry) && !existsSync(`${cache}/${entry}`)) await Bun.$`unzip -o -d ${cache} ${images} ${entry}`.quiet();
+  if (!existsSync(images)) {
+    const fd = openSync(images, "w");
+    try { execFileSync("unzip", ["-p", zip, "*/image-*.zip"], { stdio: ["ignore", fd, "inherit"] }); } finally { closeSync(fd); }
   }
-  const debugfs = Bun.which("debugfs", { PATH: `${process.env.PATH}:/opt/homebrew/opt/e2fsprogs/sbin:/usr/local/opt/e2fsprogs/sbin:/sbin` });
+  const entries = new Set(execFileSync("unzip", ["-Z1", images], { encoding: "utf8", maxBuffer: 1 << 30 }).split("\n"));
+  for (const entry of ["android-info.txt", "boot.img", ...["system", "system_ext", "product", "vendor", "system_dlkm", "vendor_dlkm", "odm", "odm_dlkm"].map((p) => `${p}.img`)]) {
+    if (entries.has(entry) && !existsSync(`${cache}/${entry}`)) execFileSync("unzip", ["-o", "-d", cache, images, entry], { stdio: "pipe" });
+  }
+  const debugfs = [...process.env.PATH!.split(":"), "/opt/homebrew/opt/e2fsprogs/sbin", "/usr/local/opt/e2fsprogs/sbin", "/sbin"].map((dir) => `${dir}/debugfs`).find(existsSync);
   if (!debugfs) throw new Error("debugfs reads the image's ext4 partitions: brew install e2fsprogs");
-  const debug = (command: string, image: string) => Bun.spawnSync([debugfs, "-R", command, `${cache}/${image}.img`], { stdout: "pipe", stderr: "pipe" });
+  const debug = (command: string, image: string) => spawnSync(debugfs, ["-R", command, `${cache}/${image}.img`], { maxBuffer: 1 << 30 });
   const read: Read = (path) => {
     const [, part, rest] = /^\/(\w+)(\/.*)$/.exec(path)!;
     // odm and odm_dlkm are vendor's directories on a device without those partitions
@@ -180,7 +190,7 @@ export async function recordIdentity(url: string, sdk: string): Promise<void> {
   // of the bootloader the image flashes; init.rc imports /vendor/etc/init/hw/init.${ro.hardware}.rc,
   // which the vendor provides for one hardware name. The baseband, boot mode, revision and serial
   // the bootloader passes are its own, so a reader gets its default.
-  props.set("ro.bootloader", /^require version-bootloader=(.+)$/m.exec(await Bun.file(`${cache}/android-info.txt`).text())![1].trim());
+  props.set("ro.bootloader", /^require version-bootloader=(.+)$/m.exec(readFileSync(`${cache}/android-info.txt`, "utf8"))![1].trim());
   const initRc = read("/system/etc/init/hw/init.rc")!;
   if (!initRc.includes("import /vendor/etc/init/hw/init.${ro.hardware}.rc")) throw new Error("init.rc no longer names ro.hardware's rc");
   const hardware = debug("ls -p /etc/init/hw", "vendor").stdout.toString().split("\n").flatMap((line) => /^\/\d+\/\d+\/\d+\/\d+\/init\.([^./]+)\.rc\//.exec(line)?.[1] ?? []);
@@ -198,13 +208,13 @@ export async function recordIdentity(url: string, sdk: string): Promise<void> {
 
   // the kernel's banner, "Linux version <release> (<builder>) (<toolchain>) <version>", and the
   // names init.rc sets
-  const boot = new Uint8Array(await Bun.file(`${cache}/boot.img`).arrayBuffer()), view = new DataView(boot.buffer);
+  const boot = new Uint8Array(readFileSync(`${cache}/boot.img`)), view = new DataView(boot.buffer);
   if (view.getUint32(40, true) < 3) throw new Error("boot image header before v3");
   let kernel = boot.subarray(4096, 4096 + view.getUint32(8, true));
-  if (view.getUint32(4096, true) === 0x184c2102) kernel = new Uint8Array(await Bun.$`lz4 -dc < ${new Response(kernel)}`.arrayBuffer());
+  if (view.getUint32(4096, true) === 0x184c2102) kernel = new Uint8Array(execFileSync("lz4", ["-dc"], { input: kernel, maxBuffer: 1 << 30 }));
   const banner = /Linux version (\S+) \(.*\) (#\d+ [^\n\0]*)/.exec(new TextDecoder("latin1").decode(kernel))!;
   const uname = { sysname: "Linux", nodename: /^\s*hostname (\S+)/m.exec(initRc)![1], release: banner[1], version: banner[2], domainname: /^\s*domainname (\S+)/m.exec(initRc)![1] };
-  await writeProperties("src/shell/device-properties.ts", "DEVICE_PROPERTIES", properties,
+  writeProperties("src/shell/device-properties.ts", "DEVICE_PROPERTIES", properties,
     ` --identity: the identity of the phone whose factory image is\n${url}\n(sha256 ${sha256}),\nas an app reads it (see recordIdentity), and its kernel's uname but for the machine.`,
     `export const UNAME = ${JSON.stringify(uname, null, 2).replace(/"(\w+)":/g, "$1:")};\n`);
 }

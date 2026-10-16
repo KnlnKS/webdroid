@@ -1,6 +1,10 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { chromium, type Browser, type Page } from "playwright";
 import { device, formatScreen } from "../../src/shell/config.ts";
 import { probeScript } from "../../tests/e2e/lib/probe.ts";
@@ -16,22 +20,24 @@ export type WebdroidSession = {
 
 type WebdroidOptions = { proxyProbeTo?: string };
 
-function freePort(): number {
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-  const port = reservation.port;
-  reservation.stop(true);
-  if (port === undefined) throw new Error("could not allocate a webdroid server port");
+const ROOT = join(import.meta.dirname, "../..");
+
+async function freePort(): Promise<number> {
+  const reservation = createServer();
+  await new Promise<void>((resolve, reject) => reservation.once("error", reject).listen(0, "127.0.0.1", resolve));
+  const { port } = reservation.address() as AddressInfo;
+  await new Promise((resolve) => reservation.close(resolve));
   return port;
 }
 
-async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
+async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 1_200; attempt++) {
-    if (child.exitCode !== null) throw new Error(`webdroid server exited with ${child.exitCode}`);
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`webdroid server exited with ${child.exitCode ?? child.signalCode}`);
     try {
       const response = await fetch(url);
       if (response.ok) return;
     } catch { /* server is still starting */ }
-    await Bun.sleep(250);
+    await setTimeout(250);
   }
   throw new Error(`webdroid server did not start at ${url}`);
 }
@@ -49,7 +55,7 @@ async function waitForDraw(page: Page, ms = 60_000): Promise<void> {
     if (shown && "draws" in shown && shown.draws > 0) return;
     if (shown && "exit" in shown && shown.exit) throw new Error(`${shown.pkg} exited before drawing: ${shown.exit}`);
     if (performance.now() > end) throw new Error(`no app drew within ${ms}ms: ${JSON.stringify(shown)}`);
-    await Bun.sleep(250);
+    await setTimeout(250);
   }
 }
 
@@ -69,13 +75,21 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
   const stage = mkdtempSync(join(tmpdir(), "webdroid-fuzz-"));
   const servedPath = join(stage, apk);
   copyFileSync(apkPath, servedPath);
-  const port = freePort();
-  const devServer = Bun.spawn(["bun", "run", "server.ts"], {
+  const port = await freePort();
+  // its own process group, so stopping it stops whatever it spawned too
+  const devServer = spawn(join(ROOT, "node_modules/.bin/vp"), ["dev", "--configLoader", "native"], {
+    cwd: ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PORT: String(port), WEBDROID_APK_DIR: stage,
       ...(options.proxyProbeTo ? { WEBDROID_FUZZ_ORIGIN: options.proxyProbeTo } : {}) },
-    stdout: "pipe", stderr: "pipe",
   });
-  const serverOutput = Promise.all([new Response(devServer.stdout).text(), new Response(devServer.stderr).text()]);
+  const serverOutput: string[] = [];
+  for (const stream of [devServer.stdout, devServer.stderr]) stream.setEncoding("utf8").on("data", (chunk: string) => serverOutput.push(chunk));
+  const stopServer = async () => {
+    if (devServer.exitCode !== null || devServer.signalCode !== null) return;
+    const exited = once(devServer, "exit");
+    process.kill(-devServer.pid!, "SIGTERM");
+    await exited;
+  };
   const origin = `http://127.0.0.1:${port}`;
   let browser: Browser | undefined;
   const errors: string[] = [];
@@ -94,17 +108,14 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
       reopen: () => openApp(page, origin, apk),
       close: async () => {
         await browser?.close();
-        devServer.kill();
-        await devServer.exited;
+        await stopServer();
         rmSync(stage, { recursive: true, force: true });
       },
     };
   } catch (error) {
     await browser?.close();
-    devServer.kill();
-    await devServer.exited;
-    const output = (await serverOutput).filter(Boolean).join("\n");
+    await stopServer();
     rmSync(stage, { recursive: true, force: true });
-    throw new Error(`${error instanceof Error ? error.message : String(error)}\npage errors: ${errors.join("\n")}\nserver: ${output}`);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\npage errors: ${errors.join("\n")}\nserver: ${serverOutput.join("")}`);
   }
 }

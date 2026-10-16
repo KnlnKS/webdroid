@@ -1,16 +1,16 @@
 // Pull the real android: framework off the reference device and prove the two halves match.
 //
-//   bun run gen-framework            # pull from a connected device/emulator, then verify
-//   bun run gen-framework --verify   # verify what is already in vendor/aosp
-//   bun run gen-framework --charsets # record only the device's single-byte charsets
-//   bun run gen-framework --input    # record only the device's key character maps and key sets
-//   bun run gen-framework --settings # record only the device's settings tables
-//   bun run gen-framework --properties # record only the device's platform properties
-//   bun run gen-framework --overlays # record only the framework values the device's overlays replace
-//   bun run gen-framework --compat   # record only the device's target-SDK-gated and disabled compat changes
-//   bun run gen-framework --fonts    # record only the device's updated system fonts
-//   bun run gen-framework --identity [url] # record the identity properties and uname of a phone's
-//                                    factory image, by default the Pixel 9's (no device needed)
+//   pnpm gen-framework            # pull from a connected device/emulator, then verify
+//   pnpm gen-framework --verify   # verify what is already in vendor/aosp
+//   pnpm gen-framework --charsets # record only the device's single-byte charsets
+//   pnpm gen-framework --input    # record only the device's key character maps and key sets
+//   pnpm gen-framework --settings # record only the device's settings tables
+//   pnpm gen-framework --properties # record only the device's platform properties
+//   pnpm gen-framework --overlays # record only the framework values the device's overlays replace
+//   pnpm gen-framework --compat   # record only the device's target-SDK-gated and disabled compat changes
+//   pnpm gen-framework --fonts    # record only the device's updated system fonts
+//   pnpm gen-framework --identity [url] # record the identity properties and uname of a phone's
+//                                 factory image, by default the Pixel 9's (no device needed)
 //
 // framework.jar carries android.* and com.android.internal.* as bytecode; framework-res.apk
 // carries the resource table those classes' R ids were compiled against. Neither is usable
@@ -21,7 +21,9 @@
 //
 // The reference AVD (tests/e2e/setup-avd.sh) is also what records tests/e2e/golden, so the
 // bytecode we run and the screenshots we score against come from the same platform build.
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
 import { unzipSync } from "fflate";
 import { constObject, mountLocalPlatformData, openDexes, writeGenerated } from "./lib.ts";
 import "../src/natives.ts";
@@ -34,6 +36,7 @@ import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { postScriptName } from "../src/android/sfnt.ts";
 import { adb, asRoot, probeSdk, pull, runDex } from "./adb.ts";
+import { nodeCommand } from "./node.ts";
 import { buildFixed, identity, recordIdentity, writeProperties } from "./identity.ts";
 
 const OUT = "vendor/aosp";
@@ -62,19 +65,19 @@ if (process.argv.includes("--overlays")) { await recordDeviceOverlays(); process
 if (process.argv.includes("--compat")) { await recordCompatChanges(); process.exit(0); }
 if (process.argv.includes("--fonts")) {
   const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
-  await writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
+  writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
   process.exit(0);
 }
 if (process.argv.includes("--identity")) {
   await recordIdentity(process.argv[process.argv.indexOf("--identity") + 1] ?? "https://dl.google.com/dl/android/aosp/tokay-ap3a.241005.015-factory-88013873.zip",
-    /^sdk (\d+)$/m.exec(await Bun.file(`${OUT}/build.txt`).text())![1]);
+    /^sdk (\d+)$/m.exec(readFileSync(`${OUT}/build.txt`, "utf8"))![1]);
   process.exit(0);
 }
 if (!process.argv.includes("--verify")) {
   adb("wait-for-device");
   for (let i = 0; adb("shell", "getprop", "sys.boot_completed") !== "1"; i++) {
-    if (i > 90) throw new Error("device never reported sys.boot_completed — boot it with `bun run e2e:boot`");
-    await Bun.sleep(2000);
+    if (i > 90) throw new Error("device never reported sys.boot_completed — boot it with `pnpm e2e:boot`");
+    await setTimeout(2000);
   }
   const fingerprint = adb("shell", "getprop", "ro.build.fingerprint");
   console.log(`pulling from ${fingerprint}`);
@@ -110,19 +113,19 @@ if (!process.argv.includes("--verify")) {
     data[path] = await mirror(path);
     libraries[name] = { path, dependencies: at("dependency")?.split(":") ?? [] };
   }
-  await Bun.write(`${OUT}/build.txt`, `${fingerprint}\nsdk ${adb("shell", "getprop", "ro.build.version.sdk")}\n`);
+  writeFileSync(`${OUT}/build.txt`, `${fingerprint}\nsdk ${adb("shell", "getprop", "ro.build.version.sdk")}\n`);
   await recordDeviceOverlays();
   await recordCompatChanges();
   await recordOsConstants();
   await recordCharsets();
   await recordInputDevices();
   await recordProperties();
-  await writeBootClasspath(jars, bootJars, data, libraries);
+  writeBootClasspath(jars, bootJars, data, libraries);
   // its own process: it boots the class path just written, which the verification below loads apart
-  if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");
+  if (spawnSync(...nodeCommand(import.meta.filename, "--settings"), { stdio: "inherit" }).status) throw new Error("recording settings failed");
 }
 
-for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} — run \`bun run gen-framework\` with the reference AVD booted`);
+for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} — run \`pnpm gen-framework\` with the reference AVD booted`);
 
 /** The fonts the reference device's FontManagerService serves in place of the image's, which GMS's
  *  font updater installed (src/android/font-updates.ts): the files its UpdatableFontDir holds, by
@@ -134,14 +137,14 @@ async function recordFontUpdates(): Promise<Record<string, number>> {
   const data: Record<string, number> = {}, postScriptMap: Record<string, string> = {};
   for (const src of files) {
     data[src] = await mirror(src);
-    postScriptMap[postScriptName(new Uint8Array(await Bun.file(`${OUT}${src}`).arrayBuffer()), 0)!] = src;
+    postScriptMap[postScriptName(new Uint8Array(readFileSync(`${OUT}${src}`)), 0)!] = src;
   }
   const config = files.length ? adb("shell", "abx2xml", "/data/fonts/config/config.xml", "-") : "";
   // a named family an update adds (FontManager.updateFontFamily) joins the configuration's own
   if (/<family\b/.test(config)) throw new Error("the device's font update adds families, which are not recorded");
   const lastModifiedDate = Number(/<lastModifiedDate value="(\d+)"/.exec(config)?.[1] ?? 0);
   const configVersion = Number(/Current Version: (\d+)/.exec(adb("shell", "cmd", "font", "status"))![1]);
-  await writeGenerated("src/android/font-updates.ts", ": the reference device's updated system fonts, as its\n" +
+  writeGenerated("src/android/font-updates.ts", ": the reference device's updated system fonts, as its\n" +
     "FontManagerService serves them: each file by PostScript name, and the configuration's date and version.",
     `export const FONT_UPDATES = {\n  postScriptMap: ${JSON.stringify(postScriptMap)} as Record<string, string>,\n` +
     `  lastModifiedDate: ${lastModifiedDate},\n  configVersion: ${configVersion},\n};\n`, `${files.length} updated fonts`);
@@ -152,7 +155,7 @@ async function recordFontUpdates(): Promise<Record<string, number>> {
  *  own configuration: SystemUI's Monet palette, the gestural navigation bar's insets and scrim, the
  *  Google and Pixel configuration. Only inline values; strings, arrays and files keep framework-res's. */
 async function recordDeviceOverlays() {
-  const table = new Arsc(unzipSync(new Uint8Array(await Bun.file(RES).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
+  const table = new Arsc(unzipSync(new Uint8Array(readFileSync(RES)), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
   const keys = new Set<string>();
   for (const [, overlay] of adb("shell", "cmd", "overlay", "list", "android").matchAll(/^\[x\] (\S+)/gm))
     for (const [, key] of adb("shell", "cmd", "overlay", "dump", overlay).matchAll(/^\s*0x[0-9a-f]{8} -> .*?\(((?:bool|integer|dimen|color)\/\w+)/gm)) keys.add(key);
@@ -167,7 +170,7 @@ async function recordDeviceOverlays() {
       values.push([JSON.stringify(key), `[0x${value[0].toString(16)}, ${type === "color" ? "0x" + (value[1] >>> 0).toString(16) : value[1]}]`]);
     }
   }
-  await writeGenerated("src/android/device-overlays.ts", ": the framework values the reference device's overlays replace.",
+  writeGenerated("src/android/device-overlays.ts", ": the framework values the reference device's overlays replace.",
     constObject("DEVICE_OVERLAYS", "Record<string, [type: number, data: number]>", values.sort()), `${values.length} overlaid values`);
 }
 
@@ -196,7 +199,7 @@ async function recordCompatChanges() {
     if (rest.includes("; disabled")) changes.push([id, "Infinity"]);
     else if (since > 1) changes.push([id, String(since)]);
   }
-  await writeGenerated("src/android/compat-changes.ts", ": the compat changes the reference device disables for some app.",
+  writeGenerated("src/android/compat-changes.ts", ": the compat changes the reference device disables for some app.",
     constObject("COMPAT_CHANGES", "Record<number, number>", changes), `${changes.length} changes`);
 }
 
@@ -204,7 +207,7 @@ async function recordCompatChanges() {
 async function recordOsConstants() {
   const values = (await runDex("scripts/DumpOsConstants.java")).split("\n")
     .map((line) => line.trim().split(" ")).filter(([name, value]) => name && /^-?\d+$/.test(value)).map(([n, v]) => [n, v] as const);
-  await writeGenerated("src/android/os-constants.ts", ": android.system.OsConstants on the reference device.",
+  writeGenerated("src/android/os-constants.ts", ": android.system.OsConstants on the reference device.",
     constObject("OS_CONSTANTS", "Record<string, number>", values), `${values.length} constants`);
 }
 
@@ -216,7 +219,7 @@ async function recordCharsets() {
     const list = (s: string | undefined) => `[${s?.trim() ? s.trim().split(" ").join(", ") : ""}]`;
     return `  [${JSON.stringify(name)}, ${JSON.stringify(aliases ? aliases.split(" ") : [])}, ${list(replacement)}, ${JSON.stringify(chars)}, ${list(oneWay)}],`;
   });
-  await writeGenerated("src/jvm/charset-tables.ts", ": the reference device's single-byte charsets as\n" +
+  writeGenerated("src/jvm/charset-tables.ts", ": the reference device's single-byte charsets as\n" +
     "[name, aliases as aliases() iterates them, encoder replacement, the character each byte 0-255\n" +
     "decodes to, the bytes whose character does not encode back to them].",
     `export const SINGLE_BYTE_CHARSETS: [string, string[], number[], string, number[]][] = [\n${rows.join("\n")}\n];\n`, `${rows.length} charsets`);
@@ -232,7 +235,7 @@ async function recordCharsets() {
  *  Settings.Config names, which is what an app process can ask for. */
 async function recordSettings() {
   await loadTier();
-  for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(await Bun.file(`${OUT}/${jar}`).arrayBuffer()), i);
+  for (const [i, jar] of PLATFORM_JARS.entries()) loadPlatformJar(new Uint8Array(readFileSync(`${OUT}/${jar}`)), i);
   await mountLocalPlatformData();
   const { publicSettings } = await import("../src/android/settings.ts");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
@@ -269,7 +272,7 @@ async function recordSettings() {
     if (reads) for (const s of strings) named.add(s);
   }
   tables.config = Object.fromEntries(parse(adb("shell", "device_config", "list")).filter(([key]) => named.has(key.slice(key.indexOf("/") + 1))));
-  await writeGenerated("src/android/device-settings.ts", ": the reference device's settings tables as an app may read them.",
+  writeGenerated("src/android/device-settings.ts", ": the reference device's settings tables as an app may read them.",
     `export const DEVICE_SETTINGS: Record<"system" | "secure" | "global" | "config", Record<string, string>> = {\n` +
     Object.entries(tables).map(([table, values]) => `  ${table}: {\n${Object.entries(values).map(([n, v]) => `    ${JSON.stringify(n)}: ${JSON.stringify(v)},`).join("\n")}\n  },`).join("\n") +
     `\n};\n`, Object.entries(tables).map(([t, v]) => `${t} ${Object.keys(v).length}`).join(", "));
@@ -288,7 +291,7 @@ async function recordProperties() {
   const readable = new Set(adb("shell", [...new Set(contexts.values())].map(query).join("; ")).split("\n")
     .map((line) => line.trim().split(" ")).filter(([, allowed]) => parseInt(allowed, 16) & readBit).map(([ctx]) => ctx));
   const properties = parse(adb("shell", "getprop")).filter(([name, value]) => readable.has(contexts.get(name)!) && buildFixed(name, value) && !identity(name));
-  await writeProperties("src/shell/platform-properties.ts", "PLATFORM_PROPERTIES", properties,
+  writeProperties("src/shell/platform-properties.ts", "PLATFORM_PROPERTIES", properties,
     ": the reference device's platform properties as an app reads\nthem (see recordProperties).");
 }
 
@@ -302,7 +305,7 @@ async function recordInputDevices() {
   }
   // full-line comments go; a '#' inside a character literal is the key's character
   const kcm = (file: string) => adb("shell", "cat", `/system/usr/keychars/${file}`).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).join("\n");
-  await writeGenerated("src/android/keychars.ts", ": the reference device's key character maps (AOSP's\n" +
+  writeGenerated("src/android/keychars.ts", ": the reference device's key character maps (AOSP's\n" +
     "/system/usr/keychars, Apache-2.0, comments removed) and the key codes InputDevice.hasKeys reports\n" +
     "for its touchscreen and its virtual keyboard, whose negative id asks every device of the AVD.",
     constObject("KEY_CHARACTER_MAPS", "Record<string, string>", ["Virtual.kcm", "Generic.kcm"].map((f) => [JSON.stringify(f), JSON.stringify(kcm(f))])) +
@@ -314,7 +317,7 @@ const jarDexes = await openDexes(JAR);
 console.log(`${JAR}: ${jarDexes.length} dex, ${jarDexes.reduce((n, d) => n + d.classDefCount, 0)} classes`);
 
 const tableOf = async (apk: string) =>
-  new Arsc(unzipSync(new Uint8Array(await Bun.file(apk).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
+  new Arsc(unzipSync(new Uint8Array(readFileSync(apk)), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
 const paired = await tableOf(RES);
 
 /** every (name, id) pair the R$<type> classes in the framework dex declare: the ids are constants,

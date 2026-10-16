@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { compareResult, graphicsPrecisionDeltas } from "./compare.ts";
 import { generateApiCases, generateGraphicsCases } from "./generate.ts";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize.ts";
@@ -86,11 +86,11 @@ async function runCampaignWithRunner(options: CampaignOptions, webRunner: Webdro
       environment: { oracle: oracle.environment, webdroid: webdroid.environment },
     };
     const path = `${options.out}/${options.kind}-${options.seed}-${bundles.length}.failure.json`;
-    await Bun.write(path, JSON.stringify(bundle, null, 2) + "\n");
+    writeFileSync(path, JSON.stringify(bundle, null, 2) + "\n");
     bundles.push(path);
     if (bundles.length >= 20) break;
   }
-  await Bun.write(`${options.out}/${options.kind}-${options.seed}.campaign.json`, JSON.stringify({
+  writeFileSync(`${options.out}/${options.kind}-${options.seed}.campaign.json`, JSON.stringify({
     schemaVersion: 1, kind: options.kind, seed: options.seed, cases: inputs.length,
     failures: failures.length, precisionDeltas, retained: bundles, oracle, webdroid,
   }, null, 2) + "\n");
@@ -98,7 +98,7 @@ async function runCampaignWithRunner(options: CampaignOptions, webRunner: Webdro
 }
 
 export async function replayBundle(path: string, oracleSerial?: string): Promise<boolean> {
-  const parsed = validateFailureBundle(JSON.parse(await Bun.file(path).text()));
+  const parsed = validateFailureBundle(JSON.parse(readFileSync(path, "utf8")));
   if (parsed.injected) return reproducesTwice(parsed.minimized.input, async (candidate) =>
     sameFailure(parsed.minimized.failure, injectedProbeFailure(candidate).failure));
   if (!oracleSerial) throw new Error("API and graphics replay require an oracle serial");

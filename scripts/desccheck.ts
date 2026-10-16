@@ -2,7 +2,7 @@
 // its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
 // delegate must be a native method its class declares. A spec method standing in for an AOSP
 // bytecode body is a reimplementation (docs/architecture.md) unless provenance's TS_SPECS allows its class.
-//   bun run desccheck [--write-baseline]
+//   pnpm desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { rt } from "../src/jvm/runtime.ts";
@@ -16,21 +16,23 @@ import "../src/natives.ts";
 const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
 /** a method declaration: its access flags, and whether it has a bytecode body */
 type Declared = { flags: number; hasCode: boolean };
-const aosp = (jar: string) => resolve(import.meta.dir, "../vendor/aosp", jar);
+const aosp = (jar: string) => resolve(import.meta.dirname, "../vendor/aosp", jar);
 
 export const hasPlatformJars = () => PLATFORM_JARS.every((jar) => existsSync(aosp(jar)));
+/** every class the platform class path defines, by name, its first definition */
+export function platformDefs(): Map<string, ClassDef> {
+  const defs = new Map<string, ClassDef>();
+  for (const jar of PLATFORM_JARS) for (const dex of jarDexes(readFileSync(aosp(jar)), jar))
+    for (let i = 0; i < dex.classDefCount; i++) {
+      const name = descToName(dex.type(dex.classDef2Type(i)));
+      if (!defs.has(name)) defs.set(name, dex.classDef(i));
+    }
+  return defs;
+}
 
 /** `class → [descriptor problems]` for every registered class AOSP defines */
 export function descriptorMismatches(): Map<string, string[]> {
-  const defs = new Map<string, ClassDef>();
-  for (const jar of PLATFORM_JARS) {
-    for (const dex of jarDexes(readFileSync(aosp(jar)), jar)) {
-      for (let i = 0; i < dex.classDefCount; i++) {
-        const name = descToName(dex.type(dex.classDef2Type(i)));
-        if (!defs.has(name)) defs.set(name, dex.classDef(i));
-      }
-    }
-  }
+  const defs = platformDefs();
   const declared = new Map<string, Map<string, Declared>>();
   const methodsOf = (name: string) => {
     let m = declared.get(name);
@@ -96,12 +98,12 @@ export function descriptorMismatches(): Map<string, string[]> {
   return out;
 }
 
-/** the accepted mismatches `bun run test` holds new ones against, without their AOSP hints */
-export const BASELINE = resolve(import.meta.dir, "../tests/fixtures/desccheck-baseline.json");
+/** the accepted mismatches `pnpm test` holds new ones against, without their AOSP hints */
+export const BASELINE = resolve(import.meta.dirname, "../tests/fixtures/desccheck-baseline.json");
 export const withoutHint = (msg: string) => msg.replace(/ \(AOSP: .*/, "");
 
 if (import.meta.main) {
-  if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: bun run gen-framework");
+  if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: pnpm gen-framework");
   const found = descriptorMismatches();
   if (process.argv.includes("--write-baseline")) {
     const sorted = [...found.keys()].sort().map((cls) => [cls, found.get(cls)!.map(withoutHint).sort()]);

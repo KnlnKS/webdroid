@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { androidPlatform } from "../android-sdk.ts";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, type NativeSupport } from "../native-surface.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
@@ -146,6 +147,6 @@ export function addReachedMembers(catalog: ApiCatalog, reached: ReachedSurface, 
   return catalog;
 }
 
-export async function sdkApiXml(sdk: number): Promise<string> {
-  return Bun.file(`${androidPlatform(sdk)}/data/api-versions.xml`).text();
+export function sdkApiXml(sdk: number): string {
+  return readFileSync(`${androidPlatform(sdk)}/data/api-versions.xml`, "utf8");
 }

@@ -1,5 +1,5 @@
 // Dump a binary layout XML that references a given id, or a named layout.
-// bun scripts/layout.ts <apk> <0xid|layoutName>
+// pnpm layout <apk> <0xid|layoutName>
 import { openApk, dumpXml } from "./lib.ts";
 import { parseAXML, type XmlNode } from "../src/android/axml.ts";
 

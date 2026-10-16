@@ -1,15 +1,15 @@
 // Roll up the per-step perf counters an e2e run already writes, so two runs can be compared
-// on cost as well as on pixels.  bun scripts/perfsum.ts [dir=tests/e2e/actual] [baseline.json]
-import { readdirSync, existsSync } from "node:fs";
+// on cost as well as on pixels.  pnpm ts scripts/perfsum.ts [dir=tests/e2e/actual] [baseline.json]
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const KEYS = ["bootMs", "wasmCompileMs", "wasmClasses", "drawMs", "draws", "frameMs", "frames", "presentLagMs", "inputMs", "measureText", "nativeInstr", "nativeMs", "nativeHostCalls", "jitRegions", "jitMs"] as const;
 
-async function rollup(dir: string) {
+function rollup(dir: string) {
   const out: Record<string, Record<string, number>> = {};
   for (const flow of readdirSync(dir)) {
     const f = `${dir}/${flow}/run.json`;
     if (!existsSync(f)) continue;
-    const raw = await Bun.file(f).json();
+    const raw = JSON.parse(readFileSync(f, "utf8"));
     const steps: any[] = Array.isArray(raw) ? raw : raw.steps ?? [];
     const t: Record<string, number> = { ms: 0 };
     for (const s of steps) {
@@ -27,8 +27,8 @@ async function rollup(dir: string) {
 }
 
 const dir = process.argv[2] ?? "tests/e2e/actual";
-const now = await rollup(dir);
-const base = process.argv[3] ? await Bun.file(process.argv[3]).json() : null;
+const now = rollup(dir);
+const base = process.argv[3] ? JSON.parse(readFileSync(process.argv[3], "utf8")) : null;
 
 const cols = ["ms", ...KEYS];
 console.log("flow".padEnd(18) + cols.map((c) => c.padStart(13)).join(""));
@@ -42,5 +42,5 @@ for (const [flow, t] of Object.entries(now)) {
   }
   console.log(line);
 }
-if (!base) console.log(`\n(pass a baseline json as arg 2 to see deltas; write one with: bun scripts/perfsum.ts ${dir} > /dev/null)`);
-await Bun.write(`${dir}/../perf-rollup.json`, JSON.stringify(now, null, 1));
+if (!base) console.log(`\n(pass a baseline json as arg 2 to see deltas; write one with: pnpm ts scripts/perfsum.ts ${dir} > /dev/null)`);
+writeFileSync(`${dir}/../perf-rollup.json`, JSON.stringify(now, null, 1));

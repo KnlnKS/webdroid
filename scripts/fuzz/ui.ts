@@ -1,5 +1,7 @@
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { PNG } from "pngjs";
 import { diffImages } from "../../tests/e2e/lib/diff.ts";
 import { savePng, type Img } from "../../tests/e2e/lib/png.ts";
@@ -56,9 +58,7 @@ function stable(value: unknown): string {
 }
 
 function hash(value: unknown): string {
-  const hasher = new Bun.CryptoHasher("sha256");
-  hasher.update(typeof value === "string" ? value : stable(value));
-  return hasher.digest("hex").slice(0, 20);
+  return createHash("sha256").update(typeof value === "string" ? value : stable(value)).digest("hex").slice(0, 20);
 }
 
 function image(bytes: Buffer): Img {
@@ -155,7 +155,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
           diagnostics: { status: "action-failure", message }, signals: [`timeout-or-error:${message}`] });
         break;
       }
-      await Bun.sleep(250);
+      await sleep(250);
       const [androidPng, webPng, relevant, alive, nextWebTree, postAndroidNodes] = await Promise.all([
         android?.screenshot(), web.screenshot(), readProcesses(web.page), web.alive(), web.tree(), android?.tree(),
       ]);
@@ -197,8 +197,8 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       if (novel && plan.artifactLabel) {
         const prefix = `${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}-${plan.artifactLabel}-${String(index).padStart(3, "0")}`;
         const artifacts: NonNullable<UiStep["artifacts"]> = { webdroid: `${prefix}-webdroid.png` };
-        await Bun.write(artifacts.webdroid, webPng);
-        if (androidPng) { artifacts.android = `${prefix}-android.png`; await Bun.write(artifacts.android, androidPng); }
+        writeFileSync(artifacts.webdroid, webPng);
+        if (androidPng) { artifacts.android = `${prefix}-android.png`; writeFileSync(artifacts.android, androidPng); }
         if (diff) { artifacts.diff = `${prefix}-diff.png`; await savePng(artifacts.diff, diff); }
         step.artifacts = artifacts;
       }
@@ -313,7 +313,7 @@ export async function runUi(options: UiOptions): Promise<void> {
       if (failure && !retained.has(failure.fingerprint)) {
         retained.add(failure.fingerprint);
         const bundlePath = `${options.out}/${app.pkg}-${explorer.apkDigest.slice(0, 12)}-${hash(failure.fingerprint)}.failure.json`;
-        if (!(await Bun.file(bundlePath).exists())) {
+        if (!existsSync(bundlePath)) {
           const input = run.steps.map((step) => step.action);
           const reproduces = async (actions: UiAction[]) => (await observeUi(app, actions, options, failure)) !== null;
           const minimized = await minimizeUiActions(input, reproduces);
@@ -322,7 +322,7 @@ export async function runUi(options: UiOptions): Promise<void> {
           if (first && second && first.failure.fingerprint === second.failure.fingerprint) {
             const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app,
               original: { actions: input, failure, run }, minimized: first, reproductions: [first, second] };
-            await Bun.write(bundlePath, JSON.stringify(bundle, null, 2) + "\n");
+            writeFileSync(bundlePath, JSON.stringify(bundle, null, 2) + "\n");
           }
         }
       }
@@ -346,14 +346,14 @@ export async function runUi(options: UiOptions): Promise<void> {
     visualPairs.add(candidate.framePair);
     return true;
   }).slice(0, 10);
-  await Bun.write(`${options.out}/ui-${options.seed}.campaign.json`, JSON.stringify({
+  writeFileSync(`${options.out}/ui-${options.seed}.campaign.json`, JSON.stringify({
     schemaVersion: 1, kind: "ui", seed: options.seed, requestedSteps: options.steps, summaries, visualCandidates, runs,
   }, null, 2) + "\n");
   console.log(`UI fuzzed ${apps.length} APK(s); retained artifacts in ${options.out}`);
 }
 
 export async function replayUiBundle(path: string, oracle?: string): Promise<boolean> {
-  const bundle = validateUiFailureBundle(JSON.parse(await Bun.file(path).text()));
+  const bundle = validateUiFailureBundle(JSON.parse(readFileSync(path, "utf8")));
   if (bundle.injected) return sameFailure(bundle.minimized.failure, injectedUiFailure(bundle.minimized.actions)) &&
     sameFailure(bundle.minimized.failure, injectedUiFailure(bundle.minimized.actions));
   const options: UiOptions = { apks: [bundle.app.apk], seed: bundle.seed, steps: bundle.minimized.actions.length,

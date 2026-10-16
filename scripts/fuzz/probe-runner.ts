@@ -1,4 +1,7 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+import { promisify } from "node:util";
 import { androidTool } from "../android-sdk.ts";
 import { device, formatScreen } from "../../src/shell/config.ts";
 import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes.ts";
@@ -18,15 +21,6 @@ export type PlatformRun = {
   diagnostics: unknown;
 };
 
-async function command(argv: string[], quiet = false): Promise<string> {
-  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-  ]);
-  if (exitCode !== 0 && !quiet) throw new Error(`${argv.join(" ")} failed (${exitCode}): ${stderr || stdout}`);
-  return stdout.trim();
-}
-
 function requireProbe(): void {
   if (!existsSync(PROBE_APK)) throw new Error(`missing ${PROBE_APK}; run bash scripts/fuzz/build-probe.sh`);
 }
@@ -34,7 +28,7 @@ function requireProbe(): void {
 export async function runAndroid(cases: readonly ProbeCase[], serial: string): Promise<PlatformRun> {
   requireProbe();
   const adb = androidTool("adb");
-  const at = (...args: string[]) => command([adb, "-s", serial, ...args]);
+  const at = async (...args: string[]) => (await promisify(execFile)(adb, ["-s", serial, ...args])).stdout.trim();
   let environment = preparedOracles.get(serial);
   if (!environment) {
     const [sdk, fingerprint, size, density] = await Promise.all([
@@ -49,7 +43,7 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
     environment = { sdk, fingerprint, screen };
     preparedOracles.set(serial, environment);
   }
-  const server = serveCases(cases);
+  const server = await serveCases(cases);
   try {
     await at("reverse", "tcp:4876", `tcp:${new URL(server.url).port}`);
     await at("shell", "am", "force-stop", PROBE_PACKAGE);
@@ -68,7 +62,7 @@ async function webdroidRun(session: Awaited<ReturnType<typeof startWebdroid>>, r
     let processFrames = await readProcesses(page);
     let missingDiagnostics = processFrames.filter((process) => !diagnosed(process.diagnostics));
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
-      await Bun.sleep(250);
+      await setTimeout(250);
       processFrames = await readProcesses(page);
       missingDiagnostics = processFrames.filter((process) => !diagnosed(process.diagnostics));
     }
@@ -88,7 +82,7 @@ export class WebdroidProbeRunner {
 
   async run(cases: readonly ProbeCase[]): Promise<PlatformRun> {
     requireProbe();
-    const caseServer = serveCases(cases, this.casePort ?? 0);
+    const caseServer = await serveCases(cases, this.casePort ?? 0);
     this.casePort = Number(new URL(caseServer.url).port);
     try {
       if (!this.session) this.session = await startWebdroid(PROBE_APK, { proxyProbeTo: caseServer.url });

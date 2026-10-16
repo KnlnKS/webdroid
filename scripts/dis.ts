@@ -1,4 +1,4 @@
-// Disassemble a method: bun scripts/dis.ts <apk> <class> [methodName]
+// Disassemble a method: pnpm dis <apk> <class> [methodName]
 import { openDexes } from "./lib.ts";
 import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes.ts";
 import { descToName } from "../src/jvm/abi.ts";

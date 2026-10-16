@@ -1,5 +1,5 @@
 // What the real framework dex contains, and what it would ask of us.
-// bun scripts/fwscan.ts [vendor/aosp/framework.jar] [class-name-prefix]
+// pnpm fwscan [vendor/aosp/framework.jar] [class-name-prefix]
 import { ACC } from "../src/jvm/dex.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import { openDexes } from "./lib.ts";

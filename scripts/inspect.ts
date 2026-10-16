@@ -2,7 +2,7 @@ import { openApk, dexesOf, dumpXml } from "./lib.ts";
 import { parseAXML } from "../src/android/axml.ts";
 import { need } from "./args.ts";
 
-const [path] = need("bun run inspect <apk>");
+const [path] = need("pnpm inspect <apk>");
 const zip = await openApk(path);
 
 console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 3).join("\n"));
