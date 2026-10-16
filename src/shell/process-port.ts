@@ -24,7 +24,7 @@ export function processFailure(error: unknown): ProcessFailure {
   return { javaClass: null, name: "Error", message: String(error) };
 }
 export function processError(error: ProcessFailure): Error {
-  const result = new Error(error.message ?? ""); result.name = error.name;
+  const result = new Error(error.message ?? ""); result.name = error.javaClass ?? error.name;
   if (!error.javaClass && typeof error.stack === "string") result.stack = error.stack;
   return result;
 }
