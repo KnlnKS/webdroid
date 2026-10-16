@@ -3,10 +3,13 @@ export type LocationFix = {
   altitudeAccuracy: number | null; speed: number | null; heading: number | null;
   timestamp: number; monotonic: number; highAccuracy: boolean;
 };
+/** how often GNSS reports a fix */
+const REPEAT_MS = 1000;
 export type LocationEvent = { kind: "fix"; fix: LocationFix } | { kind: "error"; code: number } | { kind: "enabled" };
 export class BrowserLocation {
   private subscriptions = new Map<string, { pid: number; highAccuracy: boolean; active: boolean; receive: (event: LocationEvent) => void }>();
   private watch: number | null = null;
+  private repeat: ReturnType<typeof setInterval> | null = null;
   private highAccuracy = false;
   private generation = 0;
   private denied = false;
@@ -45,7 +48,7 @@ export class BrowserLocation {
     }
     if (this.watch !== null && active && highAccuracy === this.highAccuracy) return;
     const generation = ++this.generation;
-    if (this.watch !== null) { navigator.geolocation.clearWatch(this.watch); this.watch = null; }
+    this.stopWatch();
     if (!active) return;
     this.highAccuracy = highAccuracy;
     this.watch = navigator.geolocation.watchPosition(position => {
@@ -61,12 +64,24 @@ export class BrowserLocation {
       if (error.code === 1) this.deny();
       else this.emit({ kind: "error", code: error.code });
     }, { enableHighAccuracy: highAccuracy, maximumAge: 0 });
+    // A provider reports each second while it runs, but a watch only when the position changes:
+    // the position it holds then stands as of now.
+    this.repeat = setInterval(() => {
+      const last = this.last, now = performance.timeOrigin + performance.now();
+      if (!last || now - last.monotonic < REPEAT_MS) return;
+      this.last = { ...last, timestamp: Date.now(), monotonic: now };
+      this.emit({ kind: "fix", fix: this.last });
+    }, REPEAT_MS);
+  }
+  private stopWatch() {
+    if (this.watch !== null) navigator.geolocation.clearWatch(this.watch);
+    if (this.repeat !== null) clearInterval(this.repeat);
+    this.watch = this.repeat = null;
   }
   private deny() {
     const changed = !this.denied;
     this.denied = true; this.last = null;
-    if (this.watch !== null) navigator.geolocation.clearWatch(this.watch);
-    this.watch = null; this.generation++;
+    this.stopWatch(); this.generation++;
     if (changed) { this.enabledChanged(); this.emit({ kind: "error", code: 1 }); }
   }
   private emit(event: LocationEvent) { for (const sub of this.subscriptions.values()) sub.receive(event); }
