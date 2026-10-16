@@ -104,6 +104,10 @@ function requestBind(s: ServiceRecord, b: Binding, rebind: boolean): Promise<voi
   b.hasBound = true; b.doRebind = false;
   return scheduleOnApp("scheduleBindService", `(${BINDER}${INTENT}ZIJ)V`, s.token, b.intent, +rebind, processState(PROCESS_STATE_SERVICE), 0n);
 }
+function unbindApp(s: ServiceRecord, b: Binding): Promise<void> {
+  b.hasBound = false;
+  return scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
+}
 /** Service.START_FLAG_REDELIVERY and START_FLAG_RETRY */
 const START_FLAG_REDELIVERY = 1, START_FLAG_RETRY = 2;
 /** sendServiceArgsLocked: each pending start is delivered, and stays delivered until it finishes */
@@ -141,10 +145,7 @@ function* bringDownIfNeeded(s: ServiceRecord): Gen<void> {
   services.delete(s.key);
   for (const b of s.bindings) for (const c of b.connections.splice(0)) c.connected(null, true);
   yield* awaited(starts().destroyed(s.cls));
-  if (s.created) yield Promise.all([...s.bindings.filter((b) => b.hasBound).map((b) => {
-    b.hasBound = false;
-    return scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
-  }), scheduleOnApp("scheduleStopService", `(${BINDER})V`, s.token)]);
+  if (s.created) yield Promise.all([...s.bindings.filter((b) => b.hasBound).map((b) => unbindApp(s, b)), scheduleOnApp("scheduleStopService", `(${BINDER})V`, s.token)]);
   if (s.foregroundId) yield stopForegroundNotification(s.foregroundId, true);
 }
 /** queue starts and deliver them, bringing the service up if it is not */
@@ -180,8 +181,8 @@ function* unbindLocal(id: JObj | string): Gen<boolean> {
     const [c] = b.connections.splice(i, 1);
     found = true;
     if (!b.connections.length && s.created && b.hasBound) {
-      b.hasBound = false; b.doRebind = false;
-      yield scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
+      b.doRebind = false;
+      yield unbindApp(s, b);
     }
     if (c.autoCreate) yield* bringDownIfNeeded(s);
   }
