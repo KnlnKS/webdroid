@@ -6,7 +6,7 @@ import { once } from "../jvm/suspend";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
 import { i8, jarray, strArray } from "../jvm/abi";
-import { newStub } from "./binder";
+import { newStub, importBinder, type BinderHandle } from "./binder";
 import { mkUri, uriText, type JUri } from "./net";
 
 const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
@@ -124,6 +124,8 @@ interface SystemProvider {
   grantUriPermissions?: boolean;
   /** the action its intent filter answers, which queryIntentContentProviders matches */
   action?: string;
+  /** its state (files, index) lives in system_server's realm, which another realm's process reaches over the broker */
+  systemRealm?: boolean;
   binder: () => JObj | Promise<JObj>;
 }
 /** DocumentsContract.PROVIDER_INTERFACE: the action a documents provider's intent filter answers */
@@ -138,6 +140,15 @@ export function registerSystemProvider(authority: string, p: Omit<SystemProvider
 }
 /** the system providers by authority, which the package manager lists before the installed ones */
 export const systemProviders: ReadonlyMap<string, Readonly<SystemProvider>> = providers;
+
+/** the broker's lookup of system_server's binder for a systemRealm provider, set in a process Worker */
+export const systemProviderTransport: { lookup?: (authority: string) => Promise<BinderHandle | null> } = {};
+/** this realm's binder for a system provider, or system_server's when its state lives there */
+function* providerBinder$(authority: string, p: SystemProvider): Gen<JObj> {
+  if (!p.systemRealm || !systemProviderTransport.lookup) return yield* awaited(p.binder());
+  const binder = yield* awaited(importBinder(yield* awaited(systemProviderTransport.lookup(authority))));
+  return yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder);
+}
 
 /** a system provider's IContentProvider by its authority */
 export const systemProvider = (authority: string | null): JObj | Promise<JObj> | null =>
@@ -158,5 +169,5 @@ export const systemProviderHolder = driven(function* systemProviderHolder$(autho
   const info: JObj | null = yield* systemProviderInfo$(authority);
   if (!info) return null;
   const holder: JObj = yield newObj("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
-  return setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield* awaited(providers.get(authority)!.binder()), noReleaseNeeded: 1 });
+  return setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield* providerBinder$(authority, providers.get(authority)!), noReleaseNeeded: 1 });
 });
