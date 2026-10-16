@@ -118,10 +118,12 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
     case "enter": await run(wd.enter()); return;
     case "background": await run(wd.background(a.ms)); return;
     case "swipe": {
+      const swipe = () => wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms);
+      if (a.whileText) { await whileShown(a.whileText, a.appearMs, a.maxSwipes ?? 1, a.ms + 500, swipe); return; }
       const count = a.maxSwipes ?? 1;
       for (let i = 0; i < count; i++) {
         if (a.untilText && await query(wd.locateText(a.untilText), "locateText")) return;
-        await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms));
+        await run(swipe());
         if (a.untilText) await sleep(500);
       }
       return;
