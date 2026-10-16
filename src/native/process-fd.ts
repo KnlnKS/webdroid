@@ -114,18 +114,21 @@ export function processFdStat(fd: number): ReturnType<typeof javaFdStat> | Promi
   const remote = openFd(fd)?.remote;
   return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null) : javaFdStat(fd);
 }
+/** a remote descriptor's position and how many bytes lie from there to its end */
+const remoteRest = (fd: number) => Promise.all([processFdStat(fd),processSeekFd(fd,0,1)])
+  .then(([stat,position]) => !stat || position < 0 ? null : {position,length:Math.max(0,stat.size-position)});
 /** the bytes from `fd`'s position to its end, which stays where it was */
 export async function processFdBytes(fd: number): Promise<Uint8Array | null> {
   if (!isRemoteFd(fd)) return javaFdBytes(fd);
-  const [stat, position] = await Promise.all([processFdStat(fd), processSeekFd(fd, 0, 1)]);
-  if (!stat || position < 0) return null;
-  const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await processPreadFd(fd, bytes, position);
-  return n < 0 ? null : bytes.subarray(0, n);
+  const rest = await remoteRest(fd);
+  if (!rest) return null;
+  const bytes = new Uint8Array(rest.length), n = await processPreadFd(fd,bytes,rest.position);
+  return n < 0 ? null : bytes.subarray(0,n);
 }
 export function processIoctlIntFd(fd: number, command: number): number | Promise<number> {
   if (!isRemoteFd(fd)) return javaIoctlIntFd(fd,command);
   if (command !== 0x541b) return -E.NOTTY;
-  return Promise.all([processFdStat(fd),processSeekFd(fd,0,1)]).then(([stat,position]) => !stat || position < 0 ? -E.BADF : Math.max(0,stat.size-position));
+  return remoteRest(fd).then(rest => rest ? rest.length : -E.BADF);
 }
 
 /** A live owner lease; a mapping outlives the descriptor that acquired it. */
