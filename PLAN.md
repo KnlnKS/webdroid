@@ -42,6 +42,13 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
+On `knlnks/tiktok-wasm` (2026-10-16, `e7b873c9`): typecheck passes, 1,169 unit tests pass and all 16 `wasm all` suites
+pass. The `--jobs 1` quick gate reaches 7 of 7 flows with no missing APIs, errors, required natives, settle timeouts or
+wedges. Two five-at-a-time runs, with other checkouts holding the host at loads of 15–50, missed FitNotes, Flappy Bird and
+Doodle Jump (Komikku once): Play services Worker 1003 stayed at "Reading package…", and steps hit completion timeouts.
+Each of these flows passed alone. Under `--full` TikTok reaches the feed and plays through both swipes; its launch step's
+main loop wedged once, at a load of 20–24.
+
 At the merge of `knlnks/node-migration` (2026-10-16), at a load of about 3: typecheck passes; 1,158 unit tests pass under
 Vitest; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass; after `aot`, the `--jobs 1` quick e2e gate reaches
 7 of 7 flows in 161 s with no missing APIs, errors, required natives, draw errors, settle timeouts or wedges.
