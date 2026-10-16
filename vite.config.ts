@@ -1,10 +1,7 @@
-import "./scripts/node-env.ts";
+// first, as for every script: the dev server's modules import the generated ones
+import "./scripts/preload.ts";
 import { defineConfig } from "vite-plus";
-import { ensureGenerated } from "./scripts/generated.ts";
 import { NODE_FLAGS } from "./scripts/node.ts";
-
-// before the plugins load: the dev server's modules import the generated ones
-await ensureGenerated();
 
 export default defineConfig(({ command }) => ({
   plugins: [

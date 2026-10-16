@@ -3,15 +3,13 @@
 //   pnpm conform <suite|quick> [class-substring | --test name-substring] [--update] [--jobs n] [--out directory]
 // A baseline test that fails or no longer runs is a regression, unless tests/conformance/wasm-pins.json pins it (a class regex, a test-name regex and a `why`).
 // A pin that matches no failure is stale, except a `flaky` one, whose result depends on timing. --update rewrites a whole suite's baseline from this run.
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { text } from "node:stream/consumers";
 import { prepare } from "../conform/prepare.ts";
 import { hash, parseLines, type Outcome } from "../conform/results.ts";
 import { SUITES } from "../conform/suites.ts";
 import { consume } from "../args.ts";
-import { nodeCommand } from "../node.ts";
+import { nodeCommand, run } from "../node.ts";
 import { arrayProviderFailures, classSetupFailures } from "./conform-coverage.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
@@ -35,19 +33,15 @@ const [node, conformOne] = nodeCommand(join(import.meta.dirname, "conformone.ts"
 async function runClass(args: string[], cls: string): Promise<{ tests: Map<string, Outcome>; skipped: Map<string, string>; seconds: number; executions: { pass: number; fail: number; skipped: number } }> {
   const t0 = performance.now();
   // CONFORM_DEBUG asks the child for its gaps and the natives that waited
-  const proc = spawn(node, [...conformOne, ...args, ...(testFilter ? [testFilter] : [])], { stdio: ["ignore", "pipe", "pipe"] });
-  const timer = setTimeout(() => proc.kill(), CLASS_TIMEOUT_MS);
-  const closed = new Promise((done) => proc.once("close", done));
-  const [out, err] = await Promise.all([text(proc.stdout), text(proc.stderr)]);
-  await closed;
-  clearTimeout(timer);
+  const { signal, stdout, stderr: err } = await run(node, [...conformOne, ...args, ...(testFilter ? [testFilter] : [])], { timeout: CLASS_TIMEOUT_MS });
+  const out = stdout.toString();
   if (process.env.CONFORM_DEBUG && err) console.log([...new Set(err.split("\n"))].join("\n"));
   if (outputDir) {
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, `${cls}.txt`), out);
   }
   const marker = out.indexOf("\u0001");
-  const why = proc.signalCode ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : `no result: ${err.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}`;
+  const why = signal ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : `no result: ${err.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}`;
   const lines = marker >= 0 ? out.slice(marker + 1) : `F\t${cls}\t${why}\n`;
   const executions = { pass: 0, fail: 0, skipped: 0 };
   for (const line of lines.split("\n")) {

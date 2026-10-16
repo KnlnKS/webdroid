@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { describe, expect, test } from "vite-plus/test";
-import { NODE_ARGS } from "../../scripts/node.ts";
+import { NODE_ARGS, run } from "../../scripts/node.ts";
 import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64, slice } from "./cpu.ts";
 import { dispositions, sigHandler } from "./signals.ts";
@@ -441,8 +439,8 @@ test("an unhandled terminating signal ends the process once unblocked; ignored o
     cpu.signalMask = 0n; cpu.pump();
     await turn();
     console.log(JSON.stringify({ ignored, pending, exited: processExited() }));`;
-  const { stdout: out, stderr: err } = await promisify(execFile)(process.execPath, [...NODE_ARGS, "--input-type=module", "-e", code]);
-  expect(JSON.parse(out.trim().split("\n").at(-1)!)).toEqual({ ignored: true, pending: true, exited: true });
+  const { stdout, stderr: err } = await run(process.execPath, [...NODE_ARGS, "--input-type=module", "-e", code]);
+  expect(JSON.parse(stdout.toString().trim().split("\n").at(-1)!)).toEqual({ ignored: true, pending: true, exited: true });
   expect(err).toContain("Fatal signal 6 (SIGABRT) in tid");
   expect(err).toContain("name: victim");
 });

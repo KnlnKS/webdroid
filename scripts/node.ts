@@ -1,5 +1,5 @@
-// The node every script runs on, as package.json starts it
-import { spawn } from "node:child_process";
+// The node every script runs on: scripts/node starts package.json's scripts with these flags, and these start the scripts' children
+import { execFile, spawn } from "node:child_process";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,12 @@ export const NODE_FLAGS = ["--experimental-wasm-jspi", "--expose-gc"];
 export const NODE_ARGS = [...NODE_FLAGS, "--import", fileURLToPath(new URL("./preload.ts", import.meta.url))];
 /** the command that runs `script` with `args` on that node */
 export const nodeCommand = (script: string, ...args: string[]): [string, string[]] => [process.execPath, [...NODE_ARGS, script, ...args]];
+
+export interface Ran { code: number; signal: NodeJS.Signals | null; stdout: Buffer; stderr: string }
+/** `cmd args` run to completion: its exit status, whatever it is (1 for a signal, which `signal` names), and its output. `timeout` kills it. */
+export const run = (cmd: string, args: string[], { timeout }: { timeout?: number } = {}): Promise<Ran> => new Promise((resolve, reject) =>
+  execFile(cmd, args, { encoding: "buffer", maxBuffer: 1 << 30, timeout }, (error, stdout, stderr) => typeof error?.code === "string" ? reject(error)
+    : resolve({ code: error ? error.code ?? 1 : 0, signal: error?.signal ?? null, stdout, stderr: stderr.toString() })));
 
 /** the output of `script` run on that node without its caller's NODE_ENV, whose log goes on to the caller's: a Vite build's
  *  "production" would have the runtime fetch its core as a page does */

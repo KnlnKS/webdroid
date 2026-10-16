@@ -2,7 +2,7 @@
 // Reads only from disk — no emulator, no browser. (lib/diff.ts is the pixel math.)
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { nodeCommand } from "../../scripts/node.ts";
+import { nodeCommand, run } from "../../scripts/node.ts";
 import { loadPng, savePng, hconcat } from "./lib/png.ts";
 import { diffImages } from "./lib/diff.ts";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report.ts";
@@ -10,7 +10,7 @@ import { parseArgs } from "./lib/args.ts";
 import { flowSchemaHash, screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types.ts";
 import { diffTrees } from "./lib/tree.ts";
 import type { FlowRun } from "./capture-webdroid.ts";
-import { E2E_DIR, readJson, runProcess, runQueue, sha1 } from "./lib/util.ts";
+import { E2E_DIR, readJson, runQueue, sha1 } from "./lib/util.ts";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;
@@ -126,7 +126,7 @@ const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
 /** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
  *  loop the other flows' browsers are driven from — and return its printed summary. */
 export async function scoreFlow(app: string): Promise<string> {
-  const { code, stdout, stderr } = await runProcess(...nodeCommand(`${E2E_DIR}score.ts`, "--json", app));
+  const { code, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}score.ts`, "--json", app));
   if (code) throw new Error(`scoring ${app} failed: ${stderr || stdout}`);
   return stdout.toString().trimEnd();
 }
@@ -142,7 +142,7 @@ export async function assembleReport(apps: string[], geometry: string): Promise<
   return { out: `${dir}/index.html`, reports };
 }
 
-if (import.meta.main) {
+export async function main(): Promise<void> {
   const json = process.argv[2] === "--json";
   const { flows, jobs } = parseArgs(process.argv.slice(json ? 3 : 2), "pnpm e2e --diff");
   await mkdir(`${E2E_DIR}report`, { recursive: true });
@@ -158,3 +158,4 @@ if (import.meta.main) {
     console.log(`\nreport: ${out}`);
   }
 }
+if (import.meta.main) await main();

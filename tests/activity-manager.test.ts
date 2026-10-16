@@ -1,13 +1,11 @@
 import { expect, test } from "vite-plus/test";
-import { spawn } from "node:child_process";
-import { text } from "node:stream/consumers";
-import { nodeCommand } from "../scripts/node.ts";
+import { nodeCommand, run } from "../scripts/node.ts";
 
 // Each fixture drives the activity manager in a process of its own, whose app identity and
 // registered binders it sets up from scratch.
 async function fixture(name: string): Promise<unknown> {
-  const run = spawn(...nodeCommand(new URL(`fixtures/${name}.ts`, import.meta.url).pathname), { stdio: ["ignore", "pipe", "ignore"] });
-  return JSON.parse((await text(run.stdout)).trim().split("\n").at(-1)!);
+  const { stdout } = await run(...nodeCommand(new URL(`fixtures/${name}.ts`, import.meta.url).pathname));
+  return JSON.parse(stdout.toString().trim().split("\n").at(-1)!);
 }
 
 test("the activity manager drives a process's services and ordered receivers through its IApplicationThread", async () => {

@@ -1,5 +1,4 @@
 // Helpers every harness entry point was re-declaring.
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { stableFrame } from "./settle.ts";
@@ -24,16 +23,6 @@ export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T)
 }
 export const sha1 = (buf: Uint8Array) => createHash("sha1").update(buf).digest("hex");
 
-/** `cmd args` run to completion: its exit code (signalled: 1) and collected output */
-export function runProcess(cmd: string, args: string[]): Promise<{ code: number; stdout: Buffer; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const out: Buffer[] = [], err: Buffer[] = [];
-    p.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    p.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    p.on("error", reject).on("close", (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString() }));
-  });
-}
 
 /**
  * Wait until `capture` stops returning new frames, on the contract lib/settle.ts defines over
