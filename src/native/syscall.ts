@@ -107,13 +107,11 @@ const A64: Record<number, HostFn> = {
   137: (cpu, a) => {                                                             // rt_sigtimedwait
     const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
-      const i = cpu.signals.findIndex((sig) => blocked(set, sig));
-      if (i < 0) return 0;
-      const sig = cpu.signals.splice(i, 1)[0];
+      const taken = cpu.takePending((sig) => blocked(set, sig));
+      if (!taken) return 0;
       const at = info();
-      const si = cpu.queuedInfo(sig);
-      if (at) writeSiginfo(at, sig, si);
-      return sig;
+      if (at) writeSiginfo(at, taken.sig, taken.info);
+      return taken.sig;
     };
     const now = take();
     if (now || ms === 0) return now || fail(cpu, E.AGAIN);

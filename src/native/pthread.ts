@@ -219,9 +219,9 @@ function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<
     cpu.depth++;
     try { await body(); } catch (e) { void dispatchUncaught(cpu.jthread, e); }
     finally {
-      cpu.signals.length = 0;
+      cpu.signals.clear();
       await cpu.awaitIdleBase();
-      cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
+      cpu.depth--; cpu.finished = true; cpu.signals.clear();
       exit();
       resolve();
     }

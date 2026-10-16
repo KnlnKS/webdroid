@@ -148,7 +148,7 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
   sigwait: () => new Promise<never>(() => {}),
-  sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals) & 0xffffffffn)); return 0; },
+  sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals.keys()) & 0xffffffffn)); return 0; },
   pthread_sigqueue: () => 0, killpg: () => 0,
 };
 for (const suffix of ["", "64"]) {

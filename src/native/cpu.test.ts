@@ -95,7 +95,7 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     const handler = defineHost("test.thread.signal", () => { entered.push(curThread); return 0; });
     const address = defineHost("test.thread.interrupted", () => { entered.push(curThread); return 23; });
     const restore = install(12, sigHandler(handler, 0, 0n));
-    cpu.signals.push(12);
+    cpu.signals.set(12, null);
     setCurThread(mainThread);
     try {
       expect(await cpu.call(address)).toBe(23);
@@ -430,10 +430,10 @@ test("an unhandled terminating signal ends the process once unblocked; ignored o
     dispositions.set(15, { kind: "ignore" });
     for (const sig of [17, 23, 28, 15]) cpu.kill(sig);
     await turn();
-    const ignored = !processExited() && !cpu.signals.length;
+    const ignored = !processExited() && !cpu.signals.size;
     cpu.signalMask = 1n << 5n; cpu.kill(6);
     await turn();
-    const pending = !processExited() && cpu.signals.includes(6);
+    const pending = !processExited() && cpu.signals.has(6);
     cpu.signalMask = 0n; cpu.pump();
     await turn();
     console.log(JSON.stringify({ ignored, pending, exited: processExited() }));`;

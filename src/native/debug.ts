@@ -26,7 +26,7 @@ export const native = {
   regs: () => [...cpus].map((c) => ({
     name: c.name, tid: c.tid, pc: symbolizePc(c.pc), t: c.t, ic: c.ic,
     r: [...Array(c.a64 ? 32 : 16)].map((_, i) => c.regHex(i)),
-    finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: c.frames.map((f) => f.label), loops: c.loops, sigLog: [...c.sigLog], signals: [...c.signals], handling: [...c.handling], sigWait: !!c.sigWait,
+    finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: c.frames.map((f) => f.label), loops: c.loops, sigLog: [...c.sigLog], signals: [...c.signals.keys()], handling: [...c.handling], sigWait: !!c.sigWait,
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: processExited, sigHandlers: () => [...dispositions].flatMap(([s, d]) => d.kind === "handler" ? [[s, symbolizePc(d.fn)]] : []), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: codeStats, jit: jitStats,
