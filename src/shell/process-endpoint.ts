@@ -131,6 +131,8 @@ export function closeProcessBrokerPort(): void {
   workerLocation.close();
   workerLife.close();
   workerActivityResults.clear();
+  // its presence routes system providers to system_server, which a closed port no longer reaches
+  systemProviderTransport.lookup = undefined;
 }
 const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
 function connectActivityCommands(): void {
