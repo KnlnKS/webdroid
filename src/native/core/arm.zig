@@ -393,9 +393,11 @@ fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const narrow = op == 4 or op == 6;
     const wide = op == 1 or op == 3;
-    if (size == 3 or (scalar and size == 0) or (if (narrow) n | m else d | (if (wide) n else 0)) & 1 != 0) return fault(c, .undefined, w, pc);
-    // the saturating doubling forms
-    if (op & 9 == 9) return fault(c, .unimplemented, w, pc);
+    const q_operands = if (narrow) n | m else if (wide) d | n else d;
+    const polynomial_undefined = op == 14 and (size == 1 or bits(w, 24, 1) != 0);
+    if (size == 3 or (scalar and size == 0) or q_operands & 1 != 0 or op == 15 or polynomial_undefined) return fault(c, .undefined, w, pc);
+    // the saturating doubling forms and VMULL.P64
+    if (op == 9 or op == 11 or op == 13 or (op == 14 and size == 2)) return fault(c, .unimplemented, w, pc);
     const count: usize = if (narrow) 8 else 16;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
     @memcpy(c.v[17][0..(if (narrow or wide) @as(usize, 16) else 8)], @as([*]u8, @ptrCast(vreg(u64, c, n))));
