@@ -6,7 +6,7 @@ Source URLs, APK SHA-256 digests and generated-index digests are pinned in
 `src/shell/system-packages.ts`. Generated files live in `vendor/microg/`, which is
 ignored by Git. Do not commit the generated indexes, entries or APKs.
 
-`bun scripts/system-packages.ts [source-directory]` generates missing bundles.
+`pnpm ts scripts/system-packages.ts [source-directory]` generates missing bundles.
 Server startup runs the same preparation automatically. Complete bundles require no
 upstream request or regeneration. Missing entries are regenerated from the cached
 APK, downloading the pinned release only if that source is absent or invalid.

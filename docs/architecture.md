@@ -10,13 +10,13 @@ the measurements, failure mechanisms and rejected experiments. Each source file'
 
 1. **Tap latency ≤ 150 ms** from the input event that completes the gesture (`pointerup`, key up) to the first
    presented frame showing the response, excluding the app's network waits. It applies to every gated tap,
-   including the first tap on a screen. `bun run lat` measures it; [performance.md](performance.md) gives the
+   including the first tap on a screen. `pnpm lat` measures it; [performance.md](performance.md) gives the
    conditions.
 2. **Unchanged bytecode.** App and bundled library bytecode run as shipped.
 3. **The software draw path and the visual goldens are preserved.**
 4. **One Android build everywhere:** API 35, `sdk_gphone64_arm64` `AE3A.240806.043` (`vendor/aosp/build.txt`). It
    supplies the framework and boot jars, framework-res, ICU and tz data, the fonts, the advertised SDK level, the
-   fuzz oracle and the e2e goldens. `bun run gen-framework` pulls it from the reference AVD. AOSP bytecode needs
+   fuzz oracle and the e2e goldens. `pnpm gen-framework` pulls it from the reference AVD. AOSP bytecode needs
    its paired resources from the same build: a relinked framework-res had only 53.5% of internal ids right.
 
 ## Platform: AOSP bytecode over TypeScript boundaries
@@ -42,12 +42,12 @@ Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP relay, Workers
   unsupported capability. Persistent state keeps its canonical owners.
 - **Intrinsics** (a TS or Wasm body for a Java method outside the boundaries) are allowed only when the method is
   a VM built-in or the intrinsic measurably reduces a gated tap or frame, and only when it is differentially
-  tested against the AOSP body it replaces (`bun run textcmp` is the model). They live in `link/intrinsics.ts`
+  tested against the AOSP body it replaces (`pnpm textcmp` is the model). They live in `link/intrinsics.ts`
   and `compiler/chars.ts` (bit conversions, `System.arraycopy`, identity hashes, stack capture, `Math` as Wasm
   instructions or direct host imports, a few `Character` predicates) and take precedence over registered natives
   for the same method, so a native registered under an intrinsic's key is unreachable.
-- **Enforced by static checks** in `bun run test`: `bun run desccheck` holds every registered descriptor to one
-  that AOSP declares, and a TS spec standing in for a bytecode body to `TS_SPECS`; `bun run bypass` reports a TS
+- **Enforced by static checks** in `pnpm test`: `pnpm desccheck` holds every registered descriptor to one
+  that AOSP declares, and a TS spec standing in for a bytecode body to `TS_SPECS`; `pnpm bypass` reports a TS
   method whose AOSP body dispatches to an overridable method on `this` that the TS body bypasses (only methods a
   corpus app overrides, from `tests/fixtures/app-overrides.json`).
 
@@ -96,7 +96,7 @@ is how host code calls Java.
   `src/native/jnivm.ts`).
 
 **Code delivery.**
-- **Platform:** compiled at build time (`bun run aot`, `scripts/wasm/aot-build.ts`) into class-data ("D") and code
+- **Platform:** compiled at build time (`pnpm aot`, `scripts/wasm/aot-build.ts`) into class-data ("D") and code
   ("C") modules under `vendor/wasm-aot/`, numbered so that they link into any World. The build is keyed by every
   file under `src/` and the AOT scripts. A page streams and compiles it in Workers (`host/aotload.ts`). A zygote
   warms the platform code while the package downloads (`src/shell/device.ts`), and a spare process Worker stands
@@ -145,14 +145,14 @@ Path ops use Skia through CanvasKit (decision below). Resources drive widget def
 
 ## Verification tooling
 
-- **Conformance:** `bun run conform <suite>` runs Guava's collection testlib, the JSR-166 TCK and libcore's
+- **Conformance:** `pnpm conform <suite>` runs Guava's collection testlib, the JSR-166 TCK and libcore's
   `java.time` and harmony/luni suites from the same AOSP build headless, against baselines in
   `tests/conformance/`.
-- **Recorded device answers:** reference-AVD results checked into fixtures and replayed in `bun test`
-  (`scripts/simd-oracle.ts` for SIMD, `bun run textcmp` for text layout).
+- **Recorded device answers:** reference-AVD results checked into fixtures and replayed in `pnpm test`
+  (`scripts/simd-oracle.ts` for SIMD, `pnpm textcmp` for text layout).
 - **Differential fuzzing** of APIs, graphics and UI against an API-35 oracle: [scripts/fuzz/README.md](../scripts/fuzz/README.md).
-- **Flows:** `bun run e2e` against device goldens ([tests/e2e/README.md](../tests/e2e/README.md)), `bun run corpus`
-  over the APK corpus, `bun run fwtest` for framework delegates, `bun run smoke` compiling an APK's every method.
+- **Flows:** `pnpm e2e` against device goldens ([tests/e2e/README.md](../tests/e2e/README.md)), `pnpm corpus`
+  over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm smoke` compiling an APK's every method.
 - **Telemetry for silent failures:** `run.json` records `newMissing`, `newErrors`, `nativeRequired`,
   `newPlaceholders` and the Java callers of missing entries, from every process.
 - Not built: a boundary-trace differential against the device (JVMTI or Frida on the reference AVD), which would

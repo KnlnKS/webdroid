@@ -31,32 +31,32 @@ changed behavior; complete the broader matrix when required by PLAN or the task.
 run the entire suite solely for documentation edits.
 
 ```bash
-bun run typecheck
-bun run test
-bun run fwtest
-bun run wasm all    # src/wasm tests under node: diff classdiff … sweep (boot jars and FitNotes) aottest persist; `bun run wasm` lists them
-PORT=4090 bun run server.ts
-WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
-WEBDROID_URL=http://localhost:4090 bun run e2e
-WEBDROID_URL=http://localhost:4090 bun run e2e --live
-WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
-WEBDROID_URL=http://localhost:4090 bun run corpus
-WEBDROID_URL=http://localhost:4090 bun run lat [--warm]
-bun run conform guava|jsr166|ojluni-time
-bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
+pnpm typecheck
+pnpm test
+pnpm fwtest
+pnpm wasm all    # src/wasm suites: diff classdiff … sweep (boot jars and FitNotes) aottest persist; `pnpm wasm` lists them
+PORT=4090 pnpm dev
+WEBDROID_URL=http://localhost:4090 pnpm textcmp FitNotes.apk
+WEBDROID_URL=http://localhost:4090 pnpm e2e
+WEBDROID_URL=http://localhost:4090 pnpm e2e --live
+WEBDROID_URL=http://localhost:4090 pnpm e2e --full --jobs 1
+WEBDROID_URL=http://localhost:4090 pnpm corpus
+WEBDROID_URL=http://localhost:4090 pnpm lat [--warm]
+pnpm conform guava|jsr166|ojluni-time
+pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 
 - Use an unused port for this checkout; 4090 is an example. Serialize captures that share
   output directories and keep the code under capture stable. See the
   [harness guide](tests/e2e/README.md) for flow selection, output paths and recording.
-  `bun run e2e` is the reproducible gate; `--live` adds flows that depend on network content.
+  `pnpm e2e` is the reproducible gate; `--live` adds flows that depend on network content.
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
-  blobs, the WebView page bundle and the sql.js build are not committed; Bun preloads their
-  builders and tests use ReleaseSafe.
-- `bun run lat` gates tap latency (≤ 150 ms, pointerup to the answering frame); `--warm`
-  repeats each scenario with the code a first launch persisted. `bun run conform <suite>`
+  blobs, the WebView page bundle and the sql.js build are not committed; the node preload
+  (`scripts/preload.ts`) and the Vite config build them, and tests use ReleaseSafe.
+- `pnpm lat` gates tap latency (≤ 150 ms, pointerup to the answering frame); `--warm`
+  repeats each scenario with the code a first launch persisted. `pnpm conform <suite>`
   compares a conformance suite with its baseline in `tests/conformance/`; `--bytecode <prefixes>`
-  measures a provenance cut. `bun run gen-framework` (reference AVD booted) refreshes the
+  measures a provenance cut. `pnpm gen-framework` (reference AVD booted) refreshes the
   platform class path, framework-res, ICU/tz data and the device overlays' values.
 - Smoke-compile affected APKs (`smoke <apk>` is the Wasm sweep; `wasm all` sweeps FitNotes); require no unexplained failures or
   explicitly report a reproduced baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
@@ -105,8 +105,8 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   preserve guest-frame, signal and callback ordering. See the history for core implementation
   details and rejected performance experiments.
 - Java runs on the Wasm tier, `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
-  Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `bun run wasm <suite>` (`scripts/wasm/run.ts`);
-  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `bun run wasm all`. Map: [docs/architecture.md](docs/architecture.md).
+  Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `pnpm wasm <suite>` (`scripts/wasm/run.ts`);
+  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `pnpm wasm all`. Map: [docs/architecture.md](docs/architecture.md).
 
 ## Diagnosis
 

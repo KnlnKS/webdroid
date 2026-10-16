@@ -70,7 +70,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
    serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
    before the removal) under the same settings: check it out in its own worktree with its own `vendor/wasm-aot`
-   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `bun run aot`
+   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `pnpm aot`
    there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
    content); do not raise the limit.
 3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
@@ -107,7 +107,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
      bar arbitration; Google Maps sign-in and backup transport. A native fault converted into a Java exception can
      still leave native locks held.
-   - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
+   - *Games:* Among Us completes a live online match through the dev server's relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
      Subway Surfers reaches an active run; its background Firebase initialization still throws. Genshin Impact

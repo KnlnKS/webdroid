@@ -8,11 +8,11 @@ it before retrying an idea.
 ## Measuring
 
 ```bash
-WEBDROID_AOT_STALE=1 PORT=4191 bun run server.ts
-WEBDROID_URL=http://localhost:4191 bun run lat fitnotes calculatorm --gpu --warm
-WEBDROID_URL=http://localhost:4191 bun run lat komikku --gpu --cpuprofile
-bun run aot                                                # rebuild the platform build after a source edit
-WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile  # regenerate the bundled app builds
+WEBDROID_AOT_STALE=1 PORT=4191 pnpm dev
+WEBDROID_URL=http://localhost:4191 pnpm lat fitnotes calculatorm --gpu --warm
+WEBDROID_URL=http://localhost:4191 pnpm lat komikku --gpu --cpuprofile
+pnpm aot                                                # rebuild the platform build after a source edit
+WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundled app builds
 ```
 
 - **`lat`** (`scripts/lat/run.ts`) launches the browser with Playwright but drives it over raw CDP with only Page
@@ -49,10 +49,10 @@ WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile  # regenerate the bu
 - **The platform build must match the source.** It is keyed by every file under `src/` and the AOT scripts; after
   any edit the server answers 404 for `/aot/current.json` unless `WEBDROID_AOT_STALE=1`. That flag is right for
   edits outside the compiler and linker; after one inside them, or after adding even a temporary counter under
-  `src/`, run `bun run aot`, or a `--warm` run silently becomes an on-demand one (it fails with "app code is not
+  `src/`, run `pnpm aot`, or a `--warm` run silently becomes an on-demand one (it fails with "app code is not
   saved"). Check `browserErrors` in `run.json` for a failed `/aot/current.json` and `wasmAotLoaded` above 0 in the
   step counters.
-- **`vendor/wasm-aot` is shared** and ignored by Git; a worktree usually symlinks it. `bun run aot` prunes the
+- **`vendor/wasm-aot` is shared** and ignored by Git; a worktree usually symlinks it. `pnpm aot` prunes the
   builds it replaces, including the bundled app builds, so regenerate those afterwards.
 - **The dev server serves source fresh.** Do not edit served code while an e2e or `lat` run is in progress; an e2e
   run that reports "0 steps" just after an edit is the bundle rebuilding. Server-side code (`server.ts`,
@@ -118,7 +118,7 @@ Repeating a tap bounds what a second tier could save (Komikku, back and then App
 2026-10-14). `appearance` took 167, 93 and 52 ms on its first, second and tenth visits cold, and 82, 64 and 50 ms
 warm. Its compiling fell from 33 ms to 0–6 ms after the first cold visit.
 
-The Wasm tier against ART (`bun scripts/wasm/g1art.ts --ref <g1.json>`, the reference AVD, 2026-10-14), steady state:
+The Wasm tier against ART (`pnpm ts scripts/wasm/g1art.ts --ref <g1.json>`, the reference AVD, 2026-10-14), steady state:
 
 | Kotlin-shaped G1 workload | Chrome ÷ ART |
 |---|---|

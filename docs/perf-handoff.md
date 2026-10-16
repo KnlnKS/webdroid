@@ -17,7 +17,7 @@ The approved plan is appended below, unchanged. Read [AGENTS.md](../AGENTS.md) a
   - YouTube, Reddit, TikTok and ChatGPT are `"gate": false` reports.
   - Use 3+ matched runs per side, alternating.
   - Never edit served code (`src/`) while a `lat` or e2e run is in progress.
-- **AOT freshness.** Run `bun run aot` after compiler edits. `WEBDROID_AOT_STALE=1` is fine for runtime-only edits.
+- **AOT freshness.** Run `pnpm aot` after compiler edits. `WEBDROID_AOT_STALE=1` is fine for runtime-only edits.
 - **Platform scope.** Chrome-only features must keep a working WebKit path. Compilation stays client-side.
 
 ## State of the working tree
@@ -155,10 +155,10 @@ A second pass (`git log 2510a6a77..`) cut TypeScript by 121 lines net (+113/−2
 ## How to run
 
 ```bash
-PORT=4191 WEBDROID_AOT_STALE=1 bun run server.ts          # the dev server was stopped at handoff
-WEBDROID_URL=http://localhost:4191 bun run lat komikku --gpu --timeline --json /tmp/k.json
-WEBDROID_TRACE_CATEGORIES=disabled-by-default-v8.gc,v8 WEBDROID_URL=http://localhost:4191 bun run lat komikku --gpu --timeline --json /tmp/k.json --trace /tmp/k.trace.json
-WEBDROID_URL=http://localhost:4191 bun run e2e --jobs 1
+PORT=4191 WEBDROID_AOT_STALE=1 pnpm dev          # the dev server was stopped at handoff
+WEBDROID_URL=http://localhost:4191 pnpm lat komikku --gpu --timeline --json /tmp/k.json
+WEBDROID_TRACE_CATEGORIES=disabled-by-default-v8.gc,v8 WEBDROID_URL=http://localhost:4191 pnpm lat komikku --gpu --timeline --json /tmp/k.json --trace /tmp/k.trace.json
+WEBDROID_URL=http://localhost:4191 pnpm e2e --jobs 1
 ```
 
 These analyses were done with scratch scripts that are not in the repo; each is a few lines over the `--json` output:
@@ -368,7 +368,7 @@ Each item lists the change, files, switch, expected effect and the run that conf
     - Then bind late through imported immutable i32 globals in module `"~"`, using `sites.ts` symbolic imports as the precedent. Gap and link-error ids become string constants.
   - **Mismatch protection:** seed and prefix hashes on every shard.
   - **Related changes:** `AppIndex` gets the seed (`APP_VERSION` 19), and `COUNT_SLOTS` goes to 2^21 (`exc.ts`).
-  - **Validation:** first offline, as a `bun run smoke --seed --freeze` exclusion report per app; in the browser it must be launch-neutral.
+  - **Validation:** first offline, as a `pnpm smoke --seed --freeze` exclusion report per app; in the browser it must be launch-neutral.
   - Switch: `?seed=`.
 - **2.2 Streamed app images:**
   - **Planner:**
@@ -395,7 +395,7 @@ Each item lists the change, files, switch, expected effect and the run that conf
   - `adoptUnit` (`world.ts:1182`, `unit.ts`, `host/compiler.ts`) keeps only its epoch and assumption checks.
   - `World.ahead` becomes a `compile-serve` request.
   - Switch: `?ahead=worker`.
-- **2.5 Compiler front-end throughput:** less allocation in `Flow` construction, reuse of inference scratch space, decoding each instruction once (`src/jvm/prepared.ts`, `structure.ts`, `src/wasm/compiler/infer.ts`, `facts.ts`). Measure with a Node benchmark over Komikku's demand list. Requires `bun run wasm all`.
+- **2.5 Compiler front-end throughput:** less allocation in `Flow` construction, reuse of inference scratch space, decoding each instruction once (`src/jvm/prepared.ts`, `structure.ts`, `src/wasm/compiler/infer.ts`, `facts.ts`). Measure with a Node benchmark over Komikku's demand list. Requires `pnpm wasm all`.
 
 ### Stage 3: emitted code V8 can make fast (warm frame time)
 
@@ -524,14 +524,14 @@ Record each finding and rejection in `docs/implementation-history.md`, and updat
 ## Verification (per change)
 
 ```bash
-bun run typecheck && bun run test
-bun run wasm all            # any compiler, linker or shared front-end change
-bun run fwtest && bun run smoke apks/FitNotes.apk   # plus the gate APKs and TikTok for host overlays
-bun run conform jsr166      # also guava and ojluni-time for ABI, catch, Unsafe and preemption stages
-bun run aot && WEBDROID_URL=http://localhost:4191 bun run wasm aot-profile   # after any src/ edit, before --warm runs
-PORT=4191 bun run server.ts
-WEBDROID_URL=http://localhost:4191 bun run e2e --jobs 1
-WEBDROID_URL=http://localhost:4191 bun run lat calculatorm fitnotes komikku --gpu [--warm] --query <A|B>
+pnpm typecheck && pnpm test
+pnpm wasm all            # any compiler, linker or shared front-end change
+pnpm fwtest && pnpm smoke apks/FitNotes.apk   # plus the gate APKs and TikTok for host overlays
+pnpm conform jsr166      # also guava and ojluni-time for ABI, catch, Unsafe and preemption stages
+pnpm aot && WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile   # after any src/ edit, before --warm runs
+PORT=4191 pnpm dev
+WEBDROID_URL=http://localhost:4191 pnpm e2e --jobs 1
+WEBDROID_URL=http://localhost:4191 pnpm lat calculatorm fitnotes komikku --gpu [--warm] --query <A|B>
 ```
 
 **Latency runs:** 3 or more matched runs per side, alternating A and B, nothing else running on the host; 5 or more for fps claims. Also do `--engine webkit` once per switch. Check `wasmAotLoaded` > 0, `browserErrors`, and the counters in `run.json`. Compare any regression against the starting commit before attributing it.
