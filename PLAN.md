@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-13
+# Webdroid status — 2026-10-15
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -30,17 +30,18 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   slower than on ART in Kotlin-shaped workloads; skipping every Wasm cast left warm taps unchanged. See [performance.md](docs/performance.md).
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
-  setup. The `apks/new` XAPKs (Snapseed, Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before
-  the Wasm tier, and need re-verification.
+  setup. NewPipe, outside the corpus, was exercised end to end on 2026-10-15. The `apks/new` XAPKs (Snapseed,
+  Walmart, Yelp, McDonald's, Tubi) were last worked on 2026-09-27, before the Wasm tier, and need re-verification.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
-At `de7ba895`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
-natives, draw errors, settle timeouts or wedges; 1,147 unit tests pass (the browser tests' "End Of Central
-Directory" flake recurred once); FitNotes `smoke` is clean; all 17 `wasm all` suites and 31 of 31 `fwtest`
-exercises pass.
+At `71e437ae`: the `--jobs 1` quick e2e gate passes 7 of 7 flows with no new missing APIs, errors, required
+natives, draw errors, settle timeouts or wedges; 1,153 unit tests pass (the browser tests' "End Of Central
+Directory" flake recurred once); FitNotes `smoke` is clean; all 16 `wasm all` suites and 31 of 31 `fwtest`
+exercises pass. The default five-at-a-time run missed four flows on worker-diagnostic and completion timeouts
+while another checkout's sweep held the host at a load of about 14; it was not repeated on an idle host.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
@@ -77,6 +78,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
      walks) was a stale handle long naming a reused slot (history, YouTube). The full lane's video-open tap is a
      coordinate that can land on a live Short.
+   - *NewPipe:* feeds, search, playback (fullscreen, background and popup players), live streams, channels,
+     subscriptions, downloads, history and settings work. Live streams intermittently get HTTP 403 from YouTube,
+     as they do on the reference AVD. It has no e2e flow.
    - *Cut the Rope:* the intro video stalls or shows black; gameplay beyond the level-one sample (36 frames/s at
      1080×2160) is unmeasured on an idle host. Player ID/backend paths are unvalidated; it has no full-matrix flow.
    - *Graphics parity:* minimize the 132 differences of the two larger API-33 graphics fuzz campaigns (58 and 74
