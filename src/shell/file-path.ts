@@ -1,7 +1,8 @@
 import { E } from "../native/abi";
 import { vfs, type FileAttributes } from "./vfs";
 import { procIdentity } from "./procfs";
-import { mkdirPath, accessPath, renamePath, removePath, createPath, makeFifo, isFifo } from "../native/fs";
+import { mkdirPath, accessPath, renamePath, removePath, createPath, makeFifo } from "../native/fs";
+import { isFifo } from "../native/pipe";
 export type PathStat = { directory: boolean; fifo: boolean; size: number; mtime: number; uid: number; gid: number; mode: number };
 export type PathReply<T> = { errno: number; value: T };
 export type FilePathCalls = {

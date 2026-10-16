@@ -1,7 +1,8 @@
 import { E } from "../native/abi";
 import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, isFifo, type OpenFile } from "../native/fs";
+  detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
+import { isFifo } from "../native/pipe";
 import { vfs, type VfsFile } from "./vfs";
 import { writable } from "./lazyfile";
 

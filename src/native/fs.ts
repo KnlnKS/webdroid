@@ -17,6 +17,7 @@ import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag 
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
 import { SIGPIPE } from "./signals";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
@@ -27,10 +28,6 @@ export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, PO
 const O_RDWR = 2;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
 
-/** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
- *  open write ends, the last of which closing is its readers' end of file. `closed` also stands for
- *  a reader gone (or shut down), which a writer meets as EPIPE. */
-interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean; named?: boolean }
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share */
 export interface OpenFile {
@@ -51,24 +48,11 @@ export const F_DUPFD_CLOEXEC = 0x406;
 const EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
-const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: false });
-/** named pipes (mkfifo) in this process, by the file that names them: every open shares the one
- *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
- *  variables signal through them */
-const fifos = new WeakMap<VfsFile, Pipe>();
-/** this process's pipes for fifos another realm names; their contents stay per process */
-const remoteFifos = new Map<string, Pipe>();
-const namedPipe = (): Pipe => ({ ...newPipe(0), named: true });
-/** a name only: volatile, as a fifo that outlived a reload would come back a regular file */
 export function makeFifo(cpu: Cpu | null, path: string): number {
   const p = vfs.norm(path), taken = newName(cpu, p);
-  if (taken) return taken;
-  vfs.markVolatile(p);
-  vfs.write(p, new Uint8Array(0));
-  fifos.set(vfs.open(p)!, namedPipe());
-  return 0;
+  if (!taken) nameFifo(p);
+  return taken;
 }
-export const isFifo = (path: string): boolean => { const file = vfs.open(path); return !!file && fifos.has(file); };
 function openFifo(path: string, content: VfsFile, fifo: Pipe, flags: number): number {
   const acc = flags & O_ACCMODE;
   if (acc !== 0) { fifo.writers++; fifo.closed = false; }
@@ -76,11 +60,7 @@ function openFifo(path: string, content: VfsFile, fifo: Pipe, flags: number): nu
     statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
 /** opens this process's pipe for a fifo the owning realm names */
-export function openRemoteFifo(path: string, flags: number): number {
-  let fifo = remoteFifos.get(path);
-  if (!fifo) remoteFifos.set(path, fifo = namedPipe());
-  return openFifo(path, fdBase(path).content, fifo, flags);
-}
+export const openRemoteFifo = (path: string, flags: number): number => openFifo(path, fdBase(path).content, remoteFifo(path), flags);
 const inotifies = new Set<Inotify>();
 function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
   const bytes = name ? utf8(name + "\0") : new Uint8Array(0);
@@ -113,7 +93,6 @@ function hookInotify(): void {
   inotifyHooked = true;
 }
 const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
-function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
 export const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
@@ -269,8 +248,8 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
   if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
-  const existing = vfs.open(path), fifo = existing && fifos.get(existing);
-  if (fifo) return openFifo(path, existing, fifo, flags);
+  const existing = vfs.open(path), fifo = fifoOf(existing);
+  if (fifo) return openFifo(path, existing!, fifo, flags);
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
@@ -416,14 +395,15 @@ export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<nu
 }
 export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
   const calls = remoteFilePath(from) ?? remoteFilePath(to);
-  return calls ? kernelResult(cpu,calls.fileRename(vfs.norm(from),vfs.norm(to))) : renamePath(cpu,from,to);
+  if (!calls) return renamePath(cpu,from,to);
+  const a = vfs.norm(from), b = vfs.norm(to);
+  return kernelResult(cpu,calls.fileRename(a,b).then(r => { if (!r) moveRemoteFifo(a,b); return r; }));
 }
 export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
   const calls = remoteFilePath(path);
   if (!calls) return removePath(cpu,path,directory);
   const p = vfs.norm(path);
-  remoteFifos.delete(p);
-  return kernelResult(cpu,calls.fileRemove(p,directory));
+  return kernelResult(cpu,calls.fileRemove(p,directory).then(r => { if (!r) moveRemoteFifo(p,null); return r; }));
 }
 /** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
 export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
@@ -584,18 +564,6 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   const advance = (read: number) => { if (read > 0) f.pos += read; return read; };
   return result instanceof Promise ? result.then(advance) : advance(result);
 }
-/** up to `n` bytes a pipe holds, into guest memory at `p` */
-function takePipe(pipe: Pipe, p: number, n: number): number {
-  const q = pipe.q;
-  let k = 0;
-  while (k < n && q.length) {
-    const c = q[0], take = Math.min(n - k, c.length);
-    mem.write(p + k, c.subarray(0, take));
-    k += take;
-    if (take === c.length) q.shift(); else q[0] = c.subarray(take);
-  }
-  return k;
-}
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
@@ -672,7 +640,7 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir), fifo = !!file && fifos.has(file)): void {
+export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir), fifo = !!fifoOf(file)): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
   mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : fifo ? S_IFIFO : S_IFREG) | attributes.mode);
