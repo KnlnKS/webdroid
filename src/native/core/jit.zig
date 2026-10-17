@@ -140,11 +140,10 @@ export fn jit_config(c: u32) void {
 }
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
-pub const Block = struct { pc: u32, n: u32, taken: i32, fall: i32, exits: bool };
+/// epoch: its page's when it was scanned; an A64 region spans the pages its blocks are on
+pub const Block = struct { pc: u32, epoch: u32, n: u32, taken: i32, fall: i32, exits: bool };
 pub const Region = struct {
     entry: u32,
-    page: u32,
-    epoch: u32,
     isa: Isa,
     nblocks: u32,
     blocks: [MAX_BLOCKS]Block,
@@ -193,12 +192,11 @@ export fn jit_install(i: u32, slot: u32) void {
     // map, which is sized for the host's table.
     abi.require(slot < abi.JIT_SLOTS, "jit_install: table slot out of range");
     const r = &regions[i];
-    const page = cpu.decodedPage(r.page) orelse return;
-    if (page.epoch != r.epoch) return;
+    for (r.blocks[0..r.nblocks]) |b| if ((blockPage(b) orelse return).epoch != b.epoch) return;
     // An empty block only exits to its own pc, so installing one would hand that pc straight back
     // to a region that cannot advance it.
     for (r.blocks[0..r.nblocks], 0..) |b, k| if (b.n != 0) {
-        page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+        blockPage(b).?.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
     };
     regions_installed += 1;
 }
@@ -207,10 +205,16 @@ export fn jit_done() void {
     nregions = 0;
 }
 
+fn blockPage(b: Block) ?*cpu.Page {
+    return cpu.decodedPage(b.pc >> abi.PAGE_SHIFT);
+}
+/// A64 blocks may lie on any page the interpreter has decoded, which is all code that has run;
+/// ARM and Thumb stay on the entry's page, where a Thumb instruction cannot straddle into the next.
 pub fn blockFor(r: *Region, pc: u32) i32 {
     for (r.blocks[0..r.nblocks], 0..) |b, i| if (b.pc == pc) return @intCast(i);
-    if (r.nblocks >= MAX_BLOCKS or (pc >> abi.PAGE_SHIFT) != r.page) return -1;
-    r.blocks[r.nblocks] = .{ .pc = pc, .n = 0, .taken = -2, .fall = -2, .exits = false };
+    if (r.nblocks >= MAX_BLOCKS or (r.isa != .a64 and (pc ^ r.entry) >> abi.PAGE_SHIFT != 0)) return -1;
+    const page = cpu.decodedPage(pc >> abi.PAGE_SHIFT) orelse return -1;
+    r.blocks[r.nblocks] = .{ .pc = pc, .epoch = page.epoch, .n = 0, .taken = -2, .fall = -2, .exits = false };
     r.nblocks += 1;
     return @intCast(r.nblocks - 1);
 }
@@ -226,7 +230,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
         },
         .bcond, .cbz, .tbz => blk: {
             r.blocks[i].taken = blockFor(r, @truncate(o.imm));
-            r.blocks[i].fall = if (next & (abi.PAGE_SIZE - 1) != 0) blockFor(r, next) else -1;
+            r.blocks[i].fall = blockFor(r, next);
             break :blk true;
         },
         .br, .svc, .fault => true,
@@ -234,7 +238,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
     };
     return .{ .len = 4, .ends = ends };
 }
-fn discover(r: *Region, page: *cpu.Page) bool {
+fn discover(r: *Region) bool {
     var total: u32 = 0;
     var i: u32 = 0;
     // Scanning a block registers its successors, so r.nblocks grows underneath this loop. Stopping
@@ -243,6 +247,7 @@ fn discover(r: *Region, page: *cpu.Page) bool {
     // and emits nothing, and jit_install leaves its pc to the interpreter.
     while (i < r.nblocks and total < MAX_INSTR) : (i += 1) {
         var pc = r.blocks[i].pc;
+        const page = blockPage(r.blocks[i]).?;
         var n: u32 = 0;
         while (true) {
             const s = switch (r.isa) {
@@ -254,7 +259,7 @@ fn discover(r: *Region, page: *cpu.Page) bool {
             total += 1;
             pc += s.len;
             if (s.ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
-                if (!s.ends) r.blocks[i].fall = if ((pc & (abi.PAGE_SIZE - 1)) != 0 and total < MAX_INSTR) blockFor(r, pc) else -1;
+                if (!s.ends) r.blocks[i].fall = if (total < MAX_INSTR) blockFor(r, pc) else -1;
                 r.blocks[i].exits = s.ends and r.blocks[i].taken == -2;
                 break;
             }
@@ -507,11 +512,18 @@ pub fn Emit(comptime wide: bool) type {
         fn storeIc(e: *Self) void {
             e.b.emit(.{ get(L_CPU), get(L_IC), mo(O.i64_store, OFF_IC) });
         }
+        // A spill or reload is not a use of the register by the region's code.
         fn spillRegs(e: *Self, mask: u32) void {
+            const watched = e.b.nwatch;
+            defer e.b.nwatch = watched;
+            e.b.nwatch = 0;
             var n: u8 = 0;
             while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), OFF_X + 8 * @as(u32, n)) });
         }
         fn loadRegs(e: *Self, mask: u32) void {
+            const watched = e.b.nwatch;
+            defer e.b.nwatch = watched;
+            e.b.nwatch = 0;
             var n: u8 = 0;
             while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), OFF_X + 8 * @as(u32, n)), set(L_X + n) });
         }
@@ -561,27 +573,39 @@ pub fn Emit(comptime wide: bool) type {
             e.settle(e.edge(target));
             e.countIc(k);
             if (target < 0) return e.exitTo(pc);
+            const to = e.r.blocks[@intCast(target)];
+            if ((to.pc ^ e.r.blocks[e.blk].pc) >> abi.PAGE_SHIFT != 0) {
+                // a store may since have dropped the page the target was compiled from
+                const page = @intFromPtr(blockPage(to).?);
+                e.b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (to.pc >> abi.PAGE_SHIFT) * 4), c32(@bitCast(page)), O.i32_ne,
+                    c32(0), mo(O.i32_load, page + @offsetOf(cpu.Page, "epoch")), c32(@bitCast(to.epoch)), O.i32_ne, O.i32_or });
+                e.guardedExit(pc);
+            }
             const blk: i32 = @intCast(e.blk);
             // a later block's code follows the end of the block nested (target - blk - 1) out from here
             if (target > blk) return e.b.br(@as(u32, @intCast(target - blk - 1)) + e.nest);
             e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
+            e.guardedExit(pc);
+            e.b.emit(.{ c32(target), set(L_NEXT) });
+            e.b.br(e.chain_depth - 1 + e.nest);
+        }
+        /// exit to pc if the condition on the stack holds
+        fn guardedExit(e: *Self, pc: u32) void {
             e.ifv();
-            // The exit may settle flags the target does not read; the chained path reads none.
+            // The exit may settle flags the target does not read; the path past it reads none.
             const term = e.term;
             e.term = true;
             e.exitTo(pc);
             e.term = term;
             e.endif();
-            e.b.emit(.{ c32(target), set(L_NEXT) });
-            e.b.br(e.chain_depth - 1 + e.nest);
         }
         pub fn fallback(e: *Self, pc: u32, k: u32) void {
             const b = e.b;
             if (e.rw.fr | e.rw.fw != 0) e.settle(15);
-            e.spillRegs(e.rw.r | e.rw.w);
+            e.spillRegs((e.rw.r | e.rw.w) & e.used);
             if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
-            e.loadRegs(e.rw.w);
+            e.loadRegs(e.rw.w & e.used);
             e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
@@ -597,12 +621,12 @@ pub fn Emit(comptime wide: bool) type {
         pub fn fallbackIt(e: *Self, pc: u32, end: u32, k: u32) void {
             const b = e.b;
             e.settle(15);
-            e.spillRegs(e.rw.r | e.rw.w);
+            e.spillRegs((e.rw.r | e.rw.w) & e.used);
             e.spillFlags();
             e.countIc(k - 1);
             e.storeIc();
             b.emit(.{ get(L_CPU), c32(@bitCast(pc)), c32(@bitCast(end)), call(F_IT32), set(L_R) });
-            e.loadRegs(e.rw.w);
+            e.loadRegs(e.rw.w & e.used);
             e.loadFlags(15);
             e.eager(15);
             b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_R) });
@@ -1181,12 +1205,12 @@ fn simdRw(w: u32) RW {
 inline fn ilen(comptime isa: Isa, pc: u32) u32 {
     return if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) < 0xe800) 2 else 4;
 }
-fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
+fn emitRegion(b: *Buf, r: *Region) void {
     switch (r.isa) {
-        inline else => |isa| emitRegionAs(isa, b, r, page),
+        inline else => |isa| emitRegionAs(isa, b, r),
     }
 }
-fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
+fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     const wide = isa == .a64;
     var e = Emit(wide){ .b = b, .r = r, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .chain_depth = 0, .nest = 0 };
     const n = r.nblocks;
@@ -1200,6 +1224,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         writes[i] = 0;
         wb[i] = 0;
         base[i] = t;
+        const page = blockPage(blk).?;
         var pc = blk.pc;
         var j: u32 = 0;
         while (j < blk.n) : (j += 1) {
@@ -1243,7 +1268,26 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     e.lin = lin;
     var live: u4 = 0;
     for (lin[0..n]) |l| live |= l;
-    if (wide) {
+    if (!wide) {
+        // The ARM emitters name registers only through their locals, so emitting each block once
+        // into a buffer that keeps nothing finds the registers it reads and writes.
+        var dry = Buf.init(abi.LOW, 0);
+        dry.watch = L_X;
+        dry.nwatch = 15;
+        var d = e;
+        d.b = &dry;
+        e.used = 0;
+        e.written = 0;
+        for (0..n) |i| {
+            dry.reads = 0;
+            dry.writes = 0;
+            emitBlock(isa, &d, @intCast(i));
+            writes[i] = dry.writes;
+            e.used |= dry.reads | dry.writes;
+            e.written |= dry.writes;
+        }
+    }
+    {
         changed = true;
         while (changed) {
             changed = false;
@@ -1258,10 +1302,6 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 };
             }
         }
-    } else {
-        e.used = 0x7fff;
-        e.written = 0x7fff;
-        @memset(wb[0..n], 0x7fff);
     }
     b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 3, wasm.V128 });
     if (wide) b.emit(.{ 32, wasm.V128 });
@@ -1273,38 +1313,11 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     b.u(n);
     for (0..n) |i| b.u(i);
     b.u(0);
-    for (r.blocks[0..n], 0..) |blk, i| {
+    for (0..n) |i| {
         b.byte(O.end);
-        e.blk = @intCast(i);
-        e.chain_depth = n - @as(u32, @intCast(i));
-        e.wcur = wb[i];
-        e.pk = .none;
-        e.pdirty = 0;
-        e.vloaded = 0;
-        var pc = blk.pc;
-        var j: u32 = 0;
-        var ended = false;
-        while (j < blk.n) : (j += 1) {
-            e.pc = pc;
-            const len = ilen(isa, pc);
-            const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
-            if (wide) {
-                e.rw = rwOf(o);
-                e.wcur |= e.rw.w;
-            }
-            if (forcedFallback(pc)) {
-                if (wide) e.rw = ALL;
-                e.fallback(pc, j + 1);
-                ended = false;
-            } else ended = switch (isa) {
-                .a64 => e.emitOp(o, pc, j + 1),
-                .arm => jit32.emitArm(&e, pc, j + 1),
-                .thumb => jit32.emitThumb(&e, pc, j + 1),
-            };
-            pc += len;
-            if (ended) break;
-        }
-        if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
+        // ARM instructions' register sets are known per block only
+        e.wcur = wb[i] | (if (wide) 0 else writes[i]);
+        emitBlock(isa, &e, @intCast(i));
     }
     b.emit(.{ O.end, O.end });
     e.storeIc();
@@ -1314,6 +1327,40 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     e.spillFlags();
     e.storeIc();
     b.emit(.{ get(L_RET), O.end });
+}
+fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
+    const wide = isa == .a64;
+    const blk = e.r.blocks[i];
+    e.blk = i;
+    e.chain_depth = e.r.nblocks - i;
+    e.pk = .none;
+    e.pdirty = 0;
+    e.vloaded = 0;
+    const page = blockPage(blk).?;
+    var pc = blk.pc;
+    var j: u32 = 0;
+    var ended = false;
+    while (j < blk.n) : (j += 1) {
+        e.pc = pc;
+        const len = ilen(isa, pc);
+        const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
+        if (wide) {
+            e.rw = rwOf(o);
+            e.wcur |= e.rw.w;
+        }
+        if (forcedFallback(pc)) {
+            if (wide) e.rw = ALL;
+            e.fallback(pc, j + 1);
+            ended = false;
+        } else ended = switch (isa) {
+            .a64 => e.emitOp(o, pc, j + 1),
+            .arm => jit32.emitArm(e, pc, j + 1),
+            .thumb => jit32.emitThumb(e, pc, j + 1),
+        };
+        pc += len;
+        if (ended) break;
+    }
+    if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
 }
 fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
     const b = e.b;
@@ -1335,11 +1382,9 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     var q: u32 = 0;
     while (q < nrequests) : (q += 1) {
         const pc = requests[q];
-        const page = cpu.decodedPage(pc >> abi.PAGE_SHIFT) orelse continue;
         const r = &regions[nregions];
-        r.* = .{ .entry = pc, .page = pc >> abi.PAGE_SHIFT, .epoch = page.epoch, .isa = request_isa[q], .nblocks = 0, .blocks = undefined };
-        _ = blockFor(r, pc);
-        if (discover(r, page)) nregions += 1;
+        r.* = .{ .entry = pc, .isa = request_isa[q], .nblocks = 0, .blocks = undefined };
+        if (blockFor(r, pc) == 0 and discover(r)) nregions += 1;
     }
     nrequests = 0;
     // A batch too large for the buffer is halved until it fits; the regions left out go back on
@@ -1412,7 +1457,7 @@ fn emitModule(b: *Buf, n: u32) void {
     for (regions[0..n]) |*r| {
         const body_len = b.reserve();
         const body_start = b.len;
-        emitRegion(b, r, cpu.decodedPage(r.page) orelse unreachable);
+        emitRegion(b, r);
         b.patch(body_len, b.len - body_start);
     }
     b.patch(code_len, b.len - code_start);

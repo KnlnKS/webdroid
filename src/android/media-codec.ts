@@ -7,7 +7,7 @@ import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio.ts";
 import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface.ts";
-import { nativePeer, postNativeEvent } from "./media-native.ts";
+import { nativePeer, nativeThread, postNativeEvent } from "./media-native.ts";
 
 /** a profile and level the codec lists, as MediaCodecInfo.CodecProfileLevel's */
 type Level = { profile: number; level: number };
@@ -31,6 +31,19 @@ function nalUnits(data: Uint8Array): Uint8Array[] {
   if (start >= 0) units.push(data.subarray(start));
   return units;
 }
+/** An access unit in the MP4 framing (ISO/IEC 14496-15: each NAL unit after its 4-byte length) as Annex B,
+ *  or null when such lengths do not frame it exactly. A player that configures its decoder before its
+ *  demuxer has read the sample entry can queue samples still framed so. */
+function lengthPrefixedAsAnnexB(data: Uint8Array): Uint8Array | null {
+  const length = (at: number) => (data[at] << 24 | data[at + 1] << 16 | data[at + 2] << 8 | data[at + 3]) >>> 0;
+  let at = 0;
+  for (let n; at + 4 < data.length; at += 4 + n) if (!(n = length(at)) || data[at + 4] & 0x80) return null;
+  if (at !== data.length) return null;
+  const out = data.slice();
+  for (at = 0; at < out.length; at += 4 + length(at)) out.set(START_CODE, at);
+  return out;
+}
+const START_CODE = Uint8Array.of(0, 0, 0, 1);
 /** the RBSP of a NAL unit's first bytes, without emulation prevention */
 function rbsp(unit: Uint8Array, length: number): number[] {
   const out: number[] = [];
@@ -223,7 +236,7 @@ class Run {
   }
   /** an event to the Java codec's EventHandler, dropped once this run ends */
   post(what: number, arg1: number, arg2: number, obj?: () => unknown): void {
-    if (this.codec.owner) postNativeEvent(this.codec.owner, this.live, what, arg1, arg2, obj);
+    if (this.codec.owner) postNativeEvent(this.codec.owner, this.live, what, arg1, arg2, obj, this.codec.looper);
   }
   frame(frame: VideoFrame): void {
     if (!this.live()) { frame.close(); return; }
@@ -311,6 +324,7 @@ class Run {
     const def = this.codec.def;
     if (def.kind === "audio") { this.inFlight++; (this.decoder as AudioDecoder).decode(new EncodedAudioChunk({ type: "key", timestamp, data })); return; }
     const decoder = this.decoder as VideoDecoder;
+    if (def.bitstream.spsCodec) data = lengthPrefixedAsAnnexB(data) ?? data;
     if (this.parameterSets.length) data = concat([...this.parameterSets, data]);
     key ||= videoKeyFrame(def, data);
     // a decoder starts at a key frame: what precedes it decodes to nothing, as on a device
@@ -369,6 +383,8 @@ export class Codec {
   readonly def: Definition; readonly owner: JObj | null;
   /** owner: the Java MediaCodec events go to, absent for an AMediaCodec */
   constructor(def: Definition, owner: JObj | null = null) { this.def = def; this.owner = owner; }
+  /** JMediaCodec's looper, which calls postEventFromNative for the codec's callbacks */
+  readonly looper = nativeThread("MediaCodec_looper");
   format = new NativeFormat();
   /** a Java Surface, or a native ANativeWindow's GlSurface */
   surface: JObj | GlSurface | null = null;

@@ -15,6 +15,8 @@ import { noteNativeFrame } from "./cpu.ts";
 const EGL_BAD_ALLOC = 0x3003, EGL_BAD_ATTRIBUTE = 0x3004, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_DISPLAY = 0x3008, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b,
   EGL_BAD_PARAMETER = 0x300c, EGL_BAD_SURFACE = 0x300d;
 const surfaces: (GlSurface | null)[] = [null], contexts: (EglContext | null)[] = [null];
+/** the surfaces EGL owns: a window surface's frames are its consumer's, which keeps showing the last after the producer disconnects */
+const pbuffers = new WeakSet<GlSurface>();
 /** EGL_KHR_fence_sync's fences, each a GL fence in the context current where it was made */
 const syncs = new Map<number, { gl: WebGL2RenderingContext; sync: WebGLSync }>();
 let lastSync = 0;
@@ -65,13 +67,15 @@ export function eglInit(): void {
     eglCreateWindowSurface: (cpu, a) => { a.i(); a.i(); const s = windowOf(a.p()); if (!s) { return eglFailure(EGL_BAD_NATIVE_WINDOW, 0, cpu.jthread); } return handle(surfaces, s); },
     eglCreatePbufferSurface: (_c, a) => {
       a.i(); a.i(); const at = attrs(a.p());
-      return handle(surfaces, { width: at.get(0x3057) || 1, height: at.get(0x3056) || 1, present: null, frames: 0 });
+      const s: GlSurface = { width: at.get(0x3057) || 1, height: at.get(0x3056) || 1, present: null, frames: 0 };
+      pbuffers.add(s);
+      return handle(surfaces, s);
     },
     eglCreatePixmapSurface: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
     eglDestroySurface: (cpu, a) => {
       a.i(); const h = a.i(), s = surfaces[h];
       if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
-      if (!s.post) s.present?.close();
+      if (pbuffers.has(s)) s.present?.close();
       surfaces[h] = null;
       return 1;
     },

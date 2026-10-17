@@ -22,7 +22,7 @@ export type Act =
   | { type: "back"; whileText?: string; appearMs?: number }
   | { type: "enter" }
   | { type: "background"; ms: number }
-  | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number; untilText?: string; maxSwipes?: number }
+  | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number; untilText?: string; maxSwipes?: number; whileText?: string; appearMs?: number }
   | { type: "none" };
 
 export type Quiescence = {
@@ -96,6 +96,7 @@ export function stepDeadlineMs(spec: StepSpec): number {
     else { calls = a.repeat ?? 1; dwell = Math.max(0, calls - 1) * (a.everyMs ?? 500); }
     if (a.unlessResource) calls++;
   } else if (a.type === "back" && a.whileText) { calls = 2; dwell = (a.appearMs ?? 0) + 1500; }
+  else if (a.type === "swipe" && a.whileText) { calls = 2; dwell = (a.appearMs ?? 0) + Math.max(1500, (a.maxSwipes ?? 1) * (a.ms + 500) + 800); }
   else if (a.type === "swipe") {
     calls = (a.maxSwipes ?? 1) * (a.untilText ? 2 : 1);
     dwell = (a.maxSwipes ?? 1) * (a.ms + (a.untilText ? 500 : 0));

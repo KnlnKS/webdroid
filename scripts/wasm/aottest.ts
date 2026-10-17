@@ -169,7 +169,7 @@ const modules = /^[cd]\d+\.wasm$/;
   const automatic = world([join(out, "classes.dex"), ...jars], { natives, aot: store, loop: { ...hostLoop, due: () => false } });
   automatic.link("java/util/ArrayList");
   const ctor = automatic.prog.get("java/util/ArrayList")!.byKey.get("<init>()V")!, ctorSlot = automatic.slotOf(ctor);
-  automatic.table.set(ctorSlot, automatic.restoreStub(ctorSlot, ctor));
+  automatic.restoreStub(ctorSlot);
   check("fresh stub admits delivery before its turn expires", await automatic.entryAsync("Aot", "plain", "()I")(), 0);
   check("fresh stub prepares demanded code once", requests.filter(fs => fs.includes(cfile)).length, 1);
   delivered.clear(); requests.length = 0;

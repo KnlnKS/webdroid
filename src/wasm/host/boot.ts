@@ -14,7 +14,7 @@ import { packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
 import { fetchPlatformJars, jarDexes } from "../../android/framework.ts";
 import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance.ts";
-import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput } from "../../jvm/yield.ts";
+import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput, answeringFor } from "../../jvm/yield.ts";
 import { World, type WorldOptions } from "../link/world.ts";
 import { objectOfLoader } from "../link/loaders.ts";
 import type { HostLoop } from "../link/sched.ts";
@@ -64,7 +64,7 @@ export const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { holdUpgrades: () => starting, answering: () => answeringFor() > 0, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
   globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.demandMark(), demandSince: (mark) => w.demandSince(mark) };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };

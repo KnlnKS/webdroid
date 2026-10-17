@@ -91,7 +91,7 @@ is `SLOW` only under `--jobs 1`; rates never fail a run. Measure performance wit
 | `tapText` | `uiautomator dump`, `input tap` | await `wd.locateText`, `wd.tap` |
 | `tapAt` | `input tap` | `wd.tap` (`repeat`/`everyMs`, `whileText`) |
 | `typeInto` | tap, `input text`, ESC | `wd.tap`, `wd.type` |
-| `swipe`/`back`/`enter` | `input swipe`, key 4, key 66 | `wd.swipe`, `wd.back`, `wd.enter` |
+| `swipe`/`back`/`enter` | `input swipe`, key 4, key 66 | `wd.swipe` (`untilText`, `whileText`), `wd.back` (`whileText`), `wd.enter` |
 | `background` | HOME, relaunch | pause/stop, resume |
 
 A required `tapText` absent at the action timeout fails the step (recorded coordinates are no

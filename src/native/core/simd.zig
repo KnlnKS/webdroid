@@ -926,8 +926,7 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
             },
             8 => {
                 if (!x.U) return fault(c, x.w);
-                const keep: Un = ~(@as(Un, std.math.maxInt(Un)) >> @intCast(shr));
-                OU[i] = (du & keep) | (nu >> @intCast(shr));
+                OU[i] = if (shr >= bitsT) du else (du & ~(@as(Un, std.math.maxInt(Un)) >> @intCast(shr))) | (nu >> @intCast(shr));
             },
             10 => {
                 if (!x.U) O[i] = n << @intCast(shl) else OU[i] = (du & ((@as(Un, 1) << @intCast(shl)) - 1)) | (nu << @intCast(shl));

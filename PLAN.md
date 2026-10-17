@@ -42,6 +42,23 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
+Rebased onto `knlnks/bytecode-wasm` (`85f08018`) to run on Node, pnpm and Vite+ (2026-10-16, loads of 3–12): typecheck
+passes, 1,169 unit tests pass under Vitest and all 16 `wasm all` suites pass. `aot` makes the same 1,103 code and 1,081
+class modules as before the rebase. The `--jobs 1` quick gate reaches 7 of 7 flows in 161 s with no missing APIs, errors,
+required natives, settle timeouts or wedges. Under `--full`, TikTok reached the feed and played through both swipes in 4
+of 4 runs. Its liveness probe stalled past 3 s after the interests step in 3 of them and after the first swipe in 1.
+Alternating with the pre-rebase commit `794ded21` on Bun, two runs each, each side stalled once, and one pre-rebase
+launch stalled on a black window. Whether the interests step stalls more often after the rebase needs more runs
+(history, "After the rebase onto Node").
+
+Before the rebase, on Bun (2026-10-16, `e7b873c9`): typecheck passes, 1,169 unit tests pass and all 16 `wasm all` suites
+pass. The `--jobs 1` quick gate reaches 7 of 7 flows with no missing APIs, errors, required natives, settle timeouts or
+wedges. Two five-at-a-time runs, with other checkouts holding the host at loads of 15–50, missed FitNotes, Flappy Bird and
+Doodle Jump (Komikku once): Play services Worker 1003 stayed at "Reading package…", and steps hit completion timeouts.
+Each of these flows passed alone. Under `--full` TikTok reaches the feed and plays through both swipes; its launch step's
+main loop wedged once, at a load of 20–24. In `lat`, matched against its base `2f48474e` (one run each, `7dda4f2a`), only
+Mihon's launch fails, as on the base; the base also misses on Komikku `appearance` (158 ms).
+
 At the merge of `knlnks/node-migration` (2026-10-16), at a load of about 3: typecheck passes; 1,158 unit tests pass under
 Vitest; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass; after `aot`, the `--jobs 1` quick e2e gate reaches
 7 of 7 flows in 161 s with no missing APIs, errors, required natives, draw errors, settle timeouts or wedges.
@@ -86,26 +103,34 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 1. **Cold taps: fewer, cheaper modules.** A tap without a saved build compiles the methods it first calls, one
    module per method; compiling ahead covers 16–45% of those links. The compiler takes 52% of `linkSlot`. A
    Chrome Worker charges about 18.5 µs per module against Node's 4.2 µs, and no V8 flag changes that, so fold
-   `linkEnsure` (603 modules) and the stub pools (318) into fewer modules. A callee prediction must hit more than
+   `linkEnsure` (603 modules) into fewer modules. A callee prediction must hit more than
    about 70% to pay inside a tap (single-target callees hit 64%).
 2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
    serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
    before the removal) under the same settings: check it out in its own worktree with its own `vendor/wasm-aot`
-   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `pnpm aot`
-   there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
-   content); do not raise the limit.
-3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
-   launch budget is not rechecked). With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
-   native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. The main process holds
-   ~1.34 GB live, ~240 MB of it Program/dex metadata and ~80 MB pool stubs (358,000, 72% for slots never looked up;
-   passing the slot at the call site would let one stub per signature serve every unlinked method).
+   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), copy the main checkout's
+   `vendor/wasm-aot/hot.json` into it, and run `pnpm aot` there. Lichess's launch differs from its reference on
+   both tiers (a notification-permission request and live content); do not raise the limit.
+3. **TikTok's launch** (11.5 s cold in `lat` on this branch and its base, 2026-10-16; 8.2 s warm since its saved
+   build attaches). A cold launch needs about 48 s to its first gate, so the quick lane's 20 s launch wait fails on
+   this branch and its base alike; under `--full` the flow reaches the feed and plays through both swipes
+   (2026-10-16), though liveness probes can stall past 3 s while the interests and first swipe steps compile cold
+   code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB; native code takes 27.6 s and
+   on-demand compiling 26 s of the main process's busy time. Its e2e flow now picks an adult birthdate on the guest
+   birthdate screen. In matched cold first visits against its base (new browser contexts, 2026-10-16), signup comes
+   at 37.6 s, as on the base. The feed comes at 66.9 s against 95.1 s, and 60 s later the main Worker holds 1.13 GB
+   after a full collection against 1.36 GB. On the base, merged-away units drained 32 per collection force full
+   collections for external memory. Two of 14 of the branch's cold launches stalled idle on a black window before
+   any gate, and none of the base's 12; the cause is open (history, "The branch against its base").
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
    page's World, which blocks any parallel or ahead-of-time compile; seeding app numbers at dex arrival
    covers 99.9% of Komikku, but attaching a first build mid-session did not pay, see the history). Measure each on Komikku's first launch, three
    matched runs or more. Without a platform build FitNotes' quick flow takes 144 s against 46 s, so the on-demand
-   path itself is worth profiling.
+   path itself is worth profiling. Building an app's static roots before its first launch and a Zig compiler were
+   measured and rejected: the build costs more than the 6–9 s it saves TikTok's signup, and the compiler's profile
+   has no phase to move (history, 2026-10-16).
 5. **Application compatibility.**
    - *TikTok playback and input:* capture repeatable source media and separate decoded-video, EGL-swap and
      presentation counts; profile dense clips and warmed action latency. Its unchanged ByteVC decoder reached a
@@ -155,9 +180,9 @@ Unranked; each needs a measurement or a check against the current code before wo
   `getImageData`/`putImageData` every frame; WebGL2 shader passes would remove the readback. Every frame replays the
   whole root display list (no damage tracking); measure raster time on a hardware GPU first.
 - **GLES:** `keepsClean` validation excludes draws, uniforms and state setters, so `gl.getError` follows them;
-  rangeless client-array indexed draws read the element buffer back.
-- **ARM JIT:** ARM32 regions load and spill all 15 GPRs, and A64 regions end at 4 KiB pages, so a call or return to
-  another page spills and reloads. Precise ARM32 register sets and multi-page regions would help CPU-bound games.
+  Google Maps' two `getError`s per frame come through the untracked Java bindings (history, EGL/GLES).
+- **ARM JIT:** ARM32 regions still end at 4 KiB pages, so a call or return to another page spills and reloads (A64
+  regions span pages and ARM32 ones spill only the registers they name since 2026-10-16); CPU-bound games are unmeasured.
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.

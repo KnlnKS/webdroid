@@ -84,6 +84,19 @@ describe("the decode cache", () => {
     }
   });
 
+  test("a region that branches to another page runs the new code after a store drops it", () => {
+    const at = mem.reserve(0x2000, 0x1000), callee = at + 0x1000;
+    mem.u32[at >>> 2] = 0x14000000 | ((callee - at) >>> 2); // b callee
+    mem.u32[callee >>> 2] = movW0(1); mem.u32[(callee >>> 2) + 1] = RET;
+    const c = run([RET]);
+    const execute = () => { c.setPc(at); finish(c); return c.w[0]; };
+    const compiled = jitStats.regions;
+    for (let i = 0; i <= JIT_HEAT; i++) expect(execute()).toBe(1);
+    expect(jitStats.regions).toBeGreaterThan(compiled);
+    mem.st32(callee, movW0(2));
+    expect(execute()).toBe(2);
+  });
+
   test("a store into the page's data leaves its decoded code alone", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(7); mem.u32[(at >>> 2) + 1] = RET;

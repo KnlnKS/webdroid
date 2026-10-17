@@ -116,7 +116,7 @@ export function actOf(flow: Flow, step: ExecutionStep): Act {
     case "back": return { type: "back", whileText: a.whileText, appearMs: a.appearMs };
     case "enter": return { type: "enter" };
     case "background": return { type: "background", ms: a.ms ?? 1000 };
-    case "swipe": return { type: "swipe", from: a.from, to: a.to, ms: a.ms ?? 400, untilText: a.untilText, maxSwipes: a.maxSwipes };
+    case "swipe": return { type: "swipe", from: a.from, to: a.to, ms: a.ms ?? 400, untilText: a.untilText, maxSwipes: a.maxSwipes, whileText: a.whileText, appearMs: a.appearMs };
     case "settle": return { type: "none" };
   }
 }

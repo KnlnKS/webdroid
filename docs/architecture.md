@@ -78,8 +78,9 @@ is how host code calls Java.
   then fields typed by layout. Arrays are wrapper structs over GC arrays. Class tests use the vtable's ancestor
   display. `java.lang.String` is a struct over an `i16` array with a cached hash and, once a host asked, its JS
   string (`link/strings.ts`).
-- Calls between modules go through one shared funcref table. A method's slot starts as a lazy-link stub that
-  compiles the method on first call; vtables hold slots. Class-hierarchy devirtualization is recorded per slot
+- Calls between modules go through one shared funcref table, each storing its slot in `rt.callee` first. A
+  method's slot starts as its signature's lazy-link stub, which compiles the method in `rt.callee` on first call;
+  vtables hold slots. Class-hierarchy devirtualization is recorded per slot
   and undone when a later dex falsifies it; precompiled platform code relies on no such decision.
 - A Java thread is a strand, a JSPI stack. Blocking operations (park, contended monitors, `Object.wait`, class
   initialization waits, waiting natives) are Suspending imports, so only a real wait suspends. Back edges charge

@@ -24,6 +24,7 @@ test("Wasm import compaction preserves calls, table entries and function referen
     i === 95 ? { params: [], results: [T.i64] } : i === 149 ? { params: [T.f64], results: [] } : type);
   const entry = mb.reserveFunc(type, "entry"), target = mb.addFunc(type, new Code(0).i32(3).finish(), "target");
   mb.addTable(T.funcref, 1); mb.addElemActive(0, 0, [target]); mb.addElemDeclare([target]);
+  mb.addGlobal(T.i32, true, [0x41, 0]); // CALLEE, which a call through table 0 sets
   const c = new Code(0);
   c.pc = 11; c.call(150);
   c.defer(c => { c.pc = 12; c.call(199).raw(OP.i32_add); });

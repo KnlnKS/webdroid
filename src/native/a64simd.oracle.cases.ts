@@ -29,7 +29,7 @@ faddp v0.4s, v1.4s, v2.4s|fmaxp v0.2s, v1.2s, v2.2s|fminp v0.4s, v1.4s, v2.4s|fm
 frecpe v0.4s, v1.4s|frsqrte v0.2d, v1.2d|frecps v0.4s, v1.4s, v2.4s|frsqrts v0.2d, v1.2d, v2.2d|frecpe v0.2s, v1.2s
 scvtf v0.4s, v1.4s|ucvtf v0.2d, v1.2d|scvtf v0.2s, v1.2s|scvtf v0.2d, v1.2d|ucvtf v0.4s, v1.4s|fcvtzs v0.4s, v1.4s|fcvtzu v0.2d, v1.2d|fcvtns v0.4s, v1.4s|fcvtms v0.2d, v1.2d|fcvtps v0.2s, v1.2s|fcvtas v0.4s, v1.4s|fcvtnu v0.2d, v1.2d|fcvtau v0.4s, v1.4s|fcvtzs v0.2s, v1.2s|fcvtzu v0.4s, v1.4s
 fcvtl v0.2d, v1.2s|fcvtl2 v0.2d, v1.4s|fcvtl v0.4s, v1.4h|fcvtl2 v0.4s, v1.8h|fcvtn v0.2s, v1.2d|fcvtn2 v0.4s, v1.2d|fcvtn v0.4h, v1.4s|fcvtn2 v0.8h, v1.4s
-scvtf v0.4s, v1.4s, #4|ucvtf v0.2d, v1.2d, #10|fcvtzs v0.4s, v1.4s, #3|fcvtzu v0.2d, v1.2d, #20|scvtf v0.2s, v1.2s, #7
+scvtf v0.4s, v1.4s, #4|ucvtf v0.2d, v1.2d, #10|fcvtzs v0.4s, v1.4s, #3|fcvtzu v0.2d, v1.2d, #20|fcvtzs v0.2s, v1.2s, #32|fcvtzu v0.4s, v1.4s, #1|scvtf v0.2s, v1.2s, #7
 fmul v0.4s, v1.4s, v2.s[3]|fmul v0.2d, v1.2d, v2.d[1]|fmul v0.2s, v1.2s, v2.s[2]|fmla v0.4s, v1.4s, v2.s[1]|fmls v0.2d, v1.2d, v2.d[0]|fmulx v0.4s, v1.4s, v2.s[0]|fmul s0, s1, v2.s[2]|fmla d0, d1, v2.d[1]|fmls s0, s1, v2.s[3]
 fmov v0.4s, #0.75|fmov v0.2d, #-2.0|fmov v0.2s, #0.25
 add v0.4s, v1.4s, v2.4s|add v0.16b, v1.16b, v2.16b|add v0.8h, v1.8h, v2.8h|add v0.2d, v1.2d, v2.2d|add v0.8b, v1.8b, v2.8b|add v0.4h, v1.4h, v2.4h|add v0.2s, v1.2s, v2.2s
@@ -48,9 +48,9 @@ rev64 v0.4s, v1.4s|rev64 v0.8h, v1.8h|rev64 v0.16b, v1.16b|rev32 v0.8h, v1.8h|re
 sqabs v0.4s, v1.4s|sqabs v0.8h, v1.8h|sqneg v0.16b, v1.16b|saddlp v0.4s, v1.8h|saddlp v0.2d, v1.4s|uaddlp v0.8h, v1.16b|sadalp v0.4s, v1.8h|uadalp v0.2d, v1.4s
 xtn v0.4h, v1.4s|xtn2 v0.8h, v1.4s|xtn v0.2s, v1.2d|xtn2 v0.16b, v1.8h|sqxtn v0.4h, v1.4s|sqxtn2 v0.16b, v1.8h|uqxtn v0.2s, v1.2d|sqxtun v0.8b, v1.8h|sqxtun2 v0.4s, v1.2d|uqxtn2 v0.8h, v1.4s
 shll v0.8h, v1.8b, #8|shll2 v0.4s, v1.8h, #16|shll v0.2d, v1.2s, #32
-addv s0, v1.4s|addv b0, v1.16b|addv h0, v1.8h|saddlv d0, v1.4s|uaddlv s0, v1.8h|saddlv h0, v1.8b|uaddlv h0, v1.16b|smaxv s0, v1.4s|sminv b0, v1.16b|umaxv h0, v1.8h|uminv s0, v1.4s|addp d0, v1.2d
+addv s0, v1.4s|addv b0, v1.16b|addv h0, v1.8h|saddlv d0, v1.4s|uaddlv s0, v1.8h|saddlv h0, v1.8b|uaddlv h0, v1.16b|smaxv s0, v1.4s|sminv b0, v1.16b|umaxv h0, v1.8h|uminv s0, v1.4s|addp d0, v1.2d|addv h0, v1.4h|umaxv b0, v1.8b|sminv h0, v1.4h|smaxv b0, v1.16b
 shl v0.4s, v1.4s, #3|shl v0.16b, v1.16b, #7|shl v0.2d, v1.2d, #40|shl v0.8h, v1.8h, #15|sshr v0.4s, v1.4s, #1|sshr v0.16b, v1.16b, #7|sshr v0.2d, v1.2d, #63|sshr v0.8h, v1.8h, #4|ushr v0.4s, v1.4s, #31|ushr v0.2d, v1.2d, #1|ushr v0.8b, v1.8b, #8|ushr v0.4s, v1.4s, #32
-ssra v0.4s, v1.4s, #5|usra v0.2d, v1.2d, #3|srshr v0.4s, v1.4s, #4|urshr v0.8h, v1.8h, #3|srsra v0.16b, v1.16b, #2|ursra v0.4s, v1.4s, #8|sri v0.4s, v1.4s, #8|sli v0.8h, v1.8h, #4|sqshl v0.4s, v1.4s, #2|uqshl v0.8h, v1.8h, #3|sqshlu v0.16b, v1.16b, #1
+ssra v0.4s, v1.4s, #5|usra v0.2d, v1.2d, #3|srshr v0.4s, v1.4s, #4|urshr v0.8h, v1.8h, #3|srsra v0.16b, v1.16b, #2|ursra v0.4s, v1.4s, #8|sri v0.4s, v1.4s, #8|sli v0.8h, v1.8h, #4|sri v0.8b, v1.8b, #3|sli v0.2s, v1.2s, #9|sri v0.2d, v1.2d, #64|sli v0.16b, v1.16b, #0|sqshl v0.4s, v1.4s, #2|uqshl v0.8h, v1.8h, #3|sqshlu v0.16b, v1.16b, #1
 sshll v0.8h, v1.8b, #3|sshll2 v0.4s, v1.8h, #0|ushll v0.2d, v1.2s, #5|ushll2 v0.8h, v1.16b, #7|sxtl v0.4s, v1.4h|uxtl2 v0.2d, v1.4s
 shrn v0.8b, v1.8h, #3|shrn2 v0.8h, v1.4s, #9|rshrn v0.2s, v1.2d, #12|sqshrn v0.4h, v1.4s, #5|sqrshrn2 v0.16b, v1.8h, #2|uqshrn v0.2s, v1.2d, #7|uqrshrn v0.8b, v1.8h, #1|sqshrun v0.4h, v1.4s, #6|sqrshrun2 v0.4s, v1.2d, #20
 saddl v0.8h, v1.8b, v2.8b|saddl2 v0.4s, v1.8h, v2.8h|uaddl v0.2d, v1.2s, v2.2s|saddw v0.4s, v1.4s, v2.4h|uaddw2 v0.2d, v1.2d, v2.4s|ssubl v0.8h, v1.8b, v2.8b|usubl2 v0.2d, v1.4s, v2.4s|ssubw v0.8h, v1.8h, v2.8b|usubw2 v0.4s, v1.4s, v2.8h

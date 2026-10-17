@@ -175,6 +175,7 @@ pub const Simd = struct {
     pub const xor: u8 = 0x51;
     pub const bitselect: u8 = 0x52;
     pub const any_true: u8 = 0x53;
+    pub const popcnt: u8 = 0x62;
     pub const narrow_s = [_]u8{ 0x65, 0x85 };
     pub const narrow_u = [_]u8{ 0x66, 0x86 };
     pub const f32x4_demote_f64x2_zero: u8 = 0x5e;
@@ -270,6 +271,11 @@ pub const Buf = struct {
     len: u32,
     cap: u32,
     overflow: bool = false,
+    /// local.get, set and tee of locals [watch, watch + nwatch) are recorded as bits of reads and writes
+    watch: u32 = 0,
+    nwatch: u32 = 0,
+    reads: u32 = 0,
+    writes: u32 = 0,
 
     pub fn init(base: u32, cap: u32) Buf {
         return .{ .p = @ptrFromInt(base), .len = 0, .cap = cap };
@@ -307,21 +313,20 @@ pub const Buf = struct {
             if (done) return;
         }
     }
+    noinline fn local(b: *Buf, op: u8, l: u32) void {
+        if (l -% b.watch < b.nwatch) {
+            const m = @as(u32, 1) << @intCast(l - b.watch);
+            if (op == Op.local_get) b.reads |= m else b.writes |= m;
+        }
+        b.byte(op);
+        b.u(l);
+    }
     pub fn emit(b: *Buf, ops: anytype) void {
         inline for (ops) |x| switch (@TypeOf(x)) {
             comptime_int, u8 => b.byte(x),
-            Get => {
-                b.byte(Op.local_get);
-                b.u(x.l);
-            },
-            Set => {
-                b.byte(Op.local_set);
-                b.u(x.l);
-            },
-            Tee => {
-                b.byte(Op.local_tee);
-                b.u(x.l);
-            },
+            Get => b.local(Op.local_get, x.l),
+            Set => b.local(Op.local_set, x.l),
+            Tee => b.local(Op.local_tee, x.l),
             C32 => {
                 b.byte(Op.i32_const);
                 b.s(x.v);
