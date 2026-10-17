@@ -47,7 +47,8 @@ pass. The `--jobs 1` quick gate reaches 7 of 7 flows with no missing APIs, error
 wedges. Two five-at-a-time runs, with other checkouts holding the host at loads of 15–50, missed FitNotes, Flappy Bird and
 Doodle Jump (Komikku once): Play services Worker 1003 stayed at "Reading package…", and steps hit completion timeouts.
 Each of these flows passed alone. Under `--full` TikTok reaches the feed and plays through both swipes; its launch step's
-main loop wedged once, at a load of 20–24.
+main loop wedged once, at a load of 20–24. In `lat`, matched against its base `2f48474e` (one run each, `7dda4f2a`), only
+Mihon's launch fails, as on the base; the base also misses on Komikku `appearance` (158 ms).
 
 At the merge of `knlnks/node-migration` (2026-10-16), at a load of about 3: typecheck passes; 1,158 unit tests pass under
 Vitest; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass; after `aot`, the `--jobs 1` quick e2e gate reaches
@@ -98,17 +99,20 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
    serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
    before the removal) under the same settings: check it out in its own worktree with its own `vendor/wasm-aot`
-   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `pnpm aot`
-   there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
-   content); do not raise the limit.
-3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches). A cold launch needs about
-   48 s to its first gate, so the quick lane's 20 s launch wait fails on this branch and its base alike; under
-   `--full` the flow reaches the feed and plays through both swipes (2026-10-16), though liveness probes can stall
-   past 3 s while the interests and first swipe steps compile cold code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB;
-   native code takes 27.6 s and on-demand compiling 26 s of the main process's busy time. At its feed the main
-   process holds ~1.16 GB after a full collection, against 1.35 GB before one lazy-link stub per signature and the
-   slimmer Program/dex metadata (2026-10-16). Its e2e flow now picks an adult birthdate on the guest birthdate screen.
-   A new device's first visit (platform caches warm) reaches signup in 37–40 s and the feed in 67–68 s.
+   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), copy the main checkout's
+   `vendor/wasm-aot/hot.json` into it, and run `pnpm aot` there. Lichess's launch differs from its reference on
+   both tiers (a notification-permission request and live content); do not raise the limit.
+3. **TikTok's launch** (11.5 s cold in `lat` on this branch and its base, 2026-10-16; 8.2 s warm since its saved
+   build attaches). A cold launch needs about 48 s to its first gate, so the quick lane's 20 s launch wait fails on
+   this branch and its base alike; under `--full` the flow reaches the feed and plays through both swipes
+   (2026-10-16), though liveness probes can stall past 3 s while the interests and first swipe steps compile cold
+   code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB; native code takes 27.6 s and
+   on-demand compiling 26 s of the main process's busy time. Its e2e flow now picks an adult birthdate on the guest
+   birthdate screen. In matched cold first visits against its base (new browser contexts, 2026-10-16), signup comes
+   at 37.6 s, as on the base. The feed comes at 66.9 s against 95.1 s, and 60 s later the main Worker holds 1.13 GB
+   after a full collection against 1.36 GB. On the base, merged-away units drained 32 per collection force full
+   collections for external memory. Two of 14 of the branch's cold launches stalled idle on a black window before
+   any gate, and none of the base's 12; the cause is open (history, "The branch against its base").
 4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
    `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
    could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the

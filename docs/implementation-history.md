@@ -699,6 +699,30 @@ current state and keep the measured reason for any rejected alternative. Record 
 - **Other gaps**. 27 missing classes are unshipped SDK classes probed by reflection; statx answers ENOSYS as a pre-4.11 kernel. Missing `HardwareRenderer.nDumpProfileInfo` is reached only from `LaunchCrashGuard`/`uncaughtException` after a stall, so no no-op delegate was added (2026-10-08). After ~40 installs from one host TikTok stops offering a guest session.
 - **A new device for each experiment** (2026-10-16). `wd.reset()` reinstalls every app but keeps the SSAID (`localStorage["wd:settings:ssaid"]`), so TikTok answers the next launch with "Log in to TikTok". Dropping the key brings back the signup sheet, though 6 of 16 such launches still got the login wall.
 - **Skip's lost first tap is the app's own activity** (2026-10-16). About 2.5 s after the signup sheet first draws, TikTok starts its translucent `AuthorizeActivity` above it, and that activity finishes 0.3–0.7 s later. A tap in between lands on the activity's full-screen window, which handles neither DOWN nor UP, so the sheet seems to ignore the tap; on Android a translucent activity on top takes the touch the same way. The start is TikTok's own: in a run that waited 8 s before tapping, the last UI dump ended 1.35 s before it, and the later tap worked. A cold UI dump takes 0.5–2.3 s, so a walk that taps as soon as its poll sees the sheet lands in that window. A walk that taps a gate still showing after 4 s gets through.
+- **The branch against its base** (2026-10-16, `7dda4f2a` against `2f48474e`). Each side had its own server and a platform build made from the same hot profile. Each cold first visit started in a new browser context, alternating sides at host loads of 4–19 (one-minute averages, mostly the previous visit's own tail). Times are the page's clock from navigation. The table gives medians and ranges of the four visits per side that reached the feed; the heap is the main Worker's after a forced collection.
+
+  | | base | branch |
+  |---|---|---|
+  | signup sheet | 37.4 s (35.3–38.2) | 37.6 s (35.9–39.6) |
+  | last gate to For You | 45.3 s (28.9–58.7) | 17.1 s (13.8–19.4) |
+  | For You feed | 95.1 s (77.9–108.9) | 66.9 s (63.9–73.9) |
+  | heap at feed + 60 s | 1,358 MB (1,271–1,382) | 1,127 MB (1,089–1,176) |
+
+  The main process's `__wdWasm.stats` at each point:
+
+  | | base, signup | branch, signup | base, feed | branch, feed |
+  |---|---|---|---|---|
+  | methods | 77.4k (75.5–79.3k) | 77.7k (75.1–79.9k) | 106k (99–112k) | 98k (91–107k) |
+  | compileMs | 11.6 s (11.4–12.1) | 12.0 s (11.7–12.6) | 20.6 s (19.9–21.9) | 15.9 s (14.9–17.4) |
+  | moduleMs | 3.2 s (2.9–3.3) | 3.0 s (2.8–3.1) | 12.8 s (9.9–16.1) | 6.8 s (3.7–10.9) |
+  | instantiateMs | 0.97 s (0.93–1.00) | 0.88 s (0.85–0.91) | 9.0 s (5.2–14.1) | 1.1 s (1.0–1.3) |
+  | classMs | 2.6 s (2.5–2.7) | 2.4 s (2.3–2.6) | 5.8 s (5.2–6.5) | 2.9 s (2.8–3.1) |
+
+  The feed gap comes from the base's merges. It retires merged-away first-tier units 32 per collection, so by feed + 60 s it had retired 3.0–3.9k units against 55–91k merged methods; the branch, which drains them as merges make them (`1dddb8cb`), had retired 24–47k against 43–86k. V8 charges each unit's module external memory, and in a traced minute after the feed the base's main Worker ran 199 full collections taking 25.4 s, 22 of the first 25 for external memory pressure. The branch ran 90 taking 7.0 s, 57 of them to finalize incremental marking and 30 for external memory. Those collections run inside module compiles and instantiation, and they fall in the stretch between the interests screen and the feed: the base's feed time rose with its instantiation before the feed (5.2, 7.1, 10.9 and 14.1 s in visits that reached it at 77.9, 92.7, 97.5 and 108.9 s).
+
+  Signup is unchanged, though the branch compiles each method a little longer: 155–158 µs to signup against 149–153 µs. In node over 20,000 of TikTok's on-demand methods (three alternating runs), its compiler took 101–105 µs and 1,568 B a method against 96–98 µs and 1,488 B, with the difference in emit. That is the `rt.callee` store before every slot-table call that replaced the per-slot stubs (`cc4f5874`). In one matched `lat` run per side, Mihon's launch failed on both ("Rendered app launch unavailable"), as before, and the base also missed Komikku `appearance` at 158 ms (the branch: 140 ms). Launches were within 6% (Calculator M 3.1/2.9 s, FitNotes 2.4/2.3 s, Komikku 6.3/6.5 s), and TikTok's report launch took 11.5 s on both.
+
+  Of the cold launches, 2 of 12 on the base and 3 of 14 on the branch got "Log in to TikTok" instead of the signup sheet. Two branch launches showed no gate for 400 s: a black TikTok window, with the main process idle long enough to compile ahead to its cap (8,192 methods) after about 71k methods. Neither stall kept its first minute of logs, so the cause is open; none of the base's 12 launches stalled. A first series was discarded because its base platform build lacked the hot profile (see *Worktree setup*). Feed playback under `--full` was not compared.
 
 ### Tubi
 
@@ -732,7 +756,7 @@ current state and keep the measured reason for any rejected alternative. Record 
 ### Shared host and worktrees
 
 - **Shared-host hygiene**. Other sessions' servers and runs share the host: never `pkill -f vite` or `pkill -f e2e`; stop your own server by port (`lsof -ti tcp:<port> | xargs kill`). Restart the dev server after changing `server.ts` or vendor files (a stale server served 404s that failed flows). Never `git stash -u` while a server runs from the tree.
-- **Worktree setup**. Agent worktrees start from `main`; reset them onto the working branch while clean. Symlink `apks`, `node_modules`, `vendor/aosp`, `vendor/microg` and `conform-cache`, and give each its own port. Check that a link target does not exist first: `ln -s` into an existing symlinked directory nests a link inside the real vendor directory (`vendor/aosp/aosp`, 2026-09-27). sql.js builds are cached per patch and script under `~/.cache/webdroid` (`vendor/sql.js/rebuild.sh`).
+- **Worktree setup**. Agent worktrees start from `main`; reset them onto the working branch while clean. Symlink `apks`, `node_modules`, `vendor/aosp`, `vendor/microg` and `conform-cache`, and give each its own port. Check that a link target does not exist first: `ln -s` into an existing symlinked directory nests a link inside the real vendor directory (`vendor/aosp/aosp`, 2026-09-27). sql.js builds are cached per patch and script under `~/.cache/webdroid` (`vendor/sql.js/rebuild.sh`). A worktree that makes its own platform build needs the main checkout's untracked `vendor/wasm-aot/hot.json`. Without it, `pnpm aot` lays the build out differently, Calculator M's cold launch loaded 600 build modules instead of 339, and the worktrees are not comparable (2026-10-16).
 
 ### Reference AVD and gen-framework
 
