@@ -42,7 +42,16 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-On `knlnks/tiktok-wasm` (2026-10-16, `e7b873c9`): typecheck passes, 1,169 unit tests pass and all 16 `wasm all` suites
+Rebased onto `knlnks/bytecode-wasm` (`85f08018`) to run on Node, pnpm and Vite+ (2026-10-16, loads of 3–12): typecheck
+passes, 1,169 unit tests pass under Vitest and all 16 `wasm all` suites pass. `aot` makes the same 1,103 code and 1,081
+class modules as before the rebase. The `--jobs 1` quick gate reaches 7 of 7 flows in 161 s with no missing APIs, errors,
+required natives, settle timeouts or wedges. Under `--full`, TikTok reached the feed and played through both swipes in 4
+of 4 runs. Its liveness probe stalled past 3 s after the interests step in 3 of them and after the first swipe in 1.
+Alternating with the pre-rebase commit `794ded21` on Bun, two runs each, each side stalled once, and one pre-rebase
+launch stalled on a black window. Whether the interests step stalls more often after the rebase needs more runs
+(history, "After the rebase onto Node").
+
+Before the rebase, on Bun (2026-10-16, `e7b873c9`): typecheck passes, 1,169 unit tests pass and all 16 `wasm all` suites
 pass. The `--jobs 1` quick gate reaches 7 of 7 flows with no missing APIs, errors, required natives, settle timeouts or
 wedges. Two five-at-a-time runs, with other checkouts holding the host at loads of 15–50, missed FitNotes, Flappy Bird and
 Doodle Jump (Komikku once): Play services Worker 1003 stayed at "Reading package…", and steps hit completion timeouts.
