@@ -4,12 +4,12 @@
 // value, so a generator it returns runs nothing either. Also a pending Java result kept in a cache,
 // whose suspension every awaiting frame would share, and a Java entry whose result is dropped. Whether Java is entered from a turn a thread owns is checked at run time (jlang's
 // strictThreadOwnership). And per-process ABI state read as a module loads.
-//   bun scripts/generators.ts
-import { readFileSync } from "node:fs";
+//   pnpm ts scripts/generators.ts
+import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import ts from "typescript";
 
-const root = resolve(import.meta.dir, "..");
+const root = resolve(import.meta.dirname, "..");
 /** helpers that take a callback's result as a value, never running a generator it returns */
 const CONSUMERS = new Set(["detached", "after", "onMain", "postMain"]);
 /** driven-style generators every module imports, whose calls are checked in each file */
@@ -18,7 +18,7 @@ const SHARED = ["awaited"];
 const JAVA = new Set(["vcall", "vcallAsync", "vcallOn", "scall", "newObj", "linkInit", "staticField", "callOn"]);
 /** the source files under src, parsed */
 function* sources(): Generator<[string, ts.SourceFile]> {
-  for (const file of new Bun.Glob("src/**/*.ts").scanSync(root)) {
+  for (const file of globSync("src/**/*.ts", { cwd: root }).sort()) {
     if (!file.endsWith(".d.ts")) yield [file, ts.createSourceFile(file, readFileSync(resolve(root, file), "utf8"), ts.ScriptTarget.Latest, true)];
   }
 }

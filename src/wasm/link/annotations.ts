@@ -2,29 +2,31 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { javaName, type JClass } from "../compiler/program";
-import { idOfClass, fieldId, typeName } from "./classes";
-import { executableSlot, methodAt } from "./reflect";
-import { BOX } from "../compiler/fields";
-import { VIEWS } from "../compiler/copy";
-import type { EncAnnotation, EncVal } from "../../jvm/dex";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
-import { emitRestored, emitSettled, type Strand } from "./sched";
-import { HT, T } from "../compiler/wasmbin";
-import type { Kind } from "../compiler/program";
+import { javaName, type JClass } from "../compiler/program.ts";
+import { idOfClass, fieldId, typeName } from "./classes.ts";
+import { executableSlot, methodAt } from "./reflect.ts";
+import { BOX } from "../compiler/fields.ts";
+import { VIEWS } from "../compiler/copy.ts";
+import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
+import { emitRestored, emitSettled, type Strand } from "./sched.ts";
+import { HT, T } from "../compiler/wasmbin.ts";
+import type { Kind } from "../compiler/program.ts";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";
 const METHOD_PARAMETERS = "dalvik/annotation/MethodParameters";
 const RUNTIME = 1, SYSTEM = 2;
 
-const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField, PermittedSubclasses, Parameters }
+const Ann = { Class: 0, Executable: 1, Field: 2, ExecutableParams: 3, DefaultValue: 4, SignatureOfClass: 5, SignatureOfExecutable: 6, SignatureOfField: 7, PermittedSubclasses: 8, Parameters: 9 } as const;
+type Ann = (typeof Ann)[keyof typeof Ann];
 /** the system annotation whose `value` each kind answers, and that value's type */
-const SYSTEM_VALUES = new Map<Ann, [string, string]>([[Ann.SignatureOfClass, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.SignatureOfExecutable, [SIGNATURE, "[Ljava/lang/String;"]],
+const SYSTEM_VALUES = new Map<number, [string, string]>([[Ann.SignatureOfClass, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.SignatureOfExecutable, [SIGNATURE, "[Ljava/lang/String;"]],
   [Ann.SignatureOfField, [SIGNATURE, "[Ljava/lang/String;"]], [Ann.PermittedSubclasses, [PERMITTED, "[Ljava/lang/Class;"]]]);
-const enum Element { Class, Field, Method }
+const Element = { Class: 0, Field: 1, Method: 2 } as const;
+type Element = (typeof Element)[keyof typeof Element];
 /** the element each kind asks about */
 const ELEMENT: Record<Ann, Element> = {
   [Ann.Class]: Element.Class, [Ann.SignatureOfClass]: Element.Class, [Ann.PermittedSubclasses]: Element.Class,
@@ -33,10 +35,10 @@ const ELEMENT: Record<Ann, Element> = {
 };
 
 /** the annotations of the element whose object the host was given */
-function elementOf(w: World, kind: Ann, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
+function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
   const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
   // an array or primitive class has no definition, so no annotations
-  const element = ELEMENT[kind];
+  const element = ELEMENT[kind as Ann];
   if (element === Element.Class) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
   if (element === Element.Field) {
     const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
@@ -135,7 +137,7 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
 
 /** host.annotation(kind, a, b, arg): the objects ART's annotation natives answer; `arg` is the call's object argument, if it has one: the
  *  annotation Class asked for, or the Executable whose Parameters are asked for */
-export function hostObject(w: World, kind: Ann, a: number, b: number, arg: object | null): object | null | Promise<object | null> {
+export function hostObject(w: World, kind: number, a: number, b: number, arg: object | null): object | null | Promise<object | null> {
   const strand = w.sched.current(), materialize = objects(w, strand, kind, a, b, arg);
   // Keep immediate reflection immediate; only an actual Java wait switches stacks.
   const advance = (value?: unknown, failed = false): object | null | Promise<object | null> => {
@@ -148,7 +150,7 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, arg: objec
   };
   return advance();
 }
-function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, arg: object | null): Generator<unknown, object | null, any> {
+function* objects(w: World, strand: Strand, kind: number, a: number, b: number, arg: object | null): Generator<unknown, object | null, any> {
   let s = states.get(w);
   if (!s) states.set(w, s = make(w));
   const system = SYSTEM_VALUES.get(kind);

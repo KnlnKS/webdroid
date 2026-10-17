@@ -1,16 +1,16 @@
 // MediaPlayer's native half (mediaplayer.cpp over a media element). Its state machine answers a
 // call in the wrong state with INVALID_OPERATION, which the JNI throws as IllegalStateException;
 // events reach Java through postEventFromNative, as the player's listener posts them.
-import { rt, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime";
-import { after, newObj, scall, vcall } from "../jvm/natives/jentry";
-import { fdInt } from "../jvm/natives/jio";
-import { readFully, type FileSource } from "../shell/lazyfile";
-import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
-import { newAudioSessionId, setSounding } from "./audio-output";
-import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native";
-import { guestEndpoint } from "../native/net-address";
-import { deviceFetch } from "../shell/devicefetch";
-import { nativeParcel, writeInt } from "./parcel";
+import { rt, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime.ts";
+import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
+import { presentSurface, windowSurface, type GlSurface } from "./glsurface.ts";
+import { newAudioSessionId, setSounding } from "./audio-output.ts";
+import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
+import { guestEndpoint } from "../native/net-address.ts";
+import { deviceFetch } from "../shell/devicefetch.ts";
+import { nativeParcel, writeInt } from "./parcel.ts";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
@@ -38,7 +38,8 @@ let createElement = (): MediaElement => {
 export const useMediaElements = (create: () => MediaElement): void => { createElement = create; };
 /** a player plays through a media element; given a surface, each video frame the element shows is presented to it */
 class Player {
-  constructor(readonly ref: JObj, public sessionId: number) {}
+  readonly ref: JObj; sessionId: number;
+  constructor(ref: JObj, sessionId: number) { this.ref = ref; this.sessionId = sessionId; }
   state = IDLE;
   media: MediaElement | null = null;
   looping = false;

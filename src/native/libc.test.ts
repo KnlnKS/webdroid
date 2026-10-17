@@ -1,12 +1,13 @@
-import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { defineHost, lookupHost } from "./host";
-import { LIBC_SYSCALLS, libcInit } from "./libc";
-import { kernelInit, rawSyscall } from "./syscall";
-import { mem } from "./mem";
-import { procIdentity } from "../shell/procfs";
-import { device } from "../shell/config";
+import { expect, test } from "vite-plus/test";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { defineHost, lookupHost } from "./host.ts";
+import { libcInit } from "./libc.ts";
+import { kernelInit, rawSyscall } from "./syscall.ts";
+import { mem } from "./mem.ts";
+import { kernel } from "./calls.testkit.ts";
+import { procIdentity } from "../shell/procfs.ts";
+import { device } from "../shell/config.ts";
 
 /** a 64-bit process has no HLE libc: its calls reach the kernel by number */
 const syscall = defineHost("test:syscall", (cpu, a) => rawSyscall(cpu, a.i(), a));
@@ -16,7 +17,7 @@ test("native user IDs match the process identity", async () => {
   const cpu = new Cpu(new JThread(), "identity-test");
   try {
     for (const name of ["getuid", "geteuid", "getgid", "getegid"]) {
-      expect(await cpu.call(defineHost(name, LIBC_SYSCALLS[name]), [])).toBe(procIdentity.uid);
+      expect(await cpu.call(kernel(name), [])).toBe(procIdentity.uid);
     }
   } finally { cpu.dispose(); setA64(false); }
 });
@@ -120,7 +121,7 @@ test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
 
 test("A64 mmap keeps executable and low-hinted mappings where the core runs code", async () => {
   setA64(true); kernelInit();
-  const cpu = new Cpu(new JThread(), "mmap-test"), mmap = defineHost("mmap", LIBC_SYSCALLS.mmap), size = 0x1000_0000;
+  const cpu = new Cpu(new JThread(), "mmap-test"), mmap = kernel("mmap"), size = 0x1000_0000;
   const anon = async (hint: bigint, prot: number) => {
     const lo = await cpu.call(mmap, [hint, BigInt(size), prot, 0x4022, -1, 0n]);
     return BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0);

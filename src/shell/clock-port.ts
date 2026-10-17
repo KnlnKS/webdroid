@@ -1,4 +1,4 @@
-import type { ControlledGuestClock } from "../guest-clock";
+import type { ControlledGuestClock } from "../guest-clock.ts";
 
 export type ClockBootstrap = { controlled: boolean; now: number; bootTime: number; wallAtStart: number; port?: MessagePort };
 export interface ClockClient {

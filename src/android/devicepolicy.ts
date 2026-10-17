@@ -1,9 +1,9 @@
 // IDevicePolicyManager, under AOSP's DevicePolicyManager: DevicePolicyManagerService runs on every
 // device, but this one lacks FEATURE_DEVICE_ADMIN, so it answers as with mHasFeature false (decoded
 // from the reference AVD's services.jar): no admin, owner or policy is ever in force.
-import { JObj, rt } from "../jvm/runtime";
-import { staticField } from "../jvm/natives/jentry";
-import { hostStub } from "./binder";
+import { JObj, rt } from "../jvm/runtime.ts";
+import { staticField } from "../jvm/natives/jentry.ts";
+import { hostStub } from "./binder.ts";
 
 const CN = "Landroid/content/ComponentName;";
 rt.register({ name: "webdroid/DevicePolicyManagerService", ctor: class extends JObj {}, sup: "android/app/admin/IDevicePolicyManager$Stub", methods: {

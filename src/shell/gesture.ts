@@ -1,6 +1,6 @@
-import { device } from "./config";
-import { dispatchPointer } from "./device";
-import { guestNow, guestSleep, uptimeMillis } from "../guest-clock";
+import { device } from "./config.ts";
+import { dispatchPointer } from "./device.ts";
+import { guestNow, guestSleep, uptimeMillis } from "../guest-clock.ts";
 
 /** Scheduled sample uptime survives delayed delivery, so catch-up samples
  * don't turn a constant-speed drag into an accelerating fling. */

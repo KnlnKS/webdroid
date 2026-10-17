@@ -2,15 +2,15 @@
 // and DisplayEventReceiver's natives deliver it to every receiver that scheduled one (each
 // Choreographer, per looper) as a callback on that receiver's looper, as SurfaceFlinger's event
 // thread wakes its fd there.
-import { rt, driven, type Gen, type JObj } from "../jvm/runtime";
-import { mangleField } from "../jvm/abi";
-import { vcall, newObj, after } from "../jvm/natives/jentry";
-import { handle, deref, FINALIZER } from "./handles";
-import { type NativeLooper, mainLooper, postMain } from "./mainloop";
-import { perf } from "../perf";
-import { device } from "../shell/config";
-import { uptimeMillis } from "../guest-clock";
-import { note, Ev } from "../timeline";
+import { rt, driven, type Gen, type JObj } from "../jvm/runtime.ts";
+import { mangleField } from "../jvm/abi.ts";
+import { vcall, newObj, after } from "../jvm/natives/jentry.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { type NativeLooper, mainLooper, postMain } from "./mainloop.ts";
+import { perf } from "../perf.ts";
+import { device } from "../shell/config.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { note, Ev } from "../timeline.ts";
 
 let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
 const vsyncIntervalMs = (): number => 1000 / device.refreshRate;

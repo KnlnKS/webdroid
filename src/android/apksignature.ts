@@ -1,9 +1,10 @@
-import { sameBytes } from "../jvm/abi";
+import { sameBytes } from "../jvm/abi.ts";
 
 class Fields {
+  readonly bytes: Uint8Array;
   at = 0;
   view: DataView;
-  constructor(readonly bytes: Uint8Array) { this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length); }
+  constructor(bytes: Uint8Array) { this.bytes = bytes; this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length); }
   u32(): number {
     if (this.at + 4 > this.bytes.length) throw new Error("truncated APK signing field");
     const value = this.view.getUint32(this.at, true); this.at += 4; return value;

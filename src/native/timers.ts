@@ -1,13 +1,13 @@
-import { processExited } from "../process-exit";
-import { hostLib, PTR, ldp, ldLong, type HostFn } from "./host";
-import { clockTime, fail, readTs, writeTs } from "./libc";
-import { KLAYOUT } from "./syscall";
-import { mem } from "./mem";
-import { startThread } from "./pthread";
-import { E } from "./abi";
-import { cpuByOsTid, cpus, type Cpu } from "./cpu";
-import { blocked } from "./signals";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
+import { processExited } from "../process-exit.ts";
+import { hostLib, PTR, ldp, ldLong, type HostFn } from "./host.ts";
+import { clockTime, fail, readTs, writeTs } from "./libc.ts";
+import { KLAYOUT } from "./syscall.ts";
+import { mem } from "./mem.ts";
+import { startThread } from "./pthread.ts";
+import { E } from "./abi.ts";
+import { cpuByOsTid, cpus, type Cpu } from "./cpu.ts";
+import { blocked } from "./signals.ts";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 
 /** a POSIX timer or a timerfd: its clock, next expiry and interval, in that clock's milliseconds */
 export type ClockTimer = { clock: number; next: number; interval: number; timeout?: GuestTimer };

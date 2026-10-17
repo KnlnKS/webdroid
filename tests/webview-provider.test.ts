@@ -1,13 +1,13 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, newObj } from "../src/jvm/natives/jentry";
-import { onMain } from "../src/android/mainloop";
-import type { WebViewChromium } from "../src/android/webkit";
-import { loadFrameworkJar } from "./java";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import { startMainLooper } from "../src/android/mainloop.ts";
+import "../src/natives.ts";
+import { rt, JObj } from "../src/jvm/runtime.ts";
+import { vcall, newObj } from "../src/jvm/natives/jentry.ts";
+import { onMain } from "../src/android/mainloop.ts";
+import type { WebViewChromium } from "../src/android/webkit.ts";
 
 // framework.jar and a running main looper, as a booted page has them
-beforeAll(loadFrameworkJar);
+beforeAll(startMainLooper);
 
 describe("webfragment", () => {
   class FragmentClient extends JObj {

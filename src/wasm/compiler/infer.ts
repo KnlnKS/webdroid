@@ -6,11 +6,11 @@
 // link kinds without merging live ranges. A web whose mask ends at 0 is a true conflict; a web
 // whose mask keeps several bits (a constant never constrained by a use) is "underdetermined".
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
-import { parseMethodDesc } from "../../jvm/abi";
-import type { CodeItem, DexFile } from "../../jvm/dex";
-import type { PreparedInstruction } from "../../jvm/prepared";
-import { buildCfg } from "./cfg";
-import { NO_THROW, isInvoke, isInstanceInvoke } from "./opinfo";
+import { parseMethodDesc } from "../../jvm/abi.ts";
+import type { CodeItem, DexFile } from "../../jvm/dex.ts";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import { buildCfg } from "./cfg.ts";
+import { NO_THROW, isInvoke, isInstanceInvoke } from "./opinfo.ts";
 
 export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;

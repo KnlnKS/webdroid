@@ -1,4 +1,4 @@
-import type { Outcome } from "../conform/results";
+import type { Outcome } from "../conform/results.ts";
 
 /** Array-provider setup failures lose rows even when the run emits none of the baseline names. */
 export function arrayProviderFailures(cls: string, skipped: Map<string, string>): string[] {

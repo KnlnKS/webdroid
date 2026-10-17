@@ -1,13 +1,13 @@
 // The page script: the first script of every WebView page's document, on its renderer origin. It
 // takes the load's context from the renderer bootstrap (renderer.ts) and gives the page Android
 // WebView's navigator, cookies, JavaScript interfaces, subframes, history and location.
-import { installClientHints } from "./clienthints";
-import { setDocumentCookie } from "./cookie";
-import { routeSubframes } from "./frames";
-import { installWebHistory } from "./history";
-import { installWebLocation } from "./location";
-import { snapshotDocument } from "./snapshot";
-import type { AppMessage, PageConfig, PageMessage, WebFonts } from "./protocol";
+import { installClientHints } from "./clienthints.ts";
+import { setDocumentCookie } from "./cookie.ts";
+import { routeSubframes } from "./frames.ts";
+import { installWebHistory } from "./history.ts";
+import { installWebLocation } from "./location.ts";
+import { snapshotDocument } from "./snapshot.ts";
+import type { AppMessage, PageConfig, PageMessage, WebFonts } from "./protocol.ts";
 
 /** the WebView settings' faces, by their families, and the rules that use them, before the page's own */
 function installWebFonts(fonts: WebFonts): void {

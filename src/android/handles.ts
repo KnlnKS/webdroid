@@ -11,7 +11,7 @@
 // can hold a small number; neither may name the slot's next occupant, or a claim (below) would tie
 // that occupant to an unrelated Java object and free it while its owner still uses it.
 
-import { rt } from "../jvm/runtime";
+import { rt } from "../jvm/runtime.ts";
 
 const objs: (object | undefined)[] = [undefined];
 /** each slot's generation, 1..GENERATIONS, in the bits above SLOT_BITS of its long; longs stay

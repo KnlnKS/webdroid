@@ -1,19 +1,19 @@
 // PNG load/save plus the crop and mask operations the diff applies to both sides equally.
+import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
-import type { Rect } from "../types";
+import type { Rect } from "../types.ts";
 
 export type Img = { width: number; height: number; data: Buffer };
 
 export async function loadPng(path: string): Promise<Img> {
-  const buf = Buffer.from(await Bun.file(path).arrayBuffer());
-  const png = PNG.sync.read(buf);
+  const png = PNG.sync.read(await readFile(path));
   return { width: png.width, height: png.height, data: png.data };
 }
 
 export async function savePng(path: string, img: Img): Promise<void> {
   const png = new PNG({ width: img.width, height: img.height });
   img.data.copy(png.data);
-  await Bun.write(path, PNG.sync.write(png));
+  await writeFile(path, PNG.sync.write(png));
 }
 
 export function newImg(width: number, height: number, fill = 0x00): Img {

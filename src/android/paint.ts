@@ -2,22 +2,22 @@
 // mNativePaint, with its natives and the text metrics TS reads off it. Paint and TextPaint run from
 // AOSP bytecode; TS reaches a Java paint's native state through paintOf.
 
-import { rt, declaredField, type JObj } from "../jvm/runtime";
-import { charsToString, mangleMethod } from "../jvm/abi";
-import { after, newObj } from "../jvm/natives/jentry";
-import { handle, deref, FINALIZER } from "./handles";
-import { device } from "../shell/config";
-import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
-import type { FaceMetrics } from "./sfnt";
-import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics";
-import { colorLongAt } from "./bitmap";
-import { NativePath, skCommands, setSkCommands, pathAt } from "./path";
-import { type NativeMaskFilter, maskFilterAt } from "./maskfilter";
-import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect";
-import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping";
-import { strokeCommands } from "./skia";
-import { deviceScale } from "./matrix";
-import type { Ctx2D } from "./recording";
+import { rt, declaredField, type JObj } from "../jvm/runtime.ts";
+import { charsToString, mangleMethod } from "../jvm/abi.ts";
+import { after, newObj } from "../jvm/natives/jentry.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { device } from "../shell/config.ts";
+import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts.ts";
+import type { FaceMetrics } from "./sfnt.ts";
+import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics.ts";
+import { colorLongAt } from "./bitmap.ts";
+import { NativePath, skCommands, setSkCommands, pathAt } from "./path.ts";
+import { type NativeMaskFilter, maskFilterAt } from "./maskfilter.ts";
+import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect.ts";
+import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
+import { strokeCommands } from "./skia.ts";
+import { deviceScale } from "./matrix.ts";
+import type { Ctx2D } from "./recording.ts";
 
 const PAINT = "android/graphics/Paint";
 /** Paint's flag bits hwui keeps (getJavaFlags): LCD_RENDER_TEXT and VERTICAL_TEXT are not */

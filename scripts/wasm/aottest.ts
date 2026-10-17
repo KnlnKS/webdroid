@@ -1,20 +1,20 @@
 // Precompiled platform code (aot.ts) stays sound when classes arrive after the build: it relies on no class-hierarchy decision, so a dex that
 // overrides a method it calls takes effect through dispatch, whether the dex is added later or present from the start, and the code stays installed.
-// Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `bun run wasm aottest` makes when it is unset.
+// Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `pnpm wasm aottest` makes when it is unset.
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot";
-import { defaultLoop } from "../../src/wasm/link/sched";
-import { compileModule } from "../../src/wasm/link/module";
-import { loadDexes, program, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
-import { buildApp } from "../../src/wasm/link/apps";
-import { natives } from "./harness";
-import { nativeSource } from "../../src/wasm/host/nativesource";
-import { Natives } from "../../src/wasm/host/natives";
-import { JAVA, PLATFORM_PATHS } from "./paths";
-import { checker, filesIn, shellIn } from "./tools";
+import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { loadDexes, program, world } from "./lib.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { buildApp } from "../../src/wasm/link/apps.ts";
+import { natives } from "./harness.ts";
+import { nativeSource } from "../../src/wasm/host/nativesource.ts";
+import { Natives } from "../../src/wasm/host/natives.ts";
+import { JAVA, PLATFORM_PATHS } from "./paths.ts";
+import { checker, filesIn, shellIn } from "./tools.ts";
 
 const build = process.env.WEBDROID_AOT;
 if (!build) { console.log("aottest: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
@@ -166,7 +166,7 @@ const modules = /^[cd]\d+\.wasm$/;
   check("an older module format prepares no files", requests.length, 0);
   delivered.clear(); requests.length = 0;
   held.delete(dataFile);
-  const automatic = world([join(out, "classes.dex"), ...jars], { natives, aot: store, loop: { ...defaultLoop, due: () => false } });
+  const automatic = world([join(out, "classes.dex"), ...jars], { natives, aot: store, loop: { ...hostLoop, due: () => false } });
   automatic.link("java/util/ArrayList");
   const ctor = automatic.prog.get("java/util/ArrayList")!.byKey.get("<init>()V")!, ctorSlot = automatic.slotOf(ctor);
   automatic.table.set(ctorSlot, automatic.restoreStub(ctorSlot, ctor));

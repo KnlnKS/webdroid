@@ -7,14 +7,14 @@
 // PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
 
 import initSqlJs from "sql.js";
-import { rt, driven, awaited } from "../jvm/runtime";
-import { i8, u8, parseMethodDesc } from "../jvm/abi";
-import { vfs } from "../shell/vfs";
-import { handle, deref, release } from "./handles";
+import { rt, driven, awaited } from "../jvm/runtime.ts";
+import { i8, u8, parseMethodDesc } from "../jvm/abi.ts";
+import { vfs } from "../shell/vfs.ts";
+import { handle, deref, release } from "./handles.ts";
 import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
-  SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow";
-import { processFailure, processError, type ProcessFailure } from "../shell/process-port";
-import type { PackageState } from "../shell/packagedata";
+  SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow.ts";
+import { processFailure, processError, type ProcessFailure } from "../shell/process-port.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 /** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
@@ -80,11 +80,12 @@ function withUTF8<T>(s: string, f: (text: number) => T): T {
 /** what a failure raises: AOSP's SQLiteException family, or androidx's SQLException */
 type Raise = (code: number, sqliteMessage: string, message?: string | null) => unknown;
 class Connection {
+  readonly ptr: number; readonly file: SharedDatabase | null; readonly raise: Raise;
   cancelable = false;
   canceled = false;
   closed = false;
   readonly statements = new Set<number>();
-  constructor(readonly ptr: number, readonly file: SharedDatabase | null, readonly raise: Raise) {}
+  constructor(ptr: number, file: SharedDatabase | null, raise: Raise) { this.ptr = ptr; this.file = file; this.raise = raise; }
 }
 const conn = (h: bigint) => deref<Connection>(h);
 const statementOwners = new Map<number, Connection>();

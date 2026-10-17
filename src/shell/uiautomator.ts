@@ -1,11 +1,11 @@
 // What `uiautomator dump` sees, for windows AOSP's ViewRootImpl manages: each window's views as
 // AccessibilityNodeInfos, a virtual hierarchy (Compose) through its view's AccessibilityNodeProvider,
 // in screen pixels. The e2e harness diffs this against the device's dump.
-import { awaited, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
-import { windowZOf } from "../android/server/wm";
-import { vcall, scall, newObj, iof } from "../jvm/natives/jentry";
-import { csText } from "../jvm/natives/jchars";
-import { edges } from "../android/graphics";
+import { awaited, declaredField, driven, type Gen, type JObj } from "../jvm/runtime.ts";
+import { windowZOf } from "../android/server/wm.ts";
+import { vcall, scall, newObj, iof } from "../jvm/natives/jentry.ts";
+import { csText } from "../jvm/natives/jchars.ts";
+import { edges } from "../android/graphics.ts";
 
 interface UiNode {
   text: string; desc: string; cls: string; resId: string; bounds: [number, number, number, number];

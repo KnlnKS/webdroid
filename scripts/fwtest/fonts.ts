@@ -1,16 +1,17 @@
 // Fonts and shaping: Font, FontFamily, FontFileUtil, Typeface and TextRunShaper over the reference
 // build's /system/fonts.
-import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry";
-import { familyOf, typefaceOf } from "../../src/android/fonts";
-import { loadSystemFonts } from "../../tests/java";
-import { exercise, same, thrown, fontMetrics, ltrb } from "./harness";
+import { readFileSync } from "node:fs";
+import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry.ts";
+import { familyOf, typefaceOf } from "../../src/android/fonts.ts";
+import { loadSystemFonts } from "../../tests/java.ts";
+import { exercise, same, thrown, fontMetrics, ltrb } from "./harness.ts";
 
 // Expected values are the reference AVD's for its variable Roboto (OS/2 weight 400, revision 196936,
 // hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units) and Noto Serif Bold.
 await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
   await loadSystemFonts();
   const F = "Landroid/graphics/fonts/Font;", FB = "Landroid/graphics/fonts/Font$Builder;", BB = "Ljava/nio/ByteBuffer;";
-  const bytes = async (file: string) => new Uint8Array(await Bun.file(`vendor/aosp/system/fonts/${file}`).arrayBuffer());
+  const bytes = (file: string) => new Uint8Array(readFileSync(`vendor/aosp/system/fonts/${file}`));
   const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/system/fonts/Roboto-Regular.ttf");
   const regular = await vcall(await newObj("android/graphics/fonts/Font$Builder", "(Ljava/io/File;)V", file), "build", `()${F}`);
   const style = async (f: unknown) => vcall(await vcall(f, "getStyle", "()Landroid/graphics/fonts/FontStyle;"), "toString", "()Ljava/lang/String;");
@@ -18,7 +19,7 @@ await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
     await vcall(await vcall(regular, "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"), await vcall(await vcall(regular, "getLocaleList", "()Landroid/os/LocaleList;"), "isEmpty", "()Z"),
     await vcall(await vcall(regular, "getBuffer", `()${BB}`), "capacity", "()I")],
     ["FontStyle { weight=400, slant=0}", 0, 0, "/system/fonts/Roboto-Regular.ttf", 1, 2371712]);
-  const boldBytes = await bytes("NotoSerif-Bold.ttf"), direct = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, boldBytes.length);
+  const boldBytes = bytes("NotoSerif-Bold.ttf"), direct = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, boldBytes.length);
   await vcall(direct, "put", `([B)${BB}`, new Int8Array(boldBytes.buffer));
   const bold = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, direct), "build", `()${F}`);
   same("from a direct buffer", await style(bold), "FontStyle { weight=700, slant=0}");
@@ -222,12 +223,12 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
 });
 
 // getTextWidths of printable ASCII in the default family across weights and sizes, hinting on and
-// off, as `bun run textcmp --record` printed them on the reference AVD
+// off, as `pnpm textcmp --record` printed them on the reference AVD
 await exercise("Paint.getTextWidths across weights and hinting (device values)", async () => {
   await loadSystemFonts();
   const ascii = Array.from({ length: 0x5e }, (_, i) => String.fromCharCode(0x21 + i)).join(""), T = "Landroid/graphics/Typeface;";
   const DEFAULT = await scall("android/graphics/Typeface", "defaultFromStyle", `(I)${T}`, 0);
-  const rows = (await Bun.file("tests/fixtures/textwidths-device.txt").text()).trim().split("\n").map((l) => l.split(" "));
+  const rows = readFileSync("tests/fixtures/textwidths-device.txt", "utf8").trim().split("\n").map((l) => l.split(" "));
   const bad: string[] = [];
   for (const [, weight, size, hinting, ...want] of rows) {
     const paint = await newObj("android/graphics/Paint", "(I)V", 1);

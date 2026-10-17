@@ -7,32 +7,32 @@
 // executing; a browser that runs that renderer on this thread gets only the calls that return
 // nothing, posted.
 
-import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "../jvm/natives/jentry";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { device } from "../shell/config";
-import { onMain } from "./mainloop";
-import { runningApp } from "./apphost";
-import { webCookies, thirdPartyCookies } from "./cookies";
-import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
-import { rendererPattern, rendererUrl } from "../shell/webrenderer";
-import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol";
-import type { WebCookies } from "../shell/webcookies";
-import { webRenderer } from "./webstorage";
-import { webPrintAdapter } from "./printing";
-import { canvasOf, type JavaCanvas } from "./canvas";
-import { cssColor } from "./graphics";
-import { drawFunctor, type Rect } from "./webfunctor";
-import { factory } from "./webfactory";
-import type { WebSettingsAdapter } from "./websettings";
-import { clientHints } from "./webuseragent";
-import { webAsset, webFonts } from "./webfonts";
-import { javaInterface, weakIfaces } from "./webjavabridge";
-import { WebHistory, documentFor, srcEntry, srcFor, srcdoc, webOrigin, type Entry } from "./webnavigation";
-import { interceptRequest, mkError, mkRequest } from "./webrequests";
-import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes";
+import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime.ts";
+import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "../jvm/natives/jentry.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { device } from "../shell/config.ts";
+import { onMain } from "./mainloop.ts";
+import { runningApp } from "./apphost.ts";
+import { webCookies, thirdPartyCookies } from "./cookies.ts";
+import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge.ts";
+import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
+import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
+import type { WebCookies } from "../shell/webcookies.ts";
+import { webRenderer } from "./webstorage.ts";
+import { webPrintAdapter } from "./printing.ts";
+import { canvasOf, type JavaCanvas } from "./canvas.ts";
+import { cssColor } from "./graphics.ts";
+import { drawFunctor, type Rect } from "./webfunctor.ts";
+import { factory } from "./webfactory.ts";
+import type { WebSettingsAdapter } from "./websettings.ts";
+import { clientHints } from "./webuseragent.ts";
+import { webAsset, webFonts } from "./webfonts.ts";
+import { javaInterface, weakIfaces } from "./webjavabridge.ts";
+import { WebHistory, documentFor, srcEntry, srcFor, srcdoc, webOrigin, type Entry } from "./webnavigation.ts";
+import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
+import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
 
-import type { FrameAnnouncement } from "../shell/web-surface";
+import type { FrameAnnouncement } from "../shell/web-surface.ts";
 
 /** the main frame's port once its page script listens, and the page's end */
 const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });

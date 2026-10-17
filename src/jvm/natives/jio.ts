@@ -1,17 +1,17 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { awaited, rt, JObj, driven, declaredField, type Gen } from "../runtime";
-import { concat } from "../abi";
-import { vcall, after, newObj } from "./jentry";
-import { E, ERRSTR } from "../../native/abi";
-import { readFully, writable } from "../../shell/lazyfile";
-import { vfs } from "../../shell/vfs";
-import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory";
-import { addressSize } from "./jvmruntime";
-import { mem } from "../../native/mem";
-import { syncShared, trackSharedMap } from "../../native/mappings";
-import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease } from "../../native/fs";
-import { processCloseFd as javaCloseFd, processSeekFd as javaSeekFd, processReadFd as javaReadFd, processPreadFd as javaPreadFd, processWriteFd as javaWriteFd, processPwriteFd as javaPwriteFd, processTruncateFd as javaTruncateFd, processFcntlFd as javaFcntlFd, processSyncFd as javaSyncFd, processFdStat as javaFdStat, processIoctlIntFd as javaIoctlIntFd, processMapping, isRemoteFd } from "../../native/process-fd";
+import { awaited, rt, type JObj, driven, declaredField, type Gen } from "../runtime.ts";
+import { concat } from "../abi.ts";
+import { vcall, after, newObj } from "./jentry.ts";
+import { E, ERRSTR } from "../../native/abi.ts";
+import { readFully, writable } from "../../shell/lazyfile.ts";
+import { vfs } from "../../shell/vfs.ts";
+import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory.ts";
+import { addressSize } from "./jvmruntime.ts";
+import { mem } from "../../native/mem.ts";
+import { syncShared, trackSharedMap } from "../../native/mappings.ts";
+import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease } from "../../native/fs.ts";
+import { processCloseFd as javaCloseFd, processSeekFd as javaSeekFd, processReadFd as javaReadFd, processPreadFd as javaPreadFd, processWriteFd as javaWriteFd, processPwriteFd as javaPwriteFd, processTruncateFd as javaTruncateFd, processFcntlFd as javaFcntlFd, processSyncFd as javaSyncFd, processFdStat as javaFdStat, processIoctlIntFd as javaIoctlIntFd, processMapping, isRemoteFd } from "../../native/process-fd.ts";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));

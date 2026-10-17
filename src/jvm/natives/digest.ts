@@ -13,11 +13,13 @@ export interface Hash {
 
 /** Merkle-Damgård over 64- or 128-byte blocks, the length appended in `lenBytes` bytes */
 abstract class MD implements Hash {
+  readonly block: number; private readonly lenBytes: number; private readonly littleEndian: boolean;
   abstract readonly size: number;
   private buf: Uint8Array;
   private used = 0;
   private total = 0;
-  protected constructor(readonly block: number, private readonly lenBytes: number, private readonly littleEndian: boolean) {
+  protected constructor(block: number, lenBytes: number, littleEndian: boolean) {
+    this.block = block; this.lenBytes = lenBytes; this.littleEndian = littleEndian;
     this.buf = new Uint8Array(block);
   }
   protected abstract compress(b: Uint8Array, off: number): void;
@@ -128,9 +130,10 @@ const SHA256_K = Int32Array.from([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5
   0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
 class SHA256 extends MD {
+  readonly size: 28 | 32;
   private h = new Int32Array(8);
   private w = new Int32Array(64);
-  constructor(readonly size: 28 | 32) { super(64, 8, false); this.init(); }
+  constructor(size: 28 | 32) { super(64, 8, false); this.size = size; this.init(); }
   protected init() {
     this.h.set(this.size === 32 ? [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
       : [0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4]);
@@ -182,9 +185,10 @@ const H384 = [0xcbbb9d5d, 0xc1059ed8, 0x629a292a, 0x367cd507, 0x9159015a, 0x3070
 const H512 = [0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1,
   0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179];
 class SHA512 extends MD {
+  readonly size: 48 | 64;
   private h = new Int32Array(16);
   private w = new Int32Array(160);
-  constructor(readonly size: 48 | 64) { super(128, 16, false); this.init(); }
+  constructor(size: 48 | 64) { super(128, 16, false); this.size = size; this.init(); }
   protected init() { this.h.set(this.size === 64 ? H512 : H384); }
   protected copyState(to: this) { to.h = this.h.slice(); to.w = new Int32Array(160); }
   protected compress(b: Uint8Array, off: number) {
@@ -275,9 +279,10 @@ const WEB_MIN = 1 << 16, WEB_MAX = 1 << 26;
  *  64 KB or more runs in the browser's digest, which uses the CPU's SHA instructions (V8: SHA-256 of 1 MB
  *  in 0.34 ms against 3.1 ms in JS, where the compression function is at its ceiling). */
 export class Deferred implements Hash {
+  private readonly inner: Hash; private readonly web?: string;
   private held: Uint8Array<ArrayBuffer> | null;
   private n = 0;
-  constructor(private readonly inner: Hash, private readonly web?: string) { this.held = web ? new Uint8Array(0) : null; }
+  constructor(inner: Hash, web?: string) { this.inner = inner; this.web = web; this.held = web ? new Uint8Array(0) : null; }
   get size() { return this.inner.size; }
   get block() { return this.inner.block; }
   update(b: Uint8Array, off = 0, len = b.length - off): void {

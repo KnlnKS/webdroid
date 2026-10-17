@@ -1,33 +1,32 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
-// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH; node runs it with --experimental-wasm-jspi (run.ts).
-// Run: bun run wasm threads [case,case,... | substrate]
+// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH.
+// Run: pnpm wasm threads [case,case,... | substrate]
 import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { mountPlatform, startProcess } from "./harness";
-import { nativeSource } from "../../src/wasm/host/nativesource";
-import { Natives } from "../../src/wasm/host/natives";
-import { suspendedNatives } from "../../src/wasm/host/suspend";
-import { rt } from "../../src/jvm/runtime";
-import { perf } from "../../src/perf";
-import { fnRunnable } from "../../src/android/mainloop";
-import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
-import { defaultLoop, emitRestored } from "../../src/wasm/link/sched";
-import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
-import { resumeAs } from "../../src/jvm/natives/jentry";
-import { hasJspi } from "../../src/wasm/link/module";
-import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc";
-import { HEAP_LIMIT } from "../../src/jvm/abi";
-import { T } from "../../src/wasm/compiler/wasmbin";
-import { classIntrinsics } from "../../src/wasm/link/classes";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { world } from "./lib.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
+import { nativeSource } from "../../src/wasm/host/nativesource.ts";
+import { Natives } from "../../src/wasm/host/natives.ts";
+import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
+import { rt } from "../../src/jvm/runtime.ts";
+import { perf } from "../../src/perf.ts";
+import { fnRunnable } from "../../src/android/mainloop.ts";
+import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
+import { emitRestored } from "../../src/wasm/link/sched.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
+import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
+import { resumeAs } from "../../src/jvm/natives/jentry.ts";
+import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc.ts";
+import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
+import { T } from "../../src/wasm/compiler/wasmbin.ts";
+import { classIntrinsics } from "../../src/wasm/link/classes.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, shellIn } from "./tools.ts";
 
-if (!hasJspi()) { console.error("threads needs JSPI: run it with bun run wasm threads (node --experimental-wasm-jspi)"); process.exit(2); }
 const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);
@@ -39,11 +38,11 @@ let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns =
 const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => {
+} satisfies NativeSource), loop: { ...hostLoop, due: () => admissionProbe || arithmeticProbe || hostLoop.due(), yield: (soon) => {
   if (rejectAdmission) return Promise.reject(new Error("admission timer rejected"));
   if (admissionProbe) admissionTurns++;
   if (arithmeticProbe) { turns++; return Promise.resolve(); }
-  const pending = defaultLoop.yield(soon);
+  const pending = hostLoop.yield(soon);
   if (idleBeforeResume) {
     // Model another entry completing between the admission reaction and the engine's resume.
     const then = pending.then.bind(pending);
@@ -69,6 +68,12 @@ const TH: Record<string, HostFn> = {
   },
   "await(I)I": async (x: number) => { await sleep(1); return x + 1; },
   "driven(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) { const v: number = yield Promise.resolve(x * 3); return v + 1; } }),
+  "drivenEnters(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) {
+    const v: number = yield Promise.resolve(x), u: number = yield v + 1;
+    return callbackEntry.scall("Th", "onDriven", "(I)I", u);
+  } }),
+  // async to import it as Suspending (flagged owns the plain import's report); `after` runs before it waits, where an `await` would lose the thread
+  "afterEnters(I)I": async (x: number) => callbackEntry.after(sleep(1).then(() => x + 2), (v) => callbackEntry.scall("Th", "onDriven", "(I)I", v)),
   "nested(I)I": async (x: number) => (await w.entryAsync("Th", "inner", "(I)I")(x) as number) + 1,
   "flagged(I)I": (x: number) => Promise.resolve(x),
   "gapEcho([BI)[B": async (a: Int8Array, ms: number) => { await (gate ??= sleep(20 + ms).then(() => { gate = null; })); const r = Int8Array.from(a).reverse(); a[0] = a[0] + 1; return r; },
@@ -143,7 +148,7 @@ if (substrate) {
   for (const mode of ["bridge", "full", "recovered"] as const) {
     let full = false, turns = 0, bridge = 0;
     const heap = world(w.prog, { heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
-      ...defaultLoop, after: (ms, run) => defaultLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
+      ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
     heap.host.heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
@@ -319,6 +324,8 @@ if (substrate) {
   // natives that wait: async, a generator, one that enters Java through a promising entry that waits again
   expect("async native", await show(() => w.entryAsync("Th", "trap", "(I)I")(4)), 5);
   expect("generator native", await show(() => w.entryAsync("Th", "driven", "(I)I")(4)), 13);
+  expect("generator native enters Java on its thread after a wait", await show(() => w.entryAsync("Th", "drivenThread", "(I)I")(4)), 5);
+  expect("after enters Java on the native's thread once its Promise settles", await show(() => w.entryAsync("Th", "afterThread", "(I)I")(4)), 6);
   expect("nested promising entry", await show(() => w.entryAsync("Th", "nested", "(I)I")(4)), 11);
   // arrays given to and answered by natives that wait at the same time stay each strand's own
   expect("array arguments and results across a wait", await show(() => w.entryAsync("Th", "arrayGap", "(I)I")(300)), 0);

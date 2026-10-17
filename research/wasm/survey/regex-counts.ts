@@ -1,7 +1,7 @@
-// Regex cross-checks and registration-style inventory. Run: bun research/wasm/survey/regex-counts.ts
+// Regex cross-checks and registration-style inventory. Run: node research/wasm/survey/regex-counts.ts
 import { readdirSync, statSync, readFileSync } from "fs";
 import { join, relative } from "path";
-const ROOT = join(import.meta.dir, "../../..");
+const ROOT = join(import.meta.dirname, "../../..");
 const walk = (d: string, o: string[] = []) => { for (const n of readdirSync(d)) { const p = join(d, n); statSync(p).isDirectory() ? (n !== "node_modules" && walk(p, o)) : /\.ts$/.test(n) && !/\.test\.ts$|testkit|\.d\.ts$/.test(n) && o.push(p); } return o; };
 const files = walk(join(ROOT, "src"));
 const pats: Record<string, RegExp> = {

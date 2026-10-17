@@ -4,16 +4,17 @@
 // repetition just ended. The frames come from the browser's ImageDecoder (WebCodecs), decoded
 // once at the drawable's size; until they arrive nothing is drawn and a redraw is asked for.
 
-import { rt } from "../jvm/runtime";
-import { handle, deref, FINALIZER } from "./handles";
-import { type NativeColorFilter, edges, tintedBmp } from "./graphics";
-import { type NativeCanvas, drawingCanvas } from "./canvas";
-import { NativeBitmap } from "./bitmap";
-import type { EncodedImage } from "./decode";
-import { uptimeMillis } from "../guest-clock";
+import { rt } from "../jvm/runtime.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import { type NativeColorFilter, edges, tintedBmp } from "./graphics.ts";
+import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { NativeBitmap } from "./bitmap.ts";
+import type { EncodedImage } from "./decode.ts";
+import { uptimeMillis } from "../guest-clock.ts";
 
 const REPEAT_INFINITE = -1, FINISHED = -1n, RETRY_MS = 16n;
 class AnimatedImage {
+  readonly w: number; readonly h: number;
   frames: { image: NativeBitmap; ms: number }[] = [];
   count = 1;
   repeatCount = REPEAT_INFINITE;
@@ -23,7 +24,7 @@ class AnimatedImage {
   current = 0;
   alpha = 255; filter: NativeColorFilter | null = null; mirrored = false;
   bounds = [0, 0, 0, 0];
-  constructor(readonly w: number, readonly h: number) {}
+  constructor(w: number, h: number) { this.w = w; this.h = h; }
 
   async decode(bytes: Uint8Array, type: string, crop: number[] | null): Promise<void> {
     if (typeof ImageDecoder === "undefined") return;

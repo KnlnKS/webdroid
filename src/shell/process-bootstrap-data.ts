@@ -1,6 +1,6 @@
-import type { PackedArchiveIndex } from "./packedarchive";
-import type { RemoteFileData } from "./remote-file";
-import type { Rotation } from "./config";
+import type { PackedArchiveIndex } from "./packedarchive.ts";
+import type { RemoteFileData } from "./remote-file.ts";
+import type { Rotation } from "./config.ts";
 
 /** Installed config/feature splits are loaded only by their owning package. */
 type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;

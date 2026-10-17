@@ -1,17 +1,17 @@
 // The system activities behind android.provider's and android.content's intents (DocumentsUI's
 // pickers, the photo picker, the chooser, sharing and viewing), over the browser's own.
 
-import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall } from "../jvm/natives/jentry";
-import { serviceContext } from "./binder";
-import { startActivityFor } from "./server/atm";
-import { thisApp } from "./server/am";
-import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery$, mkComponentName, type JIntent } from "./intent";
-import { csText } from "../jvm/natives/jchars";
-import { frameworkString } from "./res";
-import { mkUri } from "./net";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { pickTree, pickDocument, pickDocuments } from "./documents";
+import { awaited, rt, type JObj, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
+import { serviceContext } from "./binder.ts";
+import { startActivityFor } from "./server/atm.ts";
+import { thisApp } from "./server/am.ts";
+import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery$, mkComponentName, type JIntent } from "./intent.ts";
+import { csText } from "../jvm/natives/jchars.ts";
+import { frameworkString } from "./res.ts";
+import { mkUri } from "./net.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { pickTree, pickDocument, pickDocuments } from "./documents.ts";
 
 const S = "Ljava/lang/String;";
 const typeOf = (intent: JIntent): string | null | Promise<string | null> => vcall(intent, "getType", `()${S}`);
@@ -57,15 +57,15 @@ for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.act
 }
 registerSystemActivity("android.intent.action.VIEW", driven(function* (intent: JIntent): Gen<null> {
   const url: string = yield vcall(intent, "getDataString", `()${S}`);
-  return yield* awaited((yield* awaited(import("../shell/share"))).openInBrowser(url));
+  return yield* awaited((yield* awaited(import("../shell/share.ts"))).openInBrowser(url));
 }), ["http", "https", "market"]);
 for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"])
-  registerSystemActivity(action, driven(function* (intent: JIntent): Gen<JIntent | null> { return yield* awaited((yield* awaited(import("../shell/share"))).shareIntent(intent)); }));
+  registerSystemActivity(action, driven(function* (intent: JIntent): Gen<JIntent | null> { return yield* awaited((yield* awaited(import("../shell/share.ts"))).shareIntent(intent)); }));
 registerSystemActivity("android.intent.action.CHOOSER", driven(function* (intent: JIntent): Gen<JIntent | null> {
   const target: JIntent | null = yield vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, "android.intent.extra.INTENT");
   if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
   const q = yield* intentQuery$(target);
-  const share = () => import("../shell/share");
+  const share = () => import("../shell/share.ts");
   if (q.action === "android.intent.action.SEND" || q.action === "android.intent.action.SEND_MULTIPLE")
     return yield* awaited((yield* awaited(share())).shareIntent(intent));
   const handler = systemActivity(q);

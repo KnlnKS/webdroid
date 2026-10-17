@@ -1,6 +1,6 @@
 // Address parsing, host resolution and interfaces shared by sockets, libcore and netd.
-import { syntheticAddress, syntheticHost, nameExists, ipv4Text, parseIpv4 } from "../shell/relay";
-import { sameBytes } from "../jvm/abi";
+import { syntheticAddress, syntheticHost, nameExists, ipv4Text, parseIpv4 } from "../shell/relay.ts";
+import { sameBytes } from "../jvm/abi.ts";
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
 export const AI_NUMERICHOST = 4;

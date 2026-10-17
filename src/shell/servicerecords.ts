@@ -4,10 +4,10 @@
 // restart what is still wanted (a sticky start, an unfinished or redelivered start, a
 // BIND_AUTO_CREATE binding) with scheduleServiceRestartLocked's backoff, and bring the rest down. A
 // process crashing counts against its services as AppErrors.handleAppCrashLocked counts it.
-import type { BinderHandle, ParcelData } from "../android/binder";
-import type { PendingOperation } from "./pendingintents";
-import type { Death } from "../android/server/appexitinfo";
-import { clearGuestTimeout, setSystemTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
+import type { BinderHandle, ParcelData } from "../android/binder.ts";
+import type { PendingOperation } from "./pendingintents.ts";
+import type { Death } from "../android/server/appexitinfo.ts";
+import { clearGuestTimeout, setSystemTimeout, uptimeMillis, type GuestTimer } from "../guest-clock.ts";
 
 /** ActivityManagerConstants' restart timing and ServiceRecord's redelivery limits */
 const RESTART_MS = 1000, RESET_RUN_MS = 60_000, RESTART_FACTOR = 4, MIN_RESTART_SPACING_MS = 10_000;
@@ -41,9 +41,10 @@ type Record = { pkg: string; process: string; cls: string; intent: ParcelData; r
 const unawaited = (work: Promise<unknown> | null) => void work?.catch((error) => console.error("[services]", error));
 
 export class ServiceRecords {
+  private port: ServicePort;
   private records = new Map<string, Record>();
   private byKey = new Map<string, Record>();
-  constructor(private port: ServicePort) {}
+  constructor(port: ServicePort) { this.port = port; }
 
   private record(pkg: string, process: string, cls: string, intent: ParcelData): Record {
     const name = pkg + "/" + cls;

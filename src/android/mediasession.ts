@@ -1,11 +1,11 @@
 // ISessionManager, ISession and ISessionController, as MediaSessionService and MediaSessionRecord
 // keep sessions: a record holds what its session last set, relays a controller's transport calls
 // to the session's ISessionCallback, and tells registered ISessionControllerCallbacks of changes.
-import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
-import { after, newObj, scall, vcall } from "../jvm/natives/jentry";
-import { lambda } from "../jvm/natives/jlambda";
-import { hostStub, newStub, oneway } from "./binder";
-import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio";
+import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime.ts";
+import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { lambda } from "../jvm/natives/jlambda.ts";
+import { hostStub, newStub, oneway } from "./binder.ts";
+import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio.ts";
 
 const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
 const PS = MS + "PlaybackState", PI = MS + "MediaController$PlaybackInfo", AA = "Landroid/media/AudioAttributes;";

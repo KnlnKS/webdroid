@@ -1,10 +1,10 @@
-import { beforeAll, describe, expect, test } from "bun:test";
-import { mem } from "./mem";
-import { Cpu, setA64 } from "./cpu";
-import { core, jitStats, JIT_HEAT } from "./core";
-import { finish, pattern, sweep } from "./a64.testkit";
-import { mainThread } from "../jvm/natives/jentry";
-import { RET_SENTINEL } from "./abi";
+import { beforeAll, describe, expect, test } from "vite-plus/test";
+import { mem } from "./mem.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { core, jitStats, JIT_HEAT } from "./core.ts";
+import { finish, pattern, place, sweep } from "./a64.testkit.ts";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { RET_SENTINEL } from "./abi.ts";
 
 let shared: Cpu | null = null;
 function execute(at: number, setup: (c: Cpu) => void): Cpu {
@@ -19,11 +19,7 @@ function execute(at: number, setup: (c: Cpu) => void): Cpu {
   return c;
 }
 function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  // ask for the page the way a module load does, rather than picking an address that the stack
-  // allocator can march into
-  const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
-  for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
-  return sweep(execute, at, setup);
+  return sweep(execute, place(words), setup);
 }
 function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((half.length * 2 + 0xfff) & ~0xfff, 0x1000);

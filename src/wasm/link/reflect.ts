@@ -3,24 +3,25 @@
 // Executable's other fields (declaringClass, accessFlags, dexMethodIndex) are filled as ART does. Invoking is a generated thunk per
 // method (host.info hands out its table slot): it unboxes the Object[] into the method's parameters, dispatches as the invoke
 // instruction would, boxes the result and wraps what the method throws in InvocationTargetException.
-import { OP } from "../compiler/code";
-import { T, refNull } from "../compiler/wasmbin";
-import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program";
-import { descToName } from "../../jvm/abi";
-import { H } from "../compiler/consts";
-import { emitString, idOfClass, classMethod, emitNameEq, typeName, vtId } from "./classes";
-import { UInfo } from "./unsafe";
-import { WIDEN, BOX } from "../compiler/fields";
-import { rt } from "../compiler/rtfns";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
+import { OP } from "../compiler/code.ts";
+import { T, refNull } from "../compiler/wasmbin.ts";
+import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program.ts";
+import { descToName } from "../../jvm/abi.ts";
+import { H } from "../compiler/consts.ts";
+import { emitString, idOfClass, classMethod, emitNameEq, typeName, vtId } from "./classes.ts";
+import { UInfo } from "./unsafe.ts";
+import { WIDEN, BOX } from "../compiler/fields.ts";
+import { rt } from "../compiler/rtfns.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, SerialInit, MethodSlot }
+export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
+export type RInfo = (typeof RInfo)[keyof typeof RInfo];
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
 function members(jc: JClass | undefined): string[] {
@@ -42,7 +43,7 @@ const byName = new WeakMap<JClass, Map<number, number[]>>();
 /** the methods of the class `MethodsNamed` last counted, which `MethodNamedAt` indexes */
 let named: number[] = [];
 
-export function hostReflect(w: World, kind: RInfo, a: number, b: number): number {
+export function hostReflect(w: World, kind: number, a: number, b: number): number {
   const jc = w.prog.get(w.nameOf(a));
   if (kind === RInfo.MethodCount) return jc?.def ? jc.methods.length : 0;
   if (kind === RInfo.IfaceCount) return jc?.ifaces.length ?? 0;

@@ -1,14 +1,14 @@
-import { javaName, type Loader } from "../compiler/program";
-import { idOfClass } from "./classes";
-import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders";
-import { T } from "../compiler/wasmbin";
-import type { Strand } from "./sched";
-import type { World } from "./world";
-import type { MethodInfo } from "../compiler/program";
-import type { PreparedInstruction } from "../../jvm/prepared";
-import { descToName } from "../../jvm/abi";
-import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles";
-import { THROWERS } from "./exc";
+import { javaName, type Loader } from "../compiler/program.ts";
+import { idOfClass } from "./classes.ts";
+import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders.ts";
+import { T } from "../compiler/wasmbin.ts";
+import type { Strand } from "./sched.ts";
+import type { World } from "./world.ts";
+import type { MethodInfo } from "../compiler/program.ts";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import { descToName } from "../../jvm/abi.ts";
+import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles.ts";
+import { THROWERS } from "./exc.ts";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
   const next = (at: number): void | Promise<void> => {

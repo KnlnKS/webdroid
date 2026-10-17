@@ -1,10 +1,10 @@
 // ART's process configuration boundaries.
-import { rt } from "../runtime";
-import { jarray } from "../abi";
-import { libraryAbi } from "./jlang";
-import { ABIS_32 } from "../../shell/properties";
-import { device } from "../../shell/config";
-import { BOOT_JAR_PATHS } from "../bootclasspath";
+import { rt } from "../runtime.ts";
+import { jarray } from "../abi.ts";
+import { libraryAbi } from "./jlang.ts";
+import { ABIS_32 } from "../../shell/properties.ts";
+import { device } from "../../shell/config.ts";
+import { BOOT_JAR_PATHS } from "../bootclasspath.ts";
 
 const is32Bit = (names: Iterable<string>) => ABIS_32.includes(libraryAbi(names) ?? "");
 let wide: boolean | null = null, bitnessFixed!: () => void;

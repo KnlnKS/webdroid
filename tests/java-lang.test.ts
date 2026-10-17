@@ -1,15 +1,15 @@
-import { expect, test, describe } from "bun:test";
-import "../src/natives";
+import { expect, test, describe } from "vite-plus/test";
+import "../src/natives.ts";
 import { readFileSync } from "node:fs";
-import { jarray, longBitsToDouble } from "../src/jvm/abi";
-import { DexFile } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry";
-import { JObj, rt } from "../src/jvm/runtime";
-import { loadDex } from "../src/jvm/tier";
-import { scall, thrown, loadLibcore, mountApexData } from "./java";
-import { detached } from "../src/jvm/natives/jthrowable";
+import { setTimeout as sleep } from "node:timers/promises";
+import { jarray, longBitsToDouble } from "../src/jvm/abi.ts";
+import { DexFile } from "../src/jvm/dex.ts";
+import { vcall, newObj, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry.ts";
+import { JObj, rt } from "../src/jvm/runtime.ts";
+import { loadDex } from "../src/jvm/tier.ts";
+import { scall, thrown, mountApexData } from "./java.ts";
+import { detached } from "../src/jvm/natives/jthrowable.ts";
 
-await loadLibcore();
 await mountApexData();
 
 describe("strict-math", () => {
@@ -264,7 +264,7 @@ describe("uncaught-exceptions", () => {
       // a host-entered call no Java frame waits on escapes the thread that made it
       seen.length = 0;
       detached(() => { throw failure; });
-      await Bun.sleep(0);
+      await sleep(0);
       const main = await scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;");
       expect(seen).toEqual([["pre", main, failure], ["default", main, failure]]);
     } finally {
@@ -289,7 +289,7 @@ describe("thread-group", () => {
     const activeCount = () => vcall(group, "activeCount", "()I");
     const count = await activeCount();
     await vcall(thread, "start", "()V");
-    await Bun.sleep(0);
+    await sleep(0);
     try {
       expect(await activeCount()).toBe(count + 1);
       const threads = jarray(new Array(count + 2).fill(null), "Ljava/lang/Thread;");
@@ -360,7 +360,7 @@ describe("string-trim", () => {
 
 describe("invoke-polymorphic-custom", () => {
   test("VarHandles, method handles and record methods", async () => {
-    loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/InvokeProbe.dex"))), true);
+    loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dirname + "/fixtures/InvokeProbe.dex"))), true);
     const missing = rt.missing.size, call = (name: string) => scall("InvokeProbe", name, "()Ljava/lang/String;");
     expect(await call("varHandles")).toBe("true,false,5,8,true,true,true,40,42,true,y,oob");
     expect(await call("methodHandles")).toBe("103,107,n7");
@@ -385,14 +385,14 @@ describe("system-properties", () => {
   test("Runtime.exec tokenizes the program and reports that processes cannot start", async () => {
     const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
     const error = await thrown(() => vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"));
-    expect(error).toStartWith("java/io/IOException: ");
+    expect(error).toMatch(/^java\/io\/IOException: /);
     expect(error).toContain('"getprop"');
   });
 });
 
 describe("dex-class-loaders", () => {
   test("in-memory DEX loaders read the buffer window and preserve defining-loader identity", async () => {
-    const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
+    const bytes = new Uint8Array(readFileSync(import.meta.dirname + "/fixtures/JvmTierProbe.dex"));
     const padded = new Int8Array(bytes.length + 16);
     padded.set(bytes, 8);
     const buffer = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
@@ -403,7 +403,7 @@ describe("dex-class-loaders", () => {
     expect(await vcall(second, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).not.toBe(cls);
     expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
     expect([await vcall(buffer, "position", "()I"), await vcall(buffer, "limit", "()I")]).toEqual([8, 8 + bytes.length]);
-    const { readOnlyBuffer } = await import("../src/jvm/natives/jnio");
+    const { readOnlyBuffer } = await import("../src/jvm/natives/jnio.ts");
     const mapped = await readOnlyBuffer(bytes);
     const paged = await newObj("dalvik/system/InMemoryDexClassLoader", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V", mapped, null);
     const loaded = await vcall(paged,"loadClass","(Ljava/lang/String;)Ljava/lang/Class;","JvmTierProbe");

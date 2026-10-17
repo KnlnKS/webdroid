@@ -2,12 +2,12 @@
 // VFS the way installd walks it, with StorageStatsService's checks (decoded from the reference
 // AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
-import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { vfs, storageEstimate } from "../shell/vfs";
-import { packages } from "./packages";
-import { mimeOf } from "../mime";
-import { callingIdentity, hostStub, serviceContext } from "./binder";
+import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
+import { vfs, storageEstimate } from "../shell/vfs.ts";
+import { packages } from "./packages.ts";
+import { mimeOf } from "../mime.ts";
+import { callingIdentity, hostStub, serviceContext } from "./binder.ts";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {

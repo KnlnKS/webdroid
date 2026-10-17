@@ -1,44 +1,44 @@
-import { webStorageTransport } from "../android/webstorage";
+import { webStorageTransport } from "../android/webstorage.ts";
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
-import { remoteLocation } from "./location-access";
-import { remoteProcessLife } from "./process-life";
-import { filePathTransport } from "./file-path";
-import { descriptorTransport } from "../native/process-fd";
-import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
-import { executePendingIntent, pendingTransport } from "../android/pendingintent";
-import { alarmTransport } from "../android/alarm";
-import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
-import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder";
-import { PROCESS_PID, processTransport } from "../android/os";
-import { exitProcess, onProcessExit } from "../process-exit";
-import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo";
-import { after } from "../jvm/natives/jentry";
-import { systemProviderTransport } from "../android/systemproviders";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
-import type { ServiceRequest, ServiceStarts } from "./servicerecords";
-import { vfs } from "./vfs";
-import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue";
-import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
-import { publishedProvider, providerProcesses } from "../android/server/am";
-import { usePermissionStore, usePermissionAccess } from "../android/permissions";
-import { sqliteTransport } from "../android/sqlite";
-import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs";
-import { useNotificationStore, notificationTransport } from "../android/notification";
-import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings";
-import { remoteSettings } from "./settings";
-import { awaited, rt, driven, type Gen } from "../jvm/runtime";
-import { cookieTransport, useWebCookies } from "../android/cookies";
-import { clipboardTransport, clipboardChanged } from "../android/clipboard";
-import { locationTransport } from "../android/locationmanager";
-import { useHostUi } from "./host-ui";
-import { packageDataTransport } from "../android/appdata";
-import { storageChanged } from "./device-storage";
-import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
+import { remoteLocation } from "./location-access.ts";
+import { remoteProcessLife } from "./process-life.ts";
+import { filePathTransport } from "./file-path.ts";
+import { descriptorTransport } from "../native/process-fd.ts";
+import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts.ts";
+import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
+import { alarmTransport } from "../android/alarm.ts";
+import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc.ts";
+import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
+import { PROCESS_PID, processTransport } from "../android/os.ts";
+import { exitProcess, onProcessExit } from "../process-exit.ts";
+import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { systemProviderTransport } from "../android/systemproviders.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices.ts";
+import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
+import { vfs } from "./vfs.ts";
+import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue.ts";
+import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm.ts";
+import { publishedProvider, providerProcesses } from "../android/server/am.ts";
+import { usePermissionStore, usePermissionAccess } from "../android/permissions.ts";
+import { sqliteTransport } from "../android/sqlite.ts";
+import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
+import { useNotificationStore, notificationTransport } from "../android/notification.ts";
+import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings.ts";
+import { remoteSettings } from "./settings.ts";
+import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { cookieTransport, useWebCookies } from "../android/cookies.ts";
+import { clipboardTransport, clipboardChanged } from "../android/clipboard.ts";
+import { locationTransport } from "../android/locationmanager.ts";
+import { useHostUi } from "./host-ui.ts";
+import { packageDataTransport } from "../android/appdata.ts";
+import { storageChanged } from "./device-storage.ts";
+import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes.ts";
 
-import { callProxy, processError, processFailure } from "./process-port";
-import { note, Ev } from "../timeline";
+import { callProxy, processError, processFailure } from "./process-port.ts";
+import { note, Ev } from "../timeline.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
@@ -254,8 +254,8 @@ export function createProcessEndpoint(requests = workerActivityResults): Process
     packageRemoved: async pkg => forgetRemoved(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
-      if (request.kind === "back") return (await import("./device")).pressBack();
-      if (request.kind === "rotate") return (await import("./device")).rotateDevice(request.landscape);
+      if (request.kind === "back") return (await import("./device.ts")).pressBack();
+      if (request.kind === "rotate") return (await import("./device.ts")).rotateDevice(request.landscape);
       return asBroker(function* (): Gen<void> {
         if (request.kind === "visibility") {
           yield taskVisibility(request.phase);

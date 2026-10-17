@@ -1,10 +1,10 @@
-// Type-checker-backed survey of Java-object coupling. Run: bun research/wasm/survey/ast-survey.ts
+// Type-checker-backed survey of Java-object coupling. Run: node research/wasm/survey/ast-survey.ts
 // Writes research/wasm/survey/out/ast.json. Static only (no execution of webdroid code).
 import ts from "typescript";
-import { readdirSync, statSync, writeFileSync, readFileSync } from "fs";
+import { mkdirSync, readdirSync, statSync, writeFileSync, readFileSync } from "fs";
 import { join, relative } from "path";
 
-const ROOT = join(import.meta.dir, "../../..");
+const ROOT = join(import.meta.dirname, "../../..");
 const SCOPES: Record<string, string> = {
   "jvm/natives": "src/jvm/natives", "jvm/core": "src/jvm", android: "src/android",
   native: "src/native", shell: "src/shell", "src/top": "src",
@@ -279,5 +279,6 @@ for (const sf of program.getSourceFiles()) {
   };
   visit(sf);
 }
-writeFileSync(join(import.meta.dir, "out/ast.json"), JSON.stringify({ perFile, entries, regCalls, classes }, null, 1));
+mkdirSync(join(import.meta.dirname, "out"), { recursive: true });
+writeFileSync(join(import.meta.dirname, "out/ast.json"), JSON.stringify({ perFile, entries, regCalls, classes }, null, 1));
 console.log("files", Object.keys(perFile).length, "entries", entries.length, "regCalls", regCalls.length);

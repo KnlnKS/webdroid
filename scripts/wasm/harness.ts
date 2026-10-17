@@ -1,18 +1,18 @@
 // What the harnesses run Java with: the registered natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
 import { existsSync, openSync, readFileSync, readSync } from "node:fs";
-import "../../src/natives";
-import { jarDexes, mountPlatformJar } from "../../src/android/framework";
-import { Program } from "../../src/wasm/compiler/program";
-import { externs } from "../../src/wasm/link/intrinsics";
-import { mountPlatformData } from "../../src/shell/apex";
-import { PLATFORM_DATA } from "../../src/jvm/bootclasspath";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory";
-import { lookup, natives, settled } from "../../src/wasm/host/nativesource";
-import type { World } from "../../src/wasm/link/world";
-import { world } from "./lib";
-import { vfs } from "../../src/shell/vfs";
+import "../../src/natives.ts";
+import { jarDexes, mountPlatformJar } from "../../src/android/framework.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { mountPlatformData } from "../../src/shell/apex.ts";
+import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
+import { lookup, natives, settled } from "../../src/wasm/host/nativesource.ts";
+import type { World } from "../../src/wasm/link/world.ts";
+import { world } from "./lib.ts";
+import { vfs } from "../../src/shell/vfs.ts";
 export { natives };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */

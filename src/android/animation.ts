@@ -2,9 +2,9 @@
 // (android_animation_PropertyValuesHolder.cpp): a setter found by JNI's GetMethodID, which the
 // holder then calls on its target, dispatched virtually.
 
-import { rt, type JObj } from "../jvm/runtime";
-import { vcall, linkClass, after } from "../jvm/natives/jentry";
-import { deref, handle } from "./handles";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { vcall, linkClass, after } from "../jvm/natives/jentry.ts";
+import { deref, handle } from "./handles.ts";
 
 /** a jmethodID: the virtual method `name``desc` a class has, which NoSuchMethodError reports missing */
 const ids = new Map<string, bigint>();

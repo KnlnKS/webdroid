@@ -1,25 +1,28 @@
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
-import { never, processExited } from "../process-exit";
-import { note, Ev } from "../timeline";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
+import { never, processExited } from "../process-exit.ts";
+import { note, Ev } from "../timeline.ts";
 
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),
 // which is what a computation that yields every few milliseconds would otherwise spend idle in.
 // Each turn resumes one yielded thread, after every thread woken since the last turn, so a wake
 // waits out one thread's slice rather than a round of every runnable thread's.
+type NodePort = MessagePort & { ref?(): void; unref?(): void };
 const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 const waiters: (() => void)[] = [], woken: (() => void)[] = [];
 let posted = false;
-const post = (): void => { if (!posted) { posted = true; chan!.port2.postMessage(0); } };
+// node: a posted turn holds the process open and an idle port does not, so a script awaiting a turn
+// runs on and one whose work is done exits
+const port = chan?.port1 as NodePort | undefined;
+const post = (): void => { if (!posted) { posted = true; port?.ref?.(); chan?.port2.postMessage(0); } };
 if (chan) {
   chan.port1.onmessage = () => {
-    posted = false; yieldStats.fires++; turnArmed = false; note(Ev.Turn);
+    posted = false; port?.unref?.(); yieldStats.fires++; turnArmed = false; note(Ev.Turn);
     for (const f of woken.splice(0)) f();
     waiters.shift()?.();
     if (waiters.length) post();
   };
-  // an open port keeps a bun/node process alive after its work is done (tests, scripts)
-  (chan.port1 as unknown as { unref?: () => void }).unref?.();
+  port?.unref?.();
 }
 /** How long the current macrotask has held the JS thread, from the first time this turn asked: a
  *  turn ends at its own message, or when the yield channel starts the next. */
@@ -27,7 +30,7 @@ let turnStart = 0, turnArmed = false;
 const turnChannel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 if (turnChannel) {
   turnChannel.port1.onmessage = () => { turnArmed = false; };
-  (turnChannel.port1 as unknown as { unref?: () => void }).unref?.();
+  (turnChannel.port1 as NodePort).unref?.();
 }
 export function turnElapsed(): number {
   const now = performance.now();

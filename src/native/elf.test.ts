@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { decodeAndroidPacked, decodeRelr, mapElf } from "./elf";
-import { mem } from "./mem";
+import { describe, expect, test } from "vite-plus/test";
+import { decodeAndroidPacked, decodeRelr, mapElf } from "./elf.ts";
+import { mem } from "./mem.ts";
 
 const sleb = (input: number | bigint): number[] => {
   let value = BigInt(input);

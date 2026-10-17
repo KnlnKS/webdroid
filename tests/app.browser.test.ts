@@ -1,47 +1,33 @@
 // Runtime paths that need a real Canvas2D/WebGL: the fixtures in fixtures/browser are bundled once,
 // served beside the framework resources, and each probe runs in its own page.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+import { readFile } from "node:fs/promises";
 import { chromium, type Browser } from "playwright";
+import { bundle } from "../scripts/bundle.ts";
+import { runNode } from "../scripts/node.ts";
+import { fileResponse, serve, type Served } from "../scripts/serve.ts";
 
 let browser: Browser;
-let server: ReturnType<typeof Bun.serve>;
-// Each probe loads the whole runtime into a fresh page and the GL probes compile shaders in software;
-// under a loaded host that alone passes bun's 5 s default, which bounds nothing these tests check.
-const PAGE_TIMEOUT = 60_000;
+let server: Served;
 
 beforeAll(async () => {
-  const [build, launched] = await Promise.all([
-    Bun.build({ entrypoints: [`${import.meta.dir}/fixtures/browser/index.ts`], target: "browser", format: "esm" }),
-    chromium.launch({ headless: true }),
-  ]);
+  const [script, index, launched] = await Promise.all([bundle("tests/fixtures/browser/index.ts"), runNode("scripts/font-index.ts"), chromium.launch({ headless: true })]);
   browser = launched;
-  if (!build.success) throw new AggregateError(build.logs, "browser fixture build failed");
-  // Streamed responses (a BuildArtifact's, a Bun.file's) intermittently arrive duplicated or fail under concurrent
-  // browser load: each file is served from memory, read once.
-  const bundle = await build.outputs[0].text(), fontIndex = Bun.spawnSync(["bun", "scripts/font-index.ts"]).stdout.toString();
-  const files = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
-  server = Bun.serve({ port: 0, fetch(request) {
-    const path = new URL(request.url).pathname;
-    const file = async (at: string, headers: Record<string, string> = {}) => {
-      if (!files.has(at)) files.set(at, Bun.file(`${import.meta.dir}/..${at}`).bytes() as Promise<Uint8Array<ArrayBuffer>>);
-      const bytes = await files.get(at)!, range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
-      if (!range) return new Response(bytes, { headers });
-      const end = Math.min(range[2] ? +range[2] + 1 : bytes.length, bytes.length);
-      return new Response(bytes.subarray(+range[1], end), { status: 206, headers: { ...headers, "content-range": `bytes ${range[1]}-${end - 1}/${bytes.length}` } });
-    };
+  server = await serve({ fetch(request) {
+    const path = new URL(request.url).pathname, file = (at: string) => fileResponse(`${import.meta.dirname}/..${at}`, request);
     if (path === "/framework.apk") return file("/vendor/aosp/framework-res.apk");
-    if (path === "/font-index.json") return new Response(fontIndex, { headers: { "content-type": "application/json" } });
+    if (path === "/font-index.json") return new Response(index, { headers: { "content-type": "application/json" } });
     if (path === "/harfbuzz.wasm" || path === "/harfbuzz-subset.wasm") return file(`/node_modules/harfbuzzjs/dist${path}`);
-    if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm", { "content-type": "application/wasm" });
+    if (path === "/canvaskit.wasm") return file("/node_modules/canvaskit-wasm/bin/canvaskit.wasm");
     // no saved platform build: the page compiles what it runs
     if (path.startsWith("/aot/")) return new Response(null, { status: 404 });
     if (path.startsWith("/vendor/aosp/") || path.startsWith("/tests/fixtures/images/")) return file(path);
-    return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
+    return path === "/index.js" ? new Response(script, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
-}, PAGE_TIMEOUT);
+});
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
-type Probes = typeof import("./fixtures/browser/index");
+type Probes = typeof import("./fixtures/browser/index.ts");
 
 /** A fixture's probe result, from a fresh page: the runtime's globals are per realm. */
 async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnType<Probes[K]>>> {
@@ -101,7 +87,7 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   // as on the reference device, SUBPIXEL_TEXT leaves the hinted advances alone and LINEAR_TEXT measures 130
   expect(fx.measured[1]).toBe(fx.measured[0]);
   expect(fx.measured[2]).toBe(130);
-}, PAGE_TIMEOUT);
+});
 
 // Values recorded on the reference AVD (the text box there is drawn without anti-aliasing, a pixel narrower).
 test.concurrent("AOSP's Canvas reports the reference device's clips, saves, layers and bitmap densities", async () => {
@@ -122,7 +108,7 @@ test.concurrent("AOSP's Canvas reports the reference device's clips, saves, laye
     recordedFills: ["ffff0000", "ff0000ff"],
   });
   [12, 25, 55, 39].forEach((v, i) => expect(Math.abs((textOnPath as number[])[i] - v)).toBeLessThanOrEqual(1));
-}, PAGE_TIMEOUT);
+});
 
 test.concurrent("framework drawables resolve dimensions, tint, enabled states and group transforms; vectors match the device", async () => {
   const result = await probe("drawableResources");
@@ -133,19 +119,19 @@ test.concurrent("framework drawables resolve dimensions, tint, enabled states an
   expect(result.after[3]).toBeLessThan(255);
   expect(result.center[3]).toBe(128);
   // VectorDrawableProbe's pixels on the reference device (scripts/vector-probe.ts): within 3 per channel
-  const device = (await Bun.file(`${import.meta.dir}/fixtures/vector-drawable.txt`).text()).split("\n").filter((l) => l.startsWith("px "));
+  const device = (await readFile(`${import.meta.dirname}/fixtures/vector-drawable.txt`, "utf8")).split("\n").filter((l) => l.startsWith("px "));
   for (const line of device) {
     const [, name, , , ...hex] = line.split(" "), got = result.vectors[name];
     const worst = Math.max(...hex.map((h, i) => Math.max(...[24, 16, 8, 0].map((s) => Math.abs(((parseInt(h, 16) >>> s) & 255) - ((got[i] >>> s) & 255))))));
     expect([name, worst <= 3]).toEqual([name, true]);
   }
-}, PAGE_TIMEOUT);
+});
 
 test.concurrent("drawable spans align their drawable and text shadows preserve state", async () => {
   const result = await probe("drawableSpan");
   for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, aligned: true, restored: true, hierarchy: true });
   expect(result).toMatchObject({ getters: [1, 10, 2, 0xffff0000 | 0], red: true, shadowRestored: true });
-}, PAGE_TIMEOUT);
+});
 
 test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and errors across suspension and release", async () => {
   expect(await probe("eglThread")).toEqual({ bound10: 1, interval10: 1, bound14: 1, emptySecond: true, isolated: true, restored: true,
@@ -160,7 +146,7 @@ test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and er
     surfaceTexture: { latched: { matrix: [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1], stamped: true, texel: [255, 0, 0, 255] },
       otherContext: "java/lang/IllegalStateException", deleted: true, attached: [255, 0, 0, 255], released: [1, "java/lang/RuntimeException"] },
     nativeWindow: { locked: 0, dimensions: [2, 1, 2, 1], duplicate: -16, posted: 0, pixels: [255, 0, 0, 255, 0, 255, 0, 255], yv12: true, released: -22, sameHandle: true, reset: true, frames: 2 } });
-}, PAGE_TIMEOUT);
+});
 
 // hwui blurs by Blur::convertRadiusToSigma: sigma = 0.57735 * radius + 0.5, 6.27 for a radius of 10
 test.concurrent("render effects blur by hwui's sigma, offset a chained input and color-filter the content", async () => {
@@ -169,21 +155,21 @@ test.concurrent("render effects blur by hwui's sigma, offset a chained input and
   for (const x of [22, 26, 30, 34, 38]) expect(Math.abs(blurred[x] - 255 * phi((x + 0.5 - 30) / 6.27))).toBeLessThanOrEqual(8);
   for (const x of [27, 31, 35, 39]) expect(Math.abs(shifted[x] - blurred[x - 5])).toBeLessThanOrEqual(2);
   expect([inverted[10], inverted[50]]).toEqual([255, 0]);
-}, PAGE_TIMEOUT);
+});
 
 test.concurrent("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas coordinates", async () => {
   expect(await probe("runtimeShader")).toEqual({
     recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, rippleCenter: [255, 0, 0, 128],
     rippleDiff: 0, rippleInked: true,
   });
-}, PAGE_TIMEOUT);
+});
 
 test.concurrent("drawGlyphs draws HarfBuzz outlines where the browser draws the same font's text, and color glyphs in color", async () => {
   const { drawn, reference, differing, inked, emoji } = await probe("glyphs");
   drawn.forEach((edge, i) => expect(Math.abs(edge - reference[i])).toBeLessThanOrEqual(1));
   expect(differing).toBeLessThan(inked * 0.05);
   expect(emoji).toBeGreaterThan(200);
-}, PAGE_TIMEOUT);
+});
 
 // The pixels are what the reference AVD's BitmapFactory decoded from the same files (a JPEG within
 // 2 per channel, as decoders' IDCTs may differ).
@@ -200,4 +186,4 @@ test.concurrent("decoded bitmaps, ImageDecoder post-processing and animated fram
   expect(result).toMatchObject({ truncated: [64, 64], upright: [6, 10], processed: [0xff0000ff, 0],
     invalid: "java.lang.IllegalArgumentException: invalid return from postProcess: -2",
     gif: { still: [255, 0, 0, 255], first: [255, 0, 0, 255], second: [0, 0, 255, 255], running: 1 } });
-}, PAGE_TIMEOUT);
+});

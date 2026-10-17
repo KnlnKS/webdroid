@@ -4,11 +4,11 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime";
-import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry";
-import { androidPlatform, androidTool } from "../android-sdk";
-import { JAVA } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime.ts";
+import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry.ts";
+import { androidPlatform, androidTool } from "../android-sdk.ts";
+import { JAVA } from "./paths.ts";
+import { filesIn, shellIn } from "./tools.ts";
 
 /** how a host method that waits enters Java again: the harness gives the World's */
 export const enter: { call: (cls: string, name: string, desc: string) => Promise<unknown> } = { call: async (cls, name, desc) => scall(cls, name, desc) };

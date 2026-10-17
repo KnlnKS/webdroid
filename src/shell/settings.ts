@@ -2,7 +2,7 @@
 // (device-settings.ts) under what has been written since, which persists with the device rather than
 // with an app's install. One store serves every process through the broker; a write notifies each
 // process's watcher, which dispatches the change to its content observers.
-import { DEVICE_SETTINGS } from "../android/device-settings";
+import { DEVICE_SETTINGS } from "../android/device-settings.ts";
 
 export type SettingsTable = "system" | "secure" | "global" | "config";
 export type SettingsAccess = {

@@ -1,17 +1,17 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-import { rt, declaredField, JObj } from "../../src/jvm/runtime";
-import { newObj, vcall, scall, iof } from "../../src/jvm/natives/jentry";
-import { Arsc } from "../../src/android/arsc";
-import { Resources } from "../../src/android/res";
-import { PackageRecord, packages } from "../../src/android/packages";
-import { parseAXML } from "../../src/android/axml";
-import { installFramework } from "../../src/android/framework";
-import { animateRenderThread } from "../../src/android/rtanimator";
-import { NativeRenderNode } from "../../src/android/rendernode";
-import { handle } from "../../src/android/handles";
-import { openInstall } from "../../src/shell/install";
-import { exercise, same, vectorProbeLines } from "./harness";
+import { rt, declaredField, JObj } from "../../src/jvm/runtime.ts";
+import { newObj, vcall, scall, iof } from "../../src/jvm/natives/jentry.ts";
+import { Arsc } from "../../src/android/arsc.ts";
+import { Resources } from "../../src/android/res.ts";
+import { PackageRecord, packages } from "../../src/android/packages.ts";
+import { parseAXML } from "../../src/android/axml.ts";
+import { installFramework } from "../../src/android/framework.ts";
+import { animateRenderThread } from "../../src/android/rtanimator.ts";
+import { NativeRenderNode } from "../../src/android/rendernode.ts";
+import { handle } from "../../src/android/handles.ts";
+import { openInstall } from "../../src/shell/install.ts";
+import { exercise, same, vectorProbeLines } from "./harness.ts";
 
 // An attached window's root RenderNode and its AnimationHost, made as RenderNode.create(name, host)
 // would make them but without a constructor: what AOSP's animators target and check is attached.
@@ -33,9 +33,9 @@ function windowRoot(): JObj {
 // package registry installs them, loaded through ApkAssets into an AssetManager, then read
 // through Resources, Theme, TypedArray and XmlBlock as an app reads them.
 if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk")) {
-  const read = async (p: string) => new Uint8Array(await Bun.file(p).arrayBuffer());
-  installFramework(await read("vendor/aosp/framework-res.apk"));
-  const app = openInstall(await read("apks/FitNotes.apk"));
+  const read = (p: string) => new Uint8Array(readFileSync(p));
+  installFramework(read("vendor/aosp/framework-res.apk"));
+  const app = openInstall(read("apks/FitNotes.apk"));
   const appTable = new Arsc(app.zip["resources.arsc"], (path: string) => app.zip[path] ?? null);
   const manifest = parseAXML(app.zip["AndroidManifest.xml"]);
   const pkg = manifest.attrs.find((a) => a.name === "package")!.str!;

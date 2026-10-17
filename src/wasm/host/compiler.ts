@@ -1,17 +1,17 @@
 // The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (World.upgradeJob) goes to the worker, one job at a time, and
 // its unit is installed when it arrives, if the World can still take it (World.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
-import { note, Ev } from "../../timeline";
-import { answeringFor } from "../../jvm/yield";
-import { compileBytes } from "../link/module";
-import type { CompileService } from "../link/hostapi";
-import type { AppIndex, Marks } from "../link/aot";
-import type { UpgradeJob } from "../link/unit";
-import type { ProxyDefinition } from "../link/proxy";
-import type { World } from "../link/world";
-import type { Loader, LoaderId, Program } from "../compiler/program";
-import type { DexFile } from "../../jvm/dex";
-import type { CompileRequest, CompileResponse, Containers, Port } from "./compile-serve";
+import { note, Ev } from "../../timeline.ts";
+import { answeringFor } from "../../jvm/yield.ts";
+import { compileBytes } from "../link/module.ts";
+import type { CompileService } from "../link/hostapi.ts";
+import type { AppIndex, Marks } from "../link/aot.ts";
+import type { UpgradeJob } from "../link/unit.ts";
+import type { ProxyDefinition } from "../link/proxy.ts";
+import type { World } from "../link/world.ts";
+import type { Loader, LoaderId, Program } from "../compiler/program.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import type { CompileRequest, CompileResponse, Containers, Port } from "./compile-serve.ts";
 
 /** a worker, or anything that serves the protocol */
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
@@ -77,6 +77,7 @@ export function dexesByLoader(prog: Program, keep?: (loader: Loader) => boolean)
 }
 
 export class CompileClient implements CompileService {
+  private source: WorkerPort | (() => WorkerPort); private holdMerges: () => boolean;
   readonly stats = { jobs: 0, adopted: 0, stale: 0, failed: 0, workerMs: 0, adoptMs: 0, startMs: 0 };
   private state: "idle" | "starting" | "ready" | "retired" = "idle";
   private w?: World;
@@ -91,7 +92,8 @@ export class CompileClient implements CompileService {
   private port?: WorkerPort;
   private setup?: { aotBase: string | undefined; app: AppIndex | undefined };
   /** `holdMerges`: whether merges wait, as while another worker's compiling takes the memory */
-  constructor(private source: WorkerPort | (() => WorkerPort), private holdMerges = () => false) {
+  constructor(source: WorkerPort | (() => WorkerPort), holdMerges = () => false) {
+    this.source = source; this.holdMerges = holdMerges;
     if (typeof source !== "function") this.attach(source);
   }
   private attach(port: WorkerPort): void {

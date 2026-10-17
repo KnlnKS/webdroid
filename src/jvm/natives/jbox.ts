@@ -1,7 +1,7 @@
 // java.lang's boxes run from libcore. TS makes and reads them through these helpers, over each
 // class's own `value` field.
-import { mangleField } from "../abi";
-import { classNameOf } from "./jentry";
+import { mangleField } from "../abi.ts";
+import { classNameOf } from "./jentry.ts";
 
 type Obj = Record<string, any>;
 export type BoxDesc = "I" | "J" | "F" | "D" | "Z" | "C" | "B" | "S";

@@ -1,6 +1,6 @@
 // Doodle Jump Christmas (Marmalade, 2013) exercises ARM32 native execution.
 // The fullscreen game loop never settles, so gameplay steps use animated captures.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 const PLAY = N(360, 560);      // the title screen's "play" button

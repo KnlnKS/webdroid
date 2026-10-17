@@ -1,6 +1,6 @@
-import { readFully } from "./lazyfile";
-import type { Install } from "./install";
-import { EXT_MIME } from "../mime";
+import { readFully } from "./lazyfile.ts";
+import type { Install } from "./install.ts";
+import { EXT_MIME } from "../mime.ts";
 
 interface LocalAssetSession { key: string; install: Install }
 let active: LocalAssetSession | null = null;

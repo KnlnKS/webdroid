@@ -1,10 +1,10 @@
 // The file tree every realm sees: in-memory bytes, lazy sources (apks, assets, disk-backed app
 // files) and directories. Java streams, native descriptors and the shell all read and write it.
-import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
-import { procIdentity, procList, procText } from "./procfs";
-import type { SharedMaps } from "../native/mappings";
-import { utf8 } from "../jvm/abi";
-import { knownUid } from "../android/packages";
+import { BytesFile, readFully, writable, type FileSource } from "./lazyfile.ts";
+import { procIdentity, procList, procText } from "./procfs.ts";
+import type { SharedMaps } from "../native/mappings.ts";
+import { utf8 } from "../jvm/abi.ts";
+import { knownUid } from "../android/packages.ts";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */

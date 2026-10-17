@@ -2,15 +2,16 @@
 // (values, bundles, parcelables, exceptions) runs from AOSP bytecode. AOSP's wire layout (4-byte
 // cells, UTF-16 strings, 24-byte flat objects) so dataSize/dataPosition agree with a device. What
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
-import { JObj, rt, declaredField } from "../jvm/runtime";
-import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi";
-import { scall, iof } from "../jvm/natives/jentry";
-import { fdInt, mkFd } from "../jvm/natives/jio";
-import { javaCloseFd, javaDupFd, fdLease, type FdScope } from "../native/fs";
-import { ownedHandle, deref, release } from "./handles";
+import { JObj, rt, declaredField } from "../jvm/runtime.ts";
+import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
+import { scall, iof } from "../jvm/natives/jentry.ts";
+import { fdInt, mkFd } from "../jvm/natives/jio.ts";
+import { javaCloseFd, javaDupFd, fdLease, type FdScope } from "../native/fs.ts";
+import { ownedHandle, deref, release } from "./handles.ts";
 
 export class NativeParcel {
-  constructor(readonly fdScope?: FdScope) {}
+  readonly fdScope?: FdScope;
+  constructor(fdScope?: FdScope) { this.fdScope = fdScope; }
   buf = new Uint8Array(256);
   view = new DataView(this.buf.buffer);
   pos = 0;
@@ -40,8 +41,9 @@ export function transactionSize(p: NativeParcel): number {
 }
 /** a descriptor this parcel owns, as writeDupFileDescriptor leaves one */
 export class OwnedFd {
+  private number: number;
   private lease: ReturnType<typeof fdLease>;
-  constructor(private number: number, scope?: FdScope) { this.lease = scope ? scope.own(number) : fdLease(number); }
+  constructor(number: number, scope?: FdScope) { this.number = number; this.lease = scope ? scope.own(number) : fdLease(number); }
   get fd(): number { return this.lease ? this.lease.fd : this.number; }
 }
 

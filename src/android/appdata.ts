@@ -2,18 +2,18 @@
 // and the package manager's deletion. The caller's JVM builds the package broadcasts first, since
 // the caller may be the package being stopped; the broker, which outlives every process, stops the
 // package, has the data's owners clear or remove it (shell/packagedata.ts) and sends them.
-import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime";
-import { scall, vcall, newObj, after } from "../jvm/natives/jentry";
-import { callingIdentity, type ParcelData, binderEscape } from "./binder";
-import { encodeIntent } from "./intentipc";
-import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent";
-import { longVersionCode, queryReceivers } from "./pm";
-import { packages } from "./packages";
-import { checkUidPermission } from "./permissions";
-import { sendIntent } from "./pendingintent";
-import type { PackageDataChange } from "../shell/packagedata";
-import type { Receiver } from "../shell/processes";
-import { detached } from "../jvm/natives/jthrowable";
+import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime.ts";
+import { scall, vcall, newObj, after } from "../jvm/natives/jentry.ts";
+import { callingIdentity, type ParcelData, binderEscape } from "./binder.ts";
+import { encodeIntent } from "./intentipc.ts";
+import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent.ts";
+import { longVersionCode, queryReceivers } from "./pm.ts";
+import { packages } from "./packages.ts";
+import { checkUidPermission } from "./permissions.ts";
+import { sendIntent } from "./pendingintent.ts";
+import type { PackageDataChange } from "../shell/packagedata.ts";
+import type { Receiver } from "../shell/processes.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
 
 const S = "Ljava/lang/String;";
 type Broadcast = { data: ParcelData; targets: Receiver[] };
@@ -32,7 +32,7 @@ export const packageDataTransport = { change: null as ((pkg: string, how: Packag
 /** whether the change ran: with a `prompt`, only once the user agreed to it */
 async function change(pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string): Promise<boolean> {
   if (packageDataTransport.change) return packageDataTransport.change(pkg, how, broadcasts, prompt);
-  const { processBroker } = await import("../shell/processes");
+  const { processBroker } = await import("../shell/processes.ts");
   return processBroker().changePackageData(pkg, how, broadcasts, prompt);
 }
 

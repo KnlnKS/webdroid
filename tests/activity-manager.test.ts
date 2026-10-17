@@ -1,13 +1,11 @@
-import { expect, test } from "bun:test";
-
-/** a fixture runs Java on the Wasm tier, so under node as the unit tests do */
-const UNDER_NODE = new URL("../scripts/wasm/undernode.ts", import.meta.url).pathname;
+import { expect, test } from "vite-plus/test";
+import { nodeCommand, run } from "../scripts/node.ts";
 
 // Each fixture drives the activity manager in a process of its own, whose app identity and
 // registered binders it sets up from scratch.
 async function fixture(name: string): Promise<unknown> {
-  const run = Bun.spawn(["bun", UNDER_NODE, new URL(`fixtures/${name}.ts`, import.meta.url).pathname], { stdout: "pipe", stderr: "ignore" });
-  return JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
+  const { stdout } = await run(...nodeCommand(new URL(`fixtures/${name}.ts`, import.meta.url).pathname));
+  return JSON.parse(stdout.toString().trim().split("\n").at(-1)!);
 }
 
 test("the activity manager drives a process's services and ordered receivers through its IApplicationThread", async () => {
@@ -42,8 +40,8 @@ test("another process's provider is reached through the binder it publishes", as
 
 
 test("routed back awaits its process acknowledgment and preserves queue order after failure", async () => {
-  const { ActivityStack } = await import("../src/shell/activitystack");
-  const entry = {pid:1001} as import("../src/shell/processes").Entry;
+  const { ActivityStack } = await import("../src/shell/activitystack.ts");
+  const entry = {pid:1001} as import("../src/shell/processes.ts").Entry;
   const first = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   let calls = 0, available = true;
   const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:async()=>{},
@@ -66,8 +64,8 @@ test("routed back awaits its process acknowledgment and preserves queue order af
 });
 
 test("a physical rotation reaches the process whose activity fills the display, and the display follows its turn", async () => {
-  const { ActivityStack } = await import("../src/shell/activitystack");
-  const app = {pid:1001,landscape:false} as import("../src/shell/processes").Entry;
+  const { ActivityStack } = await import("../src/shell/activitystack.ts");
+  const app = {pid:1001,landscape:false} as import("../src/shell/processes.ts").Entry;
   const followed: boolean[] = [], requests: unknown[] = [];
   const turned = Promise.withResolvers<void>();
   const stack: InstanceType<typeof ActivityStack> = new ActivityStack({entry:()=>app,alive:()=>true,entries:()=>[app],connect:()=>app,
@@ -87,9 +85,9 @@ test("a physical rotation reaches the process whose activity fills the display, 
 });
 
 test("every process records a physical rotation, and the one that comes to fill the display resolves it", async () => {
-  const { ActivityStack } = await import("../src/shell/activitystack");
-  const { rotationForRequest } = await import("../src/shell/config");
-  type Entry = import("../src/shell/processes").Entry;
+  const { ActivityStack } = await import("../src/shell/activitystack.ts");
+  const { rotationForRequest } = await import("../src/shell/config.ts");
+  type Entry = import("../src/shell/processes.ts").Entry;
   // a process: the orientation its activity requests, whether that is visible, and its rotation state
   type Process = { entry: Entry; request: number; visible: boolean; sensor: boolean; natural: boolean };
   const processes = new Map<number, Process>(), log: string[] = [], followed: [number,boolean][] = [];
@@ -161,8 +159,8 @@ test("every process records a physical rotation, and the one that comes to fill 
 });
 
 test("the activity that sets the display's orientation resolves the rotation as DisplayRotation does", async () => {
-  const { orientationRequest } = await import("../src/android/server/atm");
-  const { rotationForRequest } = await import("../src/shell/config");
+  const { orientationRequest } = await import("../src/android/server/atm.ts");
+  const { rotationForRequest } = await import("../src/shell/config.ts");
   type Record = NonNullable<Parameters<typeof orientationRequest>[0]>[number];
   const r = (orientation: number, translucent = false, state: Record["state"] = "resumed", finishing = false): Record => ({ orientation, translucent, state, finishing });
   // from the top, the first visible activity that asks for an orientation or covers what is beneath

@@ -1,9 +1,9 @@
 // The browser keyboard: the page's text control in the role of the input method, serving the
 // editor InputMethodManagerService (server/imm.ts) binds it to. The page's edits reach the editor
 // as InputConnection calls; the editor's reports keep the control's text and selection current.
-import { awaited, rt, type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
-import { onMain } from "./mainloop";
-import { csText } from "../jvm/natives/jchars";
+import { awaited, rt, type JObj, driven, declaredField, type Gen } from "../jvm/runtime.ts";
+import { onMain } from "./mainloop.ts";
+import { csText } from "../jvm/natives/jchars.ts";
 
 /** An editor the IME serves, as the IME last heard it: its text from `offset`, the selection in
  *  the editor's coordinates and the composing region in `text`'s. `call` is an

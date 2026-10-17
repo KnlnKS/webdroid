@@ -1,4 +1,4 @@
-// A realm's recent frame-path events, for attributing latency and pacing (bun run lat reads a
+// A realm's recent frame-path events, for attributing latency and pacing (pnpm lat reads a
 // window of it after the window closes). Marks go into a fixed ring of numbers: no allocation,
 // about the cost of a performance.now(), so it is always on.
 export const Ev = {

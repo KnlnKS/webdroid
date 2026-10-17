@@ -3,31 +3,31 @@
 // memory mapping, time and identity calls, which both reach (syscall.ts). stdio is in stdio.ts,
 // printf/scanf in printf.ts.
 
-import { mem, guestAt, wrote } from "./mem";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
-import { E, strerror, PAGE_SIZE } from "./abi";
-import { utf8 as codec } from "../jvm/abi";
-import { invalidateRange, nameThread, type Cpu } from "./cpu";
-import { exitGroup } from "./crash";
-import { abortThread, SIGNAL_SYSCALLS } from "./signals";
-import { format, scan } from "./printf";
-import { stdioInit } from "./stdio";
-import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
-import { isRemoteFd } from "./process-fd";
-import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread";
-import { KLAYOUT, syscallEntry } from "./syscall";
-import { zlibInit } from "./zlib";
-import { libmInit } from "./libm";
-import { localeInit } from "./locale";
-import { PROC_SYSCALLS, procInit } from "./proc";
-import { NET_SYSCALLS, netInit } from "./socket/syscalls";
-import { POLL_SYSCALLS } from "./poll";
-import { device } from "../shell/config";
-import { procIdentity, sysconf, uname } from "../shell/procfs";
-import { guestNow, wallMillis } from "../guest-clock";
-import { processEnv } from "../shell/environment";
-import { timersInit } from "./timers";
-import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings";
+import { mem, guestAt, wrote } from "./mem.ts";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host.ts";
+import { E, strerror, PAGE_SIZE } from "./abi.ts";
+import { utf8 as codec } from "../jvm/abi.ts";
+import { invalidateRange, nameThread, type Cpu } from "./cpu.ts";
+import { exitGroup } from "./crash.ts";
+import { abortThread, SIGNAL_SYSCALLS } from "./signals.ts";
+import { format, scan } from "./printf.ts";
+import { stdioInit } from "./stdio.ts";
+import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs.ts";
+import { isRemoteFd } from "./process-fd.ts";
+import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread.ts";
+import { KLAYOUT, syscallEntry } from "./syscall.ts";
+import { zlibInit } from "./zlib.ts";
+import { libmInit } from "./libm.ts";
+import { localeInit } from "./locale.ts";
+import { PROC_SYSCALLS, procInit } from "./proc.ts";
+import { NET_SYSCALLS, netInit } from "./socket/syscalls.ts";
+import { POLL_SYSCALLS } from "./poll.ts";
+import { device } from "../shell/config.ts";
+import { procIdentity, sysconf, uname } from "../shell/procfs.ts";
+import { guestNow, wallMillis } from "../guest-clock.ts";
+import { processEnv } from "../shell/environment.ts";
+import { timersInit } from "./timers.ts";
+import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings.ts";
 /** the C locale's month and weekday names (strftime, asctime) */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

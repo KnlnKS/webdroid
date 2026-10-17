@@ -1,6 +1,6 @@
-// Aggregates out/ast.json. Run: bun research/wasm/survey/summarize.ts
+// Aggregates out/ast.json. Run: node research/wasm/survey/summarize.ts
 import { readFileSync } from "fs";
-const j = JSON.parse(readFileSync(import.meta.dir + "/out/ast.json", "utf8"));
+const j = JSON.parse(readFileSync(import.meta.dirname + "/out/ast.json", "utf8"));
 const E = j.entries as any[];
 const by = (f: (e: any) => string) => { const m: Record<string, number> = {}; for (const e of E) m[f(e)] = (m[f(e)] ?? 0) + 1; return m; };
 console.log("entries by kind", by((e) => e.kind));

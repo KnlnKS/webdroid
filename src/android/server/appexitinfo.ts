@@ -3,14 +3,14 @@
 // part of a crash is here as well: the crash is logged and notes the reason the process's death
 // will carry, and a crash within MIN_CRASH_INTERVAL of the process's last one repeats, which shows
 // the crash dialog (a first crash shows none).
-import { onProcessExit, type ExitStatus } from "../../process-exit";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
-import { appHost } from "../apphost";
-import { wallMillis } from "../../guest-clock";
-import { foreground } from "./atm";
-import { logLine } from "../../native/libc";
-import { storedPackages } from "../packages";
-import type { PackageState } from "../../shell/packagedata";
+import { onProcessExit, type ExitStatus } from "../../process-exit.ts";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os.ts";
+import { appHost } from "../apphost.ts";
+import { wallMillis } from "../../guest-clock.ts";
+import { foreground } from "./atm.ts";
+import { logLine } from "../../native/libc.ts";
+import { storedPackages } from "../packages.ts";
+import type { PackageState } from "../../shell/packagedata.ts";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
 export type ExitRecord = {

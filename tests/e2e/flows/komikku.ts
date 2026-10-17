@@ -1,4 +1,4 @@
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 export const komikku: Flow = {
   app: "komikku",

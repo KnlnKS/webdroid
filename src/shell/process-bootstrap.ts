@@ -1,15 +1,15 @@
-import { packageArchive, packageArchiveSource } from "../android/packagearchive";
-import { zipTree } from "../jvm/natives/jzip";
-import { PackedArchive, packedArchives, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive";
-import { SYSTEM_PACKAGES } from "./system-packages";
-import { rt } from "../jvm/runtime";
-import { openInstallApks, type Install } from "./install";
-import { RemoteFile } from "./remote-file";
-import { readFully } from "./lazyfile";
-import { installedPath, registerPackage } from "../android/pm";
-import { vfs } from "./vfs";
-import { hexBytes, u8 } from "../jvm/abi";
-import type { ProcessBootstrap } from "./process-bootstrap-data";
+import { packageArchive, packageArchiveSource } from "../android/packagearchive.ts";
+import { zipTree } from "../jvm/natives/jzip.ts";
+import { PackedArchive, packedArchives, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
+import { SYSTEM_PACKAGES } from "./system-packages.ts";
+import { rt } from "../jvm/runtime.ts";
+import { openInstallApks, type Install } from "./install.ts";
+import { RemoteFile } from "./remote-file.ts";
+import { readFully } from "./lazyfile.ts";
+import { installedPath, registerPackage } from "../android/pm.ts";
+import { vfs } from "./vfs.ts";
+import { hexBytes, u8 } from "../jvm/abi.ts";
+import type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
 /** system packages' archives prepared before a process's package arrives, by source digest: every process registers them,
  *  and preparing one fetches and reads its bootstrap file (11 MB for GMS) */

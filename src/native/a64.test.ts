@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mem } from "./mem";
-import { setA64 } from "./cpu";
-import { run, RET } from "./a64.testkit";
-import { device } from "../shell/config";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { mem } from "./mem.ts";
+import { setA64 } from "./cpu.ts";
+import { run, RET } from "./a64.testkit.ts";
+import { device } from "../shell/config.ts";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
@@ -418,7 +418,7 @@ describe("raw syscalls", () => {
   });
 
   test("zero-length getrandom does not dereference its buffer", async () => {
-    const { kernelInit } = await import("./syscall");
+    const { kernelInit } = await import("./syscall.ts");
     kernelInit();
     const c = run([
       0xd28022c8,   // mov x8, #278 (getrandom)
@@ -428,7 +428,7 @@ describe("raw syscalls", () => {
   });
 
   test("an svc the core does not inline reaches the kernel's syscall table, and an unknown number answers -ENOSYS", async () => {
-    const { kernelInit } = await import("./syscall");
+    const { kernelInit } = await import("./syscall.ts");
     kernelInit();
     const buf = mem.reserve(0x1000, 0x1000);
     const c = run([

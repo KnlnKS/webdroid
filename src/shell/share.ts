@@ -1,12 +1,12 @@
-import { type JIntent, newIntent } from "../android/intent";
-import { serviceContext } from "../android/binder";
-import { pfdContents } from "../android/os";
-import { uriText } from "../android/net";
-import { awaited, driven, type Gen, type JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jentry";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { csText } from "../jvm/natives/jchars";
-import { hostUi } from "./host-ui";
+import { type JIntent, newIntent } from "../android/intent.ts";
+import { serviceContext } from "../android/binder.ts";
+import { pfdContents } from "../android/os.ts";
+import { uriText } from "../android/net.ts";
+import { awaited, driven, type Gen, type JObj } from "../jvm/runtime.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { csText } from "../jvm/natives/jchars.ts";
+import { hostUi } from "./host-ui.ts";
 
 const S = "Ljava/lang/String;";
 function* extraText(intent: JIntent, key: string): Gen<string | null> {

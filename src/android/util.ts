@@ -1,8 +1,8 @@
 // android.util natives: Log, EventLog and StatsLog.
 
-import { rt } from "../jvm/runtime";
-import { unbox as boxedValue } from "../jvm/natives/jbox";
-import { utf8Length } from "../jvm/abi";
+import { rt } from "../jvm/runtime.ts";
+import { unbox as boxedValue } from "../jvm/natives/jbox.ts";
+import { utf8Length } from "../jvm/abi.ts";
 
 const PRIORITY = ["", "", "V", "D", "I", "W", "E", "A"];
 const logFn = (lvl: string, tag: string | null, msg: string, tr?: unknown) => {

@@ -1,9 +1,9 @@
-import "../../../src/natives";
-import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry";
-import { bootWithFonts } from "./boot";
-import { deref } from "../../../src/android/handles";
-import { NativeShader, NativeGradient, NativeBitmapShader, NativeComposeShader } from "../../../src/android/graphics";
+import "../../../src/natives.ts";
+import { rt } from "../../../src/jvm/runtime.ts";
+import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry.ts";
+import { bootWithFonts } from "./boot.ts";
+import { deref } from "../../../src/android/handles.ts";
+import { type NativeShader, NativeGradient, NativeBitmapShader, type NativeComposeShader } from "../../../src/android/graphics.ts";
 
 /** AOSP's Canvas over our natives: clip bounds, quick rejects, save flags, layers and bitmap
  *  densities, for comparison with values recorded on the reference AVD */

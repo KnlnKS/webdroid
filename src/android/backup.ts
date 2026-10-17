@@ -1,6 +1,6 @@
-import { JObj, rt, noops, stubs } from "../jvm/runtime";
-import { hostStub } from "./binder";
-import { ownedHandle, release } from "./handles";
+import { JObj, rt, noops, stubs } from "../jvm/runtime.ts";
+import { hostStub } from "./binder.ts";
+import { ownedHandle, release } from "./handles.ts";
 
 // the native RestoreHelperBase a file helper allocates at construction; only a backup transport
 // drives its backup and restore natives, and none is hosted

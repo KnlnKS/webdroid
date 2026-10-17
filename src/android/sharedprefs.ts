@@ -1,8 +1,8 @@
 // The preference store behind AOSP's SharedPreferencesImpl files and the platform's own settings.
 
-import { vfs } from "../shell/vfs";
-import { after } from "../jvm/natives/jentry";
-import { storedPackages } from "./packages";
+import { vfs } from "../shell/vfs.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { storedPackages } from "./packages.ts";
 
 /** the platform's preference files of a package that a data clear keeps: DeviceIdleController's
  *  allowlist (ActivityTaskManager's per-app night mode and locales go, onPackageDataCleared) */
@@ -129,7 +129,8 @@ export function createAppData(pkg: string): void | Promise<void> {
 }
 /** a preference file the platform keeps for itself, outside the app's shared_prefs */
 export class Prefs {
-  constructor(readonly name: string) {}
+  readonly name: string;
+  constructor(name: string) { this.name = name; }
   get(key: string): ReturnType<PreferenceAccess["preferenceRead"]> { return preferenceAccess.preferenceRead(this.name, key); }
   keys(): ReturnType<PreferenceAccess["preferenceKeys"]> { return preferenceAccess.preferenceKeys(this.name); }
   set(key: string, value: PreferenceValue): boolean | Promise<boolean> {

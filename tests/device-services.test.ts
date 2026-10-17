@@ -1,12 +1,12 @@
-import { expect, test, beforeAll, describe } from "bun:test";
-import "../src/natives";
-import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { classNameOf, newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry";
-import { packageUid } from "../src/android/packages";
-import { grantPermissions } from "../src/android/permissions";
-import { bootApp, packageRecord, thrown } from "./java";
-import { vfs } from "../src/shell/vfs";
-import { procIdentity } from "../src/shell/procfs";
+import { expect, test, beforeAll, describe } from "vite-plus/test";
+import "../src/natives.ts";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
+import { classNameOf, newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry.ts";
+import { packageUid } from "../src/android/packages.ts";
+import { grantPermissions } from "../src/android/permissions.ts";
+import { bootApp, packageRecord, thrown } from "./java.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { procIdentity } from "../src/shell/procfs.ts";
 
 const pkg = "org.webdroid.test.services";
 let app: JObj, phone: JObj, subscriptions: JObj, wifi: JObj;
@@ -91,7 +91,7 @@ describe("fonts", () => {
   test("FontManager exists and its configuration needs UPDATE_FONTS", async () => {
     const fonts = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "font");
     expect(fonts).not.toBeNull();
-    expect(await thrown(() => vcall(fonts, "getFontConfig", "()Landroid/text/FontConfig;"))).toStartWith("java/lang/SecurityException");
+    expect(await thrown(() => vcall(fonts, "getFontConfig", "()Landroid/text/FontConfig;"))).toMatch(/^java\/lang\/SecurityException/);
   });
 });
 

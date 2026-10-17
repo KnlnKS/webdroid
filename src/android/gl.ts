@@ -1,14 +1,14 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
-import { rt } from "../jvm/runtime";
-import { curThread, threadSwitch, after } from "../jvm/natives/jentry";
-import { type JBuffer, isLiveBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, writeBufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
-import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap";
-import { gles1String } from "../native/gles1";
-import { gles3Extensions } from "../native/gles3";
-import { activeUniformInfo, externalSamplersAs2D, textureTarget } from "../native/gles3-state";
-import { pixelStore, pixelParam, pixelArray, pixelByteSize, pixelRows } from "../native/gles3-pixels";
-import { perf } from "../perf";
+import { rt } from "../jvm/runtime.ts";
+import { curThread, threadSwitch, after } from "../jvm/natives/jentry.ts";
+import { type JBuffer, isLiveBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, writeBufferBytes, position, limit, elementShift } from "../jvm/natives/jnio.ts";
+import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap.ts";
+import { gles1String } from "../native/gles1.ts";
+import { gles3Extensions } from "../native/gles3.ts";
+import { activeUniformInfo, externalSamplersAs2D, textureTarget } from "../native/gles3-state.ts";
+import { pixelStore, pixelParam, pixelArray, pixelByteSize, pixelRows } from "../native/gles3-pixels.ts";
+import { perf } from "../perf.ts";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
 type GL = WebGL2RenderingContext | WebGLRenderingContext;

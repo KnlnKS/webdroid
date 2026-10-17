@@ -42,6 +42,26 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
+At the merge of `knlnks/node-migration` (2026-10-16), at a load of about 3: typecheck passes; 1,158 unit tests pass under
+Vitest; all 16 `wasm all` suites and 31 of 31 `fwtest` exercises pass; after `aot`, the `--jobs 1` quick e2e gate reaches
+7 of 7 flows in 161 s with no missing APIs, errors, required natives, draw errors, settle timeouts or wedges.
+
+On Node, pnpm and Vite+ (`knlnks/node-migration`, 2026-10-16), with other checkouts' browsers holding the host at a load
+of 12-32: typecheck passes; 1,158 unit tests pass under Vitest; 31 of 31 `fwtest` exercises and all 16 `wasm all`
+suites pass; `build:prod` and `worker:check` pass; `textcmp FitNotes.apk` matches 108 of 108 layouts and 184 of 184
+hyphenated lines. The quick e2e gate reaches 6 of 7 flows, Doodle Jump failing as below; interleaved with `2f48474e` on
+Bun, both stacks drew its title loop at the same cost (history, "Doodle Jump under load"). `conform` guava
+(368,772/368,794), jsr166 (3,209/3,211) and ojluni-time (30,596/30,602) have no regressions, once ojluni-time's
+clock-derived non-ISO dates in test names hash stably. `lat` fails on both stacks alike: Mihon's launch is unavailable (once, at a load of 32, its process died of a
+`NullPointerException` instead; four reruns did not repeat it), and Komikku's `start`, `more` and
+`appearance` taps reach 166-436 ms; CalculatorM's taps passed 3 of 3 interleaved runs on each. After the review cleanup,
+at a load of 4-12, the same checks pass and the `--jobs 1` quick gate reaches 6 of 7 flows: Doodle Jump passes, and Mihon
+onboarding's process dies at launch of the ICU `NullPointerException` that concurrent launches reproduce at the cleanup's
+start too. A generator native that dropped its strand after a wait entered Java as the main thread (history, "Mihon's ICU
+initialization under concurrent launches"); with it kept, unit tests, `wasm all` and `fwtest` pass and the `--jobs 1` gate
+reaches 7 of 7 flows with no missing APIs, errors, required natives or draw errors. The 5-job gate at a load of about 20
+fails other flows on starvation with and without the change alike.
+
 At the merge of `knlnks/maps-wasm` (2026-10-16): typecheck passes; 1,158 unit tests pass (the "End Of Central
 Directory" flake failed four browser tests once, and they pass on a rerun); all 16 `wasm all` suites pass. The `--jobs 1`
 quick e2e gate reaches 6 of 7 flows with no missing APIs, errors, required natives, draw errors, settle timeouts or
@@ -58,7 +78,7 @@ pixel rule's readbacks stretch past the bound (history, "FitNotes under host loa
 clean and 31 of 31 `fwtest` exercises passed; the default five-at-a-time run missed four flows on worker-diagnostic and
 completion timeouts while another checkout's sweep held the host at a load of about 14.
 
-Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1`, `corpus` and `textcmp`. Before that,
+Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
 
 ## Open work, in priority order
@@ -71,7 +91,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
    serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
    before the removal) under the same settings: check it out in its own worktree with its own `vendor/wasm-aot`
-   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `bun run aot`
+   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), and run `pnpm aot`
    there. Lichess's launch differs from its reference on both tiers (a notification-permission request and live
    content); do not raise the limit.
 3. **TikTok's launch** (12.3 s cold, 8.2 s warm in `lat` since its saved build attaches; its `--live` e2e
@@ -108,7 +128,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
      bar arbitration; Google Maps sign-in and backup transport. A native fault converted into a Java exception can
      still leave native locks held.
-   - *Games:* Among Us completes a live online match through the Bun relay at its own 30/s target; a cold Skeld
+   - *Games:* Among Us completes a live online match through the dev server's relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
      and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
      Subway Surfers reaches an active run; its background Firebase initialization still throws. Genshin Impact

@@ -6,25 +6,25 @@
 // back copies, never its own object. Nothing presents them; there is no shade, sound or listener.
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
-import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall, scall, iof } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { systemResource } from "./resnative";
-import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
-import { csText } from "../jvm/natives/jchars";
-import { jarray, stringHash } from "../jvm/abi";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseBinderParcel, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder";
-import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
-import { postMain } from "./mainloop";
-import { preferenceStore, Prefs } from "./sharedprefs";
-import type { DataClear } from "../shell/packagedata";
-import { packages } from "./packages";
-import { FileDescriptors } from "../shell/file-descriptors";
-import { StoredParcel } from "../shell/stored-parcel";
-import { PROCESS_PID } from "./os";
-import { appHost } from "./apphost";
-import { coverTop, foreground } from "./server/atm";
-import { permissionGranted, grantPrompted } from "./permissions";
+import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { after, newObj, vcall, scall, iof } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { systemResource } from "./resnative.ts";
+import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
+import { csText } from "../jvm/natives/jchars.ts";
+import { jarray, stringHash } from "../jvm/abi.ts";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseBinderParcel, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
+import { postMain } from "./mainloop.ts";
+import { preferenceStore, Prefs } from "./sharedprefs.ts";
+import type { DataClear } from "../shell/packagedata.ts";
+import { packages } from "./packages.ts";
+import { FileDescriptors } from "../shell/file-descriptors.ts";
+import { StoredParcel } from "../shell/stored-parcel.ts";
+import { PROCESS_PID } from "./os.ts";
+import { appHost } from "./apphost.ts";
+import { coverTop, foreground } from "./server/atm.ts";
+import { permissionGranted, grantPrompted } from "./permissions.ts";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const DEFAULT_CHANNEL = "miscellaneous", RANKER_GROUP = "ranker_group";
@@ -150,8 +150,9 @@ const policyFile = (pkg: string) => "android:notification-policy:" + pkg;
 const CHANNEL_KEY = "channel:", GROUP_KEY = "group:", DELEGATE_KEY = "delegate";
 const parcelData = (stored: string): ParcelData => ({ bytes: Uint8Array.fromBase64(stored), objects: [] });
 class Preferences {
+  readonly pkg: string;
   private readonly file: Prefs;
-  constructor(readonly pkg: string) { this.file = new Prefs(policyFile(pkg)); }
+  constructor(pkg: string) { this.pkg = pkg; this.file = new Prefs(policyFile(pkg)); }
   ids(prefix: string): string[] | Promise<string[]> {
     return after(this.file.keys(), keys => hashOrder(keys.filter(k => k.startsWith(prefix)), k => k.slice(prefix.length)).map(k => k.slice(prefix.length)));
   }

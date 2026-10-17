@@ -5,14 +5,14 @@
 //
 // This file has both halves: the runtime functions and intrinsics compiled code uses (Thread, Object.wait/notify, park, monitors, class
 // initialization waits, the fuel yield) and the Sched that answers `host.sync` and `host.block`.
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import { rt } from "../compiler/rtfns";
-import { OP } from "../compiler/code";
-import { HT, T, type VT } from "../compiler/wasmbin";
-import { Monitors, St, type Header } from "./monitor";
-import { promising, suspending, waitsEnded } from "./module";
-import type { World } from "./world";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { rt } from "../compiler/rtfns.ts";
+import { OP } from "../compiler/code.ts";
+import { HT, T, type VT } from "../compiler/wasmbin.ts";
+import { Monitors, St, type Header } from "./monitor.ts";
+import { promising, suspending, waitsEnded } from "./module.ts";
+import type { World } from "./world.ts";
 
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
 export const SYSTEM_LOADER = "java/lang/ClassLoader$SystemClassLoader";
@@ -23,9 +23,11 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend, Rename, Ended }
+export const Sync = { Try: 1, Exit: 2, Notify: 3, NotifyAll: 4, Unpark: 5, Interrupt: 6, Interrupted: 7, IsInterrupted: 8, Holds: 9, Create: 10, Status: 11, InitDone: 12, Bind: 13, Plain: 14, Resume: 15, IsMain: 16, ContextDeferred: 17, ContextSet: 18, SystemLoaderReady: 19, CanSuspend: 20, Rename: 21, Ended: 22 } as const;
+export type Sync = (typeof Sync)[keyof typeof Sync];
 /** operations that may wait (`host.block`, Suspending) */
-export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
+export const Block = { Enter: 1, Wait: 2, Sleep: 3, Park: 4, Yield: 5, Init: 6, Net: 7 } as const;
+export type Block = (typeof Block)[keyof typeof Block];
 
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
@@ -196,21 +198,17 @@ export interface HostLoop {
   /** runs `fn` after `ms`; the function cancels */
   after(ms: number, fn: () => void): () => void;
 }
-const channel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
-const turns: (() => void)[] = [];
-if (channel) { channel.port1.onmessage = () => turns.shift()?.(); (channel.port1 as unknown as { unref?: () => void }).unref?.(); }
 let turnStart = 0;
+/** the loop of a World given none, which only compiles: timers alone. The hosts that run Java pass their own (boot.ts) */
 export const defaultLoop: HostLoop = {
-  yield: () => new Promise<void>((r) => {
-    turns.push(() => { turnStart = performance.now(); r(); });
-    if (channel) channel.port2.postMessage(0); else setTimeout(() => turns.shift()?.(), 0);
-  }),
+  yield: () => new Promise<void>((r) => setTimeout(() => { turnStart = performance.now(); r(); }, 0)),
   due: () => performance.now() - turnStart >= 8,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
 };
 
 /** what the host knows of a Java Thread */
 export class ThreadRec {
+  obj: object | null;
   interrupted = false;
   permit = false;
   /** wakes the thread out of a wait or sleep, for an interrupt */
@@ -223,20 +221,21 @@ export class ThreadRec {
   alive = true;
   /** the strand native code's monitors are held by (JNI MonitorEnter): the thread's, which does not end with a call */
   root: Strand | null = null;
-  constructor(public obj: object | null) {}
+  constructor(obj: object | null) { this.obj = obj; }
 }
 
 /** entries a strand may make before it waits; the engine's stacks run out at about 1,400 */
 const NESTED_LIMIT = 200;
 
 export class Strand {
+  readonly id: number; readonly thread: ThreadRec; readonly root: boolean; private sched: Sched;
   /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   waitsOn: Strand | null = null;
   /** the strand whose native entered Java on this one: the same thread, so it holds what that strand holds */
   parent: Strand | null = null;
   /** how many stacks the entries made from this strand's natives have taken since this strand last waited */
   nested = 0;
-  constructor(readonly id: number, readonly thread: ThreadRec, readonly root: boolean, private sched: Sched) {}
+  constructor(id: number, thread: ThreadRec, root: boolean, sched: Sched) { this.id = id; this.thread = thread; this.root = root; this.sched = sched; }
   /** whether code on this strand runs on a stack of its own, which may suspend (host code at the top level runs on the caller's) */
   get canSuspend(): boolean { return !this.root; }
   /** runs the Wasm function `f` on a stack of this strand; a Java exception rejects the promise */
@@ -248,6 +247,7 @@ export class Strand {
 interface Globals { sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global }
 
 export class Sched {
+  private w: World; private g: Globals; private loop: HostLoop;
   readonly strands: (Strand | undefined)[] = [];
   readonly root: Strand;
   readonly monitors: Monitors;
@@ -302,7 +302,8 @@ export class Sched {
   private synchronousExports = new WeakMap<Function, Function>();
   private fns = new Map<string, Function>();
 
-  constructor(private w: World, private g: Globals, private loop: HostLoop) {
+  constructor(w: World, g: Globals, loop: HostLoop) {
+    this.w = w; this.g = g; this.loop = loop;
     this.root = this.strands[ROOT] = new Strand(ROOT, this.main, true, this);
     let get: Function | undefined, set: Function | undefined;
     const header: Header = {
@@ -400,9 +401,9 @@ export class Sched {
   }
 
   // ---------- host.sync
-  sync(op: Sync, obj: object | null, a: number): number {
+  sync(op: number, obj: object | null, a: number): number {
     const s = this.current();
-    switch (op) {
+    switch (op as Sync) {
       case Sync.Try: return this.plain(this.monitors.tryEnter(obj!, s));
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
@@ -444,9 +445,9 @@ export class Sched {
   }
 
   // ---------- host.block
-  block(op: Block, obj: object | null, a: number, b: number): Promise<number> | number {
+  block(op: number, obj: object | null, a: number, b: number): Promise<number> | number {
     const s = this.current();
-    switch (op) {
+    switch (op as Block) {
       case Block.Enter: return this.monitors.enter(obj!, s).then(() => St.Ok);
       case Block.Wait: return a < 0 || b < 0 ? St.Neg : b > 999999 ? St.Nanos : this.monitors.wait(obj!, s, a, false);
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);

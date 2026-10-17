@@ -3,10 +3,10 @@
 // SCM_RIGHTS treat it as any other. Its operations answer -errno and take JS values; the kernel's
 // socket calls (syscalls.ts) and libcore's (android/socket.ts) adapt them.
 
-import { E } from "../abi";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock";
-import type { OpenFile } from "../fs";
-import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, type SocketAddress, type Ucred, type Cmsg } from "./abi";
+import { E } from "../abi.ts";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock.ts";
+import type { OpenFile } from "../fs.ts";
+import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
 
 export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8, SO_LINGER = 13, SO_PASSCRED = 16;
 export const SO_PEERCRED = 17, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, SO_BINDTODEVICE = 25, SO_ACCEPTCONN = 30, SO_PROTOCOL = 38, SO_DOMAIN = 39;
@@ -37,6 +37,7 @@ const CONSUMED: Chunk = { bytes: new Uint8Array(0), rights: null };
 /** One end of an in-process connection, reading what its peer writes: a byte stream, or with
  *  `messages` one that keeps each write whole. A peerless end is a datagram socket's queue. */
 export class Loopback implements Stream {
+  readonly messages: boolean;
   private chunks: Chunk[] = [];
   private head = 0;
   private bytes = 0;
@@ -47,7 +48,7 @@ export class Loopback implements Stream {
   private refusing = false;
   peer: Loopback | null = null;
   private readonly waiters = new Set<() => void>();
-  constructor(readonly messages = false) {}
+  constructor(messages = false) { this.messages = messages; }
   static pair(messages = false): [Loopback, Loopback] {
     const a = new Loopback(messages), b = new Loopback(messages);
     a.peer = b; b.peer = a;
@@ -141,6 +142,7 @@ export interface Accepted { fd: number; peer: SocketAddress }
 
 /** A socket of some family and type. Each operation answers -errno for what it refuses. */
 export abstract class Socket {
+  readonly type: number; readonly protocol: number;
   abstract readonly family: number;
   /** the open file this socket is, which its descriptors share */
   file!: OpenFile;
@@ -150,7 +152,7 @@ export abstract class Socket {
   readonly waiters = new Set<() => void>();
   /** setsockopt values by level << 16 | option */
   readonly options = new Map<number, number>();
-  constructor(readonly type: number, readonly protocol: number) {}
+  constructor(type: number, protocol: number) { this.type = type; this.protocol = protocol; }
   /** O_NONBLOCK, which is SOCK_NONBLOCK, on its open file */
   get nonblock(): boolean { return !!(this.file.statusFlags & SOCK_NONBLOCK); }
   /** each write stays whole: SOCK_DGRAM and SOCK_SEQPACKET */

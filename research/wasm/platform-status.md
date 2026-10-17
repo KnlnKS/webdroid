@@ -3,7 +3,7 @@
 Engine support for what the Wasm tier uses. Dated rows and sections were measured on this host (availability and
 limits, not speed). Recheck the secondary sources before relying on them.
 
-Reproduce from `research/wasm` after `bun install`:
+Reproduce from `research/wasm` after `pnpm install`:
 - `node probe.mjs <chrome|chromium|webkit> [--flags=a,b] [--nolimits]`: the matrix, as JSON
 - `DEBUG=pw:browser node probe-tiering.mjs hints|cache [chrome|chromium|node] [http,cacheStorage,blobUrl,compileBytes]`
   reads V8's `--trace-wasm-compilation-times`. `FUNCS=<n>` sets the size of the cache module.
@@ -42,7 +42,7 @@ tier was removed on 2026-10-13, and the compiler emits no tail calls now.
 
 ## JSPI under node (2026-10-04, node 24.19 / V8 13.6, M4 Pro)
 
-Node needs `--experimental-wasm-jspi` (`scripts/wasm/undernode.ts` passes it). Chrome 153 has JSPI on by default.
+Node needs `--experimental-wasm-jspi` (package.json scripts start through `scripts/node`, which passes it). Chrome 153 has JSPI on by default.
 
 | Fact | Result |
 |---|---|

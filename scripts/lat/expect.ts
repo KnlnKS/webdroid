@@ -1,4 +1,4 @@
-import { COMPILE_COUNTERS } from "../../src/shell/perf-receipts";
+import { COMPILE_COUNTERS } from "../../src/shell/perf-receipts.ts";
 
 export type Region = [number, number, number, number];
 export type Selector = { text?: string; desc?: string; resId?: string; within?: Region };

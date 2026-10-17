@@ -1,7 +1,7 @@
-import "../../../src/natives";
-import { vcall, scall } from "../../../src/jvm/natives/jentry";
-import { bootPlatform, listener } from "./boot";
-import { canvasOver } from "../../../src/android/canvas";
+import "../../../src/natives.ts";
+import { vcall, scall } from "../../../src/jvm/natives/jentry.ts";
+import { bootPlatform, listener } from "./boot.ts";
+import { canvasOver } from "../../../src/android/canvas.ts";
 
 const SRC = "Landroid/graphics/ImageDecoder$Source;";
 const image = async (name: string) => { const b = new Uint8Array(await (await fetch(`/tests/fixtures/images/${name}`)).arrayBuffer()); return new Int8Array(b.buffer); };

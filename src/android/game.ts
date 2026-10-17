@@ -1,11 +1,11 @@
 // IGameManagerService, under AOSP's GameManager and GameState: a game (its category, or the legacy
 // isGame flag) runs in the standard mode; anything else does not support game modes. The states a
 // game reports feed only the power HAL, which is not modelled.
-import { JObj, rt, noops } from "../jvm/runtime";
-import { appHost } from "./apphost";
-import { hostStub } from "./binder";
-import { packages } from "./packages";
-import { attr } from "./axml";
+import { JObj, rt, noops } from "../jvm/runtime.ts";
+import { appHost } from "./apphost.ts";
+import { hostStub } from "./binder.ts";
+import { packages } from "./packages.ts";
+import { attr } from "./axml.ts";
 
 const GAME_MODE_UNSUPPORTED = 0, GAME_MODE_STANDARD = 1, CATEGORY_GAME = 0;
 function isGame(pkg: string | null): boolean {

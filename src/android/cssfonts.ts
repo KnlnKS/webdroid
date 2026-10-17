@@ -4,9 +4,9 @@
 // wants (opsz, which it sets from the size; ital, which it leaves at the default; wdth and slnt
 // away from 100 and 0) is pinned in an instance HarfBuzz makes.
 
-import { instanceFace } from "./harfbuzz";
-import { type FvarAxis, faceCount, sfntFace } from "./sfnt";
-import { type NativeFont, type FakedFont, WGHT, ITAL, pending } from "./fonts";
+import { instanceFace } from "./harfbuzz.ts";
+import { type FvarAxis, faceCount, sfntFace } from "./sfnt.ts";
+import { type NativeFont, type FakedFont, WGHT, ITAL, pending } from "./fonts.ts";
 
 /** the value Chrome gives an axis on a canvas with a normal stretch and style */
 const chromeAxis = (a: FvarAxis) => a.tag === WDTH ? 100 : a.tag === SLNT ? 0 : a.tag === OPSZ ? NaN : a.def;

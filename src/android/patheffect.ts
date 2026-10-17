@@ -1,10 +1,10 @@
 // SkPathEffect behind android.graphics.PathEffect and its subclasses, whose Java runs from AOSP
 // bytecode: filterPath over NativePath geometry, and the SkStrokeRec a paint gives it.
 
-import { rt } from "../jvm/runtime";
-import { handle, deref, release } from "./handles";
-import { NativePath, PathMeasure, VerbIterator } from "./path";
-import type { NativePaint } from "./paint";
+import { rt } from "../jvm/runtime.ts";
+import { handle, deref, release } from "./handles.ts";
+import { NativePath, PathMeasure, VerbIterator } from "./path.ts";
+import type { NativePaint } from "./paint.ts";
 
 /** SkStrokeRec's part the effects read and change: fill, or a stroke of `width` (0 a hairline) */
 interface StrokeRec { fill: boolean; width: number; strokeAndFill: boolean }
@@ -32,11 +32,13 @@ const closedFrom = (verbs: number[][], i: number) => {
 };
 /** SkDashPathEffect: intervals, and the phase as an offset into them */
 export class DashEffect extends NativePathEffect {
+  readonly intervals: number[]; readonly phase: number;
   readonly length: number;
   readonly firstLength: number;
   readonly firstIndex: number;
-  constructor(readonly intervals: number[], readonly phase: number) {
+  constructor(intervals: number[], phase: number) {
     super();
+    this.intervals = intervals; this.phase = phase;
     const len = this.length = intervals.reduce((a, b) => a + b, 0);
     // CalcDashParameters: a negative phase flips, and phase lands in [0, len)
     if (phase < 0) { phase = -phase; if (phase > len) phase %= len; phase = len - phase; if (phase === len) phase = 0; }
@@ -75,7 +77,8 @@ export class DashEffect extends NativePathEffect {
 }
 /** SkCornerPathEffect: each corner between lines rounded by a quadratic through it */
 class CornerEffect extends NativePathEffect {
-  constructor(readonly radius: number) { super(); }
+  readonly radius: number;
+  constructor(radius: number) { super(); this.radius = radius; }
   filter(dst: NativePath, src: NativePath): boolean {
     const r = this.radius, verbs = [...iterate(src)];
     let prevVerb = -1, prevIsValid = true, mx = 0, my = 0, lx = 0, ly = 0, fx = 0, fy = 0, sx = 0, sy = 0;
@@ -117,7 +120,8 @@ class CornerEffect extends NativePathEffect {
  *  normal by an LCG's deviation (seeded from the path's length, as Skia seeds it; DiscretePathEffect
  *  gives no seed assist) */
 class DiscreteEffect extends NativePathEffect {
-  constructor(readonly segLength: number, readonly deviation: number) { super(); }
+  readonly segLength: number; readonly deviation: number;
+  constructor(segLength: number, deviation: number) { super(); this.segLength = segLength; this.deviation = deviation; }
   filter(dst: NativePath, src: NativePath, rec: StrokeRec): boolean {
     const meas = new PathMeasure(), pos = new Float32Array(2), tan = new Float32Array(2);
     meas.setPath(src, rec.fill);
@@ -150,9 +154,11 @@ class DiscreteEffect extends NativePathEffect {
 /** SkPath1DPathEffect: a stamp placed every `advance` along each contour, translated, rotated to
  *  the tangent, or bent along the contour; the result is filled */
 class Path1DEffect extends NativePathEffect {
+  readonly stamp: NativePath; readonly advance: number; readonly style: number;
   readonly offset: number;
-  constructor(readonly stamp: NativePath, readonly advance: number, phase: number, readonly style: number) {
+  constructor(stamp: NativePath, advance: number, phase: number, style: number) {
     super();
+    this.stamp = stamp; this.advance = advance; this.style = style;
     // phase inverted into an offset along the path, as PostScript reads it
     if (phase < 0) { phase = -phase; if (phase > advance) phase %= advance; }
     else { if (phase > advance) phase %= advance; phase = advance - phase; }
@@ -197,7 +203,8 @@ class Path1DEffect extends NativePathEffect {
 }
 /** SkComposePathEffect: the outer effect over what the inner one made */
 class ComposeEffect extends NativePathEffect {
-  constructor(readonly outer: NativePathEffect, readonly inner: NativePathEffect) { super(); }
+  readonly outer: NativePathEffect; readonly inner: NativePathEffect;
+  constructor(outer: NativePathEffect, inner: NativePathEffect) { super(); this.outer = outer; this.inner = inner; }
   filter(dst: NativePath, src: NativePath, rec: StrokeRec): boolean {
     const tmp = new NativePath();
     return this.outer.filter(dst, this.inner.filter(tmp, src, rec) ? tmp : src, rec);
@@ -205,7 +212,8 @@ class ComposeEffect extends NativePathEffect {
 }
 /** SkSumPathEffect: both effects' paths, one after the other */
 class SumEffect extends NativePathEffect {
-  constructor(readonly first: NativePathEffect, readonly second: NativePathEffect) { super(); }
+  readonly first: NativePathEffect; readonly second: NativePathEffect;
+  constructor(first: NativePathEffect, second: NativePathEffect) { super(); this.first = first; this.second = second; }
   filter(dst: NativePath, src: NativePath, rec: StrokeRec): boolean {
     return (+this.first.filter(dst, src, rec) | +this.second.filter(dst, src, rec)) !== 0;
   }

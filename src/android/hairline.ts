@@ -1,4 +1,4 @@
-import type { Ctx2D } from "./recording";
+import type { Ctx2D } from "./recording.ts";
 
 type Point = [number, number];
 

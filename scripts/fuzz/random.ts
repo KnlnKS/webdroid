@@ -1,7 +1,9 @@
 export class Random {
+  readonly seed: number;
   private state: number;
 
-  constructor(readonly seed: number) {
+  constructor(seed: number) {
+    this.seed = seed;
     this.state = seed >>> 0;
   }
 

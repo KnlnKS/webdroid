@@ -1,15 +1,15 @@
 // Natives the Wasm tier answers itself, under the AOSP bytecode of the classes that declare them (libcore's class loaders).
-import { jarray } from "../../jvm/abi";
-import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath";
-import { readBytes, FD, type IoBuffer } from "../../android/os";
-import { fdInt } from "../../jvm/natives/jio";
-import { fdFile, javaPreadFd, javaSeekFd } from "../../native/fs";
-import { processReadFd } from "../../native/process-fd";
-import { handle } from "../../android/handles";
-import { BytesFile } from "../../shell/lazyfile";
-import { vcall } from "../../jvm/natives/jentry";
-import { awaited, driven, type Gen } from "../../jvm/runtime";
-import type { HostFn } from "../link/hostapi";
+import { jarray } from "../../jvm/abi.ts";
+import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath.ts";
+import { readBytes, FD, type IoBuffer } from "../../android/os.ts";
+import { fdInt } from "../../jvm/natives/jio.ts";
+import { fdFile, javaPreadFd, javaSeekFd } from "../../native/fs.ts";
+import { processReadFd } from "../../native/process-fd.ts";
+import { handle } from "../../android/handles.ts";
+import { BytesFile } from "../../shell/lazyfile.ts";
+import { vcall } from "../../jvm/natives/jentry.ts";
+import { awaited, driven, type Gen } from "../../jvm/runtime.ts";
+import type { HostFn } from "../link/hostapi.ts";
 
 /** a read of a file held in memory: production queues every read of a file that has a source behind a Promise, so here it is a positional
  *  read at the file's position, which such a source answers at once */

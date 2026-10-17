@@ -3,15 +3,15 @@
 // canvas: into a cached bitmap at the canvas-scaled bounds size, repainted only when a property
 // changed, then drawn into the bounds through the colour filter at the root alpha.
 
-import { rt } from "../jvm/runtime";
-import { deref, ownedHandle, weakHandle } from "./handles";
-import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics";
-import { type NativeCanvas, drawingCanvas } from "./canvas";
-import { NativeBitmap } from "./bitmap";
-import { CAPS, JOINS } from "./paint";
-import { NativePath, PathMeasure } from "./path";
-import { deviceScale } from "./matrix";
-import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser";
+import { rt } from "../jvm/runtime.ts";
+import { deref, ownedHandle, weakHandle } from "./handles.ts";
+import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics.ts";
+import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { NativeBitmap } from "./bitmap.ts";
+import { CAPS, JOINS } from "./paint.ts";
+import { NativePath, PathMeasure } from "./path.ts";
+import { deviceScale } from "./matrix.ts";
+import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser.ts";
 
 type Ctx = OffscreenCanvasRenderingContext2D;
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */
@@ -146,11 +146,12 @@ export class FullPath extends VPath {
 /** Tree::MAX_CACHED_BITMAP_SIZE */
 const MAX_CACHE = 2048;
 export class Tree {
+  readonly root: Group;
   vpW = 0; vpH = 0;
   alpha = 1;
   dirty = true;
   private cache: NativeBitmap | null = null;
-  constructor(readonly root: Group) { root.adopt(this); }
+  constructor(root: Group) { this.root = root; root.adopt(this); }
   /** Tree::draw: the canvas's scale sizes the cache (no skew or rotation), which is drawn at the
    *  bounds, mirrored for RTL, through the colour filter; answers the cache's pixel count */
   draw(cv: NativeCanvas, filter: NativeColorFilter | null, l: number, t: number, r: number, b: number, mirror: boolean, canReuse: boolean): number {

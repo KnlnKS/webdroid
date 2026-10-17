@@ -1,9 +1,10 @@
-import { androidPlatform } from "../android-sdk";
-import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, type NativeSupport } from "../native-surface";
-import type { DexFile } from "../../src/jvm/dex";
-import type { Runtime } from "../../src/jvm/runtime";
-import { descToName } from "../../src/jvm/abi";
-import { API_RECIPE_MEMBER_IDS } from "./generate";
+import { readFileSync } from "node:fs";
+import { androidPlatform } from "../android-sdk.ts";
+import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, type NativeSupport } from "../native-surface.ts";
+import type { DexFile } from "../../src/jvm/dex.ts";
+import type { Runtime } from "../../src/jvm/runtime.ts";
+import { descToName } from "../../src/jvm/abi.ts";
+import { API_RECIPE_MEMBER_IDS } from "./generate.ts";
 
 export type ApiKind = "class" | "method" | "field";
 export type ApiSource = "public" | "reached-hidden";
@@ -146,6 +147,6 @@ export function addReachedMembers(catalog: ApiCatalog, reached: ReachedSurface, 
   return catalog;
 }
 
-export async function sdkApiXml(sdk: number): Promise<string> {
-  return Bun.file(`${androidPlatform(sdk)}/data/api-versions.xml`).text();
+export function sdkApiXml(sdk: number): string {
+  return readFileSync(`${androidPlatform(sdk)}/data/api-versions.xml`, "utf8");
 }

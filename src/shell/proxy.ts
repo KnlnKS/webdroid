@@ -1,7 +1,7 @@
-import { htmlAttribute, webDocument } from "./webhtml";
-import { webScript } from "./webscript";
-import { isGuestHost } from "../native/net-address";
-import type { BridgeCall } from "./webpage/protocol";
+import { htmlAttribute, webDocument } from "./webhtml.ts";
+import { webScript } from "./webscript.ts";
+import { isGuestHost } from "../native/net-address.ts";
+import type { BridgeCall } from "./webpage/protocol.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
@@ -87,7 +87,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       if (name === "content-length" && (upstream.headers.has("content-encoding") || html || script)) return;
       if (!DROP.test(name) && !(frame && DROP_FRAME.test(name))) out.set(name, value);
     });
-    // Bun drops Content-Length from streamed responses; URLConnection restores this value.
+    // A server may drop Content-Length from a streamed response; URLConnection restores this value.
     if (out.has("content-length")) out.set("x-wd-content-length", out.get("content-length")!);
     out.set("access-control-allow-origin", "*");
     out.set("x-wd-final-url", upstream.url || url);

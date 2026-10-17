@@ -3,11 +3,11 @@
 // into the document. AOSP draws through SkPDF, which CanvasKit does not ship, and a display list
 // holds browser objects no PDF operator can read back (Path2D, gradients, deferred replays), so a
 // page is rasterised at print resolution and stored losslessly.
-import { rt, driven, awaited, type Gen } from "../jvm/runtime";
-import { handle, deref, release } from "./handles";
-import { NativeCanvas } from "./canvas";
-import { Recorder, replay, replayFor, type DisplayList } from "./recording";
-import { writeThrough } from "../jvm/natives/jio";
+import { rt, driven, awaited, type Gen } from "../jvm/runtime.ts";
+import { handle, deref, release } from "./handles.ts";
+import { NativeCanvas } from "./canvas.ts";
+import { Recorder, replay, replayFor, type DisplayList } from "./recording.ts";
+import { writeThrough } from "../jvm/natives/jio.ts";
 
 /** a page of w×h points filled by one image */
 export type PdfPage = { w: number; h: number; width: number; height: number; filter: "DCTDecode" | "FlateDecode"; data: Uint8Array };
@@ -41,9 +41,10 @@ export async function pdfFile(pages: PdfPage[]): Promise<Uint8Array> {
 /** the print dialog's default resolution; a page past MAX_PIXELS rasterises coarser */
 const DPI = 300, MAX_PIXELS = 1 << 25;
 class Page {
+  readonly w: number; readonly h: number; readonly content: [number, number, number, number];
   readonly recorder = new Recorder();
   ops: DisplayList = [];
-  constructor(readonly w: number, readonly h: number, readonly content: [number, number, number, number]) {}
+  constructor(w: number, h: number, content: [number, number, number, number]) { this.w = w; this.h = h; this.content = content; }
 }
 /** SkDocument::beginPage: the picture drawn translated to the content rect and clipped to it */
 async function rasterPage(page: Page): Promise<PdfPage> {

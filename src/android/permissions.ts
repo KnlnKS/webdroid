@@ -1,16 +1,16 @@
 // The permission controller: which permissions a package or uid holds, as PermissionManagerService
 // checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
 // IPermissionManager over them.
-import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { jarray, sameBytes } from "../jvm/abi";
-import { after, vcall, newObj } from "../jvm/natives/jentry";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { type XmlNode, attrStr, attr } from "./axml";
-import { appHost } from "./apphost";
-import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";
-import { PackageRecord, packages, signaturePermissions, storedPackages, usesSdk } from "./packages";
-import { hostStub } from "./binder";
-import { permissionInfo$ } from "./pm";
+import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { jarray, sameBytes } from "../jvm/abi.ts";
+import { after, vcall, newObj } from "../jvm/natives/jentry.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { type XmlNode, attrStr, attr } from "./axml.ts";
+import { appHost } from "./apphost.ts";
+import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
+import { type PackageRecord, packages, signaturePermissions, storedPackages, usesSdk } from "./packages.ts";
+import { hostStub } from "./binder.ts";
+import { permissionInfo$ } from "./pm.ts";
 
 /**
  * A runtime permission is DENIED until the app asks for it, which is the state a freshly

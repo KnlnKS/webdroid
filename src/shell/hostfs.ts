@@ -7,8 +7,8 @@
  * Origin Private File System, so the code above has one path rather than two. A user who *cancels* the real picker still gets null.
  */
 
-import { openDb } from "./idb";
-import { hostUi, onNextGesture, type FilePick } from "./host-ui";
+import { openDb } from "./idb.ts";
+import { hostUi, onNextGesture, type FilePick } from "./host-ui.ts";
 
 // lib.dom types the handles but not the async iteration or the permission calls.
 declare global {

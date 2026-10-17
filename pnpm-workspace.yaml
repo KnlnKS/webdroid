@@ -1,0 +1,6 @@
+packages:
+  - vendor/sql.js
+  - research/wasm
+allowBuilds:
+  esbuild: true
+  workerd: true

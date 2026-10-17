@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
-import { recordVsync } from "../src/android/vsync";
-import { device } from "../src/shell/config";
+import { expect, test } from "vite-plus/test";
+import { recordVsync } from "../src/android/vsync.ts";
+import { device } from "../src/shell/config.ts";
 
 test("virtual vsync tolerates host jitter, caps refresh rates and drops missed periods", () => {
   const saved = device.refreshRate;

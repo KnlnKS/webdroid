@@ -1,10 +1,10 @@
 // ActivityTaskManager's part the broker plays across processes: the activities each launch stacks
 // on its caller's, which process is in front, which are shown beneath a translucent one, and their
 // visibility changes, made one at a time. The shown processes' canvases are layered to match.
-import type { ParcelData } from "../android/binder";
-import { guestSleep } from "../guest-clock";
-import type { Rotation } from "./config";
-import type { ActivityRequest, Entry } from "./processes";
+import type { ParcelData } from "../android/binder.ts";
+import { guestSleep } from "../guest-clock.ts";
+import type { Rotation } from "./config.ts";
+import type { ActivityRequest, Entry } from "./processes.ts";
 
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
@@ -23,6 +23,7 @@ export type StackPort = {
 };
 
 export class ActivityStack {
+  private port: StackPort; private natural: boolean;
   private activities: Activity[] = [];
   private queue: Promise<void> = Promise.resolve();
   private nextId = 1;
@@ -37,7 +38,7 @@ export class ActivityStack {
   private sensor: boolean;
   /** `natural`: the display's natural rotation (ROTATION_0), landscape or not, as the screen is
    *  configured; the sensor starts there */
-  constructor(private port: StackPort, private natural: boolean) { this.sensor = natural; }
+  constructor(port: StackPort, natural: boolean) { this.port = port; this.natural = natural; this.sensor = natural; }
   /** the rotation state a process starts with */
   get rotation(): Rotation { return { sensor: this.sensor, natural: this.natural }; }
 

@@ -1,15 +1,13 @@
 // Each scripts/jbench workload, cut out of Bench.java as its own static method, runs lazily compiled over the AOSP boot dex and must answer as
 // scripts/jbench/expected.json records: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
-// VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
-// does not give, so run.ts runs it bundled under node (undernode.ts).
-// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: bun run wasm jbench [workload ...] [-v]
+// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: pnpm wasm jbench [workload ...] [-v]
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { program, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { PLATFORM_PATHS, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
+import { program, world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
 
 const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
 const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));

@@ -1,12 +1,12 @@
 // Resources: the app's resource table and the android: one, addressed by the package byte of a
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
-import { Arsc } from "./arsc";
-import { TV, type XmlNode, type XmlAttr } from "./axml";
-import { getDeclared } from "../jvm/runtime";
-import { deref } from "./handles";
-import { intBitsToFloat } from "../jvm/abi";
-import type { FileSource } from "../shell/lazyfile";
+import type { Arsc } from "./arsc.ts";
+import { TV, type XmlNode, type XmlAttr } from "./axml.ts";
+import { getDeclared } from "../jvm/runtime.ts";
+import { deref } from "./handles.ts";
+import { intBitsToFloat } from "../jvm/abi.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
 
 let fwPkg: Arsc | null = null;
 export function setFramework(a: Arsc): void { fwPkg = a; }
@@ -35,8 +35,9 @@ const isValidResid = (id: number) => (id & 0x00ff0000) !== 0 && (id & 0xff000000
 /** A bag with its parents merged in, keys ascending, child entries winning (AssetManager2::GetBag):
  *  entry i is (types[i], data[i]) out of style styles[i], whose table its strings index. */
 export class Bag {
-  constructor(readonly parent: number, readonly flags: number, readonly keys: Int32Array,
-    readonly types: Uint8Array, readonly data: Int32Array, readonly styles: Int32Array) {}
+  readonly parent: number; readonly flags: number; readonly keys: Int32Array; readonly types: Uint8Array; readonly data: Int32Array; readonly styles: Int32Array;
+  constructor(parent: number, flags: number, keys: Int32Array,
+    types: Uint8Array, data: Int32Array, styles: Int32Array) { this.parent = parent; this.flags = flags; this.keys = keys; this.types = types; this.data = data; this.styles = styles; }
   /** the index of attribute `key`, or -1 */
   find(key: number): number {
     const keys = this.keys;
@@ -295,7 +296,8 @@ interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
 /** A theme's native half (AssetManager2's Theme): the attributes of the styles applied to it,
  *  merged as Theme::ApplyStyle merges them. */
 export class NativeTheme {
-  constructor(public res: Resources) { this.gen = res.generation; }
+  res: Resources;
+  constructor(res: Resources) { this.res = res; this.gen = res.generation; }
   entries = new Map<number, ThemeEntry>();
   /** the styles applied so far, with their force flags, in pairs */
   applied: number[] = [];

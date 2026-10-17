@@ -1,21 +1,21 @@
 // Printing: the print service (IPrintManager) and the spooler's print dialog over the browser's
 // print. AOSP's PrintManager hands the service the app's document adapter and starts the dialog the
 // service answers with; the dialog asks the adapter for its PDF and prints it in the browser.
-import { JObj, rt, driven, awaited, type Gen } from "../jvm/runtime";
-import { jarray, i8 } from "../jvm/abi";
-import { after, newObj, vcall, scall, staticField } from "../jvm/natives/jentry";
-import { csText } from "../jvm/natives/jchars";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { wallMillis } from "../guest-clock";
-import { vfs } from "../shell/vfs";
-import { hostUi } from "../shell/host-ui";
-import { hostStub } from "./binder";
-import { newIntent, registerSystemActivity, type JIntent } from "./intent";
-import { mkUri } from "./net";
-import { pendingTransport, intentSender } from "./pendingintent";
-import { encodeIntent } from "./intentipc";
-import { pdfFile, type PdfPage } from "./pdf";
-import type { WebViewChromium as JWebView } from "./webkit";
+import { JObj, rt, driven, awaited, type Gen } from "../jvm/runtime.ts";
+import { jarray, i8 } from "../jvm/abi.ts";
+import { after, newObj, vcall, scall, staticField } from "../jvm/natives/jentry.ts";
+import { csText } from "../jvm/natives/jchars.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { wallMillis } from "../guest-clock.ts";
+import { vfs } from "../shell/vfs.ts";
+import { hostUi } from "../shell/host-ui.ts";
+import { hostStub } from "./binder.ts";
+import { newIntent, registerSystemActivity, type JIntent } from "./intent.ts";
+import { mkUri } from "./net.ts";
+import { pendingTransport, intentSender } from "./pendingintent.ts";
+import { encodeIntent } from "./intentipc.ts";
+import { pdfFile, type PdfPage } from "./pdf.ts";
+import type { WebViewChromium as JWebView } from "./webkit.ts";
 
 const S = "Ljava/lang/String;", ID = "Landroid/print/PrintJobId;", PA = "Landroid/print/PrintAttributes;";
 const PRINT_DIALOG = "android.print.PRINT_DIALOG";
@@ -63,7 +63,7 @@ const printCallback = () => class extends JObj {
   readonly done = new Promise<unknown>((resolve) => { this.settle = resolve; });
 };
 type JPrintCallback = InstanceType<ReturnType<typeof printCallback>>;
-class PrintFailure { constructor(readonly message: string) {} }
+class PrintFailure { readonly message: string; constructor(message: string) { this.message = message; } }
 const failed = function (this: JPrintCallback, error: unknown) { return after(csText(error), (message) => this.settle(new PrintFailure(message))); };
 const canceled = function (this: JPrintCallback) { this.settle(null); };
 rt.register({ name: "webdroid/PrintLayoutCallback", ctor: printCallback(), sup: "android/print/ILayoutResultCallback$Stub", methods: {

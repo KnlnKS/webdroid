@@ -1,18 +1,18 @@
 // java.lang's natives: System's clocks and properties, Runtime's library loading and memory, and the process a fork would make.
 // Java booleans are 0/1 numbers, longs are BigInt.
 
-import { awaited, rt, type Gen } from "../runtime";
-import { HEAP_LIMIT } from "../abi";
-import { jarray } from "../abi";
-import { uptimeMillis, wallMillis } from "../../guest-clock";
-import { vfs } from "../../shell/vfs";
-import { processFileBytes } from "../../native/process-fd";
-import { processEnv } from "../../shell/environment";
-import { curThread, iof, vcall, type JThread } from "./jentry";
-import { shareable } from "../suspend";
-import type { JThrowable } from "./jthrowable";
+import { awaited, rt, type Gen } from "../runtime.ts";
+import { HEAP_LIMIT } from "../abi.ts";
+import { jarray } from "../abi.ts";
+import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
+import { vfs } from "../../shell/vfs.ts";
+import { processFileBytes } from "../../native/process-fd.ts";
+import { processEnv } from "../../shell/environment.ts";
+import { curThread, iof, vcall, type JThread } from "./jentry.ts";
+import { shareable } from "../suspend.ts";
+import type { JThrowable } from "./jthrowable.ts";
 // String and its builders, java.lang's natives with these
-import "./jstring";
+import "./jstring.ts";
 
 /** Objects.checkFromIndexSize: [off, off + len) must lie within [0, length) */
 export function checkFromIndexSize(off: number, len: number, length: number, cls = "java/lang/IndexOutOfBoundsException"): void {
@@ -39,7 +39,7 @@ function* libraryFile(path: string): Gen<Uint8Array | null> {
   const bang = path.indexOf("!/");
   if (bang < 0) return yield processFileBytes(path);
   const archive = path.slice(0, bang), entry = path.slice(bang + 2);
-  const [{ packedArchives }, { zipTree }] = yield* awaited(Promise.all([import("../../shell/packedarchive"), import("./jzip")]));
+  const [{ packedArchives }, { zipTree }] = yield* awaited(Promise.all([import("../../shell/packedarchive.ts"), import("./jzip.ts")]));
   const packed = packedArchives.get(archive);
   return packed ? yield packed.entry(entry) : vfs.exists(archive) ? zipTree(yield vfs.readFile(archive))[entry] ?? null : null;
 }

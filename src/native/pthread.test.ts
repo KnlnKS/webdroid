@@ -1,10 +1,11 @@
-import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, cpus, setA64 } from "./cpu";
-import { core, CORE_LIBC } from "./core";
-import { Args, hostFn, lookupHost } from "./host";
-import { mem } from "./mem";
-import { pthreadInit, startThread } from "./pthread";
+import { setTimeout as sleep } from "node:timers/promises";
+import { expect, test } from "vite-plus/test";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, cpus, setA64 } from "./cpu.ts";
+import { core, CORE_LIBC } from "./core.ts";
+import { Args, hostFn, lookupHost } from "./host.ts";
+import { mem } from "./mem.ts";
+import { pthreadInit, startThread } from "./pthread.ts";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
   setA64(false); pthreadInit();
@@ -37,7 +38,7 @@ test("joinable pthread handles remain distinct after their routines exit", async
   mem.u32.set([0xe3a00007, 0xe12fff1e], routine >>> 2);
   try {
     const first = startThread(parent, routine, 0n, false);
-    for (let i = 0; cpus.has(first) && i < 5000; i++) await Bun.sleep(1);
+    for (let i = 0; cpus.has(first) && i < 5000; i++) await sleep(1);
     expect(cpus.has(first)).toBe(false);
     const second = startThread(parent, routine, 0n, false);
     expect(second.pthreadSelf).not.toBe(first.pthreadSelf);

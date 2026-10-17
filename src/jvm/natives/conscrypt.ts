@@ -4,22 +4,22 @@
 // holds is owned by it and freed when the NativeRef is collected. TLS stays at the relay (jnet.ts),
 // so the SSL natives are not implemented.
 
-import { rt, declaredField, type JObj } from "../runtime";
-import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles";
-import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
-import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
-import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio";
-import { memoryAt } from "./jmemory";
-import { randomBytes } from "../../native/libc";
-import { after, scall } from "./jentry";
-import { concat, i8, jarray, u8 } from "../abi";
+import { rt, declaredField, type JObj } from "../runtime.ts";
+import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles.ts";
+import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest.ts";
+import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers.ts";
+import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio.ts";
+import { memoryAt } from "./jmemory.ts";
+import { randomBytes } from "../../native/libc.ts";
+import { after, scall } from "./jentry.ts";
+import { concat, i8, jarray, u8 } from "../abi.ts";
 import {
   CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, equal, x25519, X25519_BASE,
   rsaBytes, rsaPublic, rsaPrivate, pkcs1SignPad, pssEncode, pssVerify, oaepEncode, oaepDecode, pkcs1EncryptPad, pkcs1Unpad, digestNamed,
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type EcKey, type PKey,
-} from "./pkey";
-import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "./der";
+} from "./pkey.ts";
+import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "./der.ts";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);

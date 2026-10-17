@@ -1,5 +1,5 @@
-import { loopbackFetch } from "./devicefetch";
-import { parseBridgeCall, type BridgeCall, type Invoke } from "./webpage/protocol";
+import { loopbackFetch } from "./devicefetch.ts";
+import { parseBridgeCall, type BridgeCall, type Invoke } from "./webpage/protocol.ts";
 
 /** a JavaScript interface method; `returns`: the Java method returns a value */
 export type WebMethod = ((...args: unknown[]) => Promise<unknown>) & { returns: boolean };
@@ -9,12 +9,14 @@ export type WebRequest = { url: string; method: string; main: boolean; headers: 
 export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
 
 export class WebBridge {
+  private ifaces: WebInterfaces;
   readonly id = crypto.randomUUID();
   readonly ready: Promise<string>;
   private socket: WebSocket;
   private queue = Promise.resolve();
 
-  constructor(private ifaces: WebInterfaces, intercept: ((request: WebRequest) => Promise<WebResponse | null>) | undefined, origin: Promise<string>) {
+  constructor(ifaces: WebInterfaces, intercept: ((request: WebRequest) => Promise<WebResponse | null>) | undefined, origin: Promise<string>) {
+    this.ifaces = ifaces;
     const url = new URL("/webview-socket", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("id", this.id);

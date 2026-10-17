@@ -1,13 +1,14 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
-import "../src/natives";
-import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { newPaint, paintOf } from "../src/android/paint";
-import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
-import { TV } from "../src/android/axml";
-import type { TextStyle } from "../src/android/minikin";
-import { withFonts } from "../src/android/fonts";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import { readFileSync } from "node:fs";
+import { loadSystemFonts, fakeStyles, scall, thrown } from "./java.ts";
+import "../src/natives.ts";
+import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
+import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
+import { newPaint, paintOf } from "../src/android/paint.ts";
+import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res.ts";
+import { TV } from "../src/android/axml.ts";
+import type { TextStyle } from "../src/android/minikin.ts";
+import { withFonts } from "../src/android/fonts.ts";
 
 beforeAll(loadSystemFonts);
 /** a TextPaint's public field */
@@ -15,7 +16,6 @@ const textPaintField = (p: object, name: string) => (p as Record<string, number>
 
 describe("locale-span", () => {
   test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
-    await loadLibcore();
     const locales = await scall("android/os/LocaleList", "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", "ja-JP,en-US");
     const span = await newObj("android/text/style/LocaleSpan", "(Landroid/os/LocaleList;)V", locales);
     expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
@@ -33,7 +33,7 @@ describe("locale-span", () => {
     expect(await vcall(restored, "getSpanTypeId", "()I")).toBe(23);
     const empty = await newObj("android/text/style/LocaleSpan", "(Ljava/util/Locale;)V", null);
     expect(await vcall(empty, "getLocale", "()Ljava/util/Locale;")).toBeNull();
-    await expect(vcallAsync(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint)).rejects.toMatchObject({ msg: "locales cannot be null or empty" });
+    expect(await thrown(() => vcallAsync(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint))).toMatch(/: locales cannot be null or empty$/);
   });
 });
 
@@ -199,7 +199,7 @@ describe("tts-span", () => {
 
 describe("minikin", () => {
   test("hyphenation points are minikin's over the reference build's patterns", async () => {
-    const { initHyphenators, hyphenatorFor, hyphenate } = await import("../src/android/hyphenator");
+    const { initHyphenators, hyphenatorFor, hyphenate } = await import("../src/android/hyphenator.ts");
     initHyphenators();
     const types = async (lang: string, word: string) =>
       Array.from(await rt.drive(function* () { return yield* hyphenate(word, yield* hyphenatorFor(lang)); }()) as Uint8Array);
@@ -223,9 +223,8 @@ describe("minikin", () => {
     await same("de-LI-1901", "de-CH-1901"); await same("no", "nb"); await same("ti", "und-Ethi"); await same("sa-Deva", "hi");
   });
   test("line breaking over the reference device's advances breaks where the device does", async () => {
-    await loadLibcore();
-    const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin");
-    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin.ts");
+    const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => {
       const [, text, width, size, , frequency] = r.split("\t");
       return { text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), width: +width, size: +size, hyphenated: !!+(frequency ?? 0) };
@@ -257,9 +256,8 @@ describe("minikin", () => {
   });
 
   test("Paint's advances are the reference device's", async () => {
-    await loadLibcore();
-    const { styleOf, advances } = await import("../src/android/minikin");
-    const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
+    const { styleOf, advances } = await import("../src/android/minikin.ts");
+    const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));
     const paint = await newPaint("android/text/TextPaint"), mismatches: string[] = [];
     for (const [, i, spacing, ...device] of rows.filter((r) => r.startsWith("advances ")).map((r) => r.split(" "))) {

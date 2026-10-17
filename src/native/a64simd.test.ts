@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mem } from "./mem";
-import { setA64 } from "./cpu";
-import { run, RET, pattern } from "./a64.testkit";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { mem } from "./mem.ts";
+import { setA64 } from "./cpu.ts";
+import { run, RET, pattern } from "./a64.testkit.ts";
 
 // Encodings from `clang -target aarch64-linux-gnu`, mnemonics from objdump. Lanes are set and read
 // through the integer views: a move must be bit-exact, and the float views cannot say so.

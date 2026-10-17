@@ -1,10 +1,11 @@
-import { existsSync, readdirSync } from "node:fs";
-import { openApk, openDexes, dexesOf } from "../lib";
-import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog";
-import { rt } from "../../src/jvm/runtime";
-import { Program, reach } from "../../src/jvm/reach";
-import { reflectiveRoots, rootsOf } from "../../src/jvm/roots";
-import "../../src/natives";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { openApk, openDexes, dexesOf } from "../lib.ts";
+import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog.ts";
+import { rt } from "../../src/jvm/runtime.ts";
+import { Program, reach } from "../../src/jvm/reach.ts";
+import { reflectiveRoots, rootsOf } from "../../src/jvm/roots.ts";
+import "../../src/natives.ts";
 
 function option(args: string[], name: string, fallback?: string): string | undefined {
   const inline = args.find((arg) => arg.startsWith(`${name}=`));
@@ -18,7 +19,7 @@ export async function inventory(args: string[]): Promise<void> {
   if (!Number.isInteger(sdk) || sdk < 1) throw new Error("--sdk must be a positive integer");
   const cached = `fuzz-cache/android-${sdk}/framework.jar`;
   const frameworkPath = option(args, "--framework", existsSync(cached) ? cached : "vendor/aosp/framework.jar")!;
-  const [xml, frameworkDexes] = await Promise.all([sdkApiXml(sdk), openDexes(frameworkPath)]);
+  const xml = sdkApiXml(sdk), frameworkDexes = await openDexes(frameworkPath);
   let catalog = buildCatalog({ sdk, xml, runtime: rt, frameworkDexes });
   if (!args.includes("--no-reached")) {
     const reached: ReachedSurface = { classes: new Map(), methods: new Map(), fields: new Map() };
@@ -45,7 +46,8 @@ export async function inventory(args: string[]): Promise<void> {
   for (const [support, count] of Object.entries(catalog.totals)) console.log(`  ${String(count).padStart(6)}  ${support}`);
   const json = option(args, "--json");
   if (json) {
-    await Bun.write(json, JSON.stringify(catalog, null, 1));
+    mkdirSync(dirname(json), { recursive: true });
+    writeFileSync(json, JSON.stringify(catalog, null, 1));
     console.log(`wrote ${json}`);
   }
 }

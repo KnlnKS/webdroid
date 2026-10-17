@@ -3,11 +3,11 @@
 // entry point marked keepsClean judges each call itself, calling unsure() when WebGL may reject
 // it (an argument not recognized here included); every other entry leaves the context unsure.
 
-import { mem } from "./mem";
-import type { HostFn } from "./host";
-import { unsure } from "../android/gl";
-import { g, contextState, texRecs, pbo, imageKey, UNKNOWN, type ContextState, type Bound, type TexImage } from "./gles3-state";
-import { ALIGNMENTS, pixelParam, uploadExtent } from "./gles3-pixels";
+import { mem } from "./mem.ts";
+import type { HostFn } from "./host.ts";
+import { unsure } from "../android/gl.ts";
+import { g, contextState, texRecs, pbo, imageKey, UNKNOWN, type ContextState, type Bound, type TexImage } from "./gles3-state.ts";
+import { ALIGNMENTS, pixelParam, uploadExtent } from "./gles3-pixels.ts";
 
 const kept = new WeakSet<HostFn>();
 /** an entry point that judges for itself whether WebGL may reject a call */

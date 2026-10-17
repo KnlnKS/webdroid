@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { setA64, type Cpu } from "./cpu";
-import { run, runCases, RET } from "./a64.testkit";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { setA64, type Cpu } from "./cpu.ts";
+import { run, runCases, RET } from "./a64.testkit.ts";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));

@@ -1,22 +1,22 @@
 # Deployment
 
-`bun run dev` remains the development server. It lists packages from `apks/` and also accepts local APK, XAPK and APKS files. `bun run build:prod` creates `dist/` for Cloudflare Workers. That build does not copy `apks/` or request `/apks`; users select packages in the browser. Package bytes are read from `File` objects, and local WebView assets are served through the browser service worker.
+`pnpm dev` remains the development server. It lists packages from `apks/` and also accepts local APK, XAPK and APKS files. `pnpm build:prod` creates `dist/` for Cloudflare Workers. That build does not copy `apks/` or request `/apks`; users select packages in the browser. Package bytes are read from `File` objects, and local WebView assets are served through the browser service worker.
 
 ## Build and check
 
-Install Bun, Zig 0.16 and project dependencies, then run:
+Install Node 24 (`.node-version`), pnpm, Zig 0.16 and project dependencies, then run:
 
 ```bash
-bun install
-bun run typecheck
-bun run worker:check
+pnpm install
+pnpm typecheck
+pnpm worker:check
 ```
 
-The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`bun run gen-framework`) and fails if any of its files is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. If `vendor/wasm-aot` holds a platform build (`bun run aot`), it is copied under `aot/` with immutable cache headers; a build made from other sources fails the production build. The generated `dist/` directory is disposable.
+The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`pnpm gen-framework`) and fails if any of its files is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. If `vendor/wasm-aot` holds a platform build (`pnpm aot`), it is copied under `aot/` with immutable cache headers; a build made from other sources fails the production build. The generated `dist/` directory is disposable.
 
-For local Worker testing, use `bun run worker:dev`. To deploy after configuring the sites below, run `bun run build:prod` followed by `bunx wrangler deploy --env=""`. The Pages project deploys from Git automatically.
+For local Worker testing, use `pnpm worker:dev`. To deploy after configuring the sites below, run `pnpm build:prod` followed by `pnpm exec wrangler deploy --env=""`. The Pages project deploys from Git automatically.
 
-Cloudflare Workers Builds connects the main Worker to the `main` branch of `KnlnKS/webdroid`. It uses `sh scripts/build-cloudflare.sh`, build variable `BUN_VERSION=1.4.0`, and deploy command `npx wrangler deploy --env=""`. The Pages project `webdroid-renderer` connects to the same branch with automatic deployments enabled, build command `bun install --frozen-lockfile`, and `pages-renderer` as its output directory. The install supplies dependencies for Pages Functions, which compile the shared Worker modules and serve the WebView routes; Pages does not rebuild or upload the emulator assets. In Pages Settings > Bindings, bind `WEB_BRIDGES` to the main Worker's `webdroid_WebBridgeSession` Durable Object namespace, then redeploy Pages so the binding takes effect. The Worker build script downloads checksum-pinned Zig 0.16.0, Android 33 platform resources, and Android build tools 35.0.1. The existing sql.js build script fetches Emscripten 4.0.9 and its pinned sources. Each Worker build generates assets from the checked out commit; generated assets remain out of Git.
+Cloudflare Workers Builds connects the main Worker to the `main` branch of `KnlnKS/webdroid`. It uses `sh scripts/build-cloudflare.sh`, Node from `.node-version`, build variable `PNPM_VERSION=11.0.8`, and deploy command `npx wrangler deploy --env=""`. The Pages project `webdroid-renderer` connects to the same branch with automatic deployments enabled, build command `pnpm install --frozen-lockfile`, and `pages-renderer` as its output directory. The install supplies dependencies for Pages Functions, which compile the shared Worker modules and serve the WebView routes; Pages does not rebuild or upload the emulator assets. In Pages Settings > Bindings, bind `WEB_BRIDGES` to the main Worker's `webdroid_WebBridgeSession` Durable Object namespace, then redeploy Pages so the binding takes effect. The Worker build script downloads checksum-pinned Zig 0.16.0, Android 33 platform resources, and Android build tools 35.0.1. The existing sql.js build script fetches Emscripten 4.0.9 and its pinned sources. Each Worker build generates assets from the checked out commit; generated assets remain out of Git.
 
 ## Sites and configuration
 

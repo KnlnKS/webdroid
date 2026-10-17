@@ -1,16 +1,16 @@
 // One conformance class on the Wasm tier, in this process: prints "\u0001" and ConformRunner's lines.
-// Run by conform.ts under node: conformone.ts <dex directory> <runner class> <class> [filter]
+// Run by conform.ts: conformone.ts <dex directory> <runner class> <class> [filter]
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { rt } from "../../src/jvm/runtime";
-import { vcall } from "../../src/jvm/natives/jentry";
-import { extraBootEntries } from "../../src/wasm/host/hostnatives";
-import { suspendedNatives } from "../../src/wasm/host/suspend";
-import { world } from "./lib";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
-import { PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn } from "./tools";
-import { vfs } from "../../src/shell/vfs";
+import { rt } from "../../src/jvm/runtime.ts";
+import { vcall } from "../../src/jvm/natives/jentry.ts";
+import { extraBootEntries } from "../../src/wasm/host/hostnatives.ts";
+import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
+import { world } from "./lib.ts";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn } from "./tools.ts";
+import { vfs } from "../../src/shell/vfs.ts";
 
 const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);
 const dexFiles = filesIn(dexDir, /\.dex$/).sort();

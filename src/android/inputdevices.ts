@@ -4,13 +4,13 @@
 // there. The touchscreen's raw axes span 0..32767; InputReader scales them to the panel, which
 // sets its motion ranges and the events' precision.
 
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { once } from "../jvm/suspend";
-import { hostStub } from "./binder";
-import { device } from "../shell/config";
-import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars";
-import { parseKeyMap, javaKeyCharacterMap } from "./keyevent";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
+import { once } from "../jvm/suspend.ts";
+import { hostStub } from "./binder.ts";
+import { device } from "../shell/config.ts";
+import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars.ts";
+import { parseKeyMap, javaKeyCharacterMap } from "./keyevent.ts";
 
 const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
 /** TOUCHSCREEN | STYLUS: the source of the touchscreen's events */

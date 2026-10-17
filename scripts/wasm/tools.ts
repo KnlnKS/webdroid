@@ -1,16 +1,22 @@
-// What the suites share: building their Java fixtures with javac and d8, running them on the JDK, and checking answers.
+// What the suites share: building their Java fixtures with javac and d8, running them on the JDK, checking answers, and bundling the harnesses pages run.
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { androidPlatform, androidTool } from "../android-sdk";
+import { androidPlatform, androidTool } from "../android-sdk.ts";
+import { bundle } from "../bundle.ts";
 
 /** runs `cmd` in `cwd` (feeding it `input`) and answers its stdout; a failure throws with its stderr */
-export function shellIn(cwd: string) {
+export function shellIn(cwd: string, env: NodeJS.ProcessEnv = process.env) {
   return (cmd: string[], input?: string): string => {
-    const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd });
-    if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-    return r.stdout.toString();
+    const r = spawnSync(cmd[0], cmd.slice(1), { cwd, env, input, encoding: "utf8", maxBuffer: 1 << 28 });
+    if (r.status !== 0) throw new Error(`${cmd[0]} failed: ${r.error ?? r.stderr}`);
+    return r.stdout;
   };
 }
+
+/** `entry` as one script for node, or for a page (g1.ts, boot-probe.ts) whose node:fs is the files it preloaded (g1fs.ts) */
+export const bundleFor = (platform: "node" | "browser", entry: string): Promise<string> =>
+  bundle(entry, platform === "node" ? { platform } : { alias: { "node:fs": join(import.meta.dirname, "g1fs.ts") } });
 
 /** the files of `dir` whose names match `re` */
 export const filesIn = (dir: string, re: RegExp) => readdirSync(dir).filter((f) => re.test(f)).map((f) => join(dir, f));

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { BridgeCalls } from "../src/shell/bridgecalls";
+import { BridgeCalls } from "../src/shell/bridgecalls.ts";
 
 export class WebBridgeSession extends DurableObject<Env> {
   private calls = new BridgeCalls<WebSocket>();

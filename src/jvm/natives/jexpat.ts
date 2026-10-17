@@ -3,9 +3,9 @@
 // with its names. Input is consumed a whole token at a time as it arrives; a partial token waits
 // for the next append. External entities are not fetched, as expat does not by default.
 
-import { rt, driven, type Gen } from "../runtime";
-import { vcall } from "./jentry";
-import { charsToString } from "../abi";
+import { rt, driven, type Gen } from "../runtime.ts";
+import { vcall } from "./jentry.ts";
+import { charsToString } from "../abi.ts";
 
 interface Name { uri: string; local: string; qName: string }
 interface Attribute extends Name { value: string }

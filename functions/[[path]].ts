@@ -1,4 +1,4 @@
-import worker from "../worker/index";
+import worker from "../worker/index.ts";
 
 export const onRequest: PagesFunction<Env> = (context) => {
   const url = new URL(context.request.url), path = url.pathname;

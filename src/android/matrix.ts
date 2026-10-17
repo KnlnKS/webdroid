@@ -4,10 +4,10 @@
 // Transformation's) can be the array behind a Java Matrix. A 2D context holds only the affine
 // part: [a, b, c, d, e, f] = [M0, M3, M1, M4, M2, M5].
 
-import { rt, declaredField } from "../jvm/runtime";
-import { handle, deref, FINALIZER } from "./handles";
-import type { Ctx2D, Mat2D } from "./recording";
-import { edges, setEdges } from "./graphics";
+import { rt, declaredField } from "../jvm/runtime.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
+import type { Ctx2D, Mat2D } from "./recording.ts";
+import { edges, setEdges } from "./graphics.ts";
 
 export type Mat = Float64Array;
 export const identity = (): Mat => Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1);

@@ -1,23 +1,24 @@
 // What an apk actually needs from us, computed before it runs.
 //
-//   bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]
+//   pnpm run audit <apk> [--framework] [--all] [--limit N] [--json out.json]
 //
 // Manifest components and services files are the roots; rapid type analysis resolves virtual
 // and interface sites. With --framework the AOSP dex joins the program and the report becomes
 // the native methods this apk would need if those classes ran as AOSP bytecode.
-import { openApk, openDexes, dexesOf } from "./lib";
-import { argv } from "./args";
-import { Program, reach } from "../src/jvm/reach";
-import { rootsOf, reflectiveRoots } from "../src/jvm/roots";
-import { DexFile } from "../src/jvm/dex";
-import { rt } from "../src/jvm/runtime";
-import "../src/natives";
-import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface";
+import { globSync, readFileSync, writeFileSync } from "node:fs";
+import { openApk, openDexes, dexesOf } from "./lib.ts";
+import { argv } from "./args.ts";
+import { Program, reach } from "../src/jvm/reach.ts";
+import { rootsOf, reflectiveRoots } from "../src/jvm/roots.ts";
+import type { DexFile } from "../src/jvm/dex.ts";
+import { rt } from "../src/jvm/runtime.ts";
+import "../src/natives.ts";
+import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";
 
 const args = process.argv.slice(2);
 const { flag, opt, positional } = argv(args, ["--limit", "--json", "--from"]);
 const apk = positional[0];
-if (!apk) throw new Error("usage: bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
+if (!apk) throw new Error("usage: pnpm run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
 const limit = parseInt(opt("--limit", "40")!);
 
 const t0 = performance.now();
@@ -111,10 +112,7 @@ show("framework fields reached and not implemented", rank(r.unresolvedFields, (k
 // spells the same fields f$name$hash. Cutting a leaf under a TS framework moves the problem.
 const cut = args.filter((a, i) => args[i - 1] === "--cut");
 if (cut.length) {
-  const src = new Map<string, string>();   // file → text, read once
-  const files: string[] = [];
-  for await (const f of new Bun.Glob("src/**/*.ts").scan(".")) files.push(f);
-  for (const f of files) src.set(f, await Bun.file(f).text());
+  const src = new Map(globSync("src/**/*.ts").map((f) => [f, readFileSync(f, "utf8")]));   // file → text, read once
   const rows: [string, string, number][] = [];
   for (const [name, spec] of rt.natives) {
     if (!cut.some((c) => name.startsWith(c))) continue;
@@ -137,7 +135,7 @@ if (cut.length) {
 
 const out = opt("--json");
 if (out) {
-  await Bun.write(out, JSON.stringify({
+  writeFileSync(out, JSON.stringify({
     apk, appClasses, frameworkClasses: p.size - appClasses,
     roots: [...roots.why], reflective: refl.length,
     reachableMethods: r.methods.size, instantiated: r.instantiated.size, classesTouched: r.classes.size,

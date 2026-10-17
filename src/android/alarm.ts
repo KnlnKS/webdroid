@@ -1,14 +1,14 @@
 // IAlarmManager, the TS half of AOSP's AlarmManager: PendingIntent alarms belong to the shell's
 // scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, after } from "../jvm/natives/jentry";
-import { logUncaught } from "../jvm/natives/jthrowable";
-import { postMain } from "./mainloop";
-import { operationId, localPendingIntents } from "./pendingintent";
-import { Alarms } from "../shell/alarms";
-import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
-import { packages, usesSdk } from "./packages";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
+import { logUncaught } from "../jvm/natives/jthrowable.ts";
+import { postMain } from "./mainloop.ts";
+import { operationId, localPendingIntents } from "./pendingintent.ts";
+import { Alarms } from "../shell/alarms.ts";
+import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } from "../guest-clock.ts";
+import { packages, usesSdk } from "./packages.ts";
 
 const localAlarms = new Alarms(localPendingIntents, uptimeMillis, logUncaught);
 export const alarmTransport: {

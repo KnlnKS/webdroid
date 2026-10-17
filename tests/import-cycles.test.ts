@@ -1,23 +1,23 @@
-import { expect, test } from "bun:test";
-import { globSync } from "node:fs";
+import { expect, test } from "vite-plus/test";
+import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 
 // Split bundles can enter an import cycle at any member, so no module may read a
 // class/const/let binding from its own cycle while loading (TDZ in production only).
-test("modules do not read cyclic imports during evaluation", async () => {
-  const root = resolve(import.meta.dir, "..");
-  const files = new Set([...globSync("src/**/*.ts", { cwd: root })].filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".d.ts")).map((f) => resolve(root, f)));
+test("modules do not read cyclic imports during evaluation", () => {
+  const root = resolve(import.meta.dirname, "..");
+  const files = new Set(globSync("src/**/*.ts", { cwd: root }).filter((f) => !f.endsWith(".test.ts") && !f.endsWith(".d.ts")).map((f) => resolve(root, f)));
   type Binding = { from: string; name: string };
   type Module = { source: ts.SourceFile; imports: Map<string, Binding>; reexports: Map<string, Binding>; deps: Set<string>; tdz: Set<string> };
   const modules = new Map<string, Module>();
   const target = (from: string, spec: string) => {
     if (!spec.startsWith(".")) return null;
     const path = resolve(dirname(from), spec);
-    return files.has(path + ".ts") ? path + ".ts" : files.has(path) ? path : null;
+    return files.has(path) ? path : null;
   };
   for (const file of files) {
-    const source = ts.createSourceFile(file, await Bun.file(file).text(), ts.ScriptTarget.Latest, true);
+    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
     const module: Module = { source, imports: new Map(), reexports: new Map(), deps: new Set(), tdz: new Set() };
     for (const statement of source.statements) {
       const exported = ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);

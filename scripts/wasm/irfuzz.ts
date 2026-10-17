@@ -1,7 +1,7 @@
 // Generator of methods whose control flow javac never produces: random graphs of basic blocks (so cycles with several entries), written as a class file
 // of version 50 (the type-inferring verifier takes any flow) that d8 converts like any other class. A fuel local ends every cycle. Handler blocks cover
 // random runs of the layout, so exception edges meet the same graph. The signature is the one of fuzz.ts' methods.
-import { Pool, u2, u4 } from "./classfile";
+import { Pool, u2, u4 } from "./classfile.ts";
 
 type T = "I" | "J" | "F" | "D";
 type Rnd = (n: number) => number;

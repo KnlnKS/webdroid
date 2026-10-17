@@ -1,6 +1,6 @@
-import { onRendererReady, openRenderer } from "./webrenderer";
-import type { RendererReady, RendererTask } from "./webpage/protocol";
-import { WEB_FRAME_SANDBOX } from "./webinject";
+import { onRendererReady, openRenderer } from "./webrenderer.ts";
+import type { RendererReady, RendererTask } from "./webpage/protocol.ts";
+import { WEB_FRAME_SANDBOX } from "./webinject.ts";
 
 export type FrameIdentity = Window | string;
 export type SurfaceStyle = Partial<Pick<CSSStyleDeclaration, "visibility" | "background" | "left" | "top" | "width" | "height">>;

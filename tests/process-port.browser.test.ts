@@ -1,15 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vite-plus/test";
 import { chromium } from "playwright";
+import { serveModules } from "./browser.ts";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/perf.ts", import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
-  if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
-  const server = Bun.serve({ port: 0, fetch(request) {
-    const path = new URL(request.url).pathname;
-    const output = build.outputs.find(out => out.path.endsWith(path));
-    return output ? new Response(output, { headers: { "content-type": "text/javascript" } })
-      : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
-  } });
+  const server = await serveModules(["src/perf.ts", "src/shell/process-life.ts", "src/shell/aot-profile.ts", "src/shell/ime-port.ts", "src/shell/location-access.ts",
+    "src/shell/worker-control-methods.ts", "src/shell/process-port.ts", "tests/fixtures/browser/process-bootstrap.ts"]);
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(), errors: string[] = [];
@@ -18,7 +13,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     const counterReceipt = await page.evaluate(async () => {
       const previous = location.href, absent = window.__wdCounterReceipt === undefined;
       history.replaceState(null, "", "?perfProbe=1&pid=17");
-      const { perf, perfReset } = await import(location.origin + "/perf.js") as typeof import("../src/perf");
+      const { perf, perfReset } = await import(location.origin + "/perf.js") as typeof import("../src/perf.ts");
       const first = window.__wdCounterReceipt!();
       perf.wasmCompileMs = 7;
       const second = window.__wdCounterReceipt!();
@@ -45,12 +40,12 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     expect(profileOwnership).toEqual({absent:null,untouched:true,copiedKey:"build-key",
       fresh:{key:"build-key",wanted:["c1.wasm"],worlds:[{linked:["LExample;"],called:["LCalled;"]}]}});
     const retainedRights = await page.evaluate(async()=>{
-      const {storedClipboardRights}=await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const {storedClipboardRights}=await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return storedClipboardRights();
     });
     expect(retainedRights).toEqual({has:true,cleared:true,reads:[1,2,3,4],backing:[9,2,3,4],replacementRejected:true,pendingRejected:true});
     const result = await page.evaluate(async () => {
-      const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
+      const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port.ts");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
       const code = `import {processProxy, serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
         self.onmessage = ({data}) => {
@@ -105,21 +100,21 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       hostError:{name:"TypeError",message:"undefined.hasTransform",origin:true,caller:false},
       death: "android/os/DeadObjectException", later: "android/os/DeadObjectException" });
     const ownership = await page.evaluate(async () => {
-      const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return endpointOwnership();
     });
     expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true,
       lifecycle:{read:{pid:3,id:1},dead:{pid:1,id:0},signalOwn:true,signalForeign:true,watcherCleaned:true},
       fileDescriptors:{opened:true,foreign:-13,written:55,read:{pid:66,id:1},binder:{pid:77,id:1},survivor:{pid:77,id:1}} });
     const cookies = await page.evaluate(async () => {
-      const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return cookieOwnership();
     });
     expect(cookies).toEqual({ session: {value:true}, persisted: {value:true}, read: "session=one; saved=two", isolatedRead: "",
       document: ["saved=two"], accept: {value:false}, denied: {value:false}, removed: {value:true}, afterSession: "saved=two",
       saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
     const clipboard = await page.evaluate(async () => {
-      const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return clipboardOwnership();
     });
     expect(clipboard).toEqual({prefs:{ack:true,fresh:["one"],keys:["array","other"],foreignDenied:true,emptyForeignDenied:true,publicPolicy:"test.clipboard.shared",policyDenied:true,files:["worker"]},paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13,metadata:true,retainedMetadata:true,changedMode:true,restoredMetadata:true},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},accounts:{publicOnly:true,exists:true,token:"visible-token",deniedRead:true,deniedWrite:true,
@@ -127,25 +122,25 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       changes:1,peerChanges:3,survivor:[1,2],
       settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});
     const pointers = await page.evaluate(async () => {
-      const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return pointerInputOwnership();
     });
     expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,10,12],[1,2,60,80],[1,1,80,100]],closed:true});
     const locationResult = await page.evaluate(async () => {
-      const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return locationOwnership();
     });
     expect(locationResult).toEqual({available:true,denied:true,events:[12,24],copied:true,
       stale:true,removed:true,peerSurvives:true,deathCloses:true});
     const diagnostic = await page.evaluate(async () => {
-      const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return workerDiagnosticOwnership();
     });
     expect(diagnostic).toEqual({pendingTerminal:{expected:true,reason:1,status:0,pid:8403},healthy:true,rejected:"owned diagnostic failure",hung:"Worker diagnostic timeout",phase:"Worker is not ready: packages",
       profilePending:"Worker is not ready: packages",profileIdentity:"Worker AOT profile identity mismatch",
       secondHealthy:true,hungCalls:1,queueBlocked:true,live:true,aliveCalls:2,retained:"actual diagnostic fixture exit",identity:8401});
     const ime = await page.evaluate(async () => {
-      const {imeOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      const {imeOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return imeOwnership();
     });
     expect(ime).toEqual({inputs:["a","abc"],switched:"new editor",inactive:true,closed:true});

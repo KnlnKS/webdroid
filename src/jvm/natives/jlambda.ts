@@ -1,4 +1,4 @@
-import { JObj, rt } from "../runtime";
+import { JObj, rt } from "../runtime.ts";
 
 class JLambda extends JObj { f!: (...a: unknown[]) => unknown; }
 const hosts = new Set<string>();

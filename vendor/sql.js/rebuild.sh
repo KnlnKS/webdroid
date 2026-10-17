@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build dist/ from the pinned sources. Bun's preload runs this when dist/ is missing, so progress
+# Build dist/ from the pinned sources. The node preload runs this when dist/ is missing, so progress
 # goes to stderr, never into an entry point's stdout.
 set -eu
 exec >&2

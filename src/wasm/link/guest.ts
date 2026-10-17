@@ -1,12 +1,12 @@
 // Runtime functions over the native core's memory (the "gmem" import of cx.guest()): scalar loads and stores at a 32-bit address, and copies of a
 // primitive array's elements to and from it, which memory.ts calls for libcore.io.Memory. They are runtime functions, not inline code, so that the
 // memory's type (shared or not) is declared by a module made when it is used, never by precompiled code.
-import { Code, OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import { SIZE, copyFn, copySwapFn } from "../compiler/copy";
-import { rt } from "../compiler/rtfns";
-import type { ElemKind } from "../compiler/consts";
-import type { Compiler } from "../compiler/j2w";
+import { Code, OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { SIZE, copyFn, copySwapFn } from "../compiler/copy.ts";
+import { rt } from "../compiler/rtfns.ts";
+import type { ElemKind } from "../compiler/consts.ts";
+import type { Compiler } from "../compiler/j2w.ts";
 
 function notifyWrite(cx: Compiler): number {
   return cx.memo("guest:wrote", () => {

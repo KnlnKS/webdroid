@@ -12,9 +12,11 @@ export interface WritableSource extends FileSource {
 export const writable = (source: FileSource | null | undefined): source is WritableSource => !!source && "write" in source;
 
 export class BytesFile implements FileSource {
+  readonly bytes: Uint8Array;
   readonly size: number;
 
-  constructor(readonly bytes: Uint8Array) {
+  constructor(bytes: Uint8Array) {
+    this.bytes = bytes;
     this.size = bytes.length;
   }
 
@@ -25,9 +27,11 @@ export class BytesFile implements FileSource {
 }
 
 export class BlobFile implements FileSource {
+  private readonly blob: Blob;
   readonly size: number;
 
-  constructor(private readonly blob: Blob) {
+  constructor(blob: Blob) {
+    this.blob = blob;
     this.size = blob.size;
   }
 
@@ -38,9 +42,11 @@ export class BlobFile implements FileSource {
 }
 
 export class SliceFile implements FileSource {
+  readonly source: FileSource; readonly offset: number;
   readonly size: number;
 
-  constructor(readonly source: FileSource, readonly offset: number, size: number) {
+  constructor(source: FileSource, offset: number, size: number) {
+    this.source = source; this.offset = offset;
     this.size = size;
   }
 
@@ -78,16 +84,12 @@ export async function readFully(source: FileSource, offset = 0, length = source.
 }
 
 export class RangeFile implements FileSource {
+  readonly url: string; readonly size: number; private readonly chunkSize: number; private readonly maxChunks: number;
   private readonly chunks = new Map<number, Uint8Array>();
   private readonly inflight = new Map<number, Promise<Uint8Array>>();
   private lastEnd = -1;
 
-  constructor(
-    readonly url: string,
-    readonly size: number,
-    private readonly chunkSize = 1 << 20,
-    private readonly maxChunks = 32,
-  ) {}
+  constructor(url: string, size: number, chunkSize = 1 << 20, maxChunks = 32) { this.url = url; this.size = size; this.chunkSize = chunkSize; this.maxChunks = maxChunks; }
 
   static async open(url: string): Promise<FileSource> {
     const response = await fetch(url, { method: "HEAD" });

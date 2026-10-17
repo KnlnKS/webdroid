@@ -13,12 +13,12 @@ Toolchain: Emscripten 4.0.9 (native WebAssembly BigInt), `-Oz -flto`.
 Closure is omitted so rebuilding does not require Java. Both WASM files are
 identical; their names match the upstream entry points.
 
-The build output in `dist/` is not committed. Bun's preload (`scripts/preload.ts`)
-runs `rebuild.sh` whenever `dist/` is missing or was built from another patch, before any entry point imports sql.js.
+The build output in `dist/` is not committed. The node preload (`scripts/preload.ts`)
+and the Vite config run `rebuild.sh` whenever `dist/` is missing or was built from another patch, before any entry point imports sql.js.
 The script uses an active Emscripten 4.0.9, or installs that release through emsdk
 pinned to the same tag under `~/.cache/webdroid/` (override with `WEBDROID_EMSDK`).
 To rebuild by hand, run `vendor/sql.js/rebuild.sh`.
 
 The script verifies upstream source checksums and applies `sqljs.patch`.
 Python 3, Git, Make, and network access are required to build. The workspace
-link makes Bun imports and the server's `/sqljs/` route use the same build.
+link makes node imports and the server's `/sqljs/` route use the same build.

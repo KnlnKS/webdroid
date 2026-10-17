@@ -1,8 +1,8 @@
 // What a WebView loads for a URL, and the back/forward history Chromium keeps of it.
-import { rt, JObj } from "../jvm/runtime";
-import { runningApp } from "./apphost";
-import { WEB_INJECT } from "../shell/webinject";
-import type { FrameDocument, FrameInit } from "../shell/webpage/protocol";
+import { rt, JObj } from "../jvm/runtime.ts";
+import { runningApp } from "./apphost.ts";
+import { WEB_INJECT } from "../shell/webinject.ts";
+import type { FrameDocument, FrameInit } from "../shell/webpage/protocol.ts";
 
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
 export function srcFor(url: string): string {
@@ -33,10 +33,12 @@ export function srcdoc(data: string, enc: string | null, base: string | null): s
   return dt ? dt[0] + inject + data.slice(dt[0].length) : inject + data;
 }
 class JWebHistoryItem extends JObj {
-  constructor(public entry: Entry) { super(); }
+  entry: Entry;
+  constructor(entry: Entry) { super(); this.entry = entry; }
 }
 class JWebBackForwardList extends JObj {
-  constructor(public entries: Entry[], public index: number) { super(); }
+  entries: Entry[]; index: number;
+  constructor(entries: Entry[], index: number) { super(); this.entries = entries; this.index = index; }
 }
 const item = (e: Entry | undefined) => e ? new JWebHistoryItem(e) : null;
 rt.register({

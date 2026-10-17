@@ -1,11 +1,11 @@
-import { expect, test, describe } from "bun:test";
-import "../src/natives";
-import { vcall, newObj } from "../src/jvm/natives/jentry";
-import { scall, mountApexData, thrown } from "./java";
+import { expect, test, describe } from "vite-plus/test";
+import { readFileSync } from "node:fs";
+import "../src/natives.ts";
+import { vcall, newObj } from "../src/jvm/natives/jentry.ts";
+import { getInstance, mountApexData, thrown } from "./java.ts";
 
 const hex = (b: Int8Array) => Buffer.from(b).toString("hex");
 const bytes = (h: string) => new Int8Array(Buffer.from(h, "hex"));
-const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
 
 describe("conscrypt-natives", () => {
   test("HMAC and 3DES answer their reference vectors through the JCA", async () => {
@@ -34,12 +34,12 @@ describe("conscrypt-natives", () => {
     changed[5] ^= 1;
     await vcall(c, "init", "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V", 2, key, spec);
     await vcall(c, "updateAAD", "([B)V", Int8Array.of(1, 2, 3));
-    expect(await thrown(() => vcall(c, "doFinal", "([B)[B", changed))).toStartWith("javax/crypto/AEADBadTagException:");
+    expect(await thrown(() => vcall(c, "doFinal", "([B)[B", changed))).toMatch(/^javax\/crypto\/AEADBadTagException:/);
   });
 
   test("a certificate parses, names its subject and verifies its own signature", async () => {
     await mountApexData();
-    const pem = (await Bun.file(new URL("../vendor/android-cacerts.pem", import.meta.url)).text()).match(/-----BEGIN CERTIFICATE-----[^]*?-----END CERTIFICATE-----/)![0];
+    const pem = readFileSync(new URL("../vendor/android-cacerts.pem", import.meta.url), "utf8").match(/-----BEGIN CERTIFICATE-----[^]*?-----END CERTIFICATE-----/)![0];
     const factory = await getInstance("java/security/cert/CertificateFactory", "X.509");
     const cert = await vcall(factory, "generateCertificate", "(Ljava/io/InputStream;)Ljava/security/cert/Certificate;",
       await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(Buffer.from(pem))));
@@ -51,11 +51,11 @@ describe("conscrypt-natives", () => {
 
   test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
     const nc = await import("node:crypto");
-    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers");
-    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest");
-    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey");
-    const { modPow } = await import("../src/jvm/natives/jmath");
-    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der");
+    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers.ts");
+    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest.ts");
+    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey.ts");
+    const { modPow } = await import("../src/jvm/natives/jmath.ts");
+    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der.ts");
     const rnd = (n: number) => new Uint8Array(nc.randomBytes(n));
     const same = (a: Uint8Array, b: Uint8Array | Buffer) => expect(Buffer.from(a).toString("hex")).toBe(Buffer.from(b).toString("hex"));
     for (const keyLen of [16, 24, 32]) {
@@ -149,7 +149,7 @@ describe("conscrypt-natives", () => {
       const b = BigInt("0x" + nc.randomBytes(40).toString("hex"));
       expect(modPow(b, e, m)).toBe(binaryPow(b, e, m));
     }
-  }, 60_000);
+  });
 
   test("ECDH agrees on one secret from either side", async () => {
     const gen = await getInstance("java/security/KeyPairGenerator", "EC");

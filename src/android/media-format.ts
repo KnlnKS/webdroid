@@ -1,9 +1,9 @@
 // A format as the media natives keep one (stagefright's AMessage), and its crossing to and from
 // the Map<String, Object> Java's MediaFormat wraps, its values tagged with MediaFormat's types.
-import { driven, type Gen, type JObj } from "../jvm/runtime";
-import { newObj, vcall, after } from "../jvm/natives/jentry";
-import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox";
-import { isBuffer, remainingBytes, readRemainingBytes, directCopy, type JBuffer } from "../jvm/natives/jnio";
+import { driven, type Gen, type JObj } from "../jvm/runtime.ts";
+import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
+import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox.ts";
+import { isBuffer, remainingBytes, readRemainingBytes, directCopy, type JBuffer } from "../jvm/natives/jnio.ts";
 
 export const TYPE_INTEGER = 1, TYPE_LONG = 2, TYPE_FLOAT = 3, TYPE_STRING = 4, TYPE_BYTE_BUFFER = 5;
 type FormatValue = number | bigint | string | JBuffer;

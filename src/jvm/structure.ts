@@ -3,15 +3,17 @@
 // region is ordered so every loop is contiguous and every other edge goes forward, so a branch is
 // a `continue` of the loop it closes or a `break` out of a labelled block ending at its target.
 // Only edges between regions, which exceptions and handler exits take, go through the `pc` switch.
-import type { CodeItem } from "./dex";
-import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "./prepared";
+import type { CodeItem } from "./dex.ts";
+import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "./prepared.ts";
 
 /** How a branch reaches its target block. */
-export const enum Go { Next, Break, Continue, Dispatch }
+export const Go = { Next: 0, Break: 1, Continue: 2, Dispatch: 3 } as const;
+export type Go = (typeof Go)[keyof typeof Go];
 
 /** The flow has a cycle with more than one entry; `heads` are the start pcs of the targets of its retreating edges. */
 export class Irreducible extends Error {
-  constructor(readonly heads: number[]) { super("irreducible"); }
+  readonly heads: number[];
+  constructor(heads: number[]) { super("irreducible"); this.heads = heads; }
 }
 
 interface Scope { open: number; close: number; label: string; loop: boolean }

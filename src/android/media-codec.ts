@@ -1,13 +1,13 @@
 // MediaCodec's and MediaCodecList's natives over WebCodecs: the codec list is the definitions
 // below that the browser's decoders accept, and a codec is a VideoDecoder or AudioDecoder behind
 // MediaCodec's buffer-index protocol, which libmediandk's AMediaCodec shares.
-import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { concat, jarray } from "../jvm/abi";
-import { after, newObj, vcall } from "../jvm/natives/jentry";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
-import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format";
-import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
-import { nativePeer, postNativeEvent } from "./media-native";
+import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { concat, jarray } from "../jvm/abi.ts";
+import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio.ts";
+import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
+import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface.ts";
+import { nativePeer, postNativeEvent } from "./media-native.ts";
 
 /** a profile and level the codec lists, as MediaCodecInfo.CodecProfileLevel's */
 type Level = { profile: number; level: number };
@@ -176,6 +176,7 @@ const illegalState = (message: string | null) => rt.mkThrowable("java/lang/Illeg
 /** A started codec's session, from start() to the stop, flush or reset that closes it: its decoder,
  *  buffer indices and outputs. Its callbacks act, and its events reach Java, only while it is the codec's run. */
 class Run {
+  readonly codec: Codec;
   readonly decoder: VideoDecoder | AudioDecoder;
   readonly live = () => this.codec.run === this;
   available = new Set([0, 1, 2, 3]);
@@ -192,7 +193,8 @@ class Run {
   error: string | null = null;
   waiters = new Set<() => void>();
   scheduled = new Map<ReturnType<typeof setTimeout>, VideoFrame>();
-  constructor(readonly codec: Codec) {
+  constructor(codec: Codec) {
+    this.codec = codec;
     const { def, format } = codec, outputFormat = new NativeFormat(format);
     const error = (e: unknown) => { if (this.live()) this.fail(e); };
     this.parameterSets = parameterSets(def, format);
@@ -364,8 +366,9 @@ class Run {
 }
 /** a codec's configuration; a Run holds what it does once started */
 export class Codec {
+  readonly def: Definition; readonly owner: JObj | null;
   /** owner: the Java MediaCodec events go to, absent for an AMediaCodec */
-  constructor(readonly def: Definition, readonly owner: JObj | null = null) {}
+  constructor(def: Definition, owner: JObj | null = null) { this.def = def; this.owner = owner; }
   format = new NativeFormat();
   /** a Java Surface, or a native ANativeWindow's GlSurface */
   surface: JObj | GlSurface | null = null;

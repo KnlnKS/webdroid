@@ -1,13 +1,14 @@
 // The ART headroom ratio: g1.ts's workloads (Bench.java and G1.java, each case cut into its own method) as one dex, run by app_process on the
 // reference device (booted, adb reachable) and timed per call as g1run times them, each run a fresh process. With --ref (a `g1 --json` report)
 // each row shows how many times slower the Wasm tier is than ART, first call and steady state.
-//   bun scripts/wasm/g1art.ts [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]
+//   pnpm ts scripts/wasm/g1art.ts [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adb } from "../adb";
-import { JAVA, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
+import { adb } from "../adb.ts";
+import { JAVA, ROOT } from "./paths.ts";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { geo, med } from "./g1report.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "3"), refPath = flag("--ref", ""), engine = flag("--engine", "chrome");
@@ -36,7 +37,6 @@ dexAndroid(shellIn(dir), dir, ["Bench.java", "G1.java", "G1Art.java"]);
 const remote = "/data/local/tmp/webdroid-g1art.dex";
 adb("push", join(dir, "classes.dex"), remote);
 
-const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const refRows = new Map<string, { first: number[]; steady: number[]; result: string }>(refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines[engine].rows.map((r: { w: string }) => [r.w, r]) : []);
 const todo = [...classOf.keys()].filter((w) => only.length ? only.includes(w) : !refPath || refRows.has(w));
 const ratios: number[] = [];
@@ -59,4 +59,4 @@ for (const w of todo) {
   }
   console.log(w.padEnd(16), ...cells);
 }
-if (ratios.length) console.log(`\ngeometric mean of the steady-state ratio (Wasm tier / ART) over ${ratios.length} workloads: ${Math.exp(ratios.reduce((s, x) => s + Math.log(x), 0) / ratios.length).toFixed(2)}x`);
+if (ratios.length) console.log(`\ngeometric mean of the steady-state ratio (Wasm tier / ART) over ${ratios.length} workloads: ${geo(ratios).toFixed(2)}x`);

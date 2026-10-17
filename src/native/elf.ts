@@ -6,9 +6,9 @@
 // through them. Values do not need width-aware reads: the guest address space is under 4 GiB by
 // construction, and little-endian puts a 64-bit field's low word at its own address.
 
-import { mem } from "./mem";
-import { PAGE_SIZE } from "./abi";
-import { utf8 } from "../jvm/abi";
+import { mem } from "./mem.ts";
+import { PAGE_SIZE } from "./abi.ts";
+import { utf8 } from "../jvm/abi.ts";
 
 export interface Module {
   name: string;

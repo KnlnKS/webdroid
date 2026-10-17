@@ -1,10 +1,10 @@
 // resources.arsc parser + config-aware entry resolution.
 // Refs: AOSP libs/androidfw/include/androidfw/ResourceTypes.h
 
-import { StringPool } from "./axml";
-import { device as dev } from "../shell/config";
-import { u8 } from "../jvm/abi";
-import { perf } from "../perf";
+import { StringPool } from "./axml.ts";
+import { device as dev } from "../shell/config.ts";
+import { u8 } from "../jvm/abi.ts";
+import { perf } from "../perf.ts";
 
 interface ResEntry {
   key: string;                     // entry name
@@ -59,6 +59,7 @@ function utf16z(view: DataView, at: number, max: number): string {
 }
 
 export class Arsc {
+  readonly files: Files;
   values!: StringPool;
   pkgId = 0x7f;
   pkgName = "";
@@ -75,7 +76,8 @@ export class Arsc {
   private profiles = new Map<string, ResourceProfile>();
   private active: ResourceProfile | null = null;
 
-  constructor(bytes: Uint8Array, readonly files: Files = () => null) {
+  constructor(bytes: Uint8Array, files: Files = () => null) {
+    this.files = files;
     const started = performance.now();
     this.parse(bytes, false);
     perf.resParseMs += performance.now() - started;

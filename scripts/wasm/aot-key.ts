@@ -3,9 +3,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { VERSION } from "../../src/wasm/link/aot";
-import { AOSP, ROOT } from "./paths";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { VERSION } from "../../src/wasm/link/aot.ts";
+import { AOSP, ROOT } from "./paths.ts";
 
 // Host registrations outside Wasm determine class layouts and suspension imports too.
 const SOURCES = ["src", "scripts/wasm/aot-build.ts", "scripts/wasm/aot-key.ts", "scripts/wasm/aot-startup.ts", "scripts/wasm/harness.ts"];

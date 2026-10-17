@@ -2,7 +2,7 @@
 // The fast path asserts onboarding, search results and venue resources; the full path retains
 // the recorded Android flow. The list shows the API's announcement sheet again on each venue-list
 // update while none is shown, and a search's paging can update the list for several seconds.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 const W = 1080, H = 2160;
 const N = (x: number, y: number) => ({ x: x / W, y: y / H });

@@ -1,7 +1,8 @@
-import { declaredField } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
-import { mangleStaticField } from "../../src/jvm/abi";
-import { exercise, same, thrown, statics, listener, ltrb } from "./harness";
+import { readFileSync } from "node:fs";
+import { declaredField } from "../../src/jvm/runtime.ts";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
+import { mangleStaticField } from "../../src/jvm/abi.ts";
+import { exercise, same, thrown, statics, listener, ltrb } from "./harness.ts";
 
 // Bitmap, BitmapFactory and BitmapRegionDecoder against the reference AVD: every expected value below
 // was printed by the same calls there (images in tests/fixtures/images). Headless there is no image
@@ -10,7 +11,7 @@ import { exercise, same, thrown, statics, listener, ltrb } from "./harness";
 const BITMAP = "android/graphics/Bitmap", BF = "android/graphics/BitmapFactory", OPTS = "android/graphics/BitmapFactory$Options";
 const hex = (v: number) => (v >>> 0).toString(16);
 const configs = async () => await statics(`${BITMAP}$Config`);
-const image = (name: string) => Bun.file(`tests/fixtures/images/${name}`).bytes().then((b) => new Int8Array(b.buffer, b.byteOffset, b.length));
+const image = async (name: string) => new Int8Array(readFileSync(`tests/fixtures/images/${name}`));
 /** "WxH CONFIG rb= bc= abc= alpha= premul= mut=", as the device probe printed it */
 async function info(b: unknown): Promise<string> {
   if (!b) return "null";

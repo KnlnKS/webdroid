@@ -1,10 +1,10 @@
 // A throwable no Java frame catches: one escaping a thread, or a call no Java frame waits on
 // (detached, with an Escape policy).
 
-import { rt, JObj } from "../runtime";
-import { Strand } from "../suspend";
-import { processExited } from "../../process-exit";
-import { callOn, classNameOf, curThread, javaRuns, mainThread, vcall, vcallOn, type JThread } from "./jentry";
+import { rt, JObj } from "../runtime.ts";
+import { Strand } from "../suspend.ts";
+import { processExited } from "../../process-exit.ts";
+import { callOn, classNameOf, curThread, javaRuns, mainThread, vcall, vcallOn, type JThread } from "./jentry.ts";
 
 /** what host code holds of a Java throwable: a TS native's (wasm/host/entry.ts hostThrowable), or a facade over Java's (bridge.ts) */
 export class JThrowable extends JObj {

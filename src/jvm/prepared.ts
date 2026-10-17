@@ -1,5 +1,5 @@
-import type { CodeItem } from "./dex";
-import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes";
+import type { CodeItem } from "./dex.ts";
+import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes.ts";
 
 export interface PreparedInstruction {
   readonly pc: number;

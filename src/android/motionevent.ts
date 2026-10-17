@@ -2,10 +2,10 @@
 // android_view_MotionEvent.cpp's natives. MotionEvent, PointerCoords and PointerProperties run
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
-import { rt, JObj, declaredField } from "../jvm/runtime";
-import { ownedHandle, deref } from "./handles";
-import { matrixOf } from "./matrix";
-import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel";
+import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { ownedHandle, deref } from "./handles.ts";
+import { matrixOf } from "./matrix.ts";
+import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel.ts";
 
 const ME = "android/view/MotionEvent", PC = "android/view/MotionEvent$PointerCoords", PP = "android/view/MotionEvent$PointerProperties";
 const HISTORY_CURRENT = -0x80000000;

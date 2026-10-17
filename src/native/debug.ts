@@ -1,15 +1,15 @@
 // wd.native: modules, symbolize, traces, threads, unresolved/jniMissing, peek/poke.
-import { modules, symbolizePc, backtrace } from "./dl";
-import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } from "./host";
-import { killLog, dispositions } from "./signals";
-import { futexStats } from "./pthread";
-import { jniMissing, jniTrace, registered } from "./jni";
-import { cpus, codeStats, stepMode, setStepMode, profile, slice, watchPcs, lastFault, invalidations } from "./cpu";
-import { yieldStats } from "../jvm/yield";
-import { mem } from "./mem";
-import { processExited } from "../process-exit";
-import { core, jitStats } from "./core";
-import { netDebug } from "./socket/core";
+import { modules, symbolizePc, backtrace } from "./dl.ts";
+import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } from "./host.ts";
+import { killLog, dispositions } from "./signals.ts";
+import { futexStats } from "./pthread.ts";
+import { jniMissing, jniTrace, registered } from "./jni.ts";
+import { cpus, codeStats, stepMode, setStepMode, profile, slice, watchPcs, lastFault, invalidations } from "./cpu.ts";
+import { yieldStats } from "../jvm/yield.ts";
+import { mem } from "./mem.ts";
+import { processExited } from "../process-exit.ts";
+import { core, jitStats } from "./core.ts";
+import { netDebug } from "./socket/core.ts";
 
 export const native = {
   modules,

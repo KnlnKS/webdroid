@@ -1,6 +1,6 @@
 // The Wasm tier's host as the places that load code see it: loaded by a dynamic import, so a page opens the tier's build while the rest starts.
 // `JavaClass` is what host code holds of a loaded class.
-import type { DexFile } from "./dex";
+import type { DexFile } from "./dex.ts";
 
 export interface ThreadState { name: string; state: string; blocker?: string; owner?: string; strands?: number[] }
 /** what the Wasm tier's host provides the places that load code */
@@ -23,19 +23,19 @@ export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
 let loading: Promise<void> | undefined;
 /** loads the Wasm tier's host. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
 export function loadTier(): Promise<void> {
-  return loading ??= import("../wasm/host/boot").then(async (host) => { backend = await host.bootWasmTier(); });
+  return loading ??= import("../wasm/host/boot.ts").then(async (host) => { backend = await host.bootWasmTier(); });
 }
 
 /** a process Worker's Wasm modules come from the page's store of the platform build: the page serves the port, the Worker uses it */
 export function serveAot(port: MessagePort): void {
-  void import("../wasm/host/boot").then((host) => host.serveAot(port));
+  void import("../wasm/host/boot.ts").then((host) => host.serveAot(port));
 }
 /** and the page's compile host (wasm/host/compilehost.ts) starts its compile workers */
 export function serveCompileWorkers(port: MessagePort): void {
-  void import("../wasm/host/compilehost").then((host) => host.serveCompileWorkers(port));
+  void import("../wasm/host/compilehost.ts").then((host) => host.serveCompileWorkers(port));
 }
 export async function usePagePorts(aot: MessagePort, compile: MessagePort): Promise<void> {
-  (await import("../wasm/host/boot")).usePagePorts(aot, compile);
+  (await import("../wasm/host/boot.ts")).usePagePorts(aot, compile);
 }
 
 /** the Wasm tier's compiled app code, once the app's dex files are loaded */

@@ -4,12 +4,12 @@
 // MediaFocusControl's focus stack, and no spatializer. Output devices are not modelled (AudioSystem
 // lists no ports), so no attributes route to one. A codec's loudness parameters are the reference
 // AVD's for its output (the speaker).
-import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall } from "../jvm/natives/jentry";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { hostStub, oneway } from "./binder";
-import { isMusicActive, newAudioSessionId, outputSampleRate } from "./audio-output";
+import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { hostStub, oneway } from "./binder.ts";
+import { isMusicActive, newAudioSessionId, outputSampleRate } from "./audio-output.ts";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
 const VOLUMES: [number, number, number][] = [[1, 5, 3], [0, 7, 5], [0, 7, 5], [0, 15, 5], [1, 7, 6], [0, 7, 5], [0, 15, 7],

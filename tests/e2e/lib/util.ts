@@ -1,5 +1,7 @@
 // Helpers every harness entry point was re-declaring.
-import { stableFrame } from "./settle";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { stableFrame } from "./settle.ts";
 export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
 export function webdroidUrl(): URL {
@@ -8,6 +10,7 @@ export function webdroidUrl(): URL {
   return url;
 }
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+export const readJson = async (path: string | URL) => JSON.parse(await readFile(path, "utf8"));
 
 /** `run` over items, `jobs` at a time and heaviest first; results keep the items' order. */
 export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T) => number, run: (item: T) => Promise<R>): Promise<R[]> {
@@ -18,7 +21,8 @@ export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T)
   }));
   return results;
 }
-export const sha1 = (buf: Uint8Array) => new Bun.CryptoHasher("sha1").update(buf).digest("hex");
+export const sha1 = (buf: Uint8Array) => createHash("sha1").update(buf).digest("hex");
+
 
 /**
  * Wait until `capture` stops returning new frames, on the contract lib/settle.ts defines over

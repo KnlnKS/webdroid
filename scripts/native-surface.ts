@@ -1,4 +1,4 @@
-import { isPlaceholderMethod, type Runtime } from "../src/jvm/runtime";
+import { isPlaceholderMethod, type Runtime } from "../src/jvm/runtime.ts";
 
 export const FRAMEWORK_RE = /^(android|java|javax|dalvik|sun|libcore|com\/android\/internal|org\/xmlpull|org\/json|org\/apache\/http)\//;
 

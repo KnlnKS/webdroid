@@ -1,17 +1,17 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
-import { shareable } from "../jvm/suspend";
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry";
-import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable";
-import { exitProcess, processExited } from "../process-exit";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
-import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd, FdScope, detachFdScope } from "../native/fs";
-import { stageBinderFd, takeBinderFd, unstageBinderFd, discardBinderFd } from "../native/process-fd";
-import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
-import { jarray, i8, u8 } from "../jvm/abi";
-import { handle, release, FINALIZER } from "./handles";
+import { shareable } from "../jvm/suspend.ts";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
+import { exitProcess, processExited } from "../process-exit.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
+import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd, FdScope, detachFdScope } from "../native/fs.ts";
+import { stageBinderFd, takeBinderFd, unstageBinderFd, discardBinderFd } from "../native/process-fd.ts";
+import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel.ts";
+import { jarray, i8, u8 } from "../jvm/abi.ts";
+import { handle, release, FINALIZER } from "./handles.ts";
 
 const F_GETFL = 3, O_RDONLY = 0;
 /** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */

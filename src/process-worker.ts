@@ -1,6 +1,6 @@
-import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap";
-import { closeProcessBootstrap, type ProcessBootstrap } from "./shell/process-bootstrap-data";
-import type { ClockBootstrap } from "./shell/clock-port";
+import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
+import { closeProcessBootstrap, type ProcessBootstrap } from "./shell/process-bootstrap-data.ts";
+import type { ClockBootstrap } from "./shell/clock-port.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
@@ -19,12 +19,12 @@ let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
 async function prepare({ clock, aot, jars, compile, warm }: Prestart) {
-  (await import("./guest-clock")).attachGuestClockPort(clock);
-  await import("./natives");
-  (await import("./android/framework")).receivePlatformJars(jars);
+  (await import("./guest-clock.ts")).attachGuestClockPort(clock);
+  await import("./natives.ts");
+  (await import("./android/framework.ts")).receivePlatformJars(jars);
   const [control, port, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
-    import("./shell/worker-control"), import("./shell/process-port"), import("./native/core"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),
-    import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"), import("./jvm/natives/jvmruntime"),
+    import("./shell/worker-control.ts"), import("./shell/process-port.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-bootstrap.ts"),
+    import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
   await tier.usePagePorts(aot, compile);
@@ -50,7 +50,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: 
     const p = await prepared;
     p.config.device.refreshRate = data.bootstrap.refreshRate;
     await attachWorkerBootstrap(data.bootstrap);
-    const { processPresentation } = await import("./shell/process-endpoint");
+    const { processPresentation } = await import("./shell/process-endpoint.ts");
     processPresentation.visible = false;
     closeControl = p.port.serveCalls(data.control, p.control.workerControl(logs, () => phase));
     p.core.jitStats.on = new URLSearchParams(location.search).get("jit") !== "0";
@@ -70,7 +70,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: 
     console.error("[process Worker]", data.bootstrap.pid, error);
     data.endpoint.close();
     closeProcessBootstrap(data.bootstrap);
-    const { processFailure } = await import("./shell/process-port");
+    const { processFailure } = await import("./shell/process-port.ts");
     globalThis.postMessage({ kind: "failed", pid: data.bootstrap.pid, error: processFailure(error), logs: logs.slice() });
     // Keep copied diagnostic state available until the page's explicit teardown.
     if (!closeControl) data.control.close();

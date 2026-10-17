@@ -4,19 +4,22 @@
 // aarch64-linux to get their words, then embedded as .inst in a Mach-O stub). Running the test
 // needs nothing but the fixture.
 //
-//   bun scripts/simd-oracle.ts
-import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "../src/native/a64simd.oracle.cases";
-import { $ } from "bun";
+//   pnpm ts scripts/simd-oracle.ts
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "../src/native/a64simd.oracle.cases.ts";
 
 if (process.arch !== "arm64") { console.error("the oracle is this machine's arm64 core; this is " + process.arch); process.exit(1); }
 const dir = "scripts/simd-oracle/build";
-await $`mkdir -p ${dir}`;
+mkdirSync(dir, { recursive: true });
+const run = (cmd: string, args: string[], input?: Uint8Array) => execFileSync(cmd, args, { input, maxBuffer: 1 << 30 });
 
 // assemble every instruction: one word each, in order
 const asm = INSTRUCTIONS.join("\n") + "\n";
-await Bun.write(`${dir}/insns.s`, asm);
-await $`clang -target aarch64-linux-gnu -march=armv8.5-a+dotprod -x assembler -c ${dir}/insns.s -o ${dir}/insns.o`;
-const dis = await $`llvm-objdump -d ${dir}/insns.o`.text();
+writeFileSync(`${dir}/insns.s`, asm);
+run("clang", ["-target", "aarch64-linux-gnu", "-march=armv8.5-a+dotprod", "-x", "assembler", "-c", `${dir}/insns.s`, "-o", `${dir}/insns.o`]);
+const dis = run("llvm-objdump", ["-d", `${dir}/insns.o`]).toString();
 const words = [...dis.matchAll(/^\s*[0-9a-f]+:\s+([0-9a-f]{8})\s/gm)].map((m) => parseInt(m[1], 16) >>> 0);
 if (words.length !== INSTRUCTIONS.length) throw new Error(`assembled ${words.length} words for ${INSTRUCTIONS.length} instructions`);
 
@@ -26,7 +29,7 @@ for (let i = 0; i < words.length; i++) {
   stubs += `.globl _t${i}\n.p2align 2\n_t${i}:\n  ld1 {v0.16b, v1.16b, v2.16b, v3.16b}, [x0]\n  ldp x2, x3, [x0, #64]\n  ldp x4, x5, [x0, #80]\n  ldr x9, [x0, #96]\n  msr nzcv, x9\n  .inst 0x${words[i].toString(16)}\n  st1 {v0.16b, v1.16b, v2.16b, v3.16b}, [x1]\n  stp x2, x3, [x1, #64]\n  stp x4, x5, [x1, #80]\n  mrs x9, nzcv\n  str x9, [x1, #96]\n  ret\n`;
 }
 stubs += ".data\n.globl _stubs\n.p2align 3\n_stubs:\n" + words.map((_, i) => `  .quad _t${i}`).join("\n") + "\n";
-await Bun.write(`${dir}/stubs.s`, stubs);
+writeFileSync(`${dir}/stubs.s`, stubs);
 const main = `#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,13 +45,12 @@ int main(int argc, char** argv) {
   return 0;
 }
 `;
-await Bun.write(`${dir}/main.c`, main);
-await $`clang -O0 -arch arm64 ${dir}/stubs.s ${dir}/main.c -o ${dir}/oracle`;
+writeFileSync(`${dir}/main.c`, main);
+run("clang", ["-O0", "-arch", "arm64", `${dir}/stubs.s`, `${dir}/main.c`, "-o", `${dir}/oracle`]);
 
 const inBuf = new Uint8Array(CASES * INPUT_BYTES);
 for (let k = 0; k < CASES; k++) inBuf.set(inputs(k), k * INPUT_BYTES);
-const proc = Bun.spawn([`${dir}/oracle`, String(words.length), String(CASES)], { stdin: inBuf, stdout: "pipe" });
-const outBuf = new Uint8Array(await new Response(proc.stdout).arrayBuffer());
+const outBuf = run(`${dir}/oracle`, [String(words.length), String(CASES)], inBuf);
 if (outBuf.length !== words.length * CASES * INPUT_BYTES) throw new Error(`oracle wrote ${outBuf.length} bytes`);
 
 // fixture: "A64O", u32 count, u32 cases, the words, the outputs
@@ -57,6 +59,6 @@ const dv = new DataView(fx.buffer);
 fx.set([0x41, 0x36, 0x34, 0x4f]); dv.setUint32(4, words.length, true); dv.setUint32(8, CASES, true);
 for (let i = 0; i < words.length; i++) dv.setUint32(12 + i * 4, words[i], true);
 fx.set(outBuf, 12 + words.length * 4);
-const gz = Bun.gzipSync(fx);
-await Bun.write("src/native/fixtures/a64simd.bin.gz", gz);
+const gz = gzipSync(fx);
+writeFileSync("src/native/fixtures/a64simd.bin.gz", gz);
 console.log(`${words.length} instructions x ${CASES} cases -> src/native/fixtures/a64simd.bin.gz (${(gz.length / 1024).toFixed(0)} KB)`);

@@ -3,10 +3,10 @@
 // FP/SIMD state (arm64's fpsimd_context in __reserved, ARM32's vfp_sigframe in uc_regspace), all of
 // which the handler may rewrite before rt_sigreturn loads them back.
 
-import { mem } from "./mem";
-import { PTR, ldWord, stWord } from "./host";
-import type { Cpu } from "./cpu";
-import { BLOCKABLE } from "./signals";
+import { mem } from "./mem.ts";
+import { PTR, ldWord, stWord } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
+import { BLOCKABLE } from "./signals.ts";
 
 /** siginfo's si_code, and a fault's si_addr or a POSIX timer's id, overrun count and sigval */
 export type SigInfo = { code: number; addr: bigint; timer?: { id: number; overrun: number; value: bigint } };

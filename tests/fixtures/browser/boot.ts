@@ -1,12 +1,12 @@
-import { loadSystemFontMap } from "../../../src/android/fonts";
-import { mountPlatformData } from "../../../src/shell/apex";
-import { preloadPaint } from "../../../src/android/paint";
-import { initDeviceLocales } from "../../../src/android/resnative";
-import { loadPlatformDex } from "../../../src/android/framework";
-import { JObj, rt } from "../../../src/jvm/runtime";
-import { tierReady } from "../../../src/jvm/tier";
-import { startMainLooper } from "../../../src/android/mainloop";
-import { callOn, mainThread } from "../../../src/jvm/natives/jentry";
+import { loadSystemFontMap } from "../../../src/android/fonts.ts";
+import { mountPlatformData } from "../../../src/shell/apex.ts";
+import { preloadPaint } from "../../../src/android/paint.ts";
+import { initDeviceLocales } from "../../../src/android/resnative.ts";
+import { loadPlatformDex } from "../../../src/android/framework.ts";
+import { JObj, rt } from "../../../src/jvm/runtime.ts";
+import { tierReady } from "../../../src/jvm/tier.ts";
+import { startMainLooper } from "../../../src/android/mainloop.ts";
+import { callOn, mainThread } from "../../../src/jvm/natives/jentry.ts";
 
 /** the Wasm tier and the platform class path, as a page boots */
 export async function bootPlatform(): Promise<void> {

@@ -1,6 +1,6 @@
-import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../src/jvm/dex";
-import { zipTree } from "../src/jvm/natives/jzip";
-import { openInstall } from "../src/shell/install";
+import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../src/jvm/dex.ts";
+import { zipTree } from "../src/jvm/natives/jzip.ts";
+import { openInstall } from "../src/shell/install.ts";
 
 export function dexesOf(zip: Record<string, Uint8Array>): DexFile[] {
   return dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], name));

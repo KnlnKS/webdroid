@@ -7,16 +7,16 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
-import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry";
-import { checkFromIndexSize } from "./jlang";
-import { strArray, u8 } from "../abi";
-import { baosBytes, fdInt } from "./jio";
-import { relayChain } from "./jrelaycert";
-import { Relay } from "../../shell/relay";
-import { abandonConnection } from "../../native/socket/inet";
-import { deviceFetch } from "../../shell/devicefetch";
+import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime.ts";
+import { newArrayList, toJsArray } from "./jcoll.ts";
+import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry.ts";
+import { checkFromIndexSize } from "./jlang.ts";
+import { strArray, u8 } from "../abi.ts";
+import { baosBytes, fdInt } from "./jio.ts";
+import { relayChain } from "./jrelaycert.ts";
+import { Relay } from "../../shell/relay.ts";
+import { abandonConnection } from "../../native/socket/inet.ts";
+import { deviceFetch } from "../../shell/devicefetch.ts";
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {

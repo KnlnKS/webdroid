@@ -32,8 +32,9 @@ export function storageWrite(owner: StorageOwner, key: string, value: string | n
 
 let replica: Replica | undefined;
 class Replica {
+  readonly write: (key: string, value: string | null) => void;
   #entries: Map<string, string>;
-  constructor(entries: [string, string][], readonly write: (key: string, value: string | null) => void) { this.#entries = new Map(entries); }
+  constructor(entries: [string, string][], write: (key: string, value: string | null) => void) { this.write = write; this.#entries = new Map(entries); }
   get length() { return this.#entries.size; }
   key(index: number) { return [...this.#entries.keys()][index] ?? null; }
   getItem(key: string) { return this.#entries.get(key) ?? null; }

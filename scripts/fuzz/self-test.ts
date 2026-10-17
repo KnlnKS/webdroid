@@ -1,9 +1,9 @@
-import { mkdirSync } from "node:fs";
-import { injectedProbeFailure, injectedUiFailure } from "./injected";
-import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import { sameFailure, SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model";
-import { minimizeUiActions, type UiFailureBundle } from "./ui";
-import type { UiAction } from "./ui-model";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { injectedProbeFailure, injectedUiFailure } from "./injected.ts";
+import { minimizeCaseBatched, reproducesTwice } from "./minimize.ts";
+import { sameFailure, SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model.ts";
+import { minimizeUiActions, type UiFailureBundle } from "./ui.ts";
+import type { UiAction } from "./ui-model.ts";
 
 const OUT = "fuzz-results/smoke";
 
@@ -21,7 +21,7 @@ async function probeLayer(input: ProbeCase): Promise<string> {
   };
   const original = observed(input), minimizedObservation = observed(minimized);
   const path = `${OUT}/${input.kind}.failure.json`;
-  await Bun.write(path, JSON.stringify({ schemaVersion: 1, kind: input.kind, injected: true, seed: 0x5eed1234,
+  writeFileSync(path, JSON.stringify({ schemaVersion: 1, kind: input.kind, injected: true, seed: 0x5eed1234,
     original, minimized: minimizedObservation, reproductions: [minimizedObservation, minimizedObservation],
     environment: { oracle: { injected: true }, webdroid: { injected: true } } }, null, 2) + "\n");
   return path;
@@ -51,7 +51,7 @@ export async function runInjectedSmoke(): Promise<string[]> {
     original: observation(input), minimized: minimizedObservation, reproductions: [minimizedObservation, minimizedObservation],
   };
   const uiPath = `${OUT}/ui.failure.json`;
-  await Bun.write(uiPath, JSON.stringify(bundle, null, 2) + "\n");
+  writeFileSync(uiPath, JSON.stringify(bundle, null, 2) + "\n");
   paths.push(uiPath);
   return paths;
 }

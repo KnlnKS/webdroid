@@ -1,8 +1,8 @@
-import { rt } from "../jvm/runtime";
-import { NativeShader, fillWithShader } from "./graphics";
-import type { Affine } from "./matrix";
-import type { Ctx2D } from "./recording";
-import { device } from "../shell/config";
+import { rt } from "../jvm/runtime.ts";
+import { NativeShader, fillWithShader } from "./graphics.ts";
+import type { Affine } from "./matrix.ts";
+import type { Ctx2D } from "./recording.ts";
+import { device } from "../shell/config.ts";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
 type Uniform = { location: WebGLUniformLocation | null; format: UniformType; color: boolean; values: number[] };
 const vector = (size: 1 | 2 | 3 | 4, integer = false): UniformType => ({ size, integer,
@@ -49,6 +49,7 @@ type Child = { location: WebGLUniformLocation | null; shader: NativeShader | nul
 type Region = readonly [number, number, number, number];
 type ShaderState = { readonly uniforms: readonly Uniform[]; readonly children: readonly Child[]; readonly local: DOMMatrixReadOnly | null };
 class ShaderProgram {
+  readonly program: WebGLProgram;
   private cached: { state: ShaderState; key: string; pattern: CanvasPattern } | null = null;
   private raster: OffscreenCanvas | null = null;
   private readonly textures: WebGLTexture[] = [];
@@ -57,7 +58,8 @@ class ShaderProgram {
   readonly height: WebGLUniformLocation | null;
   readonly forward: WebGLUniformLocation | null;
   readonly size: WebGLUniformLocation | null;
-  constructor(readonly program: WebGLProgram, gl: WebGL2RenderingContext) {
+  constructor(program: WebGLProgram, gl: WebGL2RenderingContext) {
+    this.program = program;
     this.transform = gl.getUniformLocation(program, "wd_coords");
     this.height = gl.getUniformLocation(program, "wd_height");
     this.forward = gl.getUniformLocation(program, "wd_local");
@@ -230,7 +232,8 @@ export class RuntimeShaderBuilder {
   }
 }
 class NativeRuntimeShader extends NativeShader {
-  constructor(local: Affine | null, private readonly draw: (ctx: Ctx2D) => CanvasPattern) { super(local); }
+  private readonly draw: (ctx: Ctx2D) => CanvasPattern;
+  constructor(local: Affine | null, draw: (ctx: Ctx2D) => CanvasPattern) { super(local); this.draw = draw; }
   override get atReplay(): boolean { return true; }
   override pattern(ctx: Ctx2D): CanvasPattern { return this.draw(ctx); }
 }

@@ -1,13 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry";
-import { Cpu, setA64, slice } from "./cpu";
-import { dispositions, sigHandler } from "./signals";
-import { defineHost } from "./host";
-import { mem } from "./mem";
-import { futex } from "./pthread";
-import { E, RET_SENTINEL } from "./abi";
-import { jitStats, JIT_HEAT } from "./core";
-import { kernelInit, rawSyscall, syscallEntry } from "./syscall";
+import { describe, expect, test } from "vite-plus/test";
+import { NODE_ARGS, run } from "../../scripts/node.ts";
+import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64, slice } from "./cpu.ts";
+import { dispositions, sigHandler } from "./signals.ts";
+import { defineHost } from "./host.ts";
+import { mem } from "./mem.ts";
+import { futex } from "./pthread.ts";
+import { E, RET_SENTINEL } from "./abi.ts";
+import { jitStats, JIT_HEAT } from "./core.ts";
+import { kernelInit, rawSyscall, syscallEntry } from "./syscall.ts";
 
 /** `sig` is handled as `d` until the result puts back what was there */
 function install(sig: number, d: ReturnType<typeof sigHandler>): () => void {
@@ -419,11 +420,12 @@ test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signa
 
 test("an unhandled terminating signal ends the process once unblocked; ignored ones are discarded", async () => {
   // in a child process: dying marks this one's native tier exited for good
+  const at = (path: string) => JSON.stringify(new URL(path, import.meta.url).href);
   const code = `
-    import { Cpu, setA64 } from "${import.meta.dir}/cpu";
-    import { dispositions } from "${import.meta.dir}/signals";
-    import { processExited } from "${import.meta.dir}/../process-exit";
-    import { JThread } from "${import.meta.dir}/../jvm/natives/jentry";
+    import { Cpu, setA64 } from ${at("./cpu.ts")};
+    import { dispositions } from ${at("./signals.ts")};
+    import { processExited } from ${at("../process-exit.ts")};
+    import { JThread } from ${at("../jvm/natives/jentry.ts")};
     setA64(true);
     const cpu = new Cpu(new JThread(), "victim"), turn = () => new Promise((r) => setTimeout(r, 0));
     cpu.signalMask = 0n;
@@ -437,9 +439,8 @@ test("an unhandled terminating signal ends the process once unblocked; ignored o
     cpu.signalMask = 0n; cpu.pump();
     await turn();
     console.log(JSON.stringify({ ignored, pending, exited: processExited() }));`;
-  const child = Bun.spawn(["bun", "-e", code], { stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect(JSON.parse(out.trim().split("\n").at(-1)!)).toEqual({ ignored: true, pending: true, exited: true });
+  const { stdout, stderr: err } = await run(process.execPath, [...NODE_ARGS, "--input-type=module", "-e", code]);
+  expect(JSON.parse(stdout.toString().trim().split("\n").at(-1)!)).toEqual({ ignored: true, pending: true, exited: true });
   expect(err).toContain("Fatal signal 6 (SIGABRT) in tid");
   expect(err).toContain("name: victim");
 });

@@ -1,17 +1,17 @@
-import { SYSTEM_PACKAGES } from "./system-packages";
-import { packageArchive } from "../android/packagearchive";
-import { packedArchives, systemPackage } from "./packedarchive";
-import { installedPath, registerPackage } from "../android/pm";
-import { attr, attrStr, TV } from "../android/axml";
-import { resString } from "../android/res";
-import { vfs } from "./vfs";
-import { packages, signaturePermissions, componentState } from "../android/packages";
-import { mkComponentName, newIntent, putExtra } from "../android/intent";
-import { vcall } from "../jvm/natives/jentry";
-import { awaited, rt, type Gen } from "../jvm/runtime";
-import { asSystem } from "../android/binder";
-import { serviceTransport } from "../android/server/activeservices";
-import { hexBytes } from "../jvm/abi";
+import { SYSTEM_PACKAGES } from "./system-packages.ts";
+import { packageArchive } from "../android/packagearchive.ts";
+import { packedArchives, systemPackage } from "./packedarchive.ts";
+import { installedPath, registerPackage } from "../android/pm.ts";
+import { attr, attrStr, TV } from "../android/axml.ts";
+import { resString } from "../android/res.ts";
+import { vfs } from "./vfs.ts";
+import { packages, signaturePermissions, componentState } from "../android/packages.ts";
+import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { awaited, rt, type Gen } from "../jvm/runtime.ts";
+import { asSystem } from "../android/binder.ts";
+import { serviceTransport } from "../android/server/activeservices.ts";
+import { hexBytes } from "../jvm/abi.ts";
 
 let ready: Promise<void> | null = null;
 export function provisionPackages(): Promise<void> {

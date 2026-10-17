@@ -5,14 +5,14 @@
 // kept (decoded from the AVD's service-wifi.jar): ACCESS_WIFI_STATE to read, CHANGE_WIFI_STATE to
 // change, location access to see the network's identity or scan results. There is no radio to scan
 // or toggle: a scan fails and setWifiEnabled is refused.
-import { awaited, JObj, setDeclared, rt, driven, type Gen } from "../jvm/runtime";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jentry";
-import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
-import { checkUidPermission } from "./permissions";
-import { packages } from "./packages";
-import { locationTransport } from "./locationmanager";
-import { DNS_SERVER, netUp, theNetwork } from "./services";
+import { awaited, JObj, setDeclared, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder.ts";
+import { checkUidPermission } from "./permissions.ts";
+import { packages } from "./packages.ts";
+import { locationTransport } from "./locationmanager.ts";
+import { DNS_SERVER, netUp, theNetwork } from "./services.ts";
 
 const WIFI_STATE_ENABLED = 3, WIFI_STANDARD_LEGACY = 1, SECURITY_TYPE_OPEN = 0, REDACT_FOR_ACCESS_FINE_LOCATION = 1n;
 const S = "Ljava/lang/String;", SLICE = "com/android/wifi/x/com/android/modules/utils/ParceledListSlice";

@@ -1,14 +1,14 @@
-import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { concat } from "../jvm/abi";
-import { after } from "../jvm/natives/jentry";
-import { fdInt } from "../jvm/natives/jio";
-import type { FileSource } from "../shell/lazyfile";
-import { NativeBitmap, javaBitmap } from "./bitmap";
-import { MediaExtractor } from "./media-extractor";
-import { TYPE_LONG } from "./media-format";
-import { definitionFor, parameterSets, videoConfig } from "./media-codec";
-import { inspectMp3 } from "./media-mp3";
-import { dataSourceFile, fdSlice, nativePeer } from "./media-native";
+import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime.ts";
+import { concat } from "../jvm/abi.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
+import { NativeBitmap, javaBitmap } from "./bitmap.ts";
+import { MediaExtractor } from "./media-extractor.ts";
+import { TYPE_LONG } from "./media-format.ts";
+import { definitionFor, parameterSets, videoConfig } from "./media-codec.ts";
+import { inspectMp3 } from "./media-mp3.ts";
+import { dataSourceFile, fdSlice, nativePeer } from "./media-native.ts";
 
 class Retriever {
   extractor: MediaExtractor | null = null;
@@ -22,18 +22,21 @@ class Retriever {
     this.metadata.clear();
     this.picture = null;
   }
-  async open(source: FileSource) {
+  /** MediaExtractor.open makes Java buffers as the thread that calls it, so it follows the MP3 check through `after` */
+  open(source: FileSource): Promise<void> {
     this.reset();
-    const mp3 = await inspectMp3(source);
-    if (mp3) {
+    return Promise.resolve(after(inspectMp3(source), (mp3) => {
+      if (!mp3) {
+        const extractor = new MediaExtractor();
+        return extractor.open(source).then(() => this.describe(source, extractor));
+      }
       this.source = source;
       this.picture = mp3.picture;
       this.metadata = new Map([[9, String(mp3.durationMs)], [10, "1"], [12, "audio/mpeg"],
         [16, "yes"], [17, "no"], [20, String(mp3.bitrate)]]);
-      return;
-    }
-    const extractor = new MediaExtractor();
-    await extractor.open(source);
+    }));
+  }
+  private describe(source: FileSource, extractor: MediaExtractor): void {
     this.extractor = extractor;
     this.source = source;
     const tracks = extractor.tracks;

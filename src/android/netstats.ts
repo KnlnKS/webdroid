@@ -1,11 +1,11 @@
 // INetworkStatsService, under AOSP's TrafficStats, NetworkStatsManager and android.app.usage.NetworkStats:
 // no kernel accounting records traffic here, so every counter is UNSUPPORTED, every session's summary
 // is empty and every history has no buckets.
-import { JObj, rt, noops } from "../jvm/runtime";
-import { newObj } from "../jvm/natives/jentry";
-import { uptimeMillis } from "../guest-clock";
-import { hostStub, newStub } from "./binder";
-import { strArray } from "../jvm/abi";
+import { JObj, rt, noops } from "../jvm/runtime.ts";
+import { newObj } from "../jvm/natives/jentry.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { hostStub, newStub } from "./binder.ts";
+import { strArray } from "../jvm/abi.ts";
 
 const NS = "Landroid/net/NetworkStats;", NSH = "Landroid/net/NetworkStatsHistory;", T = "Landroid/net/NetworkTemplate;";
 /** NetworkStatsService's default history bucket, Settings.Global netstats_uid_bucket_duration (2 h) */

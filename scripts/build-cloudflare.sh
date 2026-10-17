@@ -21,4 +21,4 @@ unzip -q "$tmp/build-tools.zip" -d "$tmp/sdk/build-tools"
 mv "$tmp/sdk/platforms/android-13" "$tmp/sdk/platforms/android-33"
 mv "$tmp/sdk/build-tools/android-15" "$tmp/sdk/build-tools/35.0.1"
 
-ANDROID_HOME="$tmp/sdk" ANDROID_SDK_ROOT="$tmp/sdk" WEBDROID_EMSDK="$tmp/emsdk" PATH="$tmp/zig:$PATH" bun run build:prod
+ANDROID_HOME="$tmp/sdk" ANDROID_SDK_ROOT="$tmp/sdk" WEBDROID_EMSDK="$tmp/emsdk" PATH="$tmp/zig:$PATH" pnpm build:prod

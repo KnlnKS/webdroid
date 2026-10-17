@@ -1,7 +1,7 @@
-import { attr, attrStr, TV, type XmlNode } from "./axml";
-import { normRV, resString, type Resources } from "./res";
-import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
-import type { PackageState } from "../shell/packagedata";
+import { attr, attrStr, TV, type XmlNode } from "./axml.ts";
+import { normRV, resString, type Resources } from "./res.ts";
+import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 export const qualifyComponent = (name: string, pkg: string): string => {
@@ -20,6 +20,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 }
 
 export class PackageRecord {
+  readonly root: XmlNode; readonly res: Resources; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
   readonly pkg: string;
   readonly application: XmlNode | null;
   readonly components: Record<ComponentKind, Map<string, XmlNode>> = {
@@ -30,8 +31,9 @@ export class PackageRecord {
   system = false;
   compatibilityCertificates: Uint8Array[] | null = null;
 
-  constructor(readonly root: XmlNode, readonly res: Resources, readonly path: string,
-    readonly uid: number, readonly certificates: () => Promise<Uint8Array[]>) {
+  constructor(root: XmlNode, res: Resources, path: string,
+    uid: number, certificates: () => Promise<Uint8Array[]>) {
+    this.root = root; this.res = res; this.path = path; this.uid = uid; this.certificates = certificates;
     this.pkg = attrStr(root, "package") ?? "";
     this.application = root.children.find((n) => n.name === "application") ?? null;
     for (const node of this.application?.children ?? []) {

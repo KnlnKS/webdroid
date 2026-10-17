@@ -1,7 +1,7 @@
 // A GL game: the screen never settles (bobbing bird, scrolling ground), so every step is
 // `animated` — one capture after a fixed dwell. Pipes are random and the score differs per run,
 // so this is a smoke target (rendered / alive / fps / missing), not a pixel target.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 // Camera-space anchors measured on the fullscreen title screen.

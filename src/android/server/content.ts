@@ -2,13 +2,13 @@
 // its uri, those above it that asked for descendants, and every one below it unless the sender
 // skips descendants (ObserverNode.collectObserversLocked). AOSP's ContentResolver reaches it as
 // IContentService. Sync is answered as a device with no sync adapters.
-import { awaited, rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime";
-import { newArrayList } from "../../jvm/natives/jcoll";
-import { vcall } from "../../jvm/natives/jentry";
-import { logUncaught } from "../../jvm/natives/jthrowable";
-import { jarray } from "../../jvm/abi";
-import { hostStub } from "../binder";
-import { mkUri, uriParts, uriText, type JUri } from "../net";
+import { awaited, rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime.ts";
+import { newArrayList } from "../../jvm/natives/jcoll.ts";
+import { vcall } from "../../jvm/natives/jentry.ts";
+import { logUncaught } from "../../jvm/natives/jthrowable.ts";
+import { jarray } from "../../jvm/abi.ts";
+import { hostStub } from "../binder.ts";
+import { mkUri, uriParts, uriText, type JUri } from "../net.ts";
 
 const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;
 type Observer = { key: unknown; segments: string[]; descendants: boolean; deliver: (uri: string, self: boolean, flags: number) => unknown };

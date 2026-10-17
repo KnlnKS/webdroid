@@ -1,18 +1,28 @@
-import index from "./index.html";
-import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
-import { webDocument } from "./src/shell/webhtml";
-import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy";
-import { openInstall } from "./src/shell/install";
-import { EXT_MIME } from "./src/mime";
-import { prepareSystemPackages } from "./scripts/system-packages";
-import { aotFile, aotManifest } from "./scripts/wasm/aot-serve";
-
-import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
-import { parseIpv4 } from "./src/shell/relay";
+// The dev server's own routes, as a Vite plugin: Vite serves the page and its modules, this answers what the page asks of a
+// server (packages, the reference build's files, the proxy, the WebView bridge) and lends it sockets.
+import dgram from "node:dgram";
 import dns from "node:dns/promises";
+import { globSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import http, { type IncomingMessage } from "node:http";
+import https from "node:https";
+import net from "node:net";
+import tls from "node:tls";
+import type { Plugin } from "vite";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject.ts";
+import { webDocument } from "./src/shell/webhtml.ts";
+import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy.ts";
+import { openInstall } from "./src/shell/install.ts";
+import { mimeOf } from "./src/mime.ts";
+import { WebRelay } from "./src/shell/webrelay.ts";
+import { parseIpv4 } from "./src/shell/relay.ts";
+import { prepareSystemPackages } from "./scripts/system-packages.ts";
+import { aotFile, aotManifest } from "./scripts/wasm/aot-serve.ts";
+import { bundle } from "./scripts/bundle.ts";
+import { runNode } from "./scripts/node.ts";
+import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 
-await prepareSystemPackages();
-const webRelay = new WebRelay();
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
 if (fuzzOrigin && !["127.0.0.1", "localhost"].includes(fuzzOrigin.hostname))
@@ -25,282 +35,265 @@ function proxyTarget(requested: string): string {
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
-type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number; shut?: boolean };
-type UdpData = { kind: "udp"; sock: { send(data: Uint8Array, port: number, address: string): boolean; close(): void } | null; closed: boolean; addresses: Map<string, Promise<string>>; names: Map<string, string> };
-type SocketData = TcpData | UdpData | WebRelayData;
-const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
-
-function flushTcp(ws: import("bun").ServerWebSocket<SocketData>, data: TcpData): void {
-  const socket = data.sock;
-  if (!socket || !data.ready || data.closed) return;
-  while (data.pending.length) {
-    const bytes = data.pending[0];
-    const written = socket.write(bytes);
-    if (written < 0) { ws.close(); return; }
-    data.pendingBytes -= written;
-    if (written < bytes.length) {
-      data.pending[0] = bytes.subarray(written);
-      return;
+/** fetch that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
+async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
+  for (let hops = 0; ; hops++) {
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
+      if (body) headers["content-length"] ??= String(body.length);
+      const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
+      req.once("error", reject).end(body);
+    });
+    const status = res.statusCode!, location = res.headers.location;
+    if (init.redirect !== "manual" && location && [301, 302, 303, 307, 308].includes(status) && hops < 20) {
+      res.resume();
+      const next = new URL(location, url);
+      if (next.origin !== new URL(url).origin) {
+        // as node's fetch does: credentials stay with the origin they were sent to
+        const headers = new Headers(init.headers);
+        for (const name of ["authorization", "proxy-authorization", "cookie", "host"]) headers.delete(name);
+        init = { ...init, headers };
+      }
+      url = next.href;
+      if (status === 303 || ((status === 301 || status === 302) && init.method === "POST")) {
+        const headers = new Headers(init.headers);
+        for (const name of ["content-length", "content-type", "content-encoding"]) headers.delete(name);
+        init = { ...init, method: "GET", headers, body: undefined };
+      }
+      continue;
     }
-    data.pending.shift();
+    const headers = new Headers();
+    for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
+    const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
+    if (empty) res.resume();
+    const response = new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
+    return Object.defineProperty(response, "url", { value: url });
   }
-  // the client's shutdown(SHUT_WR), once what it wrote before has gone
-  if (data.shut) socket.shutdown(true);
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
-function serveFile(dir: string, name: string, headers?: Record<string, string>): Response {
+const html = (body: string) => new Response(body, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
+function serveFile(req: Request, dir: string, name: string, headers?: Record<string, string>): Response {
   if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
-  return new Response(Bun.file(`${dir}/${name}`), { headers });
+  return fileResponse(`${dir}/${name}`, req, headers);
 }
 /** a reference-build file mirrored under vendor/aosp at its device path (PLATFORM_DATA) */
-function devicePath(req: Request): Response {
-  const path = new URL(req.url).pathname.slice(1);
-  return path.includes("..") ? new Response("nope", { status: 400 }) : new Response(Bun.file(path), { headers: { "cache-control": IMMUTABLE } });
+const devicePath = (req: Request, path: string) => path.includes("..") ? new Response("nope", { status: 400 }) : fileResponse(path.slice(1), req, { "cache-control": IMMUTABLE });
+
+/** `make(key)` once per key, made again after it fails or the cache is cleared */
+function memo<T>(make: (key: string) => Promise<T>): ((key?: string) => Promise<T>) & { clear(): void } {
+  const made = new Map<string, Promise<T>>();
+  return Object.assign((key = "") => {
+    let pending = made.get(key);
+    if (!pending) made.set(key, pending = make(key).catch((e: unknown) => { made.delete(key); throw e; }));
+    return pending;
+  }, { clear: () => made.clear() });
 }
-
 /** scripts/font-index.ts, run once: the reference build's fonts change only with gen-framework */
-let fontIndex: Promise<string> | null = null;
-
-const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
+const fontIndexJson = memo(() => runNode("scripts/font-index.ts"));
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
-function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
-  let pending = assetCache.get(apk);
-  if (!pending) {
-    pending = Bun.file(`${apkDirectory}/${apk}`).arrayBuffer()
-      .then((bytes) => openInstall(new Uint8Array(bytes)).zip)
-      .catch((error: unknown) => { assetCache.delete(apk); throw error; });
-    assetCache.set(apk, pending);
-  }
-  return pending;
+const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(`${apkDirectory}/${apk}`))).zip);
+/** a worker (src/wasm/host/compile-worker.ts, src/process-worker.ts) bundled for the page, until a source changes */
+const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
+const compileWorker = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+
+type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Response>;
+const ROUTES: [RegExp, Route][] = [
+  // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
+  [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache" })],
+  [/^\/webview$/, () => html(WEB_FRAME)],
+  [/^\/webview-call$/, (req) => webRelay.call(req)],
+  [/^\/webview-origin$/, (_, url) => {
+    if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
+    // a browser resolves every *.localhost name to this loopback server, each its own site
+    return Response.json(`${url.protocol}//*.localhost:${url.port}`);
+  }],
+  [/^\/wasm-compile-worker\.js$/, () => compileWorker("src/wasm/host/compile-worker.ts")],
+  [/^\/process-worker\.js$/, () => compileWorker("src/process-worker.ts")],
+  [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
+  [/^\/webview-worker\.js$/, () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } })],
+  [/^\/dns-query$/, (req) => forwardDnsMessage(req)],
+  [/^\/proxy$/, (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
+    fetchUpstream: (url, init, encoded) => encoded ? fetchEncoded(url, init) : fetch(url, init) })],
+  // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
+  // so a page's relative subresources resolve to siblings, as they do under android_asset.
+  [/^\/asset\/([^/]+)\/(.*)$/, async (req, _, [rawApk, rawPath]) => {
+    // the apk segment is measured in the raw pathname, so an escaped name is not counted at its decoded length
+    const apk = decodeURIComponent(rawApk), path = decodeURIComponent(rawPath);
+    if (apk.includes("/") || apk.includes("..") || !path.startsWith("assets/") || path.includes("..")) return new Response("nope", { status: 400 });
+    const bytes = (await apkAssets(apk))[path];
+    if (!bytes) return new Response("not found", { status: 404 });
+    const type = mimeOf(path) ?? "application/octet-stream";
+    if (type === "text/html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
+    return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
+  }],
+  [/^\/aot\/current\.json$/, () => aotManifest()],
+  [/^\/aot\/([^/]+)\/([^/]+)$/, (req, _, [key, file]) => aotFile(req, key, file)],
+  [/^\/sqljs\/([^/]+)$/, (req, _, [file]) => serveFile(req, "vendor/sql.js/dist", file)],
+  [/^\/(canvaskit\.wasm)$/, (req, _, [file]) => serveFile(req, "node_modules/canvaskit-wasm/bin", file, { "cache-control": IMMUTABLE })],
+  [/^\/(harfbuzz(?:-subset)?\.wasm)$/, (req, _, [file]) => serveFile(req, "node_modules/harfbuzzjs/dist", file)],
+  // under vendor/aosp, the reference build's class path, framework-res.apk and its ICU and time
+  // zone files (pnpm gen-framework): they only change with the build, so let the browser keep them.
+  // The page's modules among them are Vite's to serve.
+  [/^\/(vendor(?:\/aosp(?:\/boot)?)?)\/(?![^/]*\.[cm]?[jt]s$)([^/]+)$/,(req, _, [dir, file]) => serveFile(req, dir, file, { "cache-control": IMMUTABLE })],
+  [/^\/vendor\/aosp\/(?:apex|system|data)\//, (req, url) => devicePath(req, url.pathname)],
+  [/^\/vendor\/microg\/([^/]+)$/, (req, url, [file]) => {
+    const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
+    if (file.endsWith(".gz") && !url.searchParams.has("raw")) {
+      headers["content-encoding"] = "gzip";
+      headers["content-type"] = "application/octet-stream";
+      // A .gz download filename makes WebKit retain the compressed transport body.
+      headers["content-disposition"] = "inline";
+    }
+    return serveFile(req, "vendor/microg", file, headers);
+  }],
+  [/^\/apks$/, () => Response.json(globSync("*.{apk,xapk}", { cwd: apkDirectory }).sort())],
+  [/^\/apks\/([^/]+)$/, (req, _, [name]) => serveFile(req, apkDirectory, decodeURIComponent(name))],
+  // Whether a name resolves: the guest's resolvers answer a synthetic address for every name
+  // (the relay dials by name), so this is how a name that does not exist fails as it would on a
+  // device, instead of every connection to it being refused.
+  [/^\/dns$/, (_, url) => {
+    const name = url.searchParams.get("host") ?? "";
+    if (!/^[A-Za-z0-9.-]{1,253}$/.test(name)) return new Response("bad name", { status: 400 });
+    return dns.lookup(name, { all: true }).then(
+      (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
+      (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
+  }],
+];
+const webRelay = new WebRelay();
+const BRIDGE_ID = /^[a-f0-9-]{36}$/;
+const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
+
+// Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
+// ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.
+// Java sockets can ask the relay to terminate TLS; native stacks pass their own TLS bytes
+// through the same relay unchanged.
+// A text control frame means connected and carries the relay's local endpoint; a close before
+// that means the connect failed. A plain "ok" (worker/tcp.ts, local address unparsed) also means connected.
+//
+// This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
+// as /proxy above, and the same reason both are dev-server-only: bound to loopback, never
+// meant to face a network.
+/** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
+const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
+
+function relayTcp(ws: WebSocket, url: URL): void {
+  const host = url.searchParams.get("host") ?? "", port = Number(url.searchParams.get("port"));
+  const alpn = url.searchParams.getAll("alpn"), secure = url.searchParams.get("tls") === "1";
+  let ready = false, connected = false, shut = false;
+  const pending: Buffer[] = [];
+  const socket: net.Socket = secure
+    ? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, ALPNProtocols: alpn.length ? alpn : undefined })
+    : net.connect({ host, port });
+  // A TLS socket is ready at its handshake, not the TCP open: the ready control frame goes out
+  // only once the socket can carry bytes, and anything that arrives before then is queued.
+  const open = () => {
+    ready = true;
+    ws.send(JSON.stringify({ type: "ready", localFamily: socket.localFamily, localAddress: socket.localAddress,
+      localPort: socket.localPort, alpn: (socket as tls.TLSSocket).alpnProtocol || "" }));
+    for (const chunk of pending.splice(0)) socket.write(chunk);
+    if (shut) socket.end();
+  };
+  socket.once("connect", () => { connected = true; if (!secure) open(); });
+  if (secure) socket.once("secureConnect", open);
+  socket.on("data", (chunk) => ws.send(chunk));
+  socket.once("close", () => ws.close());
+  socket.on("error", (e: NodeJS.ErrnoException) => {
+    // the errno code leads, for the guest's connect(2) to report
+    if (!connected) ws.close(4000, closeReason(`${e.code ?? ""} ${String(e)}`.trim()));
+    else if (!ready) ws.close(4001, closeReason(String(e)));
+    else ws.close();
+  });
+  ws.on("message", (data: RawData, binary: boolean) => {
+    // the client's shutdown(SHUT_WR), once what it wrote before has gone
+    if (!binary) { if (data.toString() === "shutdown") { shut = true; if (ready) socket.end(); } return; }
+    if (shut) return;
+    const chunk = data as Buffer;
+    if (ready) socket.write(chunk); else pending.push(chunk);
+    if (socket.writableLength + pending.reduce((n, c) => n + c.length, 0) > MAX_PENDING_TCP_BYTES) ws.close(4002, "TCP upstream is too slow");
+  });
+  ws.once("close", () => { pending.length = 0; socket.end(() => socket.destroy()); });
 }
 
-/** the newest modification among the files `globs` match */
-function stampOf(...globs: string[]): number {
-  let stamp = 0;
-  for (const glob of globs) for (const f of new Bun.Glob(glob).scanSync()) stamp = Math.max(stamp, Bun.file(f).lastModified);
-  return stamp;
-}
-/** a worker (src/wasm/host/compile-worker.ts, src/process-worker.ts) bundled for the page, rebuilt when a source file has changed since */
-const workerBuilds = new Map<string, { stamp: number; code: Promise<string> }>();
-async function compileWorker(entry: string): Promise<Response> {
-  const stamp = stampOf("src/**/*.ts");
-  let build = workerBuilds.get(entry);
-  if (build?.stamp !== stamp) workerBuilds.set(entry, build = { stamp, code: Bun.build({ entrypoints: [entry], target: "browser" }).then((r) => r.outputs[0].text()) });
-  return new Response(await build.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+function relayUdp(ws: WebSocket): void {
+  const addresses = new Map<string, Promise<string>>(), names = new Map<string, string>();
+  const socket = dgram.createSocket("udp4");
+  // a reply names its source as the guest dialed it (the address is this server's resolution of
+  // the name, which the guest never saw), framed as a request is
+  socket.on("message", (bytes, { port, address }) => {
+    if (!parseIpv4(address)) return;
+    const name = new TextEncoder().encode(names.get(address) ?? address);
+    const frame = new Uint8Array(3 + name.length + bytes.length);
+    frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
+    frame.set(name, 3); frame.set(bytes, 3 + name.length);
+    ws.send(frame);
+  });
+  let bound = false;
+  // once bound, a failed send is a lost datagram
+  socket.on("error", () => { if (!bound) ws.close(4000, "UDP bind failed"); });
+  socket.bind(0, () => { bound = true; ws.send("ready"); });
+  ws.on("message", async (data: RawData, binary: boolean) => {
+    const msg = data as Buffer;
+    if (!binary || msg.length < 3) return;
+    const length = msg[0], port = msg[1] << 8 | msg[2];
+    if (msg.length < 3 + length || !length || !port) return;
+    const host = msg.subarray(3, 3 + length).toString();
+    if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return;
+    try {
+      let resolved = addresses.get(host);
+      if (!resolved) {
+        if (addresses.size >= 256) addresses.clear();
+        resolved = dns.lookup(host, { family: 4 }).then((result) => result.address);
+        addresses.set(host, resolved);
+      }
+      const address = await resolved;
+      names.set(address, host);
+      if (ws.readyState === ws.OPEN) socket.send(msg.subarray(3 + length), port, address);
+    } catch { addresses.delete(host); }
+  });
+  ws.once("close", () => socket.close());
 }
 
-const server: Bun.Server<SocketData> = Bun.serve({
-  port: Number(process.env.PORT ?? 4080),
-  development: { hmr: false },
-  routes: {
-    "/": index,
-    "/webview": () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } }),
-    "/webview-call": (req) => webRelay.call(req),
-    "/webview-origin": (req) => {
-      const url = new URL(req.url);
-      if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
-      if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
-      // a browser resolves every *.localhost name to this loopback server, each its own site
-      return Response.json(`${url.protocol}//*.localhost:${url.port}`);
+export function devServer(): Plugin {
+  return {
+    name: "webdroid:dev-server",
+    async configureServer(server) {
+      await prepareSystemPackages();
+      server.watcher.on("all", () => workerBuild.clear());
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        for (const [pattern, route] of ROUTES) {
+          const match = pattern.exec(url.pathname);
+          if (match) return void respond(req, res, (request) => route(request, new URL(request.url), match.slice(1)));
+        }
+        // a renderer frame at any other path of its origin
+        if (BRIDGE_ID.test(url.searchParams.get("__wd_bridge") ?? "")) return void respond(req, res, () => html(WEB_FRAME));
+        next();
+      });
+      const sockets = new WebSocketServer({ noServer: true });
+      server.httpServer?.on("upgrade", (req, socket, head) => {
+        const url = URL.parse(req.url ?? "/", `http://${req.headers.host}`);
+        if (!url) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+        // a socket's error (a frame past the size limit) closes it, which its relay ends with
+        const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
+        if (url.pathname === "/webview-socket") {
+          const id = url.searchParams.get("id") ?? "";
+          if (!BRIDGE_ID.test(id) || req.headers.origin !== url.origin) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
+          return upgrade((ws) => {
+            webRelay.open(id, ws);
+            ws.on("message", (data, binary) => { if (!binary) webRelay.reply(ws, data.toString()); });
+            ws.once("close", () => webRelay.close(id, ws));
+          });
+        }
+        if (url.pathname === "/udp") return upgrade(relayUdp);
+        if (url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+        const host = url.searchParams.get("host") ?? "", port = Number(url.searchParams.get("port")), alpn = url.searchParams.getAll("alpn");
+        if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\nbad target");
+        if (alpn.length > 32 || alpn.some((p) => !p.length || Buffer.byteLength(p) > 255)) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\nbad ALPN");
+        upgrade((ws) => relayTcp(ws, url));
+      });
     },
-    "/wasm-compile-worker.js": () => compileWorker("src/wasm/host/compile-worker.ts"),
-    "/process-worker.js": () => compileWorker("src/process-worker.ts"),
-    "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),
-      { headers: { "content-type": "application/json" } }),
-    "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
-    "/dns-query": forwardDnsMessage,
-    "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
-      fetchUpstream: (url, init, encoded) => fetch(url, { ...init, decompress: !encoded }) }),
-    // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
-    // so a page's relative subresources resolve to siblings, as they do under android_asset.
-    "/asset/:apk/*": async (req) => {
-      // the apk segment is measured in the raw pathname, so an escaped name is not counted at
-      // its decoded length
-      const [, rawApk, rawPath] = /^\/asset\/([^/]+)\/(.*)$/.exec(new URL(req.url).pathname) ?? [];
-      const apk = decodeURIComponent(rawApk ?? "");
-      const path = decodeURIComponent(rawPath ?? "");
-      if (apk.includes("/") || apk.includes("..") || !path.startsWith("assets/") || path.includes("..")) return new Response("nope", { status: 400 });
-      const bytes = (await apkAssets(apk))[path];
-      if (!bytes) return new Response("not found", { status: 404 });
-      const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-      const type = EXT_MIME[ext] ?? "application/octet-stream";
-      if (ext === "html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
-      return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
-    },
-    "/aot/current.json": aotManifest,
-    "/aot/:key/:file": (req) => aotFile(req.params.key, req.params.file, req.headers.get("accept-encoding") ?? ""),
-    "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
-    "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
-    "/harfbuzz.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz.wasm"),
-    "/harfbuzz-subset.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz-subset.wasm"),
-    // under vendor/aosp, the reference build's class path, framework-res.apk and its ICU and time
-    // zone files (bun run gen-framework): they only change with the build, so let the browser keep them.
-    "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
-    "/vendor/aosp/apex/*": devicePath,
-    "/vendor/aosp/system/*": devicePath,
-    "/vendor/aosp/data/*": devicePath,
-    "/vendor/microg/:file": (req) => {
-      const file = req.params.file;
-      const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
-      if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) {
-        headers["content-encoding"] = "gzip";
-        headers["content-type"] = "application/octet-stream";
-        // A .gz download filename makes WebKit retain the compressed transport body.
-        headers["content-disposition"] = "inline";
-      }
-      return serveFile("vendor/microg", file, headers);
-    },
-    "/apks": async () => {
-      const names: string[] = [];
-      for await (const f of new Bun.Glob("*.{apk,xapk}").scan(apkDirectory)) names.push(f);
-      return Response.json(names.sort());
-    },
-    "/apks/:name": (req) => serveFile(apkDirectory, decodeURIComponent(req.params.name)),
-  },
-  // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
-  // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.
-  // Java sockets can ask the relay to terminate TLS; native stacks pass their own TLS bytes
-  // through the same relay unchanged.
-  // A text control frame means connected and carries the relay's local endpoint; a close before
-  // that means the connect failed. A plain "ok" (worker/tcp.ts, local address unparsed) also means connected.
-  //
-  // This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
-  // as /proxy above, and the same reason both are dev-server-only: bound to loopback, never
-  // meant to face a network.
-  fetch(req, srv) {
-    const u = new URL(req.url);
-    if (/^[a-f0-9-]{36}$/.test(u.searchParams.get("__wd_bridge") ?? "")) return new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
-    if (u.pathname === "/webview-socket") {
-      const id = u.searchParams.get("id") ?? "";
-      if (!/^[a-f0-9-]{36}$/.test(id) || req.headers.get("origin") !== u.origin) return new Response("bad bridge", { status: 403 });
-      return srv.upgrade(req, { data: { kind: "webview", id } }) ? undefined : new Response("expected websocket", { status: 400 });
-    }
-    // Whether a name resolves: the guest's resolvers answer a synthetic address for every name
-    // (the relay dials by name), so this is how a name that does not exist fails as it would on a
-    // device, instead of every connection to it being refused.
-    if (u.pathname === "/dns") {
-      const name = u.searchParams.get("host") ?? "";
-      if (!/^[A-Za-z0-9.-]{1,253}$/.test(name)) return new Response("bad name", { status: 400 });
-      return dns.lookup(name, { all: true }).then(
-        (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
-        (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
-    }
-    if (u.pathname === "/udp") return srv.upgrade(req, { data: { kind: "udp", sock: null, closed: false, addresses: new Map(), names: new Map() } })
-      ? undefined : new Response("expected websocket", { status: 400 });
-    if (u.pathname !== "/tcp") return new Response("not found", { status: 404 });
-    const host = u.searchParams.get("host") ?? "";
-    const port = Number(u.searchParams.get("port"));
-    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-      return new Response("bad target", { status: 400 });
-    }
-    const alpn = u.searchParams.getAll("alpn");
-    if (alpn.length > 32 || alpn.some(p => !p.length || Buffer.byteLength(p) > 255)) return new Response("bad ALPN", { status: 400 });
-    const data: TcpData = { alpn, kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, closed: false, pending: [], pendingBytes: 0 };
-    return srv.upgrade(req, { data }) ? undefined : new Response("expected websocket", { status: 400 });
-  },
-  websocket: {
-    async open(ws) {
-      const d = ws.data;
-      if (d.kind === "webview") { webRelay.open(d.id, ws); return; }
-      if (d.kind === "udp") {
-        try {
-          const sock = await Bun.udpSocket({ socket: {
-            // a reply names its source as the guest dialed it (the address is this server's
-            // resolution of the name, which the guest never saw), framed as a request is
-            data: (_socket, bytes, port, address) => {
-              const ip = address.replace(/^::ffff:/, "");
-              if (!parseIpv4(ip) || d.closed) return;
-              const name = new TextEncoder().encode(d.names.get(ip) ?? ip);
-              const frame = new Uint8Array(3 + name.length + bytes.length);
-              frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
-              frame.set(name, 3); frame.set(bytes, 3 + name.length);
-              ws.send(frame);
-            },
-          } });
-          d.sock = sock;
-          if (d.closed) sock.close();
-          else ws.send("ready");
-        } catch { ws.close(4000, "UDP bind failed"); }
-        return;
-      }
-      // A TLS socket silently drops (returns 0 for) anything written before its handshake
-      // completes, and connect() resolves on the TCP open, not the handshake. The ready control
-      // frame goes out only once the socket can carry bytes, and anything that arrives before
-      // then is queued.
-      const ready = (socket: import("bun").Socket) => {
-        if (d.closed) { socket.end(); return; }
-        d.sock = socket;
-        d.ready = true;
-        ws.send(JSON.stringify({
-          type: "ready", localFamily: socket.localFamily,
-          localAddress: socket.localAddress, localPort: socket.localPort, alpn: socket.alpnProtocol || "",
-        }));
-        flushTcp(ws, d);
-      };
-      try {
-        const socket = await Bun.connect({
-          hostname: d.host, port: d.port,
-          tls: d.tls ? { ALPNProtocols: Buffer.concat(d.alpn.flatMap(p => { const bytes = Buffer.from(p); return [Buffer.from([bytes.length]), bytes]; })) } : false,
-          socket: {
-            data: (_s, chunk) => { ws.send(chunk); },
-            drain: () => flushTcp(ws, d),
-            handshake: (socket, ok, err) => { if (ok) ready(socket); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },
-            close: () => ws.close(),
-            error: () => ws.close(),
-          },
-        });
-        d.sock = socket;
-        if (d.closed) socket.end();
-        else if (!d.tls) ready(socket);
-      } catch (e) {
-        // the errno code leads, for the guest's connect(2) to report
-        ws.close(4000, `${(e as { code?: string }).code ?? ""} ${String(e)}`.trim().slice(0, 100));
-      }
-    },
-    async message(ws, msg) {
-      if (ws.data.kind === "webview") { if (typeof msg === "string") webRelay.reply(ws, msg); return; }
-      if (ws.data.kind === "udp") {
-        if (typeof msg === "string" || msg.length < 3) return;
-        const length = msg[0], port = msg[1] << 8 | msg[2];
-        if (msg.length < 3 + length || !length || !port) return;
-        const host = new TextDecoder().decode(msg.subarray(3, 3 + length));
-        if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return;
-        try {
-          let resolved = ws.data.addresses.get(host);
-          if (!resolved) {
-            if (ws.data.addresses.size >= 256) ws.data.addresses.clear();
-            resolved = dns.lookup(host, { family: 4 }).then((result) => result.address);
-            ws.data.addresses.set(host, resolved);
-          }
-          const address = await resolved;
-          ws.data.names.set(address, host);
-          if (!ws.data.closed) ws.data.sock?.send(msg.subarray(3 + length), port, address);
-        } catch { ws.data.addresses.delete(host); }
-        return;
-      }
-      if (typeof msg === "string") { if (msg === "shutdown") { ws.data.shut = true; flushTcp(ws, ws.data); } return; }
-      if (ws.data.shut) return;
-      if (ws.data.ready && ws.data.pendingBytes === 0 && ws.data.sock) {
-        const written = ws.data.sock.write(msg);
-        if (written < 0) { ws.close(); return; }
-        if (written === msg.length) return;
-        msg = msg.subarray(written);
-      }
-      ws.data.pendingBytes += msg.length;
-      if (ws.data.pendingBytes > MAX_PENDING_TCP_BYTES) { ws.close(4002, "TCP upstream is too slow"); return; }
-      ws.data.pending.push(msg);
-      flushTcp(ws, ws.data);
-    },
-    close(ws) {
-      if (ws.data.kind === "webview") webRelay.close(ws.data.id, ws);
-      else if (ws.data.kind === "udp") { ws.data.closed = true; ws.data.sock?.close(); }
-      else { ws.data.closed = true; ws.data.pending.length = 0; ws.data.pendingBytes = 0; ws.data.sock?.end(); }
-    },
-  },
-});
-
-console.log(`webdroid dev server: http://localhost:${server.port}`);
+  };
+}

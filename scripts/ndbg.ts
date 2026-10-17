@@ -1,7 +1,8 @@
 // Boot an apk headless with the native host-call trace on, wait, then dump wd.native state and logs.
-//   bun scripts/ndbg.ts <apk> [waitMs] [traceRegex]
-import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
-import { BASE_URL, sleep } from "../tests/e2e/lib/util";
+//   pnpm ts scripts/ndbg.ts <apk> [waitMs] [traceRegex]
+import { writeFileSync } from "node:fs";
+import { WebdroidDriver } from "../tests/e2e/drivers/webdroid.ts";
+import { BASE_URL, sleep } from "../tests/e2e/lib/util.ts";
 
 const [apk, waitMs = "8000", re] = process.argv.slice(2);
 const drv = await WebdroidDriver.launch();
@@ -31,13 +32,13 @@ console.log("--- regs ---", JSON.stringify(out.regs, null, 1));
 console.log("calledMissing:", out.calledMissing, "jniMissing:", out.jniMissing, "\nmissing:", out.missing);
 console.log("perf:", out.perf, "blocks:", out.blocks);
 console.log("profile:\n" + (await drv.page.evaluate(() => (globalThis as any).wd.native.profile(25))).join("\n"));
-if (process.env.STEP) { const st = await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing.slice(-40000)); await Bun.write("/tmp/steps.txt", st.join("\n")); console.log("steps → /tmp/steps.txt", st.length); }
+if (process.env.STEP) { const st = await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing.slice(-40000)); writeFileSync("/tmp/steps.txt", st.join("\n")); console.log("steps → /tmp/steps.txt", st.length); }
 if (process.env.PEEK) { const [a, n] = process.env.PEEK.split(",").map(Number); const hex = await drv.page.evaluate(([a, n]) => (globalThis as any).wd.native.peek(a, n), [a, n]); const bytes = hex.split(" ").map((h: string) => parseInt(h, 16)); for (let i = 0; i < bytes.length; i += 32) console.log((a + i).toString(16).padStart(8, "0"), bytes.slice(i, i + 32).map((b: number) => b.toString(16).padStart(2, "0")).join(" "), " ", bytes.slice(i, i + 32).map((b: number) => b >= 32 && b < 127 ? String.fromCharCode(b) : ".").join("")); }
 for (const spec of (process.env.DUMP ?? "").split(";").filter(Boolean)) {
   const [a, n] = spec.split(",").map(Number);
   const hex = await drv.page.evaluate(([a, n]) => (globalThis as any).wd.native.peek(a, n), [a, n]);
-  await Bun.write(`/tmp/dump_${a.toString(16)}.bin`, new Uint8Array(hex.split(" ").map((h: string) => parseInt(h, 16))));
+  writeFileSync(`/tmp/dump_${a.toString(16)}.bin`, new Uint8Array(hex.split(" ").map((h: string) => parseInt(h, 16))));
 }
-await Bun.write("webdroid-shots/ndbg.png", await drv.page.screenshot());
+await drv.page.screenshot({ path: "webdroid-shots/ndbg.png" });
 await drv.close();
 process.exit(0);

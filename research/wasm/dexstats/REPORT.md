@@ -2,35 +2,22 @@
 
 Static statistics from 2026-10-04, taken before the compiler was designed. They covered type inference, method shape,
 control flow, try/catch and call sites. The register typing measured here became the compiler's
-(`src/wasm/compiler/infer.ts`). The scripts load DEX through the repo's parser (`src/jvm/{dex,prepared,structure,abi}.ts`)
-and open APKs with `zipTree` and `openInstall`.
+(`src/wasm/compiler/infer.ts`). The scripts loaded DEX through the repo's parser (`src/jvm/{dex,prepared,structure,abi}.ts`)
+and opened APKs with `zipTree` and `openInstall`.
 
 Corpora (9): `framework` = `vendor/aosp/framework.jar`; `core-oj` and `core-libart`, the boot jars of those names;
 `boot-other`, the other 37 `vendor/aosp/boot/*.jar` pooled; and the apps `mihon` (mihon-v0.20.4.apk), `fitnotes`
 (FitNotes.apk), `harmonic`, `newpipe` (org.schabi.newpipe_1015.apk) and `komikku` (Komikku-arm64-v8a-v1.14.1.apk).
 That is 704,430 methods with code.
 
-## Reproduce
+## Provenance
 
-```bash
-cd research/wasm/dexstats        # run from here: its empty bunfig.toml skips the root preload that builds blobs
-bun run.ts                       # all 9 corpora -> out/<corpus>.json (about 16 s); --only a,b  --limit N
-bun tables.ts > out/tables.md    # renders the tables; reproduces the committed file byte for byte
-bun crosscheck.ts apks/FitNotes.apk         # const typing vs prepared.ts's constKind
-bun dbg.ts apks/FitNotes.apk 'LA/c;.p'      # one method's disassembly and inference
-bun undet.ts apks/FitNotes.apk 5            # methods that keep an unconstrained web
-```
-
-**Broken since `844d12be` (2026-10-12).** That commit made `components` private in `src/wasm/compiler/infer.ts`
-(it is now `componentMask`) and dropped the web state `zero` and `fcon`. `dexstats/infer.ts` reads all three, so every
-script except `tables.ts` fails at import. Run the scripts at `844d12be^` or restore those exports. The committed
-`out/` is from `28d8da41`. Since then the compiler's analysis has changed, so a rerun can differ.
-
-Files: `load.ts` opens jars and APKs. `infer.ts` computes statistics over `analyzeWebs` from
-`src/wasm/compiler/infer.ts`. `run.ts` is the driver; it uses `buildCfg` (`src/wasm/compiler/cfg.ts`), `isInvoke`
-(`src/wasm/compiler/opinfo.ts`) and `Flow` (`src/jvm/structure.ts`). `families.ts` holds the opcode families,
-`reducible.ts` the Hecht-Ullman test, `cha.ts` the class hierarchy and `tables.ts` the renderer. Raw numbers are in
-`out/*.json`, and the tables (T1–T14, A1) are in [`out/tables.md`](out/tables.md).
+The scripts (`run.ts` the driver, `infer.ts` the statistics over the compiler's `analyzeWebs`, `tables.ts` the renderer,
+`crosscheck.ts`, `dbg.ts`, `undet.ts` and their helpers) were deleted in the move to Node and remain in Git history.
+They last ran at `844d12be^`: that commit made `components` private in `src/wasm/compiler/infer.ts` (it is now
+`componentMask`) and dropped the web states `zero` and `fcon` that `infer.ts` read. The committed `out/` is from
+`28d8da41`. Since then the compiler's analysis has changed, so a rerun can differ. Raw numbers are in `out/*.json`, and
+the tables (T1–T14, A1) are in [`out/tables.md`](out/tables.md).
 
 ## Decision-relevant numbers (measured)
 

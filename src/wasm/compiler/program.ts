@@ -1,6 +1,6 @@
-import type { LinkFailure } from "./linkage";
-import { ACC, type DexFile, type ClassDef } from "../../jvm/dex";
-import { parseMethodDesc } from "../../jvm/abi";
+import type { LinkFailure } from "./linkage.ts";
+import { ACC, type DexFile, type ClassDef } from "../../jvm/dex.ts";
+import { parseMethodDesc } from "../../jvm/abi.ts";
 
 export { ACC };
 export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref
@@ -76,12 +76,13 @@ const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
 /** a class of a dex file. Its header (supertypes, flags) is read when asked for and its members are built when the first of them is, so a Program holds
  *  little for the thousands of platform classes a process never uses. */
 class DexClass implements JClass {
+  readonly name: string; readonly dex: DexFile; readonly idx: number;
   private header_?: { flags: number; sup: string | null; ifaces: string[] };
   private def_?: ClassDef;
   private members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private fields_?: FieldInfo[];
   private methodInfos?: Map<number, MethodInfo>;
-  constructor(readonly name: string, readonly dex: DexFile, readonly idx: number) {}
+  constructor(name: string, dex: DexFile, idx: number) { this.name = name; this.dex = dex; this.idx = idx; }
   refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
     if (!changedTypes) this.header_ = undefined;
     else if (this.header_) {
@@ -197,6 +198,7 @@ export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx
 export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
 
 export class Program {
+  readonly base?: Program;
   /** the classes this Program adds to its base's, by key */
   private classes = new Map<string, JClass>();
   private syntheticLoaders = new Map<string, Loader>();
@@ -213,7 +215,8 @@ export class Program {
   readonly shared = new Map<string, unknown>();
   /** `base` is the platform's Program, which is immutable from now on and may be shared by the Programs of several processes: this one adds the app's dexes and the classes
    *  its loaders define, and the default loader's namespace is the base's first, then this one's */
-  constructor(dexes: DexFile[], readonly base?: Program) {
+  constructor(dexes: DexFile[], base?: Program) {
+    this.base = base;
     if (base) base.sealed = true;
     this.add(dexes);
     if (!base) this.addRuntimeClasses();

@@ -1,7 +1,7 @@
 // Crop → mask → two percentages. Both sides go through the identical pipeline.
 import pixelmatch from "pixelmatch";
-import { crop, applyMasks, newImg, type Img } from "./png";
-import type { Rect } from "../types";
+import { crop, applyMasks, newImg, type Img } from "./png.ts";
+import type { Rect } from "../types.ts";
 
 /** Most common colour in an image, quantised to 4 bits/channel — the page background. */
 function modalColor(img: Img): [number, number, number] {

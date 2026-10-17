@@ -5,25 +5,25 @@
 // buffer is bound, as in GL. The state kept beside WebGL is gles3-state.ts's, with its buffers,
 // pixels, client arrays and validation in the gles3-* modules beside it.
 
-import { mem } from "./mem";
-import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host";
-import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl";
-import { yieldToLoop } from "../jvm/yield";
-import { perf } from "../perf";
-import { utf8 } from "../jvm/abi";
-import { rewriteTextureSwizzles } from "./swizzle";
-import { activateEglCurrent } from "./egl-current";
+import { mem } from "./mem.ts";
+import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host.ts";
+import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl.ts";
+import { yieldToLoop } from "../jvm/yield.ts";
+import { perf } from "../perf.ts";
+import { utf8 } from "../jvm/abi.ts";
+import { rewriteTextureSwizzles } from "./swizzle.ts";
+import { activateEglCurrent } from "./egl-current.ts";
 import {
   g, H, TEXTURE0, UNBOUND, contextState, textureRec, texRecs, textureTarget, externalSamplersAs2D, activeUniformInfo, boundTexture, linkProgram,
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, pbo, type GL, type ContextState,
-} from "./gles3-state";
-import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels";
-import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers";
-import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays";
+} from "./gles3-state.ts";
+import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
+import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
+import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays.ts";
 import {
   keepsClean, keptClean, forgetImages, untrust, texParamAccepted, storageAccepted, imageAccepted, recordImage, subImageAccepted, pixelStoreAccepted,
   textureOf, TEXTURE_TARGETS, BUFFER_TARGETS, USAGES, RENDERBUFFER_FORMATS,
-} from "./gles3-validate";
+} from "./gles3-validate.ts";
 export let gles3Procs: Record<string, HostFn> = {};
 export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target

@@ -1,31 +1,31 @@
 // android.os.* + android.util.* natives.
-import { readFully } from "../shell/lazyfile";
-import { processEnv } from "../shell/environment";
-import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs";
-import { guestAt, mem } from "../native/mem";
-import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings";
-import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
-import { i8, jarray, utf8 } from "../jvm/abi";
-import { once } from "../jvm/suspend";
-import { exitProcess, never } from "../process-exit";
-import { device } from "../shell/config";
-import { androidGroupId } from "./identity";
-import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry";
-import { JThrowable, logUncaught } from "../jvm/natives/jthrowable";
-import { checkFromIndexSize } from "../jvm/natives/jlang";
-import { E, ERRSTR, strerror } from "../native/abi";
-import { is64BitProcess } from "../jvm/natives/jvmruntime";
-import { OS_CONSTANTS } from "./os-constants";
-import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
-import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs";
-import { remoteFilePath, changeFileAttributes, pathStat } from "../shell/file-path";
-import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
-import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath, S_IFMT, S_IFDIR, type FileStat } from "../native/fs";
-import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio";
-import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory";
-import { uptimeMillis, wallMillis } from "../guest-clock";
+import { readFully } from "../shell/lazyfile.ts";
+import { processEnv } from "../shell/environment.ts";
+import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
+import { guestAt, mem } from "../native/mem.ts";
+import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
+import { awaited, rt, type JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { i8, jarray, utf8 } from "../jvm/abi.ts";
+import { once } from "../jvm/suspend.ts";
+import { exitProcess, never } from "../process-exit.ts";
+import { device } from "../shell/config.ts";
+import { androidGroupId } from "./identity.ts";
+import { uuidFromString } from "../jvm/natives/jvalues.ts";
+import { vcall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
+import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
+import { checkFromIndexSize } from "../jvm/natives/jlang.ts";
+import { E, ERRSTR, strerror } from "../native/abi.ts";
+import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
+import { OS_CONSTANTS } from "./os-constants.ts";
+import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
+import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
+import { remoteFilePath, changeFileAttributes, pathStat } from "../shell/file-path.ts";
+import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd.ts";
+import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath, S_IFMT, S_IFDIR, type FileStat } from "../native/fs.ts";
+import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd.ts";
+import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
+import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory.ts";
+import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
 // support, a 1 ms preferred rate). A hint only advises the scheduler, so a session keeps its
@@ -688,7 +688,7 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
   }
 }));
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference
-// device's values (bun run gen-framework)
+// device's values (pnpm gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
   const constants = linkClass("android/system/OsConstants");
   constants.setStatics(Object.entries(OS_CONSTANTS), "I");

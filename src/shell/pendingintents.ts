@@ -1,4 +1,4 @@
-import type { ParcelData } from "../android/binder";
+import type { ParcelData } from "../android/binder.ts";
 
 export type PendingOperation = {
   pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service" | "foreground-service";
@@ -14,9 +14,10 @@ type Record = { key: string; operation: PendingOperation; cancellations: Set<() 
 /** PendingIntentController's records, keyed as PendingIntentRecord.Key: creator, kind, request code,
  *  flags and an intent equal under filterEquals */
 export class PendingIntents {
+  private codec: IntentCodec; private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>;
   private records = new Map<number, Record>();
   private nextId = 1;
-  constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>) {}
+  constructor(codec: IntentCodec, dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>) { this.codec = codec; this.dispatch = dispatch; }
   private async find(key: string, intent: ParcelData, codec: IntentCodec): Promise<number | undefined> {
     for (const [id, record] of this.records) if (record.key === key && await codec.filterEquals(record.operation.intent, intent)) return id;
     return undefined;

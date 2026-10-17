@@ -1,18 +1,17 @@
-// Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex) and on the
-// JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
+// Differential test: every static method of W.java, S.java and N.java runs as Wasm (this compiler, S and N over the AOSP boot dex) and on the
+// JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: pnpm wasm diff [method-name-filter]
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { dexesIn } from "../../src/jvm/dex";
-import { descToName } from "../../src/jvm/abi";
-import { insnLen } from "../../src/jvm/opcodes";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { ACC } from "../../src/wasm/compiler/program";
-import { namesWasmFrames } from "../../src/wasm/link/exc";
-import { caseLine, compare, genCases } from "./cases";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
+import { world } from "./lib.ts";
+import { dexesIn } from "../../src/jvm/dex.ts";
+import { descToName } from "../../src/jvm/abi.ts";
+import { insnLen } from "../../src/jvm/opcodes.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { ACC } from "../../src/wasm/compiler/program.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-"));
 const sh = shellIn(out);
@@ -40,8 +39,7 @@ await mountPlatform(ROOT);
 const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 await startProcess(w);
-// S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
-const methods = ["W", ...(namesWasmFrames() ? ["S", "N"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
+const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
 (globalThis as any).__dbgw = w;
 // asynchronous, as a process enters Java: S and N reach natives that wait (files, the user database)
 const entries = new Map(methods.map((m) => [m, w.entryAsync(m.cls, m.name, m.desc)]));

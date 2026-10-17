@@ -1,11 +1,11 @@
-import { awaited, rt, type JObj, type Gen } from "../jvm/runtime";
-import { after, vcall, scall } from "../jvm/natives/jentry";
-import { toJsArray } from "../jvm/natives/jcoll";
-import { onMain } from "./mainloop";
-import { isPlatformFont, platformFontBytes, typefaceOf, ITAL, WGHT } from "./fonts";
-import { localAsset } from "../shell/localassets";
-import type { WebSettingsAdapter } from "./websettings";
-import type { WebFonts } from "../shell/webpage/protocol";
+import { awaited, rt, type JObj, type Gen } from "../jvm/runtime.ts";
+import { after, vcall, scall } from "../jvm/natives/jentry.ts";
+import { toJsArray } from "../jvm/natives/jcoll.ts";
+import { onMain } from "./mainloop.ts";
+import { isPlatformFont, platformFontBytes, typefaceOf, ITAL, WGHT } from "./fonts.ts";
+import { localAsset } from "../shell/localassets.ts";
+import type { WebSettingsAdapter } from "./websettings.ts";
+import type { WebFonts } from "../shell/webpage/protocol.ts";
 
 // ── the renderer's settings. AwSettings sets Blink's per-script family and size preferences, which a
 // host browser does not let a page set: the standard family (a page's default text) and default size

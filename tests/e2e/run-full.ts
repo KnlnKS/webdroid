@@ -1,19 +1,19 @@
-import { diagnostics, browserFailures } from "./lib/diagnostics";
-// `bun run e2e --full` — capture webdroid, diff against the committed goldens, report.
+import { diagnostics, browserFailures } from "./lib/diagnostics.ts";
+// `pnpm e2e --full` — capture webdroid, diff against the committed goldens, report.
 // Never starts, queries, or requires an Android emulator. Every flow runs in its own browser;
 // `--jobs` bounds how many at once, and each is scored as soon as it has captured.
 import { cpus } from "node:os";
-import { ENV_SCREEN } from "./drivers/webdroid";
-import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs } from "./types";
-import { parseScreen } from "../../src/shell/config";
-import { captureFlow, launchFor, loadManifest, prepareShots } from "./capture-webdroid";
-import { assembleReport, scoreFlow } from "./score";
-import { printSmoke } from "./lib/report";
-import { parseArgs } from "./lib/args";
-import { FLOWS } from "./flows";
-import { runQueue } from "./lib/util";
+import { ENV_SCREEN } from "./drivers/webdroid.ts";
+import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs } from "./types.ts";
+import { parseScreen } from "../../src/shell/config.ts";
+import { captureFlow, launchFor, loadManifest, prepareShots } from "./capture-webdroid.ts";
+import { assembleReport, scoreFlow } from "./score.ts";
+import { printSmoke } from "./lib/report.ts";
+import { parseArgs } from "./lib/args.ts";
+import { FLOWS } from "./flows/index.ts";
+import { runQueue } from "./lib/util.ts";
 
-const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "bun run e2e --full");
+const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "pnpm e2e --full");
 const pinned = parseScreen(ENV_SCREEN);
 console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
 if (shots) await prepareShots(shots);

@@ -2,13 +2,14 @@
 // android_view_VelocityTracker.cpp's natives: the planar axes take least squares of degree 2 and
 // AXIS_SCROLL the impulse strategy, unless an explicit strategy overrides the planar ones.
 
-import { rt } from "../jvm/runtime";
-import { ownedHandle, deref } from "./handles";
-import { motionOf, AXIS_X, AXIS_Y, type NativeMotionEvent } from "./motionevent";
+import { rt } from "../jvm/runtime.ts";
+import { ownedHandle, deref } from "./handles.ts";
+import { motionOf, AXIS_X, AXIS_Y, type NativeMotionEvent } from "./motionevent.ts";
 
 const AXIS_SCROLL = 26;
-const enum S { DEFAULT = -1, IMPULSE, LSQ1, LSQ2, LSQ3, WLSQ2_DELTA, WLSQ2_CENTRAL, WLSQ2_RECENT, INT1, INT2, LEGACY }
-const enum W { NONE, DELTA, CENTRAL, RECENT }
+const S = { DEFAULT: -1, IMPULSE: 0, LSQ1: 1, LSQ2: 2, LSQ3: 3, WLSQ2_DELTA: 4, WLSQ2_CENTRAL: 5, WLSQ2_RECENT: 6, INT1: 7, INT2: 8, LEGACY: 9 } as const;
+const W = { NONE: 0, DELTA: 1, CENTRAL: 2, RECENT: 3 } as const;
+type W = (typeof W)[keyof typeof W];
 const DEFAULT_BY_AXIS = new Map([[AXIS_X, S.LSQ2], [AXIS_Y, S.LSQ2], [AXIS_SCROLL, S.IMPULSE]]);
 const PLANAR = [AXIS_X, AXIS_Y], DIFFERENTIAL = new Set([AXIS_SCROLL]);
 /** pointers that sent no movement for this long are assumed to have stopped */
@@ -26,8 +27,9 @@ interface Strategy {
 
 /** AccumulatingVelocityTrackerStrategy: a ring of the last HISTORY_SIZE movements per pointer */
 abstract class Accumulating implements Strategy {
+  readonly horizon: bigint; readonly maintainHorizon: boolean;
   movements = new Map<number, Movement[]>();
-  constructor(readonly horizon: bigint, readonly maintainHorizon: boolean) {}
+  constructor(horizon: bigint, maintainHorizon: boolean) { this.horizon = horizon; this.maintainHorizon = maintainHorizon; }
   clearPointer(id: number) { this.movements.delete(id); }
   add(t: bigint, id: number, x: number) {
     let ring = this.movements.get(id);
@@ -76,7 +78,8 @@ function solveLeastSquares(x: number[], y: number[], w: number[], n: number): nu
 }
 
 class LeastSquares extends Accumulating {
-  constructor(readonly degree: number, readonly weighting = W.NONE) { super(100_000_000n, true); }
+  readonly degree: number; readonly weighting: W;
+  constructor(degree: number, weighting: W = W.NONE) { super(100_000_000n, true); this.degree = degree; this.weighting = weighting; }
   fromRing(ring: Movement[]): number | null {
     const degree = Math.min(this.degree, ring.length - 1);
     if (degree <= 0) return null;
@@ -128,7 +131,8 @@ class LeastSquares extends Accumulating {
 
 const kineticEnergyToVelocity = (work: number) => f32((work < 0 ? -1 : 1) * f32(Math.sqrt(Math.abs(work))) * f32(Math.SQRT2));
 class Impulse extends Accumulating {
-  constructor(readonly deltaValues: boolean) { super(100_000_000n, false); }
+  readonly deltaValues: boolean;
+  constructor(deltaValues: boolean) { super(100_000_000n, false); this.deltaValues = deltaValues; }
   fromRing(ring: Movement[]): number | null {
     const t: bigint[] = [], x: number[] = [], newest = ring[ring.length - 1].t;
     for (let i = ring.length - 1; i >= 0; i--) {
@@ -178,8 +182,9 @@ class Legacy extends Accumulating {
 
 interface IntegratingState { t: bigint; degree: number; pos: number; vel: number; accel: number }
 class Integrating implements Strategy {
+  readonly degree: number;
   states = new Map<number, IntegratingState>();
-  constructor(readonly degree: number) {}
+  constructor(degree: number) { this.degree = degree; }
   clearPointer(id: number) { this.states.delete(id); }
   velocity(id: number) { return this.states.get(id)?.vel ?? null; }
   add(t: bigint, id: number, pos: number) {
@@ -221,12 +226,13 @@ function createStrategy(strategy: number, deltaValues: boolean): Strategy {
 
 /** VelocityTrackerState: the tracker and the velocities its last computeCurrentVelocity left */
 class Tracker {
+  readonly override: number;
   lastEventTime = 0n;
   ids = 0;
   active: number | null = null;
   strategies = new Map<number, Strategy>();
   computed = new Map<number, Map<number, number>>();
-  constructor(readonly override: number) {}
+  constructor(override: number) { this.override = override; }
   clear() { this.ids = 0; this.active = null; this.strategies.clear(); }
   clearPointer(id: number) {
     this.ids &= ~(1 << id);

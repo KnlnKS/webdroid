@@ -1,10 +1,10 @@
-import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, bindCpu } from "./cpu";
-import { processExited } from "../process-exit";
-import { hostLib, stp, ptr, type HostFn } from "./host";
-import { mem, anchor } from "./mem";
-import { toThread } from "../jvm/natives/jthrowable";
+import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output.ts";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, bindCpu } from "./cpu.ts";
+import { processExited } from "../process-exit.ts";
+import { hostLib, stp, ptr, type HostFn } from "./host.ts";
+import { mem, anchor } from "./mem.ts";
+import { toThread } from "../jvm/natives/jthrowable.ts";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
 const AAUDIO_STREAM_STATE_OPEN = 2, AAUDIO_STREAM_STATE_STARTED = 4, AAUDIO_STREAM_STATE_PAUSED = 6, AAUDIO_STREAM_STATE_FLUSHED = 8,
@@ -17,6 +17,7 @@ class Builder {
   callback = 0; context: number | bigint = 0;
 }
 class Stream {
+  readonly handle: number; readonly config: Builder;
   readonly track: PcmOutput;
   readonly cpu: Cpu;
   readonly buffer: number;
@@ -26,7 +27,8 @@ class Stream {
   state = AAUDIO_STREAM_STATE_OPEN;
   pumping: Promise<void> | null = null;
   readonly waiters = new Set<() => void>();
-  constructor(readonly handle: number, readonly config: Builder, parent: Cpu) {
+  constructor(handle: number, config: Builder) {
+    this.handle = handle; this.config = config;
     const track = this.track = new PcmOutput({ rate: config.SampleRate || outputSampleRate(), channels: config.ChannelCount || 2,
       bytesPerSample: config.Format === 1 ? 2 : 4, sessionId: config.SessionId === 0 ? newAudioSessionId() : config.SessionId });
     this.frames = config.FramesPerDataCallback || Math.ceil(track.rate / 100);
@@ -85,7 +87,7 @@ export function aaudioInit(): void {
   const methods: Record<string, HostFn> = {
     AAudio_createStreamBuilder: (_cpu, a) => { const out = a.p(); if (!out) return -886; const p = mem.malloc(4); builders.set(p, new Builder()); stp(out, p); return 0; },
     AAudioStreamBuilder_delete: (_cpu, a) => { const p = a.p(); if (!builders.delete(p)) return INVALID_HANDLE; mem.free(p); return 0; },
-    AAudioStreamBuilder_openStream: (cpu, a) => {
+    AAudioStreamBuilder_openStream: (_cpu, a) => {
       const b = builders.get(a.p()), out = a.p(); if (!b) return INVALID_HANDLE; if (!out) return -886; stp(out, 0);
       if (b.Direction !== 0 || (b.DeviceId !== 0 && b.DeviceId !== 1) || !b.callback) return UNAVAILABLE;
       if (b.SessionId < -1) return INVALID;
@@ -93,7 +95,7 @@ export function aaudioInit(): void {
       if (![0, 1, 2].includes(b.Format)) return -883;
       if (![0, 1, 2].includes(b.ChannelCount) || ![0, 1].includes(b.SharingMode) || ![10, 11, 12].includes(b.PerformanceMode) || b.FramesPerDataCallback < 0 || b.BufferCapacityInFrames < 0) return INVALID;
       if (b.FramesPerDataCallback > 1000000 || b.BufferCapacityInFrames > 1000000) return -882;
-      const p = mem.malloc(4), stream = new Stream(p, { ...b }, cpu); streams.set(p, stream); stp(out, p); return 0;
+      const p = mem.malloc(4), stream = new Stream(p, { ...b }); streams.set(p, stream); stp(out, p); return 0;
     },
     AAudioStreamBuilder_setDataCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.callback = a.p(); b.context = ptr(a.p()); } },
     AAudioStreamBuilder_setErrorCallback: () => {},

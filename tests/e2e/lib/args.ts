@@ -1,7 +1,7 @@
 // Flow selection shared by every entry point, so `--test` means the same thing everywhere.
 import { cpus } from "node:os";
-import { FLOWS } from "../flows";
-import type { Flow } from "../types";
+import { FLOWS } from "../flows/index.ts";
+import type { Flow } from "../types.ts";
 
 function fail(msg: string): never {
   console.error(`${msg}\n\nknown flows: ${FLOWS.map((f) => f.app).join(", ")}`);

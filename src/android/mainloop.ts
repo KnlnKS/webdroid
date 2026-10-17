@@ -6,16 +6,16 @@
 // onMain, as an asynchronous message on the main looper: it keeps its order with the app's own
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
-import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
-import { curThread, mainThread, scall, newObj, vcall, callOn, classNameOf, initClass, linkClass, type JThread } from "../jvm/natives/jentry";
-import { dispatchUncaught, toThread, type Escape } from "../jvm/natives/jthrowable";
-import { processExited } from "../process-exit";
-import { handle, deref, release } from "./handles";
-import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
-import { perf } from "../perf";
-import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield";
-import { compileAhead } from "../jvm/tier";
-import { note, Ev } from "../timeline";
+import { rt, JObj, declaredField, type Gen } from "../jvm/runtime.ts";
+import { curThread, mainThread, scall, newObj, vcall, callOn, classNameOf, initClass, linkClass, type JThread } from "../jvm/natives/jentry.ts";
+import { dispatchUncaught, toThread, type Escape } from "../jvm/natives/jthrowable.ts";
+import { processExited } from "../process-exit.ts";
+import { handle, deref, release } from "./handles.ts";
+import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock.ts";
+import { perf } from "../perf.ts";
+import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield.ts";
+import { compileAhead } from "../jvm/tier.ts";
+import { note, Ev } from "../timeline.ts";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
  *  inline */
@@ -28,6 +28,7 @@ const SLICE_MS = 16;
 const AHEAD_QUIET_MS = 100;
 
 export class NativeLooper {
+  readonly thread: JThread;
   private callbacks: (() => unknown)[] = [];
   private woken = false;
   private waiter: (() => void) | null = null;
@@ -35,7 +36,7 @@ export class NativeLooper {
   /** the time of the vsync whose frame this looper is running, until it next waits for work: what
    *  the frame posts runs within it */
   frameAt = -Infinity;
-  constructor(readonly thread: JThread) {}
+  constructor(thread: JThread) { this.thread = thread; }
   wake(): void { this.woken = true; this.signal(); }
   /** run `fn` on this looper's thread at its next poll, between messages */
   post(fn: () => unknown): void { this.callbacks.push(fn); this.signal(); }

@@ -6,18 +6,18 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime";
-import { handle, deref, release, FINALIZER } from "./handles";
-import { newObj, vcall } from "../jvm/natives/jentry";
-import { i8, u8, jarray } from "../jvm/abi";
+import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { handle, deref, release, FINALIZER } from "./handles.ts";
+import { newObj, vcall } from "../jvm/natives/jentry.ts";
+import { i8, u8, jarray } from "../jvm/abi.ts";
 import {
   Resources, NativeTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
-} from "./res";
-import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
-import { sizeClass, type Arsc } from "./arsc";
-import { packages } from "./packages";
-import { mkPfd } from "./os";
-import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
+} from "./res.ts";
+import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml.ts";
+import { sizeClass, type Arsc } from "./arsc.ts";
+import { packages } from "./packages.ts";
+import { mkPfd } from "./os.ts";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 
 const delegate = rt.registerJnis.bind(rt);
 
@@ -116,9 +116,10 @@ interface Block { doc: XmlDoc; res: Resources | null; strings: bigint }
 /** the parse cursor. It IS an AttributeSet: AOSP passes XmlBlock.Parser.mParseState to
  *  applyStyle, which reads the element off `node`. */
 class ParseState {
+  readonly blk: Block; readonly sourceResId: number;
   pos = 0;
   node: XmlNode | null = null;
-  constructor(readonly blk: Block, readonly sourceResId: number) {}
+  constructor(blk: Block, sourceResId: number) { this.blk = blk; this.sourceResId = sourceResId; }
   get ev(): XmlEvent { return this.blk.doc.events[this.pos]; }
 }
 const block = (h: bigint) => deref<Block>(h);

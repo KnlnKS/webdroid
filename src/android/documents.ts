@@ -9,14 +9,14 @@
  * URI algebra needs no special case; the volume is the picked directory's own name.
  */
 
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jentry";
-import { uriParts, uriText } from "./net";
-import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
-import { openDb, txDone } from "../shell/idb";
-import { mkPfd, pfdBackingBytes } from "./os";
-import { mimeOf } from "../mime";
-import { registerSystemProvider, matrixCursor, uriBundle, DOCUMENTS_PROVIDER } from "./systemproviders";
+import { awaited, rt, type JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { uriParts, uriText } from "./net.ts";
+import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs.ts";
+import { openDb, txDone } from "../shell/idb.ts";
+import { mkPfd, pfdBackingBytes } from "./os.ts";
+import { mimeOf } from "../mime.ts";
+import { registerSystemProvider, matrixCursor, uriBundle, DOCUMENTS_PROVIDER } from "./systemproviders.ts";
 
 const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 

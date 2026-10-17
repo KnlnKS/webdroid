@@ -1,12 +1,11 @@
-import { expect, test, describe } from "bun:test";
-import "../src/natives";
-import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry";
-import { vfs } from "../src/shell/vfs";
-import { jarray } from "../src/jvm/abi";
-import { scall, loadLibcore } from "./java";
-import { decodeString, encodeString } from "../src/jvm/charset";
+import { expect, test, describe } from "vite-plus/test";
+import "../src/natives.ts";
+import { newObj, vcall, vcallAsync, staticField } from "../src/jvm/natives/jentry.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { jarray } from "../src/jvm/abi.ts";
+import { scall } from "./java.ts";
+import { decodeString, encodeString } from "../src/jvm/charset.ts";
 
-await loadLibcore();
 
 describe("charset", () => {
   test("UTF-16 and UTF-32 match the reference device's byte orders, marks and replacements", async () => {

@@ -2,9 +2,9 @@
 // allocator, page, plane and region calls forwarded to the core (mem.zig). See abi.ts for the
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
-import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core";
-import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
-import { utf8 } from "../jvm/abi";
+import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core.ts";
+import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
+import { utf8 } from "../jvm/abi.ts";
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
 /** the committed bytes past LOW: a host access beyond them is to no page in use */

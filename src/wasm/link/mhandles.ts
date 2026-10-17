@@ -4,24 +4,24 @@
 // type against the handle's (invokeExact: equal, else WrongMethodTypeException; invoke: libcore's asType handles the conversions),
 // calls the member through a generated thunk and answers the boxed result, which the site unboxes. Transformer handles run their unchanged
 // libcore Java code over EmulatedStackFrame; invokeExactWithFrame re-enters the direct-handle dispatcher.
-import { T } from "../compiler/wasmbin";
-import { ACC, javaName, kindOf, type FieldInfo, type Kind, type MethodInfo, type Program } from "../compiler/program";
-import { isWide, descToName, parseMethodDesc } from "../../jvm/abi";
-import { hostReflect, RInfo } from "./reflect";
-import { BOX } from "../compiler/fields";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
-import type { MC } from "../compiler/method";
-import type { PreparedInstruction as Ins } from "../../jvm/prepared";
-import { canAccess, constClass, descOf, typeName } from "./classes";
-import { failed, prettyType, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage";
-import { emitRestored, emitSettled, type Strand } from "./sched";
-import type { DexFile } from "../../jvm/dex";
-import { emitVarHandleAccess } from "../compiler/poly";
-import { invokeVarHandleView } from "./vhandleviews";
-import { invokeCustom } from "./callsites";
-import { mid } from "../compiler/ids";
+import { T } from "../compiler/wasmbin.ts";
+import { ACC, javaName, kindOf, type FieldInfo, type Kind, type MethodInfo, type Program } from "../compiler/program.ts";
+import { isWide, descToName, parseMethodDesc } from "../../jvm/abi.ts";
+import { hostReflect, RInfo } from "./reflect.ts";
+import { BOX } from "../compiler/fields.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
+import type { MC } from "../compiler/method.ts";
+import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { canAccess, constClass, descOf, typeName } from "./classes.ts";
+import { failed, prettyType, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage.ts";
+import { emitRestored, emitSettled, type Strand } from "./sched.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import { emitVarHandleAccess } from "../compiler/poly.ts";
+import { invokeVarHandleView } from "./vhandleviews.ts";
+import { invokeCustom } from "./callsites.ts";
+import { mid } from "../compiler/ids.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** leaves the element array of the Object[] (anyref) on the stack */

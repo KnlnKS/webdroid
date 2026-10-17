@@ -2,13 +2,13 @@
 // curves BoringSSL builds in (and arbitrary prime curves), and X25519 (RFC 7748); the SPKI and PKCS#8
 // encodings EVP_parse_*/EVP_marshal_* read and write.
 
-import { modInverse, modPow } from "./jmath";
-import { DIGESTS, type Hash } from "./digest";
-import { concat, hexBytes } from "../abi";
+import { modInverse, modPow } from "./jmath.ts";
+import { DIGESTS, type Hash } from "./digest.ts";
+import { concat, hexBytes } from "../abi.ts";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
   bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
-} from "./der";
+} from "./der.ts";
 
 export const EVP_PKEY_RSA = 6, EVP_PKEY_EC = 408, EVP_PKEY_X25519 = 948;
 const OID_RSA = "1.2.840.113549.1.1.1", OID_EC = "1.2.840.10045.2.1", OID_X25519 = "1.3.101.110";

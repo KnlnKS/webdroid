@@ -1,18 +1,18 @@
-import { expect, test } from "bun:test";
-import { mainThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { ldp } from "./host";
-import { libcInit } from "./libc";
-import { kernelInit } from "./syscall";
-import { mem } from "./mem";
-import { netInit, socketCreate } from "./socket/syscalls";
-import type { Socket, Accepted } from "./socket/core";
-import { SOL_SOCKET, type SocketAddress } from "./socket/abi";
-import { E } from "./abi";
-import { javaCloseFd, readSocket, socketOf } from "./fs";
-import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address";
-import { loopbackFetch } from "../shell/devicefetch";
-import { kernelCalls, libCalls } from "./calls.testkit";
+import { expect, test } from "vite-plus/test";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { ldp } from "./host.ts";
+import { libcInit } from "./libc.ts";
+import { kernelInit } from "./syscall.ts";
+import { mem } from "./mem.ts";
+import { netInit, socketCreate } from "./socket/syscalls.ts";
+import type { Socket, Accepted } from "./socket/core.ts";
+import { SOL_SOCKET, type SocketAddress } from "./socket/abi.ts";
+import { E } from "./abi.ts";
+import { javaCloseFd, readSocket, socketOf } from "./fs.ts";
+import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address.ts";
+import { loopbackFetch } from "../shell/devicefetch.ts";
+import { kernelCalls, libCalls } from "./calls.testkit.ts";
 
 
 const sock = (fd: number) => socketOf(fd) as Socket;

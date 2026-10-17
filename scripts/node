@@ -1,0 +1,3 @@
+#!/bin/sh
+# Starts a script on the node package.json's scripts run on; scripts/node.ts starts their children with the same flags
+exec node --experimental-wasm-jspi --expose-gc --import "$(cd "$(dirname "$0")" && pwd)/preload.ts" "$@"

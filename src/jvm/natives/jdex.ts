@@ -1,5 +1,5 @@
 // dalvik.system's class loaders run from libcore over the Wasm tier's loaders (wasm/host/boot.ts openDexes).
-import { rt } from "../runtime";
+import { rt } from "../runtime.ts";
 
 /** the app's own archives, whose dex the process loaded at boot: a loader over them (LoadedApk's) is
  *  the app's class loader, over the classes the process already holds */

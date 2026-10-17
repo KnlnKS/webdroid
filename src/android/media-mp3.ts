@@ -1,4 +1,4 @@
-import { readFully, type FileSource } from "../shell/lazyfile";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
 
 type Mp3Info = { durationMs: number; bitrate: number; picture: Int8Array | null };
 

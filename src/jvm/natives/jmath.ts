@@ -1,8 +1,8 @@
 // java.math runs from libcore. NativeBN, the BIGNUM boundary its modPow, multiply and divide take for
 // large operands, is JS bigint.
 
-import { rt } from "../runtime";
-import { handle, deref, release } from "../../android/handles";
+import { rt } from "../runtime.ts";
+import { handle, deref, release } from "../../android/handles.ts";
 
 /** big-endian 32-bit words, most significant first → the magnitude */
 function wordsToBig(m: Int32Array, len = m.length, littleEndian = false): bigint {

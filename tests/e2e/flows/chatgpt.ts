@@ -1,4 +1,4 @@
-import { wait, type Flow, type Screen } from "../types";
+import { wait, type Flow, type Screen } from "../types.ts";
 
 const screen: Screen = { width: 1080, height: 2160, densityDpi: 480 };
 const tap = (x: number, y: number) => ({ type: "tapAt" as const, x: x / screen.width, y: y / screen.height });

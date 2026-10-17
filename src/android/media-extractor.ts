@@ -1,12 +1,12 @@
 import type { Sample } from "mp4box";
-import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jentry";
-import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio";
-import { fdInt } from "../jvm/natives/jio";
-import { vfs } from "../shell/vfs";
-import { readFully, type FileSource } from "../shell/lazyfile";
-import { fdSlice, nativePeer } from "./media-native";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format.ts";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import { vfs } from "../shell/vfs.ts";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
+import { fdSlice, nativePeer } from "./media-native.ts";
 
 function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   const result = new Uint8Array(units.reduce((n, unit) => n + 4 + unit.data.length, 0));
@@ -21,7 +21,14 @@ function csd(format: NativeFormat, key: string, data: Uint8Array): void {
 type Track = { format: NativeFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };
 export class MediaExtractor {
   tracks: Track[] = [];
-  async open(source: FileSource): Promise<void> {
+  /** reads the container's tracks. The reads enter no Java; the codec data the formats hold are direct buffers, which Java makes, so they
+   *  are made through `after` from this call, as the thread that calls it */
+  open(source: FileSource): Promise<void> {
+    const ready = directReady();
+    return Promise.resolve(after(this.parse(source), (build) => after(ready, () => { this.tracks = build(); })));
+  }
+  /** the container's track list, read from `source`, as the step that makes the tracks */
+  private async parse(source: FileSource): Promise<() => Track[]> {
     const { createFile, MP4BoxBuffer, BoxParser, Descriptor } = await import("mp4box");
     const file = createFile(false);
     let error = "";
@@ -35,8 +42,7 @@ export class MediaExtractor {
     }
     const movie = file.getInfo();
     if (!movie.hasMoov || !movie.tracks.length) throw new Error("Unsupported media container");
-    await directReady();
-    this.tracks = movie.tracks.map(track => {
+    return () => movie.tracks.map(track => {
       const samples = file.getTrackSamplesInfo(track.id), entry = samples[0]?.description;
       const format = new NativeFormat();
       let nalLength = 0;
@@ -157,7 +163,7 @@ rt.registerJnis("android/media/MediaExtractor", {
   "advance()Z": E((p) => +p.extractor.advance()),
   "readSampleData(Ljava/nio/ByteBuffer;I)I": E((p, buffer: JBuffer, offset: number) => {
     if (!p.source || !p.extractor.current()) return -1;
-    return p.extractor.read(p.source).then((data) => {
+    return after(p.extractor.read(p.source), (data) => {
       if (!data) return -1;
       if (offset < 0 || offset + data.length > capacity(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
       return after(writeBufferBytes(buffer,data,offset), () => {

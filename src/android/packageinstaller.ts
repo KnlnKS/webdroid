@@ -1,20 +1,20 @@
 // IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
-import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { scall, vcall, after, newObj } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { jarray } from "../jvm/abi";
-import { newFile } from "../jvm/natives/jio";
-import { vfs } from "../shell/vfs";
-import { installPackageArchive } from "./pm";
-import { broadcastIntent } from "./server/broadcastqueue";
-import { sendIntent } from "./pendingintent";
-import { callingIdentity, newStub, binderEscape, parceledList } from "./binder";
-import { packages } from "./packages";
-import { checkUidPermission } from "./permissions";
-import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata";
-import { putExtra, type JIntent } from "./intent";
+import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { scall, vcall, after, newObj } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newFile } from "../jvm/natives/jio.ts";
+import { vfs } from "../shell/vfs.ts";
+import { installPackageArchive } from "./pm.ts";
+import { broadcastIntent } from "./server/broadcastqueue.ts";
+import { sendIntent } from "./pendingintent.ts";
+import { callingIdentity, newStub, binderEscape, parceledList } from "./binder.ts";
+import { packages } from "./packages.ts";
+import { checkUidPermission } from "./permissions.ts";
+import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata.ts";
+import { putExtra, type JIntent } from "./intent.ts";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
 const STATUS_SUCCESS = 0, STATUS_FAILURE_INVALID = 4, MODE_FULL_INSTALL = 1;

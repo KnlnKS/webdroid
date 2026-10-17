@@ -1,5 +1,6 @@
-import type { UiNode } from "../../tests/e2e/types";
-import { Random } from "./random";
+import { createHash } from "node:crypto";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import type { Random } from "./random.ts";
 
 export type SemanticIdentity = {
   resourceId?: string;
@@ -139,9 +140,7 @@ export function generateUiAction(random: Random, nodes: readonly UiNode[], width
 }
 
 function hashStructure(structure: readonly string[]): string {
-  const digest = new Bun.CryptoHasher("sha256");
-  digest.update(structure.join("\n"));
-  return digest.digest("hex").slice(0, 24);
+  return createHash("sha256").update(structure.join("\n")).digest("hex").slice(0, 24);
 }
 
 export function uiStateKey(nodes: readonly UiNode[]): string {

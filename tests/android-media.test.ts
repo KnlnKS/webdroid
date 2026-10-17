@@ -1,18 +1,20 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import { loadFrameworkJar, bootApp, packageRecord, thrown } from "./java";
-import "../src/natives";
-import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { newObj, scall, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry";
-import { lambda } from "../src/jvm/natives/jlambda";
-import { vfs } from "../src/shell/vfs";
-import { onMain } from "../src/android/mainloop";
-import { mkAssetFd } from "../src/android/resnative";
-import { hostedService } from "../src/android/binder";
-import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec";
-import { NativeFormat } from "../src/android/media-format";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import { readFileSync } from "node:fs";
+import { bootApp, packageRecord, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
+import "../src/natives.ts";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
+import { newObj, scall, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
+import { lambda } from "../src/jvm/natives/jlambda.ts";
+import { vfs } from "../src/shell/vfs.ts";
+import { onMain } from "../src/android/mainloop.ts";
+import { mkAssetFd } from "../src/android/resnative.ts";
+import { hostedService } from "../src/android/binder.ts";
+import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec.ts";
+import { NativeFormat } from "../src/android/media-format.ts";
 
 // framework.jar and a running main looper, as a booted page has them
-beforeAll(loadFrameworkJar);
+beforeAll(startMainLooper);
 // one app process for the file
 const app = async () => bootApp(await packageRecord("org.webdroid.test.media"));
 
@@ -80,7 +82,7 @@ describe("media-retriever", () => {
   test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", async () => {
     await app();
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
-    vfs.write("/sdcard/media-probe.mp4", new Uint8Array(await Bun.file("tests/fixtures/media.mp4").arrayBuffer()));
+    vfs.write("/sdcard/media-probe.mp4", new Uint8Array(readFileSync("tests/fixtures/media.mp4")));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp4");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 12)).toBe("video/mp4");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 18)).toBe("32");
@@ -93,7 +95,7 @@ describe("media-retriever", () => {
 
   test("MediaMetadataRetriever reads MP3 metadata", async () => {
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
-    vfs.write("/sdcard/media-probe.mp3", new Uint8Array(await Bun.file("tests/fixtures/audio.mp3").arrayBuffer()));
+    vfs.write("/sdcard/media-probe.mp3", new Uint8Array(readFileSync("tests/fixtures/audio.mp3")));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp3");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 12)).toBe("audio/mpeg");
     expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 9)).toBe("52");
@@ -105,7 +107,7 @@ describe("mediadrm", () => {
 
   test("MediaDrm reports the browser device's unsupported schemes", async () => {
     const uuid = await newObj("java/util/UUID", "(JJ)V", 0n, 0n);
-    expect(await thrown(() => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))).toStartWith("android/media/UnsupportedSchemeException:");
+    expect(await thrown(() => newObj("android/media/MediaDrm", "(Ljava/util/UUID;)V", uuid))).toMatch(/^android\/media\/UnsupportedSchemeException:/);
     expect(await scall("android/media/MediaDrm", "isCryptoSchemeSupported", "(Ljava/util/UUID;)Z", uuid)).toBe(0);
   });
 });

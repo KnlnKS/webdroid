@@ -3,28 +3,28 @@
 // ScreenRecordingCallbacks), and a raw transaction reaches the Stub's own onTransact, so an unknown
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
-import { once } from "../jvm/suspend";
-import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jentry";
-import { postMain } from "./mainloop";
-import { uptimeMillis, wallMillis } from "../guest-clock";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { device } from "../shell/config";
-import { appHost } from "./apphost";
-import { newIntent, putExtra, registerSystemActivity } from "./intent";
-import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os";
-import { GL_ES_VERSION } from "./pm";
-import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
-import { deviceConfiguration, systemResource } from "./resnative";
-import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, parceledList } from "./binder";
-import { packages } from "./packages";
-import { getPrefs } from "./sharedprefs";
-import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue";
-import { activityManagerMethods } from "./server/am";
-import { activityTaskMethods, foreground } from "./server/atm";
-import { activeServiceMethods } from "./server/activeservices";
+import { once } from "../jvm/suspend.ts";
+import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jentry.ts";
+import { postMain } from "./mainloop.ts";
+import { uptimeMillis, wallMillis } from "../guest-clock.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { device } from "../shell/config.ts";
+import { appHost } from "./apphost.ts";
+import { newIntent, putExtra, registerSystemActivity } from "./intent.ts";
+import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os.ts";
+import { GL_ES_VERSION } from "./pm.ts";
+import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
+import { deviceConfiguration, systemResource } from "./resnative.ts";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, parceledList } from "./binder.ts";
+import { packages } from "./packages.ts";
+import { getPrefs } from "./sharedprefs.ts";
+import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue.ts";
+import { activityManagerMethods } from "./server/am.ts";
+import { activityTaskMethods, foreground } from "./server/atm.ts";
+import { activeServiceMethods } from "./server/activeservices.ts";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;

@@ -1,7 +1,7 @@
-// Disassemble a method: bun scripts/dis.ts <apk> <class> [methodName]
-import { openDexes } from "./lib";
-import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes";
-import { descToName } from "../src/jvm/abi";
+// Disassemble a method: pnpm dis <apk> <class> [methodName]
+import { openDexes } from "./lib.ts";
+import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes.ts";
+import { descToName } from "../src/jvm/abi.ts";
 
 const [apk, clsName, methodName] = process.argv.slice(2);
 for (const dex of await openDexes(apk)) {

@@ -20,11 +20,11 @@ the SDK webdroid advertises), plus an API inventory.
 ## Commands
 
 ```bash
-bun run fuzz inventory [--sdk 35] [--no-reached] [--framework <jar>] [--json <path>]
-bun run fuzz api|graphics [--seed <n>] [--cases 1000] --oracle <serial> [--out <dir>]
-bun run fuzz ui <apk...> [--seed <n>] [--steps 100] [--oracle <serial>] [--out <dir>]
-bun run fuzz replay <failure.json> [--oracle <serial>]
-bun run fuzz smoke
+pnpm fuzz inventory [--sdk 35] [--no-reached] [--framework <jar>] [--json <path>]
+pnpm fuzz api|graphics [--seed <n>] [--cases 1000] --oracle <serial> [--out <dir>]
+pnpm fuzz ui <apk...> [--seed <n>] [--steps 100] [--oracle <serial>] [--out <dir>]
+pnpm fuzz replay <failure.json> [--oracle <serial>]
+pnpm fuzz smoke
 ```
 
 Seeds default to random, printed and stored; `--out` to `fuzz-results/<kind>-<seed>`.
@@ -41,7 +41,7 @@ probe `tests/fuzz-probe/src/org/webdroid/fuzz/ProbeActivity.java`, diagnostics
 
 ## Setup
 
-Needs Bun, Java 21 (probe uses `--release 17`), `python3`, `avdmanager` and `adb` on `PATH` (or
+Needs Node 24, pnpm, Java 21 (probe uses `--release 17`), `python3`, `avdmanager` and `adb` on `PATH` (or
 `cmdline-tools/<v>/bin`), and the SDK at `ANDROID_SDK_ROOT`, else `ANDROID_HOME`, else
 `~/Library/Android/sdk`, whose newest `build-tools/` holds `aapt2`, `d8`, `apksigner`. Keep
 machine paths out of scripts.
@@ -52,7 +52,7 @@ sdkmanager 'platform-tools' 'emulator' 'platforms;android-35' \
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-bun install
+pnpm install
 export ANDROID_SERIAL=emulator-5554   # with several devices
 bash scripts/fuzz/setup-oracle.sh
 adb devices
@@ -60,14 +60,14 @@ adb -s emulator-5554 shell getprop ro.build.version.sdk   # 35
 adb -s emulator-5554 shell getprop ro.build.fingerprint
 adb -s emulator-5554 emu avd name                         # webdroid_api35_ref
 bash scripts/fuzz/build-probe.sh
-bun run smoke fuzz-cache/WebdroidFuzzProbe.apk
+pnpm smoke fuzz-cache/WebdroidFuzzProbe.apk
 ```
 
 `setup-oracle.sh` (idempotent) creates/updates AVD `webdroid_api35_ref`, boots it unless an
 attached device is that AVD (log `/tmp/webdroid-emulator.log`), requires SDK 35, applies
 `wm size`/density from `device` in `src/shell/config.ts` (`WEBDROID_SCREEN=WxH@dpi` overrides),
 and caches `framework.jar`, `framework-res.apk`, `fingerprint.txt`, `api-versions.xml` in
-`fuzz-cache/android-35/`; never copy that over `vendor/aosp` (owned by `bun run gen-framework`).
+`fuzz-cache/android-35/`; never copy that over `vendor/aosp` (owned by `pnpm gen-framework`).
 API/graphics runs reject another API or geometry; UI checks the API only.
 
 `build-probe.sh` signs `fuzz-cache/WebdroidFuzzProbe.apk` with `ANDROID_DEBUG_KEYSTORE` (default
@@ -78,13 +78,13 @@ webdroid. Cases and UI actions have 5 s deadlines.
 
 Each webdroid run starts its own dev server and headless Chromium, boots the APK as the e2e launch
 step does and waits for the app's process Worker to draw; screenshots composite the Workers' mirrored
-frames. The server needs a platform build matching the sources (`bun run aot`).
+frames. The server needs a platform build matching the sources (`pnpm aot`).
 
 ## Smoke
 
 ```bash
-bun run fuzz smoke
-bun run fuzz replay fuzz-results/smoke/graphics.failure.json
+pnpm fuzz smoke
+pnpm fuzz replay fuzz-results/smoke/graphics.failure.json
 ```
 
 No emulator: checks deterministic generation and writes injected bundles
@@ -94,9 +94,9 @@ and two-replay retention, not compatibility. Fix a failing smoke first.
 ## Inventory
 
 ```bash
-bun run fuzz inventory --sdk 35 --json fuzz-results/api-35-inventory.json
-bun run fuzz inventory --sdk 35 --no-reached --json fuzz-results/api-35-public.json
-bun run fuzz inventory --sdk 35 --framework fuzz-cache/android-35/framework.jar \
+pnpm fuzz inventory --sdk 35 --json fuzz-results/api-35-inventory.json
+pnpm fuzz inventory --sdk 35 --no-reached --json fuzz-results/api-35-public.json
+pnpm fuzz inventory --sdk 35 --framework fuzz-cache/android-35/framework.jar \
   --json fuzz-results/api-35-inventory.json   # provenance check
 ```
 
@@ -125,9 +125,9 @@ Rank reached gaps by `sites`, confirming runtime reachability first.
 ## API and graphics
 
 ```bash
-bun run fuzz api --seed 1592594996 --cases 1000 --oracle emulator-5554 \
+pnpm fuzz api --seed 1592594996 --cases 1000 --oracle emulator-5554 \
   --out fuzz-results/api-1592594996
-bun run fuzz graphics --seed 1592594996 --cases 1000 --oracle emulator-5554 \
+pnpm fuzz graphics --seed 1592594996 --cases 1000 --oracle emulator-5554 \
   --out fuzz-results/graphics-1592594996
 ```
 
@@ -150,9 +150,9 @@ field, max delta).
 ## UI campaigns
 
 ```bash
-bun run fuzz ui apks/FitNotes.apk apks/calculatorm.apk --seed 1592594996 --steps 100 \
+pnpm fuzz ui apks/FitNotes.apk apks/calculatorm.apk --seed 1592594996 --steps 100 \
   --oracle emulator-5554 --out fuzz-results/ui-1592594996
-bun run fuzz ui FitNotes.apk --seed 1592594996 --steps 100 \
+pnpm fuzz ui FitNotes.apk --seed 1592594996 --steps 100 \
   --out fuzz-results/ui-webdroid-1592594996   # webdroid alone: novelty only
 ```
 
@@ -197,8 +197,8 @@ jq '[.minimized.failure.fingerprint,.reproductions[].failure.fingerprint]' $B   
 U=fuzz-results/ui-1592594996/<bundle>.failure.json
 jq '{actions:.minimized.actions,steps:[.minimized.run.steps[] | {index,structuralDivergence,signals,
   processes:[.diagnostics.processes[]? | {url,status:.diagnostics.status}]}]}' $U
-bun run fuzz replay $B --oracle emulator-5554
-bun run fuzz replay $U --oracle emulator-5554   # UI: oracle optional
+pnpm fuzz replay $B --oracle emulator-5554
+pnpm fuzz replay $U --oracle emulator-5554   # UI: oracle optional
 ```
 
 Replay succeeds only on two fresh reproductions. UI replay uses the stored APK path; if it moved,
@@ -227,7 +227,7 @@ restore the same bytes or record the provenance change.
 - UI action: `UiAction`, `validateUiAction`, generation only when the hierarchy supports it,
   `AndroidUiTarget.act` and `WebdroidUiTarget.act`/`webAction` (never the orchestrator), optional
   `shrinkAction`, selection test.
-- Then `bun run test tests/fuzz.test.ts` (also matches ops to the Java switch), rebuild the probe,
+- Then `pnpm test tests/fuzz.test.ts` (also matches ops to the Java switch), rebuild the probe,
   run a small fixed seed on both platforms.
 
 ## Troubleshooting
@@ -239,7 +239,7 @@ restore the same bytes or record the provenance change.
 | `missing fuzz-cache/WebdroidFuzzProbe.apk` | Run `build-probe.sh`; build-tools need `aapt2`, `d8`, `apksigner` |
 | `avdmanager not on PATH`, missing system image | Fix `PATH`, install the image, rerun setup |
 | `case <id> timed out after 5000ms` | Check probe UI text, logcat, `adb reverse --list`, load, liveness; keep the deadline until the cause is known |
-| `no app drew within 60000ms`, `<pkg> exited before drawing` | Run `bun run aot` if the page logged a 404 for `/aot/current.json`; else read the app's exit |
+| `no app drew within 60000ms`, `<pkg> exited before drawing` | Run `pnpm aot` if the page logged a 404 for `/aot/current.json`; else read the app's exit |
 | `missing process diagnostics`/`telemetry` | Check each snapshot's URL and status; never substitute an empty array |
 | Differences, no bundle | Minimization or two-replay failed, duplicate fingerprint, or 20-cap; rerun a smaller seed; no claim without two reproductions |
 | UI stops with `target absent` | Intended; compare initial trees and screenshots |

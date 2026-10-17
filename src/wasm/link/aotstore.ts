@@ -2,14 +2,15 @@
 // synchronously, the way World needs them, when the code that wants one runs. A page cannot fetch synchronously (a synchronous XMLHttpRequest on the main
 // thread is deprecated and cannot return an arraybuffer), so a module nobody asked for ahead is a miss: its code is compiled on demand (aot.ts), and the module is
 // fetched for the realms that ask later.
-import type { AotStore } from "./aot";
-import { compileStream } from "./module";
+import type { AotStore } from "./aot.ts";
+import { compileStream } from "./module.ts";
 
 /** Requests in flight at once. Chrome fails a request with ERR_INSUFFICIENT_RESOURCES once about 1,600 are pending (fetching the 2,100 files of the build together lost a quarter
  *  of them), and a page reaches its server over a few connections, so more than a few dozen in flight only queue in the network stack. */
 const WIDTH = 16;
 
 export class FetchStore implements AotStore {
+  readonly base: string; readonly remote?: MessagePort;
   private files = new Map<string, WebAssembly.Module | Uint8Array>();
   /** the files to fetch on this thread, next first */
   private queue: string[] = [];
@@ -22,7 +23,8 @@ export class FetchStore implements AotStore {
   /** settles once the modules a start wants are held (or known to be missing): code does not run before, or it compiles what it finds missing on demand */
   ready: Promise<void> = Promise.resolve();
   /** `remote`: another thread's store of the same build, which fetches and compiles for this one (serveStore) */
-  constructor(readonly base: string, readonly remote?: MessagePort) {
+  constructor(base: string, remote?: MessagePort) {
+    this.base = base; this.remote = remote;
     if (remote) remote.onmessage = ({ data }: MessageEvent<{ file: string; module?: WebAssembly.Module }>) => {
       if (data.module) this.put(data.file, data.module); else this.fail(data.file);
     };

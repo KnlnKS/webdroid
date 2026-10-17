@@ -1,4 +1,4 @@
-import { device } from "./config";
+import { device } from "./config.ts";
 
 let measured: Promise<void> | undefined;
 /** The host display's rate, from rAF spacing: skipped frames only lengthen intervals, so the

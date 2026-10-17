@@ -2,16 +2,16 @@
 // whose registered receivers hear it through scheduleRegisteredReceiver and whose manifest
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
-import { awaited, JObj, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall } from "../../jvm/natives/jentry";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable";
-import { notConnected } from "../binder";
-import { PROCESS_UID } from "../os";
-import { appHost } from "../apphost";
-import { checkPermission } from "../permissions";
-import { mkComponentName, withComponent$, type JIntent } from "../intent";
-import { scheduleOnApp, compatInfo, thisApp, pms, GET_SHARED_LIBRARY_FILES } from "./am";
-import { processState, PROCESS_STATE_RECEIVER } from "./atm";
+import { awaited, type JObj, driven, type Gen } from "../../jvm/runtime.ts";
+import { newObj, vcall } from "../../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { notConnected } from "../binder.ts";
+import { PROCESS_UID } from "../os.ts";
+import { appHost } from "../apphost.ts";
+import { checkPermission } from "../permissions.ts";
+import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
+import { scheduleOnApp, compatInfo, thisApp, pms, GET_SHARED_LIBRARY_FILES } from "./am.ts";
+import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */

@@ -5,7 +5,7 @@
 // regions with each frame it presents, read only once the window closes, and the scenario's UI state
 // is checked once afterwards.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--ecores] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
+//   pnpm lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--ecores] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -26,18 +26,20 @@
 // thread: page, Workers, GPU, V8 collections), for chrome://tracing or Perfetto; WEBDROID_TRACE_CATEGORIES (comma-separated) replaces
 // its categories, e.g. disabled-by-default-v8.gc,v8 for a small GC-only trace; each gated pointerup is a `lat:<name>` user-timing mark in it. WEBDROID_JS_FLAGS and WEBDROID_CHROME_ARGS (space-separated)
 // pass V8 flags and Chrome arguments for A/B runs. With --timeline, --json taps carry the Worker's and the page's timelines and the page's long tasks.
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { chromium, webkit, type BrowserContext } from "playwright";
-import { installLatencyObserver } from "./observe";
-import { matchesState, compileDeltas, type Expectation } from "./expect";
-import { consume } from "../args";
+import { installLatencyObserver } from "./observe.ts";
+import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
+import { consume } from "../args.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
 const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
-const SCENARIOS = join(import.meta.dir, "scenarios");
+const SCENARIOS = join(import.meta.dirname, "scenarios");
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
@@ -495,16 +497,18 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     return { context, version: context.browser()!.version(), close: () => context.close() };
   }
   const chromeLog = process.env.WEBDROID_CHROME_LOG;
-  const proc = Bun.spawn([...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
+  const [command, ...argv] = [...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
     ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
-    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"],
-    // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
-    { stdout: chromeLog ? Bun.file(chromeLog) : "ignore", stderr: chromeLog ? Bun.file(chromeLog + ".err") : "ignore" });
+    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
+  // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
+  const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
+  const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });
+  for (const fd of logs) if (typeof fd === "number") closeSync(fd);
   let port = "";
   for (let i = 0; i < 100 && !port; i++) {
-    await Bun.sleep(100);
+    await delay(100);
     try { port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]; } catch { /* not yet */ }
   }
   if (!port) { proc.kill(); throw new Error("Chrome did not open a debugging port"); }
@@ -523,7 +527,9 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
     pending.set(id, (m) => m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result));
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
-  return { send, events, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
+  // the profile is removed after close, so close waits for Chrome's last writes to it
+  const exited = new Promise((r) => proc.once("exit", r));
+  return { send, events, version: (await send("Browser.getVersion")).product, close: async () => { ws.close(); proc.kill(); await exited; } };
 }
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
@@ -571,24 +577,24 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   await send("Page.navigate", { url: url.href }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline && !crashed;) {
-      await Bun.sleep(500);
+      await delay(500);
       const { targetInfo } = await send("Target.getTargetInfo", { targetId });
       if (targetInfo.title !== "DONE") continue;
       for (const [session, label] of profiled) {
         // a Worker that has ended may never answer
-        const stopped = await Promise.race([send("Profiler.stop", {}, session).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]);
-        if (stopped) await Bun.write(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
+        const stopped = await Promise.race([send("Profiler.stop", {}, session).catch(() => undefined), delay(10_000)]);
+        if (stopped) writeFileSync(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
         // the sampled allocations still live at the end, by allocating stack
-        const heap = heapSample && await Promise.race([send("HeapProfiler.getSamplingProfile", {}, session).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]);
-        if (heap) await Bun.write(profile!.replace(/\.cpuprofile$/, `${label ? "-" + label : ""}.heapprofile`), JSON.stringify(heap.profile));
+        const heap = heapSample && await Promise.race([send("HeapProfiler.getSamplingProfile", {}, session).catch(() => undefined), delay(10_000)]);
+        if (heap) writeFileSync(profile!.replace(/\.cpuprofile$/, `${label ? "-" + label : ""}.heapprofile`), JSON.stringify(heap.profile));
       }
       if (trace) await writeTrace(browser, trace);
       const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
       return JSON.parse(read.result.value);
     }
-    const partial = crashed ? undefined : await Promise.race([send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId).catch(() => undefined), Bun.sleep(10_000)]);
+    const partial = crashed ? undefined : await Promise.race([send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId).catch(() => undefined), delay(10_000)]);
     return { ...JSON.parse(partial?.result.value ?? '{"taps":[]}'), error: crashed ? "the page crashed" : "scenario timed out" };
-  } finally { browser.events?.delete(attached); browser.events?.delete(crash); await Promise.race([send("Target.closeTarget", { targetId }).catch(() => {}), Bun.sleep(10_000)]); }
+  } finally { browser.events?.delete(attached); browser.events?.delete(crash); await Promise.race([send("Target.closeTarget", { targetId }).catch(() => {}), delay(10_000)]); }
 }
 
 async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
@@ -596,15 +602,13 @@ async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
     if (m.method === "Tracing.tracingComplete") { browser.events!.delete(on); resolve(m.params.stream); }
   }));
   await browser.send!("Tracing.end");
-  // Bun's file writer does not truncate: an earlier, longer trace would leave its tail behind
-  rmSync(file, { force: true });
-  const handle = await done, out = Bun.file(file).writer();
+  const handle = await done, out = openSync(file, "w");
   for (let eof = false; !eof;) {
     const chunk = await browser.send!("IO.read", { handle, size: 1 << 22 });
-    out.write(chunk.base64Encoded ? Buffer.from(chunk.data, "base64") : chunk.data);
+    writeSync(out, chunk.base64Encoded ? Buffer.from(chunk.data, "base64") : chunk.data);
     eof = chunk.eof;
   }
-  await out.end(); await browser.send!("IO.close", { handle });
+  closeSync(out); await browser.send!("IO.close", { handle });
 }
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */
@@ -626,7 +630,7 @@ async function resetData(browser: BrowserDriver): Promise<void> {
     await globalThis.wd.reset(); document.title = "RESET"; });` }, sessionId);
   await send("Page.navigate", { url: `${BASE}/?screen=${encodeURIComponent(SCREEN)}` }, sessionId);
   try {
-    for (const deadline = Date.now() + 60_000; Date.now() < deadline; await Bun.sleep(200))
+    for (const deadline = Date.now() + 60_000; Date.now() < deadline; await delay(200))
       if ((await send("Target.getTargetInfo", { targetId })).targetInfo.title === "RESET") return;
     throw new Error("reset timed out");
   } finally { await send("Target.closeTarget", { targetId }); }
@@ -698,6 +702,6 @@ for (const name of names) {
     if (profile) rmSync(profile, { recursive: true, force: true });
   }
 }
-if (jsonOut) await Bun.write(jsonOut, JSON.stringify(report, null, 1));
+if (jsonOut) writeFileSync(jsonOut, JSON.stringify(report, null, 1));
 console.log(failed ? `latency gate FAILED: a scenario failed, or a gated tap exceeded ${LIMIT_MS} ms or never responded` : `intended-response observations passed: every gated tap within ${LIMIT_MS} ms`);
 process.exit(failed ? 1 : 0);

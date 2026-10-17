@@ -2,29 +2,28 @@
 // overridable method on `this`, where neither the TS method nor the helpers it calls ever name that
 // method, answers without the app's override. Only methods a corpus app overrides are reported; tests/fixtures/app-overrides.json
 // records those, with how many apps override each, so the check needs no APKs.
-//   bun run bypass [--corpus] [--write-baseline]
+//   pnpm bypass [--corpus] [--write-baseline]
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { globSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { rt } from "../src/jvm/runtime";
-import { ACC } from "../src/jvm/dex";
-import { descToName } from "../src/jvm/abi";
-import type { ClassDef } from "../src/jvm/dex";
-import { prepareMethod } from "../src/jvm/prepared";
-import { PLATFORM_JARS } from "../src/jvm/provenance";
+import { rt } from "../src/jvm/runtime.ts";
+import { ACC } from "../src/jvm/dex.ts";
+import { descToName } from "../src/jvm/abi.ts";
+import type { ClassDef } from "../src/jvm/dex.ts";
+import { prepareMethod } from "../src/jvm/prepared.ts";
 
-import "../src/natives";
-import { jarDexes } from "../src/android/framework";
-import { openDexes } from "./lib";
-import { corpusApks } from "./apk-corpus";
+import "../src/natives.ts";
+import { openDexes } from "./lib.ts";
+import { corpusApks } from "./apk-corpus.ts";
+import { hasPlatformJars, platformDefs } from "./desccheck.ts";
+export { hasPlatformJars };
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
-const root = resolve(import.meta.dir, "..");
+const root = resolve(import.meta.dirname, "..");
 export const OVERRIDES = resolve(root, "tests/fixtures/app-overrides.json");
 export const BASELINE = resolve(root, "tests/fixtures/bypass-baseline.json");
-export const hasPlatformJars = () => PLATFORM_JARS.every((jar) => existsSync(resolve(root, "vendor/aosp", jar)));
 
-const sources = [...new Bun.Glob("src/**/*.ts").scanSync(root)].map((file) => [resolve(root, file), readFileSync(resolve(root, file), "utf8")] as const);
+const sources = globSync("src/**/*.ts", { cwd: root }).sort().map((file) => [resolve(root, file), readFileSync(resolve(root, file), "utf8")] as const);
 /** the file registering a spec, whose helpers a method's source reaches: the one naming it as a
  *  spec, else one quoting its name, else (a name built in a loop) one quoting its simple name */
 function specFile(cls: string): string | undefined {
@@ -35,15 +34,6 @@ function specFile(cls: string): string | undefined {
   }
 }
 
-function platformDefs(): Map<string, ClassDef> {
-  const defs = new Map<string, ClassDef>();
-  for (const jar of PLATFORM_JARS) for (const dex of jarDexes(readFileSync(resolve(root, "vendor/aosp", jar)), jar))
-    for (let i = 0; i < dex.classDefCount; i++) {
-      const name = descToName(dex.type(dex.classDef2Type(i)));
-      if (!defs.has(name)) defs.set(name, dex.classDef(i));
-    }
-  return defs;
-}
 const superOf = (def: ClassDef) => def.superIdx === NO_INDEX ? undefined : descToName(def.dex.type(def.superIdx));
 const signature = (def: ClassDef, methodIdx: number) => def.dex.method(methodIdx).name + def.dex.methodDesc(methodIdx);
 
@@ -168,7 +158,7 @@ export function overrideBypasses(skipped: Map<string, string[]>, overrides: Reco
 }
 
 if (import.meta.main) {
-  if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: bun run gen-framework");
+  if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: pnpm gen-framework");
   const defs = platformDefs(), skipped = selfCallsSkipped(defs);
   if (process.argv.includes("--corpus")) {
     // an override counts at the class that declares the skipped call and every subclass with a spec

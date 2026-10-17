@@ -1,20 +1,20 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm and on the JDK; results must be bit-identical.
-// Run from the repository root: bun run wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
+// Run from the repository root: pnpm wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
 // (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { caseLine, compare, genCases } from "./cases";
-import { mountPlatform, natives } from "./harness";
-import { ACC } from "../../src/wasm/compiler/program";
-import { irreducibleClass } from "./irfuzz";
-import { Irreducible, Flow } from "../../src/jvm/structure";
-import { prepareMethod } from "../../src/jvm/prepared";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
-import { argv } from "../args";
+import { world } from "./lib.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { mountPlatform, natives } from "./harness.ts";
+import { ACC } from "../../src/wasm/compiler/program.ts";
+import { irreducibleClass } from "./irfuzz.ts";
+import { Irreducible, Flow } from "../../src/jvm/structure.ts";
+import { prepareMethod } from "../../src/jvm/prepared.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { argv } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
 const LEAVES = 8;

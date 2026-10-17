@@ -1,12 +1,12 @@
 // Natives that enter Java (File.list0 asks the File for its path): each entry takes a JSPI stack of its own, which the engine frees only when the stack the native runs on waits
-// and refuses past about 1,400. A Java loop of 3,000 File.list() calls in one entry must not end in StackOverflowError. Run: bun run wasm nested
+// and refuses past about 1,400. A Java loop of 3,000 File.list() calls in one entry must not end in StackOverflowError. Run: pnpm wasm nested
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { filesIn, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-nest-")), sh = shellIn(out);
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Nest.java")]);

@@ -1,10 +1,10 @@
-import { NativeBitmap, bitmapOf, bytesPerPixel, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16, RGBA_1010102, memoryOf, setMemory } from "../android/bitmap";
-import { readHeader, decodePixels, grayToAlpha, oriented, alphaType, INCOMPLETE, type ImageHeader } from "../android/decode";
-import type { Cpu } from "./cpu";
-import { deref } from "./jni";
-import { hostLib, stp, type ArgReader } from "./host";
-import { mem } from "./mem";
-import { iof } from "../jvm/natives/jentry";
+import { NativeBitmap, bitmapOf, bytesPerPixel, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16, RGBA_1010102, memoryOf, setMemory } from "../android/bitmap.ts";
+import { readHeader, decodePixels, grayToAlpha, oriented, alphaType, INCOMPLETE, type ImageHeader } from "../android/decode.ts";
+import type { Cpu } from "./cpu.ts";
+import { deref } from "./jni.ts";
+import { hostLib, stp, type ArgReader } from "./host.ts";
+import { mem } from "./mem.ts";
+import { iof } from "../jvm/natives/jentry.ts";
 
 // libjnigraphics' AndroidBitmap_*: the pixels as the bitmap's memory holds them, locked into guest memory
 const locks = new Map<NativeBitmap, { pointer: number; count: number }>();

@@ -2,9 +2,9 @@
 // entry points the platform itself calls, and the two ways an apk names a class in data
 // rather than in bytecode — a manifest attribute and a services file.
 
-import { slashName } from "./abi";
-import type { Program } from "./reach";
-import { parseAXML, attrStr, type XmlNode } from "../android/axml";
+import { slashName } from "./abi.ts";
+import type { Program } from "./reach.ts";
+import { parseAXML, attrStr, type XmlNode } from "../android/axml.ts";
 
 interface Roots {
   classes: string[];              // classes the platform instantiates and calls into

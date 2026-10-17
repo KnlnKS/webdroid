@@ -1,10 +1,10 @@
 // The registry host code shares with the Wasm tier: the native specs and JNI functions the natives modules register, what Java reaches that
 // nothing implements, the class path's resources, and the conversions natives make (strings, thrown JS errors).
 
-import { Strand, suspendWith } from "./suspend";
-import { decodeString } from "./charset";
-import { charsToString, dotName, oomMessage } from "./abi";
-import { isBytecode, isStageD } from "./provenance";
+import { Strand, suspendWith } from "./suspend.ts";
+import { decodeString } from "./charset.ts";
+import { charsToString, dotName, oomMessage } from "./abi.ts";
+import { isBytecode, isStageD } from "./provenance.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
 export class JObj {
@@ -202,7 +202,7 @@ export class Runtime {
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
-      // V8: "Cannot read properties of null"; JavaScriptCore (Bun): "null is not an object"
+      // V8: "Cannot read properties of null"; JavaScriptCore (Safari): "null is not an object"
       if (/null|undefined/.test(m) && /read|call|properties|is not an object/i.test(m)) {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }

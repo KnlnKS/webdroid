@@ -1,20 +1,20 @@
 // Golden pass — the ONLY entry point that touches the emulator.
 //
-//   bun tests/e2e/capture-emulator.ts [flow...]
+//   pnpm e2e --record [flow...]
 //
 // Walks each flow on the API 35 oracle, resolves every text anchor to a concrete normalized
 // coordinate, and writes tests/e2e/golden/<flow>/{NN-id.png, manifest.json}. Run this by hand
-// when the flows change; `bun run e2e --full` then diffs off the committed result with no emulator.
-import { mkdtemp, rename, rm } from "node:fs/promises";
+// when the flows change; `pnpm e2e --full` then diffs off the committed result with no emulator.
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import * as emu from "./drivers/emulator";
-import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
-import { E2E_DIR, sleep } from "./lib/util";
-import { device as profile } from "../../src/shell/config";
+import * as emu from "./drivers/emulator.ts";
+import { parseArgs } from "./lib/args.ts";
+import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types.ts";
+import { E2E_DIR, readJson, sleep } from "./lib/util.ts";
+import { device as profile } from "../../src/shell/config.ts";
 
 const startup = process.argv.includes("--startup");
-const { flows } = parseArgs(process.argv.slice(2).filter((arg) => arg !== "--startup"), "bun run e2e --record");
+const { flows } = parseArgs(process.argv.slice(2).filter((arg) => arg !== "--startup"), "pnpm e2e --record");
 if (startup && (flows.length !== 1 || flows[0]?.clock !== "live"))
   throw new Error("--startup requires one selected live flow");
 
@@ -151,12 +151,12 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
 
     const { png, timedOut } = await emu.settle();
     const file = `${String(i).padStart(2, "0")}-${step.id}.png`;
-    await Bun.write(`${dir}/${file}`, png);
+    await writeFile(`${dir}/${file}`, png);
     // The hierarchy this screen actually had. dumpUi already runs for every tapText step and its
     // nodes were thrown away; the whole point of the golden pass is to keep what the device knew.
     let uiFile: string | undefined;
     try {
-      await Bun.write(`${dir}/${uiFileFor(file)}`, JSON.stringify(await emu.dumpUi()));
+      await writeFile(`${dir}/${uiFileFor(file)}`, JSON.stringify(await emu.dumpUi()));
       uiFile = uiFileFor(file);
     } catch (e) { console.log(`     (no hierarchy: ${(e as Error).message})`); }
     recorded.push({ id: step.id, label: step.label, index: i, file, resolved, bounds, uiFile, settleTimedOut: timedOut, note });
@@ -170,13 +170,13 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
     pinnedClockMs: clockMs,
     device, crop: flow.crop, steps: recorded,
   };
-  await Bun.write(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
+  await writeFile(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
 }
 
 async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
   const dir = `${E2E_DIR}golden/${flow.app}`;
-  if (startup && await Bun.file(`${dir}/manifest.json`).exists()) {
-    const previous: Manifest = await Bun.file(`${dir}/manifest.json`).json();
+  if (startup && existsSync(`${dir}/manifest.json`)) {
+    const previous: Manifest = await readJson(`${dir}/manifest.json`);
     if (previous.depth !== "startup") throw new Error(`${flow.app}: full Android reference already exists`);
   }
   const staged = await mkdtemp(`${dir}.record-`);

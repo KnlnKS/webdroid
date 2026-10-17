@@ -1,4 +1,4 @@
-import { validateGraphicsCommand, type JsonPrimitive, type ProbeArgument, type ProbeCase } from "./model";
+import { validateGraphicsCommand, type JsonPrimitive, type ProbeArgument, type ProbeCase } from "./model.ts";
 
 type Reproduces<T extends ProbeCase = ProbeCase> = (candidate: T) => Promise<boolean>;
 

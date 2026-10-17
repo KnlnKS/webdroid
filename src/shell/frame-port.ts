@@ -2,8 +2,8 @@
 // page thread and its GPU work are not in the frame path. The page hears of each frame shown, with a
 // copy while it mirrors frames for an observer that reads their pixels: the whole frame, or only
 // downscaled crops of the regions it watches, which costs the Worker a small blit instead of a copy.
-import { note, Ev } from "../timeline";
-import { shownFrameAt } from "../android/vsync";
+import { note, Ev } from "../timeline.ts";
+import { shownFrameAt } from "../android/vsync.ts";
 /** screen regions [left,top,right,bottom], each sent scaled to fit `max` px on its long side */
 export type MirrorCrops = {regions:[number,number,number,number][];max:number};
 export type Mirror = boolean | MirrorCrops;

@@ -1,24 +1,24 @@
 // The entry cases through the page's seam: the platform and the fixture loaded through tier.loadDex; its answers are java/E.expected.txt.
-// It is the second half of `bun run wasm entry`, in a process of its own because entry.ts installs a World of its own as the current one.
+// It is the second half of `pnpm wasm entry`, in a process of its own because entry.ts installs a World of its own as the current one.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import "../../src/natives";
-import { loadPlatformJar } from "../../src/android/framework";
-import { BOOT_JAR_PATHS } from "../../src/jvm/bootclasspath";
-import { vfs } from "../../src/shell/vfs";
-import { BytesFile } from "../../src/shell/lazyfile";
-import { dexesIn } from "../../src/jvm/dex";
-import { loadDex, loadTier } from "../../src/jvm/tier";
-import { getDeclared } from "../../src/jvm/runtime";
-import { mountPlatform } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { entryCases, entryDex } from "./entrycases";
-import { recorded, unlike } from "./tools";
-import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
-import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors";
-import { descriptorTransport } from "../../src/native/process-fd";
-import { callProxy, serveCalls } from "../../src/shell/process-port";
-import { writeBufferBytes } from "../../src/jvm/natives/jnio";
+import "../../src/natives.ts";
+import { loadPlatformJar } from "../../src/android/framework.ts";
+import { BOOT_JAR_PATHS } from "../../src/jvm/bootclasspath.ts";
+import { vfs } from "../../src/shell/vfs.ts";
+import { BytesFile } from "../../src/shell/lazyfile.ts";
+import { dexesIn } from "../../src/jvm/dex.ts";
+import { loadDex, loadTier } from "../../src/jvm/tier.ts";
+import { getDeclared } from "../../src/jvm/runtime.ts";
+import { mountPlatform } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { entryCases, entryDex } from "./entrycases.ts";
+import { recorded, unlike } from "./tools.ts";
+import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
+import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
+import { descriptorTransport } from "../../src/native/process-fd.ts";
+import { callProxy, serveCalls } from "../../src/shell/process-port.ts";
+import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
 const expected = recorded(join(JAVA, "E.expected.txt"));
 await mountPlatform(ROOT);

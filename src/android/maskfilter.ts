@@ -1,11 +1,11 @@
 // SkMaskFilter behind android.graphics.MaskFilter and its subclasses, whose Java runs from AOSP
 // bytecode: what a shape's coverage becomes before it is coloured, and Bitmap.extractAlpha's use of it.
 
-import { rt } from "../jvm/runtime";
-import { handle, deref, release } from "./handles";
-import { NativeBitmap, ALPHA_8, PREMUL } from "./bitmap";
-import type { NativePaint } from "./paint";
-import type { Ctx2D } from "./recording";
+import { rt } from "../jvm/runtime.ts";
+import { handle, deref, release } from "./handles.ts";
+import { NativeBitmap, ALPHA_8, PREMUL } from "./bitmap.ts";
+import type { NativePaint } from "./paint.ts";
+import type { Ctx2D } from "./recording.ts";
 
 /** Blur::convertRadiusToSigma */
 const radiusToSigma = (r: number) => (r > 0 ? 0.57735 * r + 0.5 : 0);
@@ -20,7 +20,8 @@ export abstract class NativeMaskFilter {
 }
 /** SkBlurMaskFilter: NORMAL, SOLID, OUTER, INNER */
 export class BlurMask extends NativeMaskFilter {
-  constructor(readonly sigma: number, readonly style: number) { super(); }
+  readonly sigma: number; readonly style: number;
+  constructor(sigma: number, style: number) { super(); this.sigma = sigma; this.style = style; }
   /** SkBlurMask's margin: three box passes, or the Bessel window of a small sigma */
   override border() {
     const sigma = Math.min(this.sigma, 135);
@@ -54,7 +55,8 @@ export class BlurMask extends NativeMaskFilter {
 }
 /** SkTableMaskFilter: each coverage value through a 256-entry table */
 class TableMask extends NativeMaskFilter {
-  constructor(readonly table: Uint8Array) { super(); }
+  readonly table: Uint8Array;
+  constructor(table: Uint8Array) { super(); this.table = table; }
   apply(ctx: Ctx2D, source: CanvasImageSource, x: number, y: number) {
     ctx.drawImage(source, x, y);
     const { width, height } = ctx.canvas, img = ctx.getImageData(0, 0, width, height), d = img.data, t = this.table;
@@ -65,8 +67,9 @@ class TableMask extends NativeMaskFilter {
 /** SkEmbossMaskFilter: the shape lit as a height field its inner blur makes, the lighting
  *  modulating (ambient and diffuse) and adding to (specular) the paint's colour */
 class EmbossMask extends NativeMaskFilter {
+  readonly sigma: number; readonly light: Float64Array; readonly ambient: number; readonly specular: number;
   override readonly colored = true;
-  constructor(readonly sigma: number, readonly light: Float64Array, readonly ambient: number, readonly specular: number) { super(); }
+  constructor(sigma: number, light: Float64Array, ambient: number, specular: number) { super(); this.sigma = sigma; this.light = light; this.ambient = ambient; this.specular = specular; }
   override border() { return Math.ceil(3 * this.sigma); }
   apply(ctx: Ctx2D, source: CanvasImageSource, x: number, y: number, scale: number, color = -16777216) {
     const { width: w, height: h } = ctx.canvas;

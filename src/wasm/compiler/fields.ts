@@ -2,14 +2,14 @@
 // (class id << 12 | index in the class's fields, classes.ts mkField); the host hands out a generated accessor slot per field and operation
 // (unsafe.ts), for static fields as well, so the natives only choose the accessor by the field's type letter. Primitive reads and writes widen
 // as the language does (a getLong of an int field, a setInt of a long field is not allowed), and a receiver, access or final check precedes them.
-import { OP } from "./code";
-import { T } from "./wasmbin";
-import { ACC } from "./program";
-import { Info, fieldId, vtId, classMethod } from "../link/classes";
-import { UInfo } from "../link/unsafe";
-import { rt } from "./rtfns";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
+import { OP } from "./code.ts";
+import { T } from "./wasmbin.ts";
+import { ACC } from "./program.ts";
+import { Info, fieldId, vtId, classMethod } from "../link/classes.ts";
+import { UInfo } from "../link/unsafe.ts";
+import { rt } from "./rtfns.ts";
+import type { Code } from "./code.ts";
+import type { Compiler, Intrinsic } from "./j2w.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
 /** the field letters a value of each type may be assigned to, which is also what a get of each may be read as */

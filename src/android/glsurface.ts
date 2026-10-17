@@ -1,16 +1,16 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { awaited, rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
-import { vcall, JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry";
-import { deref, handle, ownedHandle, release } from "./handles";
-import { uptimeMillis } from "../guest-clock";
-import { gl, tables, untracked } from "./gl";
-import { vsync } from "./vsync";
-import { perf } from "../perf";
-import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
-import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger";
-import { detached } from "../jvm/natives/jthrowable";
+import { awaited, rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
+import { deref, handle, ownedHandle, release } from "./handles.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { gl, tables, untracked } from "./gl.ts";
+import { vsync } from "./vsync.ts";
+import { perf } from "../perf.ts";
+import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current.ts";
+import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
 
 export interface GlSurface {
   width: number;
@@ -124,6 +124,7 @@ const IDENTITY = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
  *  top-row-at-t=0 textures, flipped for applications */
 const FLIP_V = Float32Array.of(1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1);
 export class NativeSurfaceTexture {
+  texName: number; weak: object | null;
   surface: GlSurface = { width: 1, height: 1, present: null, frames: 0, onFrame: () => this.frameAvailable() };
   abandoned = false;
   /** mOpMode == attachedToGL, over texture `texName` in `context` (null until first used: mEglContext) */
@@ -135,7 +136,7 @@ export class NativeSurfaceTexture {
   queued = 0n;
   timestamp = 0n;
   matrix = IDENTITY;
-  constructor(public texName: number, detached: boolean, public weak: object | null) { this.attached = !detached; }
+  constructor(texName: number, detached: boolean, weak: object | null) { this.texName = texName; this.weak = weak; this.attached = !detached; }
   /** JNISurfaceTextureContext::onFrameAvailable: postEventFromNative(weakThiz) */
   frameAvailable(): void {
     const frame = this.surface.present;

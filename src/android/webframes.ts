@@ -1,19 +1,19 @@
 // The WebView's frames: each WebView's page shows in a DOM frame over the display, on a renderer
 // origin, and each subframe the page routes through the app in a renderer frame of its own origin.
 // The page's documents talk to the app over the port their load hands them.
-import type { JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jentry";
-import { device } from "../shell/config";
-import { onMain } from "./mainloop";
-import { runningApp } from "./apphost";
-import { onProcessExit } from "../process-exit";
-import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge";
-import { rendererUrl } from "../shell/webrenderer";
-import { domWebSurface, type WebSurface, type FrameIdentity } from "../shell/web-surface";
-import { webRenderer } from "./webstorage";
-import { releaseFunctor, type Rect } from "./webfunctor";
-import { mkError, mkRequest } from "./webrequests";
-import { srcdoc, webOrigin, type Entry, type SrcEntry } from "./webnavigation";
+import type { JObj } from "../jvm/runtime.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { device } from "../shell/config.ts";
+import { onMain } from "./mainloop.ts";
+import { runningApp } from "./apphost.ts";
+import { onProcessExit } from "../process-exit.ts";
+import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge.ts";
+import { rendererUrl } from "../shell/webrenderer.ts";
+import { domWebSurface, type WebSurface, type FrameIdentity } from "../shell/web-surface.ts";
+import { webRenderer } from "./webstorage.ts";
+import { releaseFunctor, type Rect } from "./webfunctor.ts";
+import { mkError, mkRequest } from "./webrequests.ts";
+import { srcdoc, webOrigin, type Entry, type SrcEntry } from "./webnavigation.ts";
 
 // ── the frame layer (shell-owned)
 let surfaceFactory: (() => WebSurface) | null = null;
@@ -33,9 +33,10 @@ export function setWebLayer(el: HTMLElement) {
 /** a document a WebView's page shows on a renderer origin: its main frame, or a subframe the page
  *  routed there, which talks to the app over `port` */
 export class RendererFrame {
+  readonly sub: boolean; url: string; readonly win: FrameIdentity; readonly port: MessagePort;
   /** the document.cookie last sent, and the page's last write it answers */
   cookies = { ack: 0, sent: "" };
-  constructor(readonly sub: boolean, public url: string, readonly win: FrameIdentity, readonly port: MessagePort) {}
+  constructor(sub: boolean, url: string, win: FrameIdentity, port: MessagePort) { this.sub = sub; this.url = url; this.win = win; this.port = port; }
 }
 /** what a WebView's page holds on the host side, by its frames' windows; it never references the provider itself */
 export interface FrameHold { el: WebSurface | null; remote: WebBridge | null; frames: Map<FrameIdentity, RendererFrame>; functor: number; ends: (() => void)[] }
@@ -88,8 +89,9 @@ export interface FrameOwner {
 }
 /** the subframes a WebView's page loads through the app, by the token in their renderer URL */
 export class Subframes {
+  private readonly owner: FrameOwner;
   private loads = new Map<string, FrameLoad>();
-  constructor(private readonly owner: FrameOwner) {}
+  constructor(owner: FrameOwner) { this.owner = owner; }
   get(token: string) { return this.loads.get(token); }
   clear() { this.loads.clear(); }
   /** Chromium's navigation throttle offers a subframe navigation of any scheme but http(s), about: and

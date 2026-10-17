@@ -1,12 +1,12 @@
-import { hostStub } from "./binder";
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { appHost } from "./apphost";
-import { type JUri, mkUri, uriText, clipUris } from "./net";
-import { PROCESS_UID } from "./os";
-import { newObj, vcall, after } from "../jvm/natives/jentry";
-import { newArrayList } from "../jvm/natives/jcoll";
-import { packages } from "./packages";
-import type { PackageState } from "../shell/packagedata";
+import { hostStub } from "./binder.ts";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { appHost } from "./apphost.ts";
+import { type JUri, mkUri, uriText, clipUris } from "./net.ts";
+import { PROCESS_UID } from "./os.ts";
+import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
+import { newArrayList } from "../jvm/natives/jcoll.ts";
+import { packages } from "./packages.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */

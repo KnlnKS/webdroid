@@ -1,8 +1,8 @@
 // The renderer origin's service worker: a WebView page's requests go through the app's proxy as the
 // WebView's network stack sends them (its user agent, client hints, cookie jar and client), and its
 // apk assets and device fonts come from the app.
-import { webViewBrands } from "./clienthints";
-import type { RendererContext } from "./protocol";
+import { webViewBrands } from "./clienthints.ts";
+import type { RendererContext } from "./protocol.ts";
 
 type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };

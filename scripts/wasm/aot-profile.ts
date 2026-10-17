@@ -1,15 +1,15 @@
 // Profiles every process World through first frames.
 // --classes records called classes with platform code withheld; rebuild AOT to group those classes.
 // Then run without --classes to record startup modules and the methods a zygote warms, and export saved app builds.
-// WEBDROID_URL=http://localhost:4090 bun run wasm aot-profile [--classes] [apk ...]
+// WEBDROID_URL=http://localhost:4090 pnpm wasm aot-profile [--classes] [apk ...]
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { COMPILED_CODE_DIR } from "../../src/shell/hostfs";
+import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { AOT_ROOT } from "./aot-key";
-import { readProcesses } from "../../tests/e2e/lib/processes";
-import type { AotProfile } from "../../src/shell/aot-profile";
+import { AOT_ROOT } from "./aot-key.ts";
+import { readProcesses } from "../../tests/e2e/lib/processes.ts";
+import type { AotProfile } from "../../src/shell/aot-profile.ts";
 
 const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
 const classes = process.argv.includes("--classes");

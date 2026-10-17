@@ -1,8 +1,8 @@
 // The ICU data as ICU4C reads it: items of the common data file, for natives that answer from the
 // data without ICU4J's loaders.
-import { PLATFORM_DATA } from "../bootclasspath";
-import { vfs } from "../../shell/vfs";
-import { readFully } from "../../shell/lazyfile";
+import { PLATFORM_DATA } from "../bootclasspath.ts";
+import { vfs } from "../../shell/vfs.ts";
+import { readFully } from "../../shell/lazyfile.ts";
 
 const ICU_DATA = Object.keys(PLATFORM_DATA).find((path) => path.endsWith(".dat"))!;
 export const icuRead = async (at: number, length: number) => {

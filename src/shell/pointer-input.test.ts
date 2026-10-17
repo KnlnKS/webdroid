@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
-import { attachPointerInput, drainPointers } from "./pointer-input";
+import { expect, test } from "vite-plus/test";
+import { attachPointerInput, drainPointers } from "./pointer-input.ts";
 
 // the DOM pieces the input reads, which node lacks
 class Rect {
-  constructor(readonly left = 0, readonly top = 0, readonly width = 0, readonly height = 0) {}
+  readonly left: number; readonly top: number; readonly width: number; readonly height: number;
+  constructor(left = 0, top = 0, width = 0, height = 0) { this.left = left; this.top = top; this.width = width; this.height = height; }
   get right() { return this.left + this.width; }
   get bottom() { return this.top + this.height; }
 }

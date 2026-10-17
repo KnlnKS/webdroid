@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { ControlledGuestClock } from "../src/guest-clock";
-import { connectClock, serveClock } from "../src/shell/clock-port";
+import { describe, expect, test } from "vite-plus/test";
+import { ControlledGuestClock } from "../src/guest-clock.ts";
+import { connectClock, serveClock } from "../src/shell/clock-port.ts";
 
 describe("ControlledGuestClock", () => {
   test("orders equal deadlines by realm then insertion and honours cancellation", () => {

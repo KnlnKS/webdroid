@@ -1,4 +1,5 @@
-import { validateProbeCase, validateProbeResult, type ProbeCase, type ProbeResult } from "./model";
+import { serve } from "../serve.ts";
+import { validateProbeCase, validateProbeResult, type ProbeCase, type ProbeResult } from "./model.ts";
 
 const CORS = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "content-type" };
 
@@ -8,7 +9,7 @@ export type CaseServer = {
   stop(): void;
 };
 
-export function serveCases(cases: readonly ProbeCase[], port = 0, caseTimeoutMs = 5_000): CaseServer {
+export async function serveCases(cases: readonly ProbeCase[], port = 0, caseTimeoutMs = 5_000): Promise<CaseServer> {
   const queue = cases.map(validateProbeCase);
   const expected = new Map(queue.map((item) => [item.id, item]));
   if (expected.size !== queue.length) throw new Error("case ids must be unique");
@@ -22,8 +23,7 @@ export function serveCases(cases: readonly ProbeCase[], port = 0, caseTimeoutMs 
     timer = setTimeout(() => rejectResults(new Error(`case ${id} timed out after ${caseTimeoutMs}ms`)), caseTimeoutMs);
   };
 
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
+  const server = await serve({
     port,
     async fetch(request) {
       const path = new URL(request.url).pathname;

@@ -1,19 +1,20 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import "../src/natives";
-import { TV } from "../src/android/axml";
-import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry";
-import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
-import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop";
-import { BridgeCalls } from "../src/shell/bridgecalls";
-import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
-import { UNAME } from "../src/shell/device-properties";
-import { binderTransport, importBinder } from "../src/android/binder";
-import { procList, procText, procWrite } from "../src/shell/procfs";
+import { expect, test, describe, beforeAll } from "vite-plus/test";
+import "../src/natives.ts";
+import { TV } from "../src/android/axml.ts";
+import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry.ts";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
+import { bootApp, packageRecord } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
+import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop.ts";
+import { BridgeCalls } from "../src/shell/bridgecalls.ts";
+import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os.ts";
+import { UNAME } from "../src/shell/device-properties.ts";
+import { binderTransport, importBinder } from "../src/android/binder.ts";
+import { procList, procText, procWrite } from "../src/shell/procfs.ts";
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
-    await loadLibcore(); await loadFrameworkJar();
+    await startMainLooper();
     const P = "Landroid/os/Parcel;", parcel = await scall("android/os/Parcel", "obtain", `()${P}`);
     const bundle = await newObj("android/os/Bundle");
     await vcall(bundle, "putString", "(Ljava/lang/String;Ljava/lang/String;)V", "s", "text");
@@ -35,7 +36,7 @@ describe("bundle-parcel", () => {
 
 describe("bitmap-parcel", () => {
   test("a Bitmap survives a Parcel round trip with its flags, geometry and pixels", async () => {
-    await loadLibcore(); await loadFrameworkJar();
+    await startMainLooper();
     const config = await linkInit("android/graphics/Bitmap$Config");
     const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 3, 2, config.static("ARGB_8888"));
     await vcall(b, "setDensity", "(I)V", 320);
@@ -83,7 +84,7 @@ describe("looper", () => {
   });
 
   test("the main looper runs posts in order, a delayed one after its delay, and host jobs between them", async () => {
-    await loadLibcore(); await loadFrameworkJar();
+    await startMainLooper();
     const events: string[] = [];
     const runnable = (name: string) => fnRunnable(() => { events.push(name); });
     const t0 = performance.now();
@@ -101,7 +102,7 @@ describe("looper", () => {
   });
 
   test("a HandlerThread loops on its own thread, with a tid and a /proc task of its own, until it quits", async () => {
-    await loadLibcore(); await loadFrameworkJar();
+    await startMainLooper();
     const thread = await newObj("android/os/HandlerThread", "(Ljava/lang/String;)V", "worker");
     expect(await vcall(thread, "getThreadId", "()I")).toBe(-1);
     await vcall(thread, "start", "()V");
@@ -202,7 +203,6 @@ describe("environment", () => {
 describe("uname", () => {
 
   test("uname reports the reference kernel", async () => {
-    await loadLibcore();
     const uts = await scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
     const field = (name: string) => getDeclared<string>(uts, "android/system/StructUtsname", name);
     expect(field("sysname")).toBe("Linux");
@@ -213,7 +213,6 @@ describe("uname", () => {
 
 describe("procfs", () => {
   test("Java and native-facing procfs expose the current process cmdline", async () => {
-    await loadLibcore();
     setProcessIdentity(2468, 10001);
     setProcessName("com.example.app");
     for (const path of ["/proc/self/cmdline", "/proc/2468/cmdline"]) {

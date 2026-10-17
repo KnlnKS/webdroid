@@ -1,31 +1,25 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
 import type { Page } from "playwright";
-import { androidTool } from "../android-sdk";
-import { openApk } from "../lib";
-import { parseAXML, attrStr } from "../../src/android/axml";
-import { device, type Screen } from "../../src/shell/config";
-import { performAction } from "../../tests/e2e/lib/actions";
-import type { Act } from "../../tests/e2e/lib/probe";
-import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator";
-import type { UiNode } from "../../tests/e2e/types";
-import { matchIdentity, type UiAction } from "./ui-model";
-import { startWebdroid, type WebdroidSession } from "./webdroid-session";
+import { androidTool } from "../android-sdk.ts";
+import { openApk } from "../lib.ts";
+import { parseAXML, attrStr } from "../../src/android/axml.ts";
+import { device, type Screen } from "../../src/shell/config.ts";
+import { performAction } from "../../tests/e2e/lib/actions.ts";
+import type { Act } from "../../tests/e2e/lib/probe.ts";
+import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator.ts";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import { matchIdentity, type UiAction } from "./ui-model.ts";
+import { startWebdroid, type WebdroidSession } from "./webdroid-session.ts";
 
 const STEP_DEADLINE_MS = 5_000;
 export type UiApp = { apk: string; pkg: string; activity: string };
 export type UiSize = { width: number; height: number };
-type CommandResult = { stdout: Buffer; stderr: string };
 type Rotation = { accelerometer: string | null; user: string | null };
 
-async function command(argv: string[]): Promise<CommandResult> {
-  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-  const timer = setTimeout(() => child.kill(), STEP_DEADLINE_MS);
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).arrayBuffer(), new Response(child.stderr).text(), child.exited,
-  ]).finally(() => clearTimeout(timer));
-  if (code !== 0) throw new Error(`${argv.join(" ")} failed (${code}): ${stderr}`);
-  return { stdout: Buffer.from(stdout), stderr };
-}
+type Adb = (...args: string[]) => Promise<Buffer>;
 
 export async function inspectUiApp(apkArg: string): Promise<UiApp> {
   const apk = existsSync(apkArg) ? apkArg : `apks/${apkArg}`;
@@ -49,28 +43,31 @@ function pixels(point: { x: number; y: number }, size: UiSize): [string, string]
 }
 
 export class AndroidUiTarget {
+  private readonly adb: Adb; private readonly app: UiApp; private readonly rotation: Rotation;
   readonly environment: { serial: string; fingerprint: string };
-  private constructor(private readonly adb: (...args: string[]) => Promise<CommandResult>, private readonly app: UiApp,
-    private readonly rotation: Rotation, serial: string, fingerprint: string) {
+  private constructor(adb: Adb, app: UiApp,
+    rotation: Rotation, serial: string, fingerprint: string) {
+    this.adb = adb; this.app = app; this.rotation = rotation;
     this.environment = { serial, fingerprint };
   }
 
-  private static async restoreRotation(adb: (...args: string[]) => Promise<CommandResult>, rotation: Rotation): Promise<void> {
+  private static async restoreRotation(adb: Adb, rotation: Rotation): Promise<void> {
     for (const [name, value] of [["user_rotation", rotation.user], ["accelerometer_rotation", rotation.accelerometer]] as const)
       await adb("shell", "settings", value === null ? "delete" : "put", "system", name, ...(value === null ? [] : [value]));
   }
 
   static async open(serial: string, app: UiApp): Promise<AndroidUiTarget> {
     const adbPath = androidTool("adb");
-    const adb = (...args: string[]) => command([adbPath, "-s", serial, ...args]);
+    const adb: Adb = async (...args) =>
+      (await promisify(execFile)(adbPath, ["-s", serial, ...args], { encoding: "buffer", maxBuffer: 1 << 30, timeout: STEP_DEADLINE_MS })).stdout;
     const [sdk, fingerprint, accelerometer, user] = await Promise.all([
       adb("shell", "getprop", "ro.build.version.sdk"), adb("shell", "getprop", "ro.build.fingerprint"),
       adb("shell", "settings", "get", "system", "accelerometer_rotation"),
       adb("shell", "settings", "get", "system", "user_rotation"),
     ]);
-    if (sdk.stdout.toString().trim() !== "35") throw new Error(`oracle ${serial} is not API 35`);
-    const setting = (result: CommandResult): string | null => {
-      const value = result.stdout.toString().trim();
+    if (sdk.toString().trim() !== "35") throw new Error(`oracle ${serial} is not API 35`);
+    const setting = (result: Buffer): string | null => {
+      const value = result.toString().trim();
       return value === "null" ? null : value;
     };
     const rotation = { accelerometer: setting(accelerometer), user: setting(user) };
@@ -81,7 +78,7 @@ export class AndroidUiTarget {
       await adb("install", "-r", "-t", app.apk);
       await adb("shell", "am", "force-stop", app.pkg);
       await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
-      return new AndroidUiTarget(adb, app, rotation, serial, fingerprint.stdout.toString().trim());
+      return new AndroidUiTarget(adb, app, rotation, serial, fingerprint.toString().trim());
     } catch (error) {
       await AndroidUiTarget.restoreRotation(adb, rotation);
       throw error;
@@ -92,11 +89,11 @@ export class AndroidUiTarget {
 
   async tree(): Promise<UiNode[]> {
     await this.adb("shell", "uiautomator", "dump", "/sdcard/wd-fuzz-ui.xml");
-    return parseUiAutomator((await this.adb("shell", "cat", "/sdcard/wd-fuzz-ui.xml")).stdout.toString());
+    return parseUiAutomator((await this.adb("shell", "cat", "/sdcard/wd-fuzz-ui.xml")).toString());
   }
 
   screenshot(): Promise<Buffer> {
-    return this.adb("exec-out", "screencap", "-p").then((result) => result.stdout);
+    return this.adb("exec-out", "screencap", "-p");
   }
 
   async act(action: UiAction, size: UiSize): Promise<void> {
@@ -109,7 +106,7 @@ export class AndroidUiTarget {
       case "back": await this.adb("shell", "input", "keyevent", "4"); return;
       case "enter": await this.adb("shell", "input", "keyevent", "66"); return;
       case "background":
-        await this.adb("shell", "input", "keyevent", "3"); await Bun.sleep(action.durationMs);
+        await this.adb("shell", "input", "keyevent", "3"); await sleep(action.durationMs);
         await this.adb("shell", "am", "start", "-n", `${this.app.pkg}/${this.app.activity}`); return;
       case "configuration":
         await this.adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
@@ -135,10 +132,12 @@ function webAction(action: UiAction, nodes: readonly UiNode[], size: UiSize): Ac
 }
 
 export class WebdroidUiTarget {
+  private readonly session: WebdroidSession;
   readonly page: Page;
   readonly origin: string;
   readonly errors: string[];
-  private constructor(private readonly session: WebdroidSession) {
+  private constructor(session: WebdroidSession) {
+    this.session = session;
     this.page = session.page; this.origin = session.origin; this.errors = session.errors;
   }
 

@@ -1,10 +1,10 @@
-import { E } from "../native/abi";
+import { E } from "../native/abi.ts";
 import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, S_IFDIR, S_IFIFO, S_IFREG, type OpenFile } from "../native/fs";
-import { isFifo } from "../native/pipe";
-import { vfs, type VfsFile } from "./vfs";
-import { writable } from "./lazyfile";
+  detachFdScope, fdBase, installFile, S_IFDIR, S_IFIFO, S_IFREG, type OpenFile } from "../native/fs.ts";
+import { isFifo } from "../native/pipe.ts";
+import { vfs, type VfsFile } from "./vfs.ts";
+import { writable } from "./lazyfile.ts";
 
 export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "ashmemProtect"; fd: number; prot: number }

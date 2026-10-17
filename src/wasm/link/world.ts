@@ -5,42 +5,40 @@
 //  - A stub calls host.link(slot), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry,
 //    then calls through the slot; every call between modules is `call_indirect slot`, so a compiled method needs no relinking.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
-import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
-import { compileSymbolicSite } from "../compiler/symbolic";
-import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin";
-import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
-import { Cha } from "../compiler/cha";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
-import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w";
-import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
-import { rtfns, type Synth } from "../compiler/rtfns";
-import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
-import { HostClasses } from "./hostclass";
-import { mhInvoke } from "./mhandles";
-import { hostText } from "./members";
-import { ASYNC } from "./inet";
-import { generateProxy, type ProxyDefinition } from "./proxy";
-import { hostObject } from "./annotations";
-import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
-import { hasSignatureConstraints, validateSignatures } from "./signatures";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SCRATCH_BASE, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
-import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
-import { insnLen } from "../../jvm/opcodes";
-import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi";
-import { mid, methodOf } from "../compiler/ids";
-import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
-import { NO_INDEX, type DexFile } from "../../jvm/dex";
-import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
-import type { UnitResult, UpgradeJob } from "./unit";
-import { HotUnits } from "./hotunits";
-import { lexicalFrames } from "../../jvm/stack-format";
+import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
+import { compileSymbolicSite } from "../compiler/symbolic.ts";
+import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type VT, type FunctionType } from "../compiler/wasmbin.ts";
+import { Code, OP } from "../compiler/code.ts";
+import { type Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { Cha } from "../compiler/cha.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
+import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
+import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
+import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
+import { rtfns, type Synth } from "../compiler/rtfns.ts";
+import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes.ts";
+import { HostClasses } from "./hostclass.ts";
+import { mhInvoke } from "./mhandles.ts";
+import { hostText } from "./members.ts";
+import { ASYNC } from "./inet.ts";
+import { generateProxy, type ProxyDefinition } from "./proxy.ts";
+import { hostObject } from "./annotations.ts";
+import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders.ts";
+import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution.ts";
+import { hasSignatureConstraints, validateSignatures } from "./signatures.ts";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SCRATCH_BASE, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc.ts";
+import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { insnLen } from "../../jvm/opcodes.ts";
+import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
+import { mid, methodOf } from "../compiler/ids.ts";
+import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage.ts";
+import { NO_INDEX, type DexFile } from "../../jvm/dex.ts";
+import { compileModule, suspending } from "./module.ts";
+import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot.ts";
+import type { UnitResult, UpgradeJob } from "./unit.ts";
+import { HotUnits } from "./hotunits.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
-let lexicalEnter: ((raw: Function | undefined, get: () => Function) => (s: Strand, ...args: unknown[]) => Promise<unknown>) | undefined;
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -122,6 +120,7 @@ type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
 
 export class World {
+  opts: WorldOptions;
   prog: Program;
   cha: Cha;
   table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
@@ -193,7 +192,8 @@ export class World {
   private refreshing = false;
   hotRefreshes = 0;
 
-  constructor(prog: Program, public opts: WorldOptions) {
+  constructor(prog: Program, opts: WorldOptions) {
+    this.opts = opts;
     this.prog = prog;
     this.natives = opts.natives;
     this.bridge = this.natives.bridge(this);
@@ -212,13 +212,12 @@ export class World {
       gap: (id: number) => { this.lastGap = id; this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
       stubSlot: (at: number) => this.stubSlots[at],
-      linkDue: (slot: number) => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
-      linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))) : (slot: number) => this.linkSlot(slot),
+      linkDue: (slot: number) => +(this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
+      linkWait: suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))),
       sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
-      // without JSPI (Bun) nothing can wait, which the first attempt says
-      block: hasJspi() ? suspending((op: number, obj: object | null, a: number, b: number) => {
+      block: suspending((op: number, obj: object | null, a: number, b: number) => {
         try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
-      }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
+      }),
       hot: (slot: number) => this.upgrade(slot),
       long: (slot: number) => { const s = this.slotAt(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
@@ -252,8 +251,6 @@ export class World {
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
         const frames = this.callerFrames(n + 2), f = frames[n + 1];
-        // JavaScriptCore's stack has no Wasm frame names: that is a missing capability, not a stack that is not n frames deep
-        if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => {
@@ -1078,7 +1075,7 @@ export class World {
   }
   /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
   private outermostWaiting(): number | undefined {
-    if (!this.refused.size || !namesWasmFrames()) return undefined;
+    if (!this.refused.size) return undefined;
     let found: number | undefined;
     for (const name of wasmFrameNames(deepStack().stack ?? "")) {
       const m = methodOf(this.prog, name.replace(/^\$dispatch:/, "").split("#")[0]), slot = m && this.slotOf(m);
@@ -2070,7 +2067,7 @@ export class World {
     const segments = (text: string) => {
       const out: string[][] = [[]];
       for (const row of text.split("\n")) {
-        if (row.includes("at webdroid:callFn (") || row.startsWith("wdWasmCallFn@")) out.push([]);
+        if (row.includes("at webdroid:callFn (")) out.push([]);
         else if (row.includes("wasm-function[")) out[out.length - 1].push(row);
       }
       return out;
@@ -2209,8 +2206,7 @@ export class World {
     let f = this.callFns.get(name);
     if (f) return f;
     const { get, raw, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
-    const enter = lexicalFrames ? (lexicalEnter ??= new Function("raw", "get", "return function wdWasmCallFn(s,...args){return s.call(raw || get(),...args)}") as NonNullable<typeof lexicalEnter>)(raw, get)
-      : raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
+    const enter = raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
       : (s: Strand, ...args: unknown[]) => s.call(get(), ...args);
     Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
     let token = 0;

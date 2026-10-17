@@ -7,21 +7,21 @@
 // app holding WRITE_SETTINGS is not checked against SystemSettingsValidators, which ship in
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
-import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { hexBytes } from "../jvm/abi";
-import { vcall, scall, staticField, newObj, iof, after } from "../jvm/natives/jentry";
-import { logUncaught, detached } from "../jvm/natives/jthrowable";
-import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
-import { unbox } from "../jvm/natives/jbox";
-import { once } from "../jvm/suspend";
-import { callingIdentity, asSystem } from "./binder";
-import { uriParts } from "./net";
-import { packages, type PackageRecord } from "./packages";
-import { notifyContent } from "./server/content";
-import { locationTransport } from "./locationmanager";
-import { holdsPlatformPermission } from "./permissions";
-import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings";
-import { registerSystemProvider, matrixCursor } from "./systemproviders";
+import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime.ts";
+import { hexBytes } from "../jvm/abi.ts";
+import { vcall, scall, staticField, newObj, iof, after } from "../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll.ts";
+import { unbox } from "../jvm/natives/jbox.ts";
+import { once } from "../jvm/suspend.ts";
+import { callingIdentity, asSystem } from "./binder.ts";
+import { uriParts } from "./net.ts";
+import { packages, type PackageRecord } from "./packages.ts";
+import { notifyContent } from "./server/content.ts";
+import { locationTransport } from "./locationmanager.ts";
+import { holdsPlatformPermission } from "./permissions.ts";
+import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings.ts";
+import { registerSystemProvider, matrixCursor } from "./systemproviders.ts";
 
 const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);

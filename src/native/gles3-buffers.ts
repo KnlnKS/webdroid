@@ -2,8 +2,8 @@
 // shadowed until then; WebGL forbids sharing index and vertex storage, so a buffer bound both ways
 // keeps a copy of each.
 
-import { tables as T } from "../android/gl";
-import { g, H, contextState } from "./gles3-state";
+import { tables as T } from "../android/gl.ts";
+import { g, H, contextState } from "./gles3-state.ts";
 
 /** `size`: the data store's bytes as WebGL holds them, -1 when not known; `mirror`: its contents on the
  *  host once a mapping needed them, kept by each write so later mappings read nothing back */

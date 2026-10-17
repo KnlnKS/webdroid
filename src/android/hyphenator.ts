@@ -3,10 +3,10 @@
 // registry of languages, as frameworks/minikin and base have them at android-15.0.0_r1. A
 // language's patterns are read on its first lookup, where the device maps them all at boot.
 
-import { rt, awaited, type Gen } from "../jvm/runtime";
-import { PLATFORM_DATA } from "../jvm/bootclasspath";
-import { vfs } from "../shell/vfs";
-import { uchar } from "../jvm/natives/jicu";
+import { rt, awaited, type Gen } from "../jvm/runtime.ts";
+import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
+import { vfs } from "../shell/vfs.ts";
+import { uchar } from "../jvm/natives/jicu.ts";
 
 /** HyphenationType */
 export const DONT_BREAK = 0, BREAK_AND_INSERT_HYPHEN = 1, BREAK_AND_INSERT_ARMENIAN_HYPHEN = 2, BREAK_AND_INSERT_UCAS_HYPHEN = 4,
@@ -57,10 +57,12 @@ function* arabicType(word: string, at: number): Gen<number> {
 const OTHER = 0, CATALAN = 1, POLISH = 2, SLOVENIAN = 3;
 const MAX_HYPHENATED_SIZE = 64;
 class Hyphenator {
+  private readonly path: string | null; private readonly minPrefix: number; private readonly minSuffix: number;
   private data: Uint8Array | null = null;
   private loading: Promise<void> | null = null;
   private readonly kind: number;
-  constructor(private readonly path: string | null, private readonly minPrefix: number, private readonly minSuffix: number, locale: string) {
+  constructor(path: string | null, minPrefix: number, minSuffix: number, locale: string) {
+    this.path = path; this.minPrefix = minPrefix; this.minSuffix = minSuffix;
     this.kind = locale === "pl" ? POLISH : locale === "ca" ? CATALAN : locale === "sl" ? SLOVENIAN : OTHER;
   }
   /** the patterns in memory, null once they are */

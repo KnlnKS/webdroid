@@ -2,15 +2,16 @@
 // round trips), and how long the page took to start serving each (the Worker's Call to the page's next unmatched Serve, which includes the message
 // hop). Calls the main thread made are split out, since only those hold up a frame. It sizes batching SQLite, caching Settings and moving
 // system_server off the page.
-//   bun scripts/lat/census.ts <run.json> ... [--windows]
-import { brokerMethods } from "../../src/shell/processes";
+//   pnpm ts scripts/lat/census.ts <run.json> ... [--windows]
+import { readFileSync } from "node:fs";
+import { brokerMethods } from "../../src/shell/processes.ts";
 
 const THREAD = 17, CALL = 20, ANSWER = 21, SERVE = 25, MAIN = 1;
 type Mark = [number, number, number];
 const q = (a: number[], p: number) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; };
 const byMethod = new Map<string, { calls: number; windows: Set<string>; trips: number[]; main: number }>(), perWindow: number[] = [], mainPerWindow: number[] = [], waits: number[] = [];
 let windows = 0;
-for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for (const run of JSON.parse(await Bun.file(file).text())) {
+for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for (const run of JSON.parse(readFileSync(file, "utf8"))) {
   const steps = [...run.taps.map((t: any) => ({ name: t.m, worker: t.timeline?.raw, page: t.page?.raw })),
     ...(run.fps ?? []).map((f: any) => ({ name: f.m, worker: f.frames?.raw, page: undefined }))];
   for (const step of steps) {

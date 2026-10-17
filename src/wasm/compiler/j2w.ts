@@ -1,22 +1,22 @@
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi";
-import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin";
-import { Code, OP } from "./code";
-import { ACC, Program, kindOf, type Kind, type MethodInfo } from "./program";
-import { mid } from "./ids";
-import { H, elemKindOf, type ElemKind } from "./consts";
-import { declareSymbolicSites, type SymbolicSite } from "./sites";
-import type { PreparedMethod } from "../../jvm/prepared";
-import type { Typing } from "./infer";
-import { compileMethod } from "./method";
-import type { ClassRt, World } from "../link/world";
-import { rtfns, type Synth } from "./rtfns";
-import type { LinkFailure } from "./linkage";
-import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc";
-import { StructStrings, stringCtor } from "../link/strings";
-import { emitStoreCheck } from "../link/classes";
-import type { NativeBinder } from "../link/hostapi";
+import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
+import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
+import { Code, OP } from "./code.ts";
+import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
+import { mid } from "./ids.ts";
+import { H, elemKindOf, type ElemKind } from "./consts.ts";
+import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
+import type { PreparedMethod } from "../../jvm/prepared.ts";
+import type { Typing } from "./infer.ts";
+import { compileMethod } from "./method.ts";
+import type { ClassRt, World } from "../link/world.ts";
+import { rtfns, type Synth } from "./rtfns.ts";
+import type { LinkFailure } from "./linkage.ts";
+import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched.ts";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc.ts";
+import { StructStrings, stringCtor } from "../link/strings.ts";
+import { emitStoreCheck } from "../link/classes.ts";
+import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 /** how `m` is implemented without its bytecode: an intrinsic, a String constructor (a call site makes the string), or a host import */
@@ -95,6 +95,7 @@ const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", 
 /** the module-local functions of Compiler.local that are the same in every module */
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 export class Compiler implements Base {
+  w: World;
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
@@ -141,7 +142,8 @@ export class Compiler implements Base {
   /** the helpers a first-tier unit shares with others (shareHelpers): those it imports, and those it exports for later units */
   private sharing?: { imports: Map<string, number>; out: [string, FunctionType][] };
   private baseTypes: number;
-  constructor(public w: World) {
+  constructor(w: World) {
+    this.w = w;
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
     this.baseTypes = mb.types.length;

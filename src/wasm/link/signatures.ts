@@ -1,12 +1,12 @@
-import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethods, javaName, type MethodInfo } from "../compiler/program";
-import { symbolicMethod } from "../compiler/linkage";
-import { rt } from "../compiler/rtfns";
-import { T } from "../compiler/wasmbin";
-import { canAccess } from "./classes";
-import { causedThrowable, resolveType } from "./resolution";
-import { emitSave, type Strand } from "./sched";
-import type { World } from "./world";
+import { descToName } from "../../jvm/abi.ts";
+import { ACC, declaredMethods, javaName, type MethodInfo } from "../compiler/program.ts";
+import { symbolicMethod } from "../compiler/linkage.ts";
+import { rt } from "../compiler/rtfns.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { canAccess } from "./classes.ts";
+import { causedThrowable, resolveType } from "./resolution.ts";
+import { emitSave, type Strand } from "./sched.ts";
+import type { World } from "./world.ts";
 
 type Declaration = { cls: string; key: string; flags: number };
 type Pair = [Declaration, Declaration];

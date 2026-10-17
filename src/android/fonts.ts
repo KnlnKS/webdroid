@@ -4,24 +4,24 @@
 // shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
-import { awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
-import { scall, vcall, after, newObj, initClass } from "../jvm/natives/jentry";
-import { mkFd } from "../jvm/natives/jio";
-import { ashmemFd } from "./os";
-import { OS_CONSTANTS } from "./os-constants";
-import { PLATFORM_DATA } from "../jvm/bootclasspath";
-import { FONT_UPDATES } from "./font-updates";
-import { vfs } from "../shell/vfs";
-import { deref, handle } from "./handles";
-import { harfBuzz } from "./harfbuzz";
-import { type FaceMetrics, type FaceInfo, type FvarAxis, faceInfo, faceCount } from "./sfnt";
+import { awaited, declaredField, type Gen, type JObj } from "../jvm/runtime.ts";
+import { scall, vcall, after, newObj, initClass } from "../jvm/natives/jentry.ts";
+import { mkFd } from "../jvm/natives/jio.ts";
+import { ashmemFd } from "./os.ts";
+import { OS_CONSTANTS } from "./os-constants.ts";
+import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
+import { FONT_UPDATES } from "./font-updates.ts";
+import { vfs } from "../shell/vfs.ts";
+import { deref, handle } from "./handles.ts";
+import { harfBuzz } from "./harfbuzz.ts";
+import { type FaceMetrics, type FaceInfo, type FvarAxis, faceInfo, faceCount } from "./sfnt.ts";
 
 /** minikin's FontVariation: an OpenType axis tag and its value */
 export interface Axis { tag: number; value: number }
 // ── font files
 /** A font whose bytes are not in memory yet. Text natives run synchronously over loaded fonts and
  *  throw this to wait for one, then run again (withFonts). */
-export class FontPending { constructor(readonly wait: Promise<unknown>) {} }
+export class FontPending { readonly wait: Promise<unknown>; constructor(wait: Promise<unknown>) { this.wait = wait; } }
 /** `f()`, again once any font it reached has loaded; `f` must have no effect before it reads fonts */
 export function withFonts<T>(f: () => T): T | Promise<T> {
   try { return f(); } catch (e) {
@@ -38,8 +38,9 @@ export function fontNatives<T extends Record<string, (...args: never[]) => unkno
 /** one font file: its bytes in memory, or a reference-build font file (isPlatformFont) read whole on
  *  first use. A platform file is the tab's: its realms share its bytes, and so HarfBuzz's face of it. */
 class FontFile {
+  private data: Uint8Array | null; readonly path: string;
   private loading?: Promise<void>;
-  constructor(private data: Uint8Array | null, readonly path = "") {}
+  constructor(data: Uint8Array | null, path = "") { this.data = data; this.path = path; }
   get bytes(): Uint8Array { return this.data ?? pending(this.load()); }
   load(): Promise<void> {
     return this.loading ??= this.data ? Promise.resolve() : Promise.resolve(vfs.readFile(this.path)).then((b) => {
@@ -111,9 +112,10 @@ let sourceIds = 0;
 /** minikin::Font over its MinikinFontSkia: one face of a font file, the style it is selected by,
  *  and the axes, path and locales it was built with. A clone shares the source id and file. */
 export class NativeFont {
+  readonly file: FontFile; readonly ttcIndex: number; readonly weight: number; readonly italic: boolean; readonly axes: readonly Axis[]; readonly locales: string; readonly sourceId: number;
   private face?: FaceInfo;
-  constructor(readonly file: FontFile, readonly ttcIndex: number, readonly weight: number, readonly italic: boolean,
-    readonly axes: readonly Axis[] = [], readonly locales = "", readonly sourceId = sourceIds++) {}
+  constructor(file: FontFile, ttcIndex: number, weight: number, italic: boolean,
+    axes: readonly Axis[] = [], locales = "", sourceId = sourceIds++) { this.file = file; this.ttcIndex = ttcIndex; this.weight = weight; this.italic = italic; this.axes = axes; this.locales = locales; this.sourceId = sourceId; }
   /** a font over bytes in memory */
   static of(bytes: Uint8Array, ttcIndex: number, weight: number, italic: boolean, axes: readonly Axis[] = [], path = "", locales = ""): NativeFont {
     return new NativeFont(new FontFile(bytes, path), ttcIndex, weight, italic, axes, locales);
@@ -151,7 +153,7 @@ export class NativeFont {
 }
 // A Java Font's pointer is a FontWrapper: every Java Font (FontFamily.getFont, a buffer's clone, a
 // shaped glyph's font) owns its own reference, which its registry releases, to a font others share.
-class FontWrapper { constructor(readonly font: NativeFont) {} }
+class FontWrapper { readonly font: NativeFont; constructor(font: NativeFont) { this.font = font; } }
 export const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
 export const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
 /** minikin's FontFakery bits */
@@ -160,13 +162,15 @@ export const WGHT = 0x77676874, ITAL = 0x6974616c;
 /** minikin's FakedFont: a font, its fakery bits, and the wght/ital values a variable font is set
  *  to in place of faking (-1 where the font has no such axis) */
 export class FakedFont {
-  constructor(readonly font: NativeFont, readonly fakery: number, readonly weight: number, readonly italic: number) {}
+  readonly font: NativeFont; readonly fakery: number; readonly weight: number; readonly italic: number;
+  constructor(font: NativeFont, fakery: number, weight: number, italic: number) { this.font = font; this.fakery = fakery; this.weight = weight; this.italic = italic; }
 }
 
 /** minikin's FontFamily: its fonts, their language tags and variant */
 export class NativeFamily {
+  readonly fonts: readonly NativeFont[]; readonly langTags: string; readonly variant: number;
   private axisTags?: readonly number[];
-  constructor(readonly fonts: readonly NativeFont[], readonly langTags = "", readonly variant = 0) {}
+  constructor(fonts: readonly NativeFont[], langTags = "", variant = 0) { this.fonts = fonts; this.langTags = langTags; this.variant = variant; }
   /** getClosestMatch: the first member scoring lowest, a point per grade of weight and two for the slant */
   closest(weight: number, italic: boolean): NativeFont {
     const grade = Math.trunc(weight / 100);
@@ -202,8 +206,9 @@ function axesOf(a: ArrayLike<object>): Axis[] {
 // ── hwui's Typeface
 /** minikin's FontCollection: families in fallback order */
 export class FontCollection {
+  readonly families: readonly NativeFamily[];
   private axisTags?: readonly number[];
-  constructor(readonly families: readonly NativeFamily[]) {}
+  constructor(families: readonly NativeFamily[]) { this.families = families; }
   /** getSupportedAxes, sorted */
   get supportedAxes(): readonly number[] {
     return this.axisTags ??= [...new Set(this.families.flatMap((f) => f.supportedAxes))].sort((a, b) => a - b);
@@ -212,8 +217,9 @@ export class FontCollection {
 /** hwui's Typeface: a collection, the style the API reports (Typeface.BOLD and ITALIC bits), the
  *  base weight relative styles derive from, and the style its text is drawn in */
 export class NativeTypeface {
-  constructor(readonly collection: FontCollection, readonly baseWeight: number, readonly apiStyle: number,
-    readonly weight: number, readonly italic: boolean) {}
+  readonly collection: FontCollection; readonly baseWeight: number; readonly apiStyle: number; readonly weight: number; readonly italic: boolean;
+  constructor(collection: FontCollection, baseWeight: number, apiStyle: number,
+    weight: number, italic: boolean) { this.collection = collection; this.baseWeight = baseWeight; this.apiStyle = apiStyle; this.weight = weight; this.italic = italic; }
 }
 const BOLD = 1, ITALIC = 2, RESOLVE_BY_FONT_TABLE = -1;
 /** computeMinikinStyle's weight */

@@ -1,11 +1,11 @@
-import { expect, test } from "bun:test";
-import { mainThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { defineHost, ldp, stp } from "./host";
-import { libCalls } from "./calls.testkit";
-import { libcInit, TM, readTs, writeTs } from "./libc";
-import { KLAYOUT, kernelInit } from "./syscall";
-import { mem } from "./mem";
+import { expect, test } from "vite-plus/test";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { defineHost, ldp, stp } from "./host.ts";
+import { libCalls } from "./calls.testkit.ts";
+import { libcInit, TM, readTs, writeTs } from "./libc.ts";
+import { KLAYOUT, kernelInit } from "./syscall.ts";
+import { mem } from "./mem.ts";
 
 test("native time fields preserve signed longs and the process ABI width", async () => {
   const previousZone = process.env.TZ;

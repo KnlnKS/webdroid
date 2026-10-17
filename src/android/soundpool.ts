@@ -1,17 +1,18 @@
 // SoundPool's native half over Web Audio: a decoded AudioBuffer per sample id (null while
 // decoding), and a one-shot source + gain node per stream id.
-import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jentry";
-import { fdInt } from "../jvm/natives/jio";
-import { readFully } from "../shell/lazyfile";
-import { audioContext, setSounding, type AudioData, type AudioGain, type AudioSource } from "./audio-output";
-import { fdSlice, nativePeer, postNativeEvent } from "./media-native";
+import { rt, type JObj } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
+import { readFully } from "../shell/lazyfile.ts";
+import { audioContext, setSounding, type AudioData, type AudioGain, type AudioSource } from "./audio-output.ts";
+import { fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
 
 type Stream = { src: AudioSource; gain: AudioGain; prio: number; rate: number; volume: number };
 /** Web Audio sources cannot pause; a zero playback rate holds the position instead */
 function setRate(s: Stream, rate: number): void { s.src.playbackRate.value = rate; setSounding(s, rate !== 0); }
 class Pool {
-  constructor(readonly owner: JObj, readonly maxStreams: number) {}
+  readonly owner: JObj; readonly maxStreams: number;
+  constructor(owner: JObj, maxStreams: number) { this.owner = owner; this.maxStreams = maxStreams; }
   sounds = new Map<number, AudioData | null>();
   streams = new Map<number, Stream>();
   nextId = 1;

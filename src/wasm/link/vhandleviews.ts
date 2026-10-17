@@ -1,13 +1,13 @@
 // ART mirror/var_handle.cc: view accesses use backing bytes, native byte order and alignment; ByteBuffer checks read-only before bounds.
-import { Code, OP } from "../compiler/code";
-import { emitMemoryScalar, memoryScalarMethod, guestRange } from "./memory";
-import { T } from "../compiler/wasmbin";
-import { kindOf } from "../compiler/program";
-import { emitVarHandleOperation } from "../compiler/poly";
-import { varHandleValues } from "../../jvm/abi";
-import { box, unbox, handleThunk } from "./mhandles";
-import type { World } from "./world";
-import type { Strand } from "./sched";
+import { Code, OP } from "../compiler/code.ts";
+import { emitMemoryScalar, memoryScalarMethod, guestRange } from "./memory.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { kindOf } from "../compiler/program.ts";
+import { emitVarHandleOperation } from "../compiler/poly.ts";
+import { varHandleValues } from "../../jvm/abi.ts";
+import { box, unbox, handleThunk } from "./mhandles.ts";
+import type { World } from "./world.ts";
+import type { Strand } from "./sched.ts";
 
 export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
   const BB = "java/nio/ByteBuffer", array = storage === "java/lang/invoke/ByteArrayViewVarHandle";

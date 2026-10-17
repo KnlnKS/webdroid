@@ -1,7 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { setA64, type Cpu } from "./cpu";
-import { runCases, RET } from "./a64.testkit";
-import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { setA64, type Cpu } from "./cpu.ts";
+import { runCases, RET } from "./a64.testkit.ts";
+import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases.ts";
 
 // The emitter against a real AArch64 core: scripts/simd-oracle.ts ran every instruction in
 // a64simd.oracle.cases.ts on this Mac and recorded v0-v3, x2-x5 and NZCV afterwards. Results
@@ -10,7 +12,7 @@ import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
 
-const fixture = Bun.gunzipSync(new Uint8Array(await Bun.file(new URL("./fixtures/a64simd.bin.gz", import.meta.url)).arrayBuffer()));
+const fixture = gunzipSync(readFileSync(new URL("./fixtures/a64simd.bin.gz", import.meta.url)));
 const dv = new DataView(fixture.buffer, fixture.byteOffset, fixture.byteLength);
 const count = dv.getUint32(4, true), cases = dv.getUint32(8, true);
 

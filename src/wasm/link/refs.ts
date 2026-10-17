@@ -1,9 +1,9 @@
 // java.lang.ref.Reference's natives, which ART implements with its collector. A weak or soft reference may stay uncleared for as long as
 // its referent is reachable from anywhere, and this heap is the engine's: a reference holds its referent until the program clears it, and
 // nothing is ever enqueued by the collector.
-import type { Code } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { Code } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 
 const REFERENCE = "java/lang/ref/Reference", FINALIZER = "java/lang/ref/FinalizerReference";
 const field = (cx: Compiler, name: string, desc: string) => ({ st: cx.structFor(REFERENCE), at: cx.fieldIndex(REFERENCE, { owner: REFERENCE, name, desc }) });

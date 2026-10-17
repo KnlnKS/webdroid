@@ -1,29 +1,29 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
-// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
+// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: pnpm wasm customdiff
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { loadDexes, program, world } from "./lib";
-import { ACC, Program } from "../../src/wasm/compiler/program";
-import type { World } from "../../src/wasm/link/world";
-import { caseLine, compare, genCases } from "./cases";
-import { Pool, u2, u4 } from "./classfile";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
-import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
-import { bootstrapReferences } from "../../src/wasm/link/callsites";
-import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory";
-import { mem } from "../../src/native/mem";
-import { defaultLoop } from "../../src/wasm/link/sched";
-import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe";
-import { decodeInstructions } from "../../src/jvm/prepared";
-import { BytesFile } from "../../src/shell/lazyfile";
-import { vfs } from "../../src/shell/vfs";
-import { definingLoader } from "../../src/wasm/link/loaders";
-import { idOfClass } from "../../src/wasm/link/classes";
-import { definitionReady } from "../../src/wasm/link/resolution";
-import { androidPlatform } from "../android-sdk";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { loadDexes, program, world } from "./lib.ts";
+import { ACC, Program } from "../../src/wasm/compiler/program.ts";
+import type { World } from "../../src/wasm/link/world.ts";
+import { caseLine, compare, genCases } from "./cases.ts";
+import { Pool, u2, u4 } from "./classfile.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles.ts";
+import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
+import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
+import { mem } from "../../src/native/mem.ts";
+import { hostLoop } from "../../src/wasm/host/boot.ts";
+import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe.ts";
+import { decodeInstructions } from "../../src/jvm/prepared.ts";
+import { BytesFile } from "../../src/shell/lazyfile.ts";
+import { vfs } from "../../src/shell/vfs.ts";
+import { definingLoader } from "../../src/wasm/link/loaders.ts";
+import { idOfClass } from "../../src/wasm/link/classes.ts";
+import { definitionReady } from "../../src/wasm/link/resolution.ts";
+import { androidPlatform } from "../android-sdk.ts";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
@@ -159,9 +159,9 @@ const dex = join(out, "classes.dex"), jars = CORE_PATHS;
 await mountPlatform(ROOT);
 
 let forceAdmission = false, admissionTurns = 0;
-const loop = { ...defaultLoop, due: () => (forceAdmission && admissionTurns < 32) || defaultLoop.due(), yield: (soon: boolean) => {
+const loop = { ...hostLoop, due: () => (forceAdmission && admissionTurns < 32) || hostLoop.due(), yield: (soon: boolean) => {
   if (forceAdmission && admissionTurns < 32) admissionTurns++;
-  return defaultLoop.yield(soon);
+  return hostLoop.yield(soon);
 } };
 const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
 const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m => decodeInstructions(m.dex.code(m.codeOff).insns));
@@ -210,7 +210,7 @@ const assertEagerFieldAccessors = (tier: typeof w) => {
   const info = tier.host.info;
   tier.host.info = (kind: number, a: number, b: number) => {
     const slot = info(kind, a, b);
-    if ([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut].includes(kind) && slot) {
+    if (([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut] as number[]).includes(kind) && slot) {
       const state = tier.slotAt(slot);
       if (state?.k !== "synth" || !state.done) throw new Error("field accessor still needs lazy admission");
     }

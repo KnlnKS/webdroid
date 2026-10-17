@@ -3,22 +3,22 @@
 // before the queue (ViewRootImpl arms its BLAST sync there), the commit and complete callbacks
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall, scall, callOn, JThread } from "../jvm/natives/jentry";
-import { handle, deref, release, refBaseHandle } from "./handles";
-import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
-import { textureLayerNatives } from "./texturelayer";
-import { animateRenderThread } from "./rtanimator";
-import { nativeSurface, surfaceBuffer, queueBuffer } from "./surfaceflinger";
-import { onNextVsync, frameDrawn } from "./vsync";
-import { mkPfd } from "./os";
-import { uptimeMillis } from "../guest-clock";
-import { perf } from "../perf";
-import { resetDrawn } from "./webfunctor";
-import type { NativeBitmap } from "./bitmap";
-import { hostStub } from "./binder";
-import { detached } from "../jvm/natives/jthrowable";
-import { note, Ev } from "../timeline";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { vcall, scall, callOn, JThread } from "../jvm/natives/jentry.ts";
+import { handle, deref, release, refBaseHandle } from "./handles.ts";
+import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode.ts";
+import { textureLayerNatives } from "./texturelayer.ts";
+import { animateRenderThread } from "./rtanimator.ts";
+import { nativeSurface, surfaceBuffer, queueBuffer } from "./surfaceflinger.ts";
+import { onNextVsync, frameDrawn } from "./vsync.ts";
+import { mkPfd } from "./os.ts";
+import { uptimeMillis } from "../guest-clock.ts";
+import { perf } from "../perf.ts";
+import { resetDrawn } from "./webfunctor.ts";
+import type { NativeBitmap } from "./bitmap.ts";
+import { hostStub } from "./binder.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
+import { note, Ev } from "../timeline.ts";
 
 const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 

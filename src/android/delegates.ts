@@ -8,34 +8,34 @@
 // The `long` a framework class holds in mNativePtr is a handle (handles.ts): framework Java owns
 // the handle, we own the object.
 //
-// Nothing in this file is written from a list. `bun run fwtest` runs the real bytecode with
+// Nothing in this file is written from a list. `pnpm fwtest` runs the real bytecode with
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
-import { startMainLooper } from "./mainloop";
-import { rt, noops, declaredField, type Gen } from "../jvm/runtime";
-import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles";
-import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
-import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
-import { RuntimeShaderBuilder } from "./runtime-shader";
-import { paintAt, preloadPaint, setFontMetrics } from "./paint";
-import { initDeviceLocales } from "./resnative";
-import { NativeCanvas, drawingCanvas } from "./canvas";
-import { glyphBounds } from "./shaping";
-import { NativeBitmap, colorLongAt } from "./bitmap";
-import { vcall, scall, after, callOn, mainThread, initClass, linkClass } from "../jvm/natives/jentry";
-import { asZygote } from "./os";
-import { hasProperty, propertyValue as propValue } from "../shell/properties";
-import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";
-import { NativeRegion, nativeRegionOf } from "./region";
-import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
-import { type JBuffer, readOnlyBuffer, addressOf, isExternal, readBufferBytes, writeBufferBytes } from "../jvm/natives/jnio";
+import { startMainLooper } from "./mainloop.ts";
+import { rt, noops, declaredField, type Gen } from "../jvm/runtime.ts";
+import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles.ts";
+import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics.ts";
+import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix.ts";
+import { RuntimeShaderBuilder } from "./runtime-shader.ts";
+import { paintAt, preloadPaint, setFontMetrics } from "./paint.ts";
+import { initDeviceLocales } from "./resnative.ts";
+import { NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { glyphBounds } from "./shaping.ts";
+import { type NativeBitmap, colorLongAt } from "./bitmap.ts";
+import { vcall, scall, after, callOn, mainThread, initClass, linkClass } from "../jvm/natives/jentry.ts";
+import { asZygote } from "./os.ts";
+import { hasProperty, propertyValue as propValue } from "../shell/properties.ts";
+import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path.ts";
+import { NativeRegion, nativeRegionOf } from "./region.ts";
+import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording.ts";
+import { type JBuffer, readOnlyBuffer, addressOf, isExternal, readBufferBytes, writeBufferBytes } from "../jvm/natives/jnio.ts";
 import {
-  type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont,
+  type Axis, NativeFont, NativeFamily, type NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont,
   resolveDefault, setDefaultTypeface, preloadFonts, withFonts, writeTypefaces, readTypefaces,
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
-} from "./fonts";
-import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt";
+} from "./fonts.ts";
+import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt.ts";
 
 const delegate = rt.registerJnis.bind(rt);
 

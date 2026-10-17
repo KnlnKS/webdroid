@@ -2,8 +2,8 @@
 // is a DOM frame over the display, so drawing a functor notes where it would draw — its view's
 // bounds under the frame's transform, clipped — on the buffer being drawn. The display places each
 // functor where the buffer it was drawn on composes, and hides the ones no composed buffer drew.
-import { transformOf, type Ctx2D, type Mat2D } from "./recording";
-import { deviceBounds } from "./matrix";
+import { transformOf, type Ctx2D, type Mat2D } from "./recording.ts";
+import { deviceBounds } from "./matrix.ts";
 
 export type Rect = [number, number, number, number];
 interface Functor {

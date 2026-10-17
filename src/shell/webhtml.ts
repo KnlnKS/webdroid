@@ -1,5 +1,5 @@
-import { WEB_INJECT } from "./webinject";
-import { webScript } from "./webscript";
+import { WEB_INJECT } from "./webinject.ts";
+import { webScript } from "./webscript.ts";
 
 export const htmlAttribute = (value: string) => value.replace(/[&"<]/g, c => c === "&" ? "&amp;" : c === '"' ? "&quot;" : "&lt;");
 

@@ -1,10 +1,10 @@
 // What ART throws at a use site whose class or member does not resolve (ClassLinker::ResolveType, ResolveField, ResolveMethodWithChecks and
 // common_throws.cc): NoClassDefFoundError, NoSuchFieldError, NoSuchMethodError and IncompatibleClassChangeError, with ART's messages. These are
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
-import type { DexFile } from "../../jvm/dex";
-import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
-import type { Thrower } from "../link/exc";
+import type { DexFile } from "../../jvm/dex.ts";
+import { descToName } from "../../jvm/abi.ts";
+import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
+import type { Thrower } from "../link/exc.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;

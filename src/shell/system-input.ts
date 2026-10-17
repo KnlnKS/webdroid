@@ -1,5 +1,5 @@
-import { inputWindowRegions, watchInputWindows, hasFocusedWindow } from "../android/server/wm";
-import { onProcessExit } from "../process-exit";
+import { inputWindowRegions, watchInputWindows, hasFocusedWindow } from "../android/server/wm.ts";
+import { onProcessExit } from "../process-exit.ts";
 
 /** Transparent hit regions keep nonmodal windows from intercepting the app/WebView underneath. */
 export function systemInputLayer(canvas: HTMLCanvasElement, geometry: () => { width: number; height: number }) {

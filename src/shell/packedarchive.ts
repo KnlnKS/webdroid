@@ -1,6 +1,6 @@
-import { zipTree } from "../jvm/natives/jzip";
-import type { FileSource } from "./lazyfile";
-import { isDexEntry } from "../jvm/dex";
+import { zipTree } from "../jvm/natives/jzip.ts";
+import type { FileSource } from "./lazyfile.ts";
+import { isDexEntry } from "../jvm/dex.ts";
 
 type PackedFile = { file: string; size: number; sha256: string };
 export type PackedArchiveIndex = {
@@ -32,6 +32,7 @@ export async function systemPackage(spec: { file: string; sha256: string; indexS
 }
 export const SYSTEM_PACKAGE_BASE = "/vendor/microg/";
 export class PackedArchive implements FileSource {
+  readonly index: PackedArchiveIndex; readonly base: string;
   readonly size: number;
   readonly zip: Record<string, Uint8Array> = {};
   private pending = new Map<string, Promise<Uint8Array>>();
@@ -39,7 +40,7 @@ export class PackedArchive implements FileSource {
   private rawPending = new Map<string, Promise<Uint8Array>>();
   private resident = 0;
 
-  constructor(readonly index: PackedArchiveIndex, readonly base: string) { this.size = index.size; }
+  constructor(index: PackedArchiveIndex, base: string) { this.index = index; this.base = base; this.size = index.size; }
   async prepare(code = false): Promise<void> {
     const bootstrap = await this.file(this.index.bootstrap);
     zipTree(bootstrap, this.zip);

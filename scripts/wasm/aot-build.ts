@@ -1,28 +1,28 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
+//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
 // Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
 // and a page fetches and compiles what a start needs, so no module should be much larger than that.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { loadDexes, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
-import { externs } from "../../src/wasm/link/intrinsics";
-import { natives } from "./harness";
-import { rt } from "../../src/jvm/runtime";
-import { hostNatives } from "../../src/wasm/host/hostnatives";
-import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
-import { waitingNatives } from "../../src/wasm/host/nativesource";
-import { Compiler } from "../../src/wasm/compiler/j2w";
-import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
-import { synthModules } from "../../src/wasm/link/apps";
-import type { MethodInfo } from "../../src/wasm/compiler/program";
-import { compileModule } from "../../src/wasm/link/module";
-import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
-import { PLATFORM_PATHS } from "./paths";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { loadDexes, world } from "./lib.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { natives } from "./harness.ts";
+import { rt } from "../../src/jvm/runtime.ts";
+import { hostNatives } from "../../src/wasm/host/hostnatives.ts";
+import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend.ts";
+import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
+import { Compiler } from "../../src/wasm/compiler/j2w.ts";
+import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
+import { synthModules } from "../../src/wasm/link/apps.ts";
+import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { AOT_ROOT, buildKey, sourceKey } from "./aot-key.ts";
+import { PLATFORM_PATHS } from "./paths.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];

@@ -1,6 +1,6 @@
 import { CookieJar, Cookie, getPublicSuffix } from "tough-cookie";
-import { storedPackages } from "../android/packages";
-import type { DocumentCookie } from "./webpage/protocol";
+import { storedPackages } from "../android/packages.ts";
+import type { DocumentCookie } from "./webpage/protocol.ts";
 
 const KEY = "wd:web-cookies:";
 

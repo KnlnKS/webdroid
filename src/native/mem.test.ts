@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { setA64 } from "./cpu";
-import { core, CORE_LIBC } from "./core";
-import { mem } from "./mem";
+import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+import { setA64 } from "./cpu.ts";
+import { core, CORE_LIBC } from "./core.ts";
+import { mem } from "./mem.ts";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));

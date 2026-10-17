@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { sampleError } from "../scripts/wasm/g1report";
+import { expect, test } from "vite-plus/test";
+import { sampleError } from "../scripts/wasm/g1report.ts";
 
 test("G1 rejects partial, errored, mismatched and unusable samples", () => {
   const full = { result: "42", completedCalls: 101, first: 2, steady: 1 };

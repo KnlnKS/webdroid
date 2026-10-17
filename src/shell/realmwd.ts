@@ -1,17 +1,17 @@
 // The harness surface (`wd`, tests/e2e/drivers/webdroid.ts) every process realm has: its app, its
 // diagnostics, and its own windows, frames and touches. The page's `wd` adds the process Workers
 // the broker shows beneath its system windows.
-import { rt } from "../jvm/runtime";
-import { appHost } from "../android/apphost";
-import { perf } from "../perf";
-import { mainDbg, onMain } from "../android/mainloop";
-import { guestClockControl, guestSleep } from "../guest-clock";
-import { nativeRequirements } from "./diagnostics";
-import { native } from "../native/debug";
-import { processExited } from "../process-exit";
-import { dumpWindows } from "./uiautomator";
-import { dispatchPointer, testFrame } from "./device";
-import { processPresentation } from "./process-endpoint";
+import { rt } from "../jvm/runtime.ts";
+import { appHost } from "../android/apphost.ts";
+import { perf } from "../perf.ts";
+import { mainDbg, onMain } from "../android/mainloop.ts";
+import { guestClockControl, guestSleep } from "../guest-clock.ts";
+import { nativeRequirements } from "./diagnostics.ts";
+import { native } from "../native/debug.ts";
+import { processExited } from "../process-exit.ts";
+import { dumpWindows } from "./uiautomator.ts";
+import { dispatchPointer, testFrame } from "./device.ts";
+import { processPresentation } from "./process-endpoint.ts";
 
 export type RealmWd = ReturnType<typeof realmWd>;
 export function realmWd() {

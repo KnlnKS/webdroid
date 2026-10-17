@@ -1,27 +1,25 @@
-import { mkdir, readdir, rename } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { gzipSync, zipSync } from "fflate";
-import { centralDir, entryBytes } from "../src/jvm/natives/jzip";
-import { parsePackageArchive } from "../src/android/packagearchive";
-import { verifyApkSignature } from "../src/android/apksignature";
-import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages";
-import type { PackedArchiveIndex } from "../src/shell/packedarchive";
-import { isDexEntry } from "../src/jvm/dex";
+import { centralDir, entryBytes } from "../src/jvm/natives/jzip.ts";
+import { parsePackageArchive } from "../src/android/packagearchive.ts";
+import { verifyApkSignature } from "../src/android/apksignature.ts";
+import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages.ts";
+import type { PackedArchiveIndex } from "../src/shell/packedarchive.ts";
+import { isDexEntry } from "../src/jvm/dex.ts";
+import { writeWhole } from "./generated.ts";
 
-const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-async function writeFile(path: string, data: Uint8Array | string): Promise<void> {
-  const temporary = path + "." + crypto.randomUUID() + ".tmp";
-  await Bun.write(temporary, data);
-  await rename(temporary, path);
-}
+const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 async function packArchive(bytes: Uint8Array, directory: string): Promise<PackedArchiveIndex> {
   await verifyApkSignature(bytes);
   const archive = await parsePackageArchive(bytes), entries = centralDir(bytes);
   await mkdir(directory, { recursive: true });
   const write = async (data: Uint8Array, extension: string): Promise<string> => {
     const file = hash(data) + extension;
-    if (!await Bun.file(join(directory, file)).exists()) await writeFile(join(directory, file), data);
+    if (!existsSync(join(directory, file))) writeWhole(join(directory, file), data);
     return file;
   };
   const index: PackedArchiveIndex = { version: 1, pkg: archive.pkg, sha256: hash(bytes), size: bytes.length,
@@ -67,26 +65,25 @@ export async function prepareSystemPackages(
   for (const spec of SYSTEM_PACKAGES) {
     const file = spec.file.replace(/\.apk$/, ".json"), target = join(directory, file);
     if (files.has(file)) {
-      const bytes = new Uint8Array(await Bun.file(target).arrayBuffer());
+      const bytes = new Uint8Array(await readFile(target));
       if (hash(bytes) === spec.indexSha256) {
         const index: PackedArchiveIndex = JSON.parse(new TextDecoder().decode(bytes));
         if (files.has(index.bootstrap.file) && Object.values(index.entries).every((e) => files.has(e.file)) && index.spans.every((s) => files.has(s[2]))) continue;
       }
     }
-    const cached = Bun.file(join(source, spec.file));
-    let bytes = await cached.exists() ? new Uint8Array(await cached.arrayBuffer()) : null;
+    const cached = join(source, spec.file);
+    let bytes = existsSync(cached) ? new Uint8Array(await readFile(cached)) : null;
     if (!bytes || hash(bytes) !== spec.sha256) {
       const response = await fetch(SYSTEM_PACKAGE_RELEASE + spec.file);
       if (!response.ok) throw new Error(`System package download failed: ${spec.file}: ${response.status}`);
       bytes = new Uint8Array(await response.arrayBuffer());
       if (hash(bytes) !== spec.sha256) throw new Error("System package digest mismatch: " + spec.file);
       await mkdir(source, { recursive: true });
-      await writeFile(cached.name!, bytes);
+      writeWhole(cached, bytes);
     }
-    if (hash(bytes) !== spec.sha256) throw new Error("System package digest mismatch: " + spec.file);
     const index = await packArchive(bytes, directory), json = JSON.stringify(index), digest = hash(new TextEncoder().encode(json));
     if (digest !== spec.indexSha256) throw new Error(`Generated system package index differs from pinned output: ${spec.file} (${digest})`);
-    await writeFile(target, json);
+    writeWhole(target, json);
     console.log("[system packages] prepared", spec.pkg);
   }
 }

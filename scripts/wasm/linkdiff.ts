@@ -1,13 +1,13 @@
 // Unresolved references (java/lk): a class or member the dex names that the running program lacks must fail at its use site with the error and
 // message ART gives, and execution up to it must be unaffected. The error class is compared with the JDK; the messages are ART's (class_linker.cc,
-// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: bun run wasm linkdiff
+// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: pnpm wasm linkdiff
 import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDexes, world } from "./lib";
-import { mountPlatform, natives, startProcess } from "./harness";
-import { CORE_PATHS, JAVA, ROOT } from "./paths";
-import { filesIn, onJdk, shellIn } from "./tools";
+import { loadDexes, world } from "./lib.ts";
+import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { filesIn, onJdk, shellIn } from "./tools.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-lk-")), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const sh = shellIn(out);

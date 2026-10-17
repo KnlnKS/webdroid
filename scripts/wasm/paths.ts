@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 
-export const ROOT = join(import.meta.dir, "../..");
+export const ROOT = join(import.meta.dirname, "../..");
 export const AOSP = join(ROOT, "vendor/aosp");
 /** every platform jar in the checkout, in class path order */
 export const PLATFORM_PATHS: string[] = PLATFORM_JARS.map((j) => join(AOSP, j));

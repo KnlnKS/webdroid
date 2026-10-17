@@ -1,6 +1,6 @@
 // The renderer origins a WebView's pages render on, apart from this page's window and storage, and
 // the documents the app drives there.
-import type { RendererReady, RendererTask, StorageOp } from "./webpage/protocol";
+import type { RendererReady, RendererTask, StorageOp } from "./webpage/protocol.ts";
 
 /** the renderer origin pattern: a "*" label stands for each storage partition */
 let rendererTemplate: Promise<string> | null = null;

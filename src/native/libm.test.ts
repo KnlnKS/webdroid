@@ -1,8 +1,8 @@
-import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jentry";
-import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
-import { libmInit } from "./libm";
+import { expect, test } from "vite-plus/test";
+import { JThread } from "../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "./cpu.ts";
+import { lookupHost } from "./host.ts";
+import { libmInit } from "./libm.ts";
 
 test("nextafter crosses zero, signed zero and infinity at double precision", async () => {
   setA64(false); libmInit();

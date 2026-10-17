@@ -1,24 +1,25 @@
 // What a class's dex says about its members: java.lang.Class's simple name and nesting, the declared methods and constructors as Method and Constructor
 // arrays, and which annotations a class, method or field carries (art/runtime/native/java_lang_Class.cc, dex_file_annotations.cc). The members of a
 // class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = class id << 12 | index in its fields.
-import { OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import { ACC, javaName, type JClass } from "../compiler/program";
-import { descToName } from "../../jvm/abi";
-import { idOfClass, fieldId, typeName, PRIM } from "./classes";
-import { rt } from "../compiler/rtfns";
-import { executableSlot, methodAt } from "./reflect";
-import type { EncAnnotation } from "../../jvm/dex";
-import type { Code } from "../compiler/code";
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { World } from "./world";
+import { OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { ACC, javaName, type JClass } from "../compiler/program.ts";
+import { descToName } from "../../jvm/abi.ts";
+import { idOfClass, fieldId, typeName, PRIM } from "./classes.ts";
+import { rt } from "../compiler/rtfns.ts";
+import { executableSlot, methodAt } from "./reflect.ts";
+import type { EncAnnotation } from "../../jvm/dex.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { World } from "./world.ts";
 
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 
-export const enum MInfo { ExecCount = 300, ExecAt, ClassAnn, ExecAnn, FieldAnn, IsRecord, DeclaringClass, EnclosingClass, EnclosingIndex, CompareParams, ThrowsCount, ThrowsAt, EnclosingOwner, IsAnonymous }
-const enum TextKind { SimpleName }
+export const MInfo = { ExecCount: 300, ExecAt: 301, ClassAnn: 302, ExecAnn: 303, FieldAnn: 304, IsRecord: 305, DeclaringClass: 306, EnclosingClass: 307, EnclosingIndex: 308, CompareParams: 309, ThrowsCount: 310, ThrowsAt: 311, EnclosingOwner: 312, IsAnonymous: 313 } as const;
+export type MInfo = (typeof MInfo)[keyof typeof MInfo];
+const TextKind = { SimpleName: 0 } as const;
 
 const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
@@ -28,9 +29,9 @@ const present = (set: EncAnnotation[] | undefined, type: string) => visible(set)
 /** the executables of a class the host last counted for `ExecAt` */
 let listed: number[] = [];
 
-export function hostMembers(w: World, kind: MInfo, a: number, b: number): number {
+export function hostMembers(w: World, kind: number, a: number, b: number): number {
   const cls = (id: number) => w.prog.get(w.nameOf(id));
-  switch (kind) {
+  switch (kind as MInfo) {
     case MInfo.ExecCount: {
       const ctor = b & 1, publicOnly = b & 2;
       listed = [];
@@ -81,7 +82,7 @@ export function hostMembers(w: World, kind: MInfo, a: number, b: number): number
 }
 
 /** the strings the host answers (host.text) */
-export function hostText(w: World, kind: TextKind, a: number): string {
+export function hostText(w: World, kind: number, a: number): string {
   const name = w.nameOf(a);
   if (name in PRIM) return PRIM[name][2];
   const jc = w.prog.get(name), inner = annotationsOf(jc)?.cls.find((x) => x.type === INNER);

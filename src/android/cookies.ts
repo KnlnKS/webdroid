@@ -1,15 +1,15 @@
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jentry";
-import { boxBool } from "../jvm/natives/jbox";
-import type { WebCookies } from "../shell/webcookies";
-import { cookieCalls, type CookieCalls } from "../shell/cookie-access";
-import { appHost } from "./apphost";
-import { postMain } from "./mainloop";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { boxBool } from "../jvm/natives/jbox.ts";
+import type { WebCookies } from "../shell/webcookies.ts";
+import { cookieCalls, type CookieCalls } from "../shell/cookie-access.ts";
+import { appHost } from "./apphost.ts";
+import { postMain } from "./mainloop.ts";
 
 const defaults = new Map<string, Promise<WebCookies>>();
 export let webCookies = (pkg: string): Promise<WebCookies> => {
   let store = defaults.get(pkg);
-  if (!store) { store = import("../shell/webcookies").then(({ WebCookies }) => new WebCookies(pkg)); defaults.set(pkg, store); }
+  if (!store) { store = import("../shell/webcookies.ts").then(({ WebCookies }) => new WebCookies(pkg)); defaults.set(pkg, store); }
   return store;
 };
 export function useWebCookies(get: typeof webCookies) { webCookies = get; }

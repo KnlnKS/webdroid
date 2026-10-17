@@ -12,7 +12,7 @@
 // comment count); the overflow reaches Settings, which is offline and deterministic.
 // Accepted newMissing: `class androidx/window/extensions/WindowExtensionsProvider` — the
 // optional <uses-library> the foldable split layout wants, absent on most real devices too.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 const P = (x: number, y: number): [number, number] => [x / 720, y / 1280];

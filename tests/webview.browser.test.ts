@@ -1,18 +1,20 @@
 // The isolated WebView renderer's document rewriting, history and location, in one browser.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import { chromium, type Browser, type Page } from "playwright";
-import { webDocument } from "../src/shell/webhtml";
-import { webScript } from "../src/shell/webscript";
-import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject";
-import { holdFrames } from "../src/shell/webpage/frames";
-import { webViewBrands } from "../src/shell/webpage/clienthints";
+import { webDocument } from "../src/shell/webhtml.ts";
+import { webScript } from "../src/shell/webscript.ts";
+import { proxyRequest } from "../src/shell/proxy.ts";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
+import { holdFrames } from "../src/shell/webpage/frames.ts";
+import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
+import { bundle } from "../scripts/bundle.ts";
+import { serveModules } from "./browser.ts";
+import { serve } from "../scripts/serve.ts";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
 /** the page's frame routing as a module a page imports */
-const framesModule = Bun.build({ entrypoints: [new URL("../src/shell/webpage/frames.ts", import.meta.url).pathname], target: "browser" })
-  .then((built) => built.outputs[0].text());
+const framesModule = bundle("src/shell/webpage/frames.ts");
 afterAll(async () => { await browser?.close(); });
 
 const renderer = "http://renderer.example:8443";
@@ -417,7 +419,7 @@ describe("WebView isolation", () => {
   // the app's page and a renderer frame on a *.localhost site of its own, as the dev server serves them
   test("a WebView page reaches neither the app page's storage, cookies and window nor a frame of the app's origin", async () => {
     const id = crypto.randomUUID(), html = { "content-type": "text/html" };
-    const server = Bun.serve({ port: 0, fetch: (req) => {
+    const server = await serve({ fetch: (req) => {
       const url = new URL(req.url);
       if (url.pathname === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/webview") return new Response(WEB_FRAME, { headers: html });
@@ -483,7 +485,7 @@ describe("WebView isolation", () => {
   });
 
   test("a renderer origin's storage frame reports and deletes what the origin holds", async () => {
-    const server = Bun.serve({ port: 0, fetch: (req) => {
+    const server = await serve({ fetch: (req) => {
       const path = new URL(req.url).pathname;
       if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
       return new Response(path === "/webview" ? WEB_FRAME : "<!doctype html><body>app", { headers: { "content-type": "text/html" } });
@@ -522,9 +524,9 @@ describe("WebView isolation", () => {
 
   test("a page's subframes load where the app routes them, never straight from their site", async () => {
     const hits: string[] = [];
-    const server = Bun.serve({ port: 0, fetch: (req) => {
+    const server = await serve({ fetch: (req) => {
       const url = new URL(req.url);
-      hits.push(url.host + url.pathname);
+      hits.push(req.headers.get("host") + url.pathname);
       return new Response(url.pathname === "/" ? "<!doctype html><head></head><body>page" : "frame", { headers: { "content-type": "text/html" } });
     } });
     const page = await browser.newPage(), errors: string[] = [];
@@ -579,9 +581,9 @@ describe("WebView isolation", () => {
 
   test("a page's frames reach the app however the page sets or navigates them, and fire only their routed load", async () => {
     const hits: string[] = [];
-    const server = Bun.serve({ port: 0, fetch: (req) => {
+    const server = await serve({ fetch: (req) => {
       const url = new URL(req.url);
-      hits.push(url.host + url.pathname + url.search);
+      hits.push(req.headers.get("host") + url.pathname + url.search);
       // a routed frame's renderer document announces itself, then writes the page, as WEB_FRAME does
       return new Response(url.pathname === "/" ? "<!doctype html><head></head><body>page" : `<script>parent.postMessage({wdFrame: "bootstrap"}, "*");
         setTimeout(() => { document.open(); document.write("frame"); document.close(); }, 20)</script>`, { headers: { "content-type": "text/html" } });
@@ -666,21 +668,14 @@ describe("WebView isolation", () => {
 });
 
 test("Worker WebView surfaces transfer real renderer ports and retire only their process DOM", async () => {
-  const build = await Bun.build({entrypoints:[new URL("../src/shell/web-surface-port.ts",import.meta.url).pathname],target:"browser",format:"esm"});
-  if (!build.success) throw new AggregateError(build.logs,"WebView surface build");
-  const server = Bun.serve({port:0,fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/webview") return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
-    if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER,{headers:{"content-type":"text/javascript"}});
-    const output = build.outputs.find(out=>out.path.endsWith(path));
-    if (output) return new Response(output,{headers:{"content-type":"text/javascript"}});
-    return new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
-  }});
+  const server = await serveModules(["src/shell/web-surface-port.ts"], (_, path) =>
+    path === "/webview" ? new Response(WEB_FRAME,{headers:{"content-type":"text/html"}})
+      : path === "/webview-worker.js" ? new Response(WEB_PROXY_WORKER,{headers:{"content-type":"text/javascript"}}) : undefined);
   const page = await browser.newPage();
   try {
     await page.goto(`http://localhost:${server.port}/`);
     const result = await page.evaluate(async ({origin,html}) => {
-      const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port");
+      const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port.ts");
       const canvas = document.createElement("canvas"); canvas.width=720;canvas.height=1280;canvas.style.zIndex="3";document.body.append(canvas);
       const channel = new MessageChannel();
       const close = receiveWebSurfaces(channel.port1,canvas,()=>({density:2,width:720}));
@@ -725,22 +720,17 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
 });
 
 test("Worker WebStorage commands retain canonical package origins and ordered deletion", async () => {
-  const build=await Bun.build({entrypoints:[new URL("../src/android/webstorage.ts",import.meta.url).pathname,new URL("../src/shell/process-port.ts",import.meta.url).pathname],target:"browser",format:"esm",splitting:true});
-  if(!build.success)throw new AggregateError(build.logs,"WebStorage owner build");
-  const server=Bun.serve({port:0,fetch(request):Response {
-    const path=new URL(request.url).pathname;
+  const server=await serveModules(["src/android/webstorage.ts","src/shell/process-port.ts"],(_,path):Response|undefined=>{
     if(path==="/webview-origin")return Response.json(`http://*.localhost:${server.port}`);
     if(path==="/webview")return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
     if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s').put(new Uint8Array(8192),'data');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
-    const output=build.outputs.find(out=>out.path.endsWith(path));
-    return output?new Response(output,{headers:{"content-type":"text/javascript"}}):new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
-  }});
+  });
   const page=await browser.newPage();
   try {
     await page.goto(`http://localhost:${server.port}/`);
     const result=await page.evaluate(async()=>{
-      const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage");
-      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port");
+      const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage.ts");
+      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port.ts");
       localStorage.setItem("wd:install:org.webdroid.surface.owner","1000");
       localStorage.setItem("wd:install:org.webdroid.surface.foreign","1000");
       const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
@@ -775,24 +765,18 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
 });
 
 test("dropped WebView frame owners release their surface without destroy", async () => {
-  const build = await Bun.build({entrypoints:[new URL("../src/android/webframes.ts",import.meta.url).pathname,new URL("../src/android/webkit.ts",import.meta.url).pathname,new URL("../src/android/webfunctor.ts",import.meta.url).pathname],target:"browser",format:"esm",splitting:true});
-  if (!build.success) throw new AggregateError(build.logs,"WebView lifetime build");
-  const server = Bun.serve({port:0,fetch(request) {
-    const path = new URL(request.url).pathname;
-    const output = build.outputs.find(out=>out.path.endsWith(path));
-    return output ? new Response(output,{headers:{"content-type":"text/javascript"}}) : new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
-  }});
+  const server = await serveModules(["src/android/webframes.ts","src/android/webkit.ts","src/android/webfunctor.ts"]);
   const gcBrowser = await chromium.launch({headless:true,args:["--js-flags=--expose-gc"]});
   const page = await gcBrowser.newPage();
   try {
     await page.goto(`http://localhost:${server.port}/`);
     await page.evaluate(async () => {
-      const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes");
+      const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes.ts");
       (globalThis as any).frames = frames;
       (globalThis as any).removed = 0;
       frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
-      const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit");
-      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor");
+      const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit.ts");
+      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor.ts");
       const view = new WebViewChromium();
       view.url = "https://dropped.example";
       view.hold.functor = createFunctor(view.size);

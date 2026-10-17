@@ -1,19 +1,21 @@
-import { expect, test, afterAll, beforeAll, describe } from "bun:test";
-import "../src/natives";
-import { matrixColor, edges } from "../src/android/graphics";
-import { NativePaint, newPaint, paintOf } from "../src/android/paint";
-import { typefaceOf } from "../src/android/fonts";
-import { declaredField } from "../src/jvm/runtime";
-import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
-import { canvasOver, canvasOf } from "../src/android/canvas";
-import { glSurfaces } from "../src/native/egl-current";
-import { NativeRenderNode } from "../src/android/rendernode";
-import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
-import { Transform } from "../src/android/recording";
-import { rt } from "../src/jvm/runtime";
-import { newObj, linkInit, vcall, iof, staticField } from "../src/jvm/natives/jentry";
-import { parsePackageArchive } from "../src/android/packagearchive";
-import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java";
+import { expect, test, afterAll, beforeAll, describe } from "vite-plus/test";
+import { readFileSync } from "node:fs";
+import "../src/natives.ts";
+import { matrixColor, edges } from "../src/android/graphics.ts";
+import { NativePaint, newPaint, paintOf } from "../src/android/paint.ts";
+import { typefaceOf } from "../src/android/fonts.ts";
+import { declaredField } from "../src/jvm/runtime.ts";
+import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path.ts";
+import { canvasOver, canvasOf } from "../src/android/canvas.ts";
+import { glSurfaces } from "../src/native/egl-current.ts";
+import { NativeRenderNode } from "../src/android/rendernode.ts";
+import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix.ts";
+import { Transform } from "../src/android/recording.ts";
+import { rt } from "../src/jvm/runtime.ts";
+import { newObj, linkInit, vcall, iof, staticField } from "../src/jvm/natives/jentry.ts";
+import { parsePackageArchive } from "../src/android/packagearchive.ts";
+import { appResources, loadSystemFonts, scall, thrown } from "./java.ts";
+import { startMainLooper } from "../src/android/mainloop.ts";
 
 beforeAll(loadSystemFonts);
 
@@ -21,12 +23,13 @@ describe("egl14-query-context", () => {
 
   const originalOffscreenCanvas = Object.getOwnPropertyDescriptor(globalThis, "OffscreenCanvas");
   beforeAll(async () => {
-    await loadFrameworkJar();
+    await startMainLooper();
     if (originalOffscreenCanvas) return;
     Object.defineProperty(globalThis, "OffscreenCanvas", {
       configurable: true,
       value: class {
-        constructor(readonly width: number, readonly height: number) {}
+        readonly width: number; readonly height: number;
+        constructor(width: number, height: number) { this.width = width; this.height = height; }
       },
     });
   });
@@ -90,7 +93,7 @@ describe("egl10", () => {
 });
 
 describe("canvas-state", () => {
-  beforeAll(loadFrameworkJar);
+  beforeAll(startMainLooper);
 
   test("canvas root state rejects unmatched restores", async () => {
     let restores = 0;
@@ -114,7 +117,7 @@ describe("font-metrics", () => {
 
   test("loaded font metrics preserve fractional ascenders and round integer metrics outward", async () => {
     // Noto Serif Bold's own tables, as an app's font: hhea 1900/-500, head yMax/yMin 2181/-571 over 2048 units
-    const bytes = new Uint8Array(await Bun.file("vendor/aosp/system/fonts/NotoSerif-Bold.ttf").arrayBuffer()), BB = "Ljava/nio/ByteBuffer;";
+    const bytes = new Uint8Array(readFileSync("vendor/aosp/system/fonts/NotoSerif-Bold.ttf")), BB = "Ljava/nio/ByteBuffer;";
     const buffer = await scall("java/nio/ByteBuffer", "allocateDirect", `(I)${BB}`, bytes.length);
     await vcall(buffer, "put", `([B)${BB}`, new Int8Array(bytes.buffer));
     const font = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, buffer), "build", "()Landroid/graphics/fonts/Font;");
@@ -363,7 +366,7 @@ describe("recorded-transform", () => {
 describe("typed-array-font", () => {
 
   test("Resources resolve referenced font resources", async () => {
-    const bytes = new Uint8Array(await Bun.file("apks/Resy.apk").arrayBuffer());
+    const bytes = new Uint8Array(readFileSync("apks/Resy.apk"));
     const archive = await parsePackageArchive(bytes);
     const id = archive.res.idFor("font", "fontawesome", archive.pkg);
     expect(id).not.toBe(0);

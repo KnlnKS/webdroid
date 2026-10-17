@@ -1,11 +1,11 @@
 // Client arrays: the default vertex array reads attributes and indices from guest memory at the
 // draw, which WebGL cannot, so each draw streams what it reaches into reused buffers.
 
-import { mem } from "./mem";
-import { raise } from "../android/gl";
-import { g, contextState, type ContextState, type ClientArray } from "./gles3-state";
-import { view, u32, u8 } from "./gles3-pixels";
-import { recAt, boundStorage, ARRAY, ELEM } from "./gles3-buffers";
+import { mem } from "./mem.ts";
+import { raise } from "../android/gl.ts";
+import { g, contextState, type ContextState, type ClientArray } from "./gles3-state.ts";
+import { view, u32, u8 } from "./gles3-pixels.ts";
+import { recAt, boundStorage, ARRAY, ELEM } from "./gles3-buffers.ts";
 
 /** bytes per vertex attribute component */
 export const vertexTypeBytes = (type: number): number =>

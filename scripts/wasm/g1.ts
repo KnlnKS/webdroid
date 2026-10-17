@@ -1,23 +1,26 @@
 // G1 timing: all selected Bench and G1 workloads on the Wasm tier, first call and steady state, in node and in headless Chrome (so Liftoff and TurboFan
 // tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java or java/G1.java; all selected workloads are attempted and failures
 // retained. Every measurement is a fresh process/context; every run of a workload must answer alike.
-//   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."] [--installed DIR [--inline]]
+//   pnpm wasm g1 [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."] [--installed DIR [--inline]]
 // --ref compares with the numbers (and answers) of an earlier --json run and measures only its workloads, for A/B work on the compiler.
 // --installed DIR runs the Wasm tier as a launch of the installed app (g1app.ts made DIR over the platform build in WEBDROID_AOT): its saved build attached, the host's classes, and in
 // Chrome a forcibly prestarted compile worker; setup time is reported separately. The saved app's measured-demand startup list replaces the platform default in this supplemental
 // scenario. With --inline the page compiles the second tier itself, as without --installed. Ordinary/on-demand remains the primary G1 scenario.
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
+import { spawnSync } from "node:child_process";
 import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { G1Config, G1Result } from "./g1run";
-import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools";
-import { sourceKey } from "./aot-key";
+import { NODE_FLAGS } from "../node.ts";
+import { fileResponse, serve } from "../serve.ts";
+import type { G1Config, G1Result } from "./g1run.ts";
+import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { bundleFor, cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { sourceKey } from "./aot-key.ts";
 import { createHash } from "node:crypto";
-import { sampleError } from "./g1report";
+import { geo, med, sampleError } from "./g1report.ts";
 
-const here = import.meta.dir;
+const here = import.meta.dirname;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", ""), v8Flags = flag("--v8-flags", "");
 /** the workloads as an installed app: the saved build g1app.ts made in this directory (with WEBDROID_AOT its platform build) */
@@ -51,44 +54,38 @@ if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file)
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
 
-// ---- one bundle per engine: a page's node:fs is the preloaded files
-const bundle = async (browser: boolean) => {
-  const r = await Bun.build({ entrypoints: [join(here, "g1run.ts")], target: browser ? "browser" : "node", outdir: join(out, browser ? "page" : "node"), define: { "import.meta.main": "false" },
-    plugins: browser ? [{ name: "g1", setup(b) { b.onResolve({ filter: /^node:fs$/ }, () => ({ path: join(here, "g1fs.ts") })); } }] : [] });
-  if (!r.success) throw new Error(r.logs.join("\n"));
-  return r.outputs[0].path;
-};
-const base64 = Bun.spawnSync(["node", "-p", "typeof Uint8Array.fromBase64"]).stdout.toString().trim() === "function" ? [] : ["--js-base-64"];
+// ---- one bundle per engine (a page's node:fs is the preloaded files); node runs its bundle without the preload's polyfills, so with V8's base64 switched on where it is off
+const base64 = spawnSync(process.execPath, ["-p", "typeof Uint8Array.fromBase64"], { encoding: "utf8" }).stdout.trim() === "function" ? [] : ["--js-base-64"];
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
-  const r = Bun.spawnSync(["node", "--expose-gc", "--experimental-wasm-jspi", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT, ...(installedDir && { G1_APP: installedDir }) } });
-  const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
-  if (!line) throw new Error(`${cfg.workload}: ${r.stderr.toString().slice(0, 400)}`);
+  const r = spawnSync(process.execPath, [...NODE_FLAGS, ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)],
+    { env: { ...process.env, ...(installedDir && { G1_APP: installedDir }) }, encoding: "utf8", maxBuffer: 1 << 28 });
+  const line = r.stdout.split("\n").find((l) => l.startsWith("G1"));
+  if (!line) throw new Error(`${cfg.workload}: ${String(r.error ?? r.stderr).slice(0, 400)}`);
   const result = JSON.parse(line.slice(2)) as G1Result;
-  if (r.exitCode) result.error ??= `node exited ${r.exitCode}: ${r.stderr.toString().slice(0, 400)}`;
+  if (r.status) result.error ??= `node exited ${r.status}: ${r.stderr.slice(0, 400)}`;
   return result;
 };
 async function chromeRun() {
   const { chromium } = await import("playwright");
-  const bundlePath = await bundle(true);
+  const script = await bundleFor("browser", join(here, "g1run.ts"));
   const aotDir = process.env.WEBDROID_AOT;
   const preload = [dex, ...PLATFORM_PATHS];
   // an installed app's saved build, and the compile worker the page's launch starts (host/compile-worker.ts)
-  const worker = installedDir ? await Bun.build({ entrypoints: [join(here, "../../src/wasm/host/compile-worker.ts")], target: "browser" }) : undefined;
-  if (worker && !worker.success) throw new Error(worker.logs.join("\n"));
+  const worker = installedDir ? await bundleFor("browser", join(ROOT, "src/wasm/host/compile-worker.ts")) : undefined;
   // cross-origin isolation gives performance.now() microsecond resolution instead of 0.1 ms
   const iso = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
-  const server = Bun.serve({ port: 0, fetch(req) {
+  const server = await serve({ fetch(req) {
     const u = new URL(req.url), p = u.pathname;
-    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(ROOT)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;globalThis.G1_APP=${JSON.stringify(installedDir)}||undefined;globalThis.G1_INLINE=${inlineTier};const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (p === "/") return new Response(`<script type=module>globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;globalThis.G1_APP=${JSON.stringify(installedDir)}||undefined;globalThis.G1_INLINE=${inlineTier};const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
     // G1_STARTUP=all: every module of the build is fetched and compiled before the first call, which shows what the rows cost when the page has what they run
     if (aotDir && p.endsWith("/startup.json") && process.env.G1_STARTUP === "all") return Response.json(readdirSync(aotDir).filter((f) => /^[cd]\d+\.wasm$/.test(f)), { headers: iso });
-    if (aotDir && p.startsWith("/aot/")) { const file = join(aotDir, p.split("/").pop()!); return existsSync(file) ? new Response(Bun.file(file), { headers: { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", ...iso } }) : new Response("", { status: 404 }); }
-    if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
+    if (aotDir && p.startsWith("/aot/")) return fileResponse(join(aotDir, p.split("/").pop()!), req, iso);
+    if (p === "/g1.js") return new Response(script, { headers: { "content-type": "text/javascript", ...iso } });
     if (installedDir && p === "/app/files.json") return Response.json(readdirSync(installedDir), { headers: iso });
-    if (installedDir && p.startsWith("/app/")) return new Response(Bun.file(join(installedDir, p.split("/").pop()!)), { headers: iso });
-    if (worker && p === "/wasm-compile-worker.js") return new Response(worker.outputs[0], { headers: { "content-type": "text/javascript", ...iso } });
+    if (installedDir && p.startsWith("/app/")) return fileResponse(join(installedDir, p.split("/").pop()!), req, iso);
+    if (worker && p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
-    return file && existsSync(file) ? new Response(Bun.file(file), { headers: iso }) : new Response("", { status: 404 });
+    return file ? fileResponse(file, req, iso) : new Response("", { status: 404 });
   } });
   const browser = await chromium.launch({ channel: "chrome", headless: true, args: [`--js-flags=--expose-gc ${v8Flags}`] });
   const version = browser.version();
@@ -97,7 +94,7 @@ async function chromeRun() {
     const errors: string[] = [];
     page.on("pageerror", e => errors.push(String(e).slice(0, 500)));
     try {
-      await page.goto(`http://localhost:${server.port}/`);
+      await page.goto(server.url.href);
       await page.waitForFunction("window.ready === true", null, { timeout: 120000 });
       const r = await page.evaluate((c) => (globalThis as unknown as { g1run: (c: unknown) => Promise<unknown> }).g1run(c), cfg) as G1Result;
       if (errors.length) r.error ??= `page error: ${errors.join("; ")}`;
@@ -107,8 +104,6 @@ async function chromeRun() {
 }
 
 // ---- measure
-const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
-const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
 interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
 const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
@@ -123,7 +118,7 @@ report.classPathLayout = "bootstrap-platform/application";
 report.startup = installedDir ? artifact(installedDir, "startup.json") : process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "startup.json") : null;
 report.appIndex = installedDir ? artifact(installedDir, "index.json") : null;
 report.platformIndex = process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "index.json") : null;
-report.harnessSha256 = createHash("sha256").update(readFileSync(import.meta.path)).update(readFileSync(join(here, "g1run.ts"))).update(readFileSync(join(here, "g1report.ts"))).digest("hex");
+report.harnessSha256 = createHash("sha256").update(readFileSync(import.meta.filename)).update(readFileSync(join(here, "g1run.ts"))).update(readFileSync(join(here, "g1report.ts"))).digest("hex");
 report.v8Flags = v8Flags;
 report.startupOverride = process.env.G1_STARTUP ?? null;
 report.primaryProtocol = !installedDir && !refPath && !v8Flags && !process.env.G1_STARTUP;
@@ -161,10 +156,10 @@ const checkSource = (where: string) => {
 };
 
 for (const engine of engines) {
-  let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
+  let run: (c: G1Config) => G1Result | Promise<G1Result>, label = `node ${process.version} (V8 ${process.versions.v8})`, close = async () => {};
   checkSource(`before ${engine} setup`);
   if (guardFailures.length) run = c => ({ workload: c.workload, result: "", times: [], error: guardFailures.join("; ") });
-  else if (engine === "node") run = nodeRun(await bundle(false));
+  else if (engine === "node") { const file = join(out, "g1run.mjs"); writeFileSync(file, await bundleFor("node", join(here, "g1run.ts"))); run = nodeRun(file); }
   else { const c = await chromeRun(); run = c.run; close = c.close; label = "Chrome " + c.version; }
   const refRows = new Map((ref?.[engine]?.rows ?? []).map((r) => [r.w, r]));
   const got = new Map(todo.filter((w) => !ref || refRows.has(w)).map((w) => [w, [] as Sample[]]));

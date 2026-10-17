@@ -1,5 +1,5 @@
-import { domWebSurface, type WebSurface, type SurfaceStyle, type FrameAnnouncement } from "./web-surface";
-import type { RendererReady, RendererTask } from "./webpage/protocol";
+import { domWebSurface, type WebSurface, type SurfaceStyle, type FrameAnnouncement } from "./web-surface.ts";
+import type { RendererReady, RendererTask } from "./webpage/protocol.ts";
 
 type SurfaceCommand = {kind:"style"; value:SurfaceStyle} | {kind:"load";url:string}
   | {kind:"watch";bridge:string} | {kind:"unwatch";bridge:string}

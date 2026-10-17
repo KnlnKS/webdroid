@@ -2,10 +2,10 @@
 // the World it works for asks (World.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (World.adoptUnit); otherwise the worker forgets what it numbered.
-import { Compiler } from "../compiler/j2w";
-import { methodOf, mid } from "../compiler/ids";
-import { unitHeader, type Marks, type Numbering, type UnitHeader } from "./aot";
-import type { World } from "./world";
+import { Compiler } from "../compiler/j2w.ts";
+import { methodOf, mid } from "../compiler/ids.ts";
+import { unitHeader, type Marks, type Numbering, type UnitHeader } from "./aot.ts";
+import type { World } from "./world.ts";
 
 /** the second-tier compile of a method, as World.upgradeJob describes it */
 export interface UpgradeJob {
@@ -38,9 +38,10 @@ export interface UnitResult {
 }
 
 export class UnitCompiler {
+  private w: World;
   /** the numbering the World compiled for had when the last job arrived */
   private known: Marks;
-  constructor(private w: World) { this.known = w.numbering(); }
+  constructor(w: World) { this.w = w; this.known = w.numbering(); }
   /** follows the World compiled for: `keep` says it took the numbering of the previous unit (otherwise that is forgotten first), and `sync` is what it numbered since; false if the two do not line up */
   sync(sync: Numbering, keep: boolean): boolean {
     if (!keep) this.w.rollback(this.known);

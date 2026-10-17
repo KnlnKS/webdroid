@@ -1,5 +1,5 @@
-import type { ImeState } from "../android/ime";
-import { callProxy, serveCalls } from "./process-port";
+import type { ImeState } from "../android/ime.ts";
+import { callProxy, serveCalls } from "./process-port.ts";
 
 type ImeCalls = {
   input(generation: number, text: string, start: number, end: number, composing: boolean): Promise<void>;
@@ -11,7 +11,7 @@ type ImeCalls = {
 /** Java callbacks remain in this Worker. Every edit checks its editor identity
  * again when its main-looper job runs, not merely when the message arrives. */
 export async function serveIme(port: MessagePort): Promise<() => void> {
-  const ime = await import("../android/ime");
+  const ime = await import("../android/ime.ts");
   const changed = (state: ImeState) => port.postMessage({ kind: "imeState", state });
   ime.imeTransport.changed = changed;
   const close = serveCalls<ImeCalls>(port, {

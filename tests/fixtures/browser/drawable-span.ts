@@ -1,9 +1,9 @@
-import "../../../src/natives";
-import { newObj, vcall, iof } from "../../../src/jvm/natives/jentry";
-import { newPaint, setFontMetrics } from "../../../src/android/paint";
-import { declaredField } from "../../../src/jvm/runtime";
-import { canvasOver } from "../../../src/android/canvas";
-import { bootWithFonts } from "./boot";
+import "../../../src/natives.ts";
+import { newObj, vcall, iof } from "../../../src/jvm/natives/jentry.ts";
+import { newPaint, setFontMetrics } from "../../../src/android/paint.ts";
+import { declaredField } from "../../../src/jvm/runtime.ts";
+import { canvasOver } from "../../../src/android/canvas.ts";
+import { bootWithFonts } from "./boot.ts";
 
 async function probe() {
   await bootWithFonts();

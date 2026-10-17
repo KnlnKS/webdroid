@@ -1,24 +1,22 @@
 // Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on a
 // World with the registered classes added to it and must answer as java/hc/expected.txt records; then the Wasm tier's own rules: what dies together, and what the tables keep.
-// Run: bun run wasm hostclass
-import { runInNewContext } from "node:vm";
-import { setFlagsFromString } from "node:v8";
+// Run: pnpm wasm hostclass
 import { join } from "node:path";
-import { rt } from "../../src/jvm/runtime";
-import { resumeAs, scall } from "../../src/jvm/natives/jentry";
-import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
-import { useWorld } from "../../src/wasm/host/boot";
-import { Program } from "../../src/wasm/compiler/program";
-import { Compiler } from "../../src/wasm/compiler/j2w";
-import { Block, emitBlock } from "../../src/wasm/link/sched";
-import { St } from "../../src/wasm/link/monitor";
-import { compileModule } from "../../src/wasm/link/module";
-import { loadDexes, program, world } from "./lib";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths";
-import { deref, handle, ownedHandle, release } from "../../src/android/handles";
-import { enter, hostCases, hostDex, JCounter } from "./hostcases";
-import { checker, recorded, unlike } from "./tools";
+import { rt } from "../../src/jvm/runtime.ts";
+import { resumeAs, scall } from "../../src/jvm/natives/jentry.ts";
+import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
+import { useWorld } from "../../src/wasm/host/boot.ts";
+import { Program } from "../../src/wasm/compiler/program.ts";
+import { Compiler } from "../../src/wasm/compiler/j2w.ts";
+import { Block, emitBlock } from "../../src/wasm/link/sched.ts";
+import { St } from "../../src/wasm/link/monitor.ts";
+import { compileModule } from "../../src/wasm/link/module.ts";
+import { loadDexes, program, world } from "./lib.ts";
+import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
+import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
+import { checker, recorded, unlike } from "./tools.ts";
 
 const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => PLATFORM_PATHS[i]);
 await mountPlatform(ROOT);
@@ -77,8 +75,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 }
 
 // lifetime: the Java object and the host object live and die together
-setFlagsFromString("--expose-gc");
-const gc = runInNewContext("gc") as () => void;
+const gc = globalThis.gc!;
 const turn = () => new Promise((r) => setTimeout(r, 0));
 async function collected(refs: WeakRef<object>[]): Promise<boolean> {
   for (let i = 0; i < 5 && refs.some((r) => r.deref()); i++) { await turn(); gc(); }

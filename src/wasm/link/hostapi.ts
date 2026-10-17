@@ -1,12 +1,12 @@
 // What the VM needs from the host layer, as interfaces, so that nothing below host/ imports it: the registered natives, the bridge that
 // marshals Java objects for them, and the network resolver. host/ provides the implementations.
-import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { Loader, MethodInfo } from "../compiler/program";
-import type { Code } from "../compiler/code";
-import type { ProxyDefinition } from "./proxy";
-import type { World } from "./world";
-import type { DexFile } from "../../jvm/dex";
-import type { Sched, Strand } from "./sched";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { Loader, MethodInfo } from "../compiler/program.ts";
+import type { Code } from "../compiler/code.ts";
+import type { ProxyDefinition } from "./proxy.ts";
+import type { World } from "./world.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import type { Sched, Strand } from "./sched.ts";
 
 /** a native; one marked `javaValues` is given and answers Java values as the tier holds them (references as they are: no String is converted, no array copied, no object wrapped) */
 export type HostFn = ((...a: any[]) => unknown) & { javaValues?: boolean };

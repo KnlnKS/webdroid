@@ -3,24 +3,24 @@
 // of that path.
 //
 // It is vendor/aosp/framework-res.apk, the table the platform's own R classes were compiled
-// against (`bun run gen-framework` checks the pairing). android.R and com.android.internal.R
+// against (`pnpm gen-framework` checks the pairing). android.R and com.android.internal.R
 // come from framework.jar.
 
-import { yieldToLoop } from "../jvm/yield";
-import { Arsc } from "./arsc";
-import { DEVICE_OVERLAYS } from "./device-overlays";
-import { centralDir, entryBytes } from "../jvm/natives/jzip";
-import { rt } from "../jvm/runtime";
-import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex";
-import { Resources, setFramework } from "./res";
-import { PLATFORM_JARS } from "../jvm/provenance";
-import { loadDex } from "../jvm/tier";
-import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
-import { vfs } from "../shell/vfs";
-import { BytesFile, type FileSource } from "../shell/lazyfile";
-import { parseAXML } from "./axml";
-import { PackageRecord, packages } from "./packages";
-import { apkCertificates } from "./packagearchive";
+import { yieldToLoop } from "../jvm/yield.ts";
+import { Arsc } from "./arsc.ts";
+import { DEVICE_OVERLAYS } from "./device-overlays.ts";
+import { centralDir, entryBytes } from "../jvm/natives/jzip.ts";
+import { rt } from "../jvm/runtime.ts";
+import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex.ts";
+import { Resources, setFramework } from "./res.ts";
+import { PLATFORM_JARS } from "../jvm/provenance.ts";
+import { loadDex } from "../jvm/tier.ts";
+import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
+import { vfs } from "../shell/vfs.ts";
+import { BytesFile, type FileSource } from "../shell/lazyfile.ts";
+import { parseAXML } from "./axml.ts";
+import { PackageRecord, packages } from "./packages.ts";
+import { apkCertificates } from "./packagearchive.ts";
 
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
@@ -61,7 +61,7 @@ export const platformJarUrl = (jar: string): string => `/vendor/aosp/${jar}`;
 export function fetchPlatformJars(): Promise<Uint8Array[]> {
   return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
     const res = await fetch(platformJarUrl(jar));
-    if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: bun run gen-framework`);
+    if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: pnpm gen-framework`);
     return new Uint8Array(await res.arrayBuffer());
   }));
 }
@@ -78,7 +78,7 @@ export function loadPlatformDex(): Promise<void> {
 export function loadFramework(): Promise<Arsc> {
   return pending ??= (async () => {
     const res = await fetch("/vendor/aosp/framework-res.apk");
-    if (!res.ok) throw new Error(`no framework package (${res.status}) — run: bun run gen-framework`);
+    if (!res.ok) throw new Error(`no framework package (${res.status}) — run: pnpm gen-framework`);
     return installFramework(new Uint8Array(await res.arrayBuffer()));
   })();
 }

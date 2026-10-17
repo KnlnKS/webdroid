@@ -12,7 +12,7 @@
 //
 // Every screen here is offline-reachable: the reproducible gate runs without a network, so
 // Browse/Extensions would be an unreachable target rather than a fair one.
-import { wait, type Flow } from "../types";
+import { wait, type Flow } from "../types.ts";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 

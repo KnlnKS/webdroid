@@ -1,14 +1,14 @@
 // TextureView's consumer and producer halves under AOSP's TextureView: hwui's DeferredLayerUpdater
 // (TextureLayer) over the view's SurfaceTexture, which RecordingCanvas.drawTextureLayer draws with
 // the layer's transform and paint, and the ANativeWindow TextureView.lockCanvas draws into.
-import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { handle, deref, release } from "./handles";
-import { canvasOf } from "./canvas";
-import { paintAt } from "./paint";
-import { type Mat, isIdentity, applyMatrix } from "./matrix";
-import type { NativeBitmap } from "./bitmap";
-import type { Ctx2D } from "./recording";
-import { type NativeSurfaceTexture, surfaceTextureOf, presentSurface, bufferWidth, bufferHeight } from "./glsurface";
+import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { handle, deref, release } from "./handles.ts";
+import { canvasOf } from "./canvas.ts";
+import { paintAt } from "./paint.ts";
+import { type Mat, isIdentity, applyMatrix } from "./matrix.ts";
+import type { NativeBitmap } from "./bitmap.ts";
+import type { Ctx2D } from "./recording.ts";
+import { type NativeSurfaceTexture, surfaceTextureOf, presentSurface, bufferWidth, bufferHeight } from "./glsurface.ts";
 
 export class TextureLayer {
   texture: NativeSurfaceTexture | null = null;

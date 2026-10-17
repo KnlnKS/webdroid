@@ -1,17 +1,18 @@
-import type { PreparedInstruction } from "../../jvm/prepared";
-import { OP, type Code } from "./code";
-import { Compiler } from "./j2w";
-import { MC } from "./method";
-import type { Kind, MethodInfo } from "./program";
-import type { SymbolicSite } from "./sites";
-import { T } from "./wasmbin";
-import type { World } from "../link/world";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import { OP, type Code } from "./code.ts";
+import { Compiler } from "./j2w.ts";
+import { MC } from "./method.ts";
+import type { Kind, MethodInfo } from "./program.ts";
+import type { SymbolicSite } from "./sites.ts";
+import { T } from "./wasmbin.ts";
+import type { World } from "../link/world.ts";
 
 // A resolved symbolic site's operation: no method IR or copied callees, its inputs are the caller's bits, and virtual calls go through the receiver's current slot.
 class SymbolicMC extends MC {
+  private inputs: SymbolicSite[4];
   override symbolic = false;
   outputLocal = -1;
-  constructor(cx: Compiler, m: MethodInfo, private inputs: SymbolicSite[4]) { super(cx, m); }
+  constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; }
   override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {
     return /^invoke-(virtual|interface)/.test(ins.name) ? "dynamic" : super.callee(ins);
   }

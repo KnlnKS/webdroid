@@ -1,7 +1,7 @@
 import { PNG } from "pngjs";
-import { compareResult } from "./compare";
-import type { Failure, ProbeCase, ProbeResult } from "./model";
-import type { UiAction } from "./ui-model";
+import { compareResult } from "./compare.ts";
+import type { Failure, ProbeCase, ProbeResult } from "./model.ts";
+import type { UiAction } from "./ui-model.ts";
 
 const transparentPixel = PNG.sync.write(new PNG({ width: 1, height: 1 })).toString("base64");
 

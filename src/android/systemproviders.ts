@@ -1,13 +1,13 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
-import { awaited, rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { newObj, scall, vcall, after, iof } from "../jvm/natives/jentry";
-import { once } from "../jvm/suspend";
-import { arrayMapEntries } from "../jvm/natives/jcoll";
-import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
-import { i8, jarray, strArray } from "../jvm/abi";
-import { newStub, importBinder, type BinderHandle } from "./binder";
-import { mkUri, uriText, type JUri } from "./net";
+import { awaited, rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime.ts";
+import { newObj, scall, vcall, after, iof } from "../jvm/natives/jentry.ts";
+import { once } from "../jvm/suspend.ts";
+import { arrayMapEntries } from "../jvm/natives/jcoll.ts";
+import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox.ts";
+import { i8, jarray, strArray } from "../jvm/abi.ts";
+import { newStub, importBinder, type BinderHandle } from "./binder.ts";
+import { mkUri, uriText, type JUri } from "./net.ts";
 
 const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
   CV = "Landroid/content/ContentValues;", SIGNAL = "Landroid/os/ICancellationSignal;";

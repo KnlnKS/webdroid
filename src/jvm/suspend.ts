@@ -1,4 +1,4 @@
-import { never, processExited } from "../process-exit";
+import { never, processExited } from "../process-exit.ts";
 
 // Suspended activations share one Promise per pending operation. Every driven generator waiting
 // for it joins the same continuation list, and when the operation settles the list resumes
@@ -16,7 +16,8 @@ type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
  *  that no entry gave a chain (host tools, tests): it shares its thread's locks and class
  *  initializations with every chain of that thread. */
 export class Strand {
-  constructor(readonly thread: unknown, readonly root = false) {}
+  readonly thread: unknown; readonly root: boolean;
+  constructor(thread: unknown, root = false) { this.thread = thread; this.root = root; }
 }
 
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */

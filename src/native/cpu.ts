@@ -2,26 +2,27 @@
 // (cpu.zig), and the async call driver that runs slices, suspends on host promises, delivers
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
-import type { JniClass } from "./jnivm";
-import { JThread, mainThread, releaseThread, resumeAs, threadContended } from "../jvm/natives/jentry";
-import { rt } from "../jvm/runtime";
-import type { Strand } from "../jvm/suspend";
-import { mem } from "./mem";
-import { NativeFault, BadAddress } from "./core";
-import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
-import { perf } from "../perf";
-import { answeringFor, yieldToLoop } from "../jvm/yield";
-import { procIdentity, processTid } from "../shell/procfs";
-import { never, processExited } from "../process-exit";
-import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals";
-import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe";
-import { dieOfSignal } from "./crash";
-import { backtrace } from "./dl";
+import type { JniClass } from "./jnivm.ts";
+import { type JThread, mainThread, releaseThread, resumeAs, threadContended } from "../jvm/natives/jentry.ts";
+import { rt } from "../jvm/runtime.ts";
+import type { Strand } from "../jvm/suspend.ts";
+import { mem } from "./mem.ts";
+import { NativeFault, BadAddress } from "./core.ts";
+import { core, jitDrain, TLS_KEYS } from "./core.ts";
+import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host.ts";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
+import { perf } from "../perf.ts";
+import { answeringFor, yieldToLoop } from "../jvm/yield.ts";
+import { procIdentity, processTid } from "../shell/procfs.ts";
+import { never, processExited } from "../process-exit.ts";
+import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals.ts";
+import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe.ts";
+import { dieOfSignal } from "./crash.ts";
+import { backtrace } from "./dl.ts";
 
-const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2, Signal = 3 }
-const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
+const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
+type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
+const CoreExit = { Budget: 0, Host: 1, Ret: 2, Fault: 3, Syscall: 4 } as const;
 const ILL_ILLOPC = 1, TRAP_BRKPT = 1, BUS_ADRALN = 1, SEGV_MAPERR = 1, SEGV_ACCERR = 2;
 /** a nested call() on this register file: what it is for (wd.native.regs) and, for a signal handler,
  *  the stack range it runs on, the state a siglongjmp out of it leaves for the interrupted code, and
@@ -58,7 +59,7 @@ const L = (i: number) => core.layout(i);
 const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15), OFF_ERRNO = L(17), OFF_TLSTAB = L(18);
 /** the architectural state a nested call saves and restores: registers, pc, V file, flags, monitor */
 const ARCH_SIZE = L(16);
-const enum Fault { Undefined = 1, BadAddress = 2, MisalignedPc = 3, Brk = 5, UnsupportedSyscall = 6, NullPage = 8, Extension = 9 }
+const Fault = { Undefined: 1, BadAddress: 2, MisalignedPc: 3, Brk: 5, UnsupportedSyscall: 6, NullPage: 8, Extension: 9 } as const;
 const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page", "optional extension"];
 
 export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };

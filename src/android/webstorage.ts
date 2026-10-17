@@ -3,16 +3,16 @@
 // renderer origin, whose storage lives in the browser; a browser enumerates and clears an origin's
 // storage only from inside it, so the app notes each origin its WebViews create, and a hidden frame
 // on that origin reports or deletes what it holds.
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
-import { newObj, vcall, scall } from "../jvm/natives/jentry";
-import { boxLong } from "../jvm/natives/jbox";
-import { installTime } from "./packages";
-import { onMain } from "./mainloop";
-import { runningApp } from "./apphost";
-import { rendererOrigin, rendererStorage } from "../shell/webrenderer";
-import type { StorageOp } from "../shell/webpage/protocol";
-import type { PackageState } from "../shell/packagedata";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { jarray } from "../jvm/abi.ts";
+import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
+import { boxLong } from "../jvm/natives/jbox.ts";
+import { installTime } from "./packages.ts";
+import { onMain } from "./mainloop.ts";
+import { runningApp } from "./apphost.ts";
+import { rendererOrigin, rendererStorage } from "../shell/webrenderer.ts";
+import type { StorageOp } from "../shell/webpage/protocol.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 
 /** kept with the install */
 const originsKey = (pkg: string) => "wd:install:" + pkg + ":webview";

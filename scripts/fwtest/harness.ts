@@ -1,8 +1,9 @@
 // What every fwtest exercise shares: the runner that reports what the real bytecode reached, and
 // the comparisons against values the reference AVD printed for the same calls.
-import type { DexFile } from "../../src/jvm/dex";
-import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry";
+import { readFileSync } from "node:fs";
+import type { DexFile } from "../../src/jvm/dex.ts";
+import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
+import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry.ts";
 
 const reached: string[] = [];
 /** how a harness makes dex files known to the Java that runs: the driver gives its World's */
@@ -66,7 +67,7 @@ export const listener = (iface: string, name: string, desc: string, fn: (...a: a
 export const fontMetrics = (fm: object, cls = "FontMetrics") =>
   ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 
-const vectorProbe = (await Bun.file("tests/fixtures/vector-drawable.txt").text()).trim().split("\n");
+const vectorProbe = readFileSync("tests/fixtures/vector-drawable.txt", "utf8").trim().split("\n");
 /** VectorDrawableProbe's lines with `tag` (scripts/vector-probe.ts), the tag removed */
 export const vectorProbeLines = (tag: string) => vectorProbe.filter((l) => l.startsWith(tag + " ")).map((l) => l.slice(tag.length + 1));
 /** a Java Rect's (or RectF's) left, top, right and bottom: instance fields are mangled properties */

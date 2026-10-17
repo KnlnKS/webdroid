@@ -1,5 +1,5 @@
-import { device } from "./config";
-import { DEVICE_PROPERTIES, UNAME } from "./device-properties";
+import { device } from "./config.ts";
+import { DEVICE_PROPERTIES, UNAME } from "./device-properties.ts";
 
 export const procIdentity = { pid: 1000, uid: 10001, name: "" };
 /** uname(2): the reference kernel's, whose machine is what an arm64 kernel reports a 64-bit or a compat task */

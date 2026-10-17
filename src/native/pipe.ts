@@ -1,6 +1,6 @@
 // Pipes and named pipes (fifos): the byte queue a pipe2 pair, or every open of one fifo, shares.
-import { mem } from "./mem";
-import { vfs, type VfsFile } from "../shell/vfs";
+import { mem } from "./mem.ts";
+import { vfs, type VfsFile } from "../shell/vfs.ts";
 
 /** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
  *  open write ends, the last of which closing is its readers' end of file. `closed` also stands for

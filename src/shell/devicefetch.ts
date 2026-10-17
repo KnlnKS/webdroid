@@ -1,10 +1,10 @@
 // HTTP as the device fetches it. Host code fetches http(s) through the dev server's proxy (proxy.ts),
 // which would reach the host's own loopback; Android's clients outside the app (the media server,
 // WebView's network service) reach the app's loopback listener instead.
-import { concat, utf8 } from "../jvm/abi";
-import { guestEndpoint } from "../native/net-address";
-import type { Stream } from "../native/socket/core";
-import { loopbackConnection } from "../native/socket/inet";
+import { concat, utf8 } from "../jvm/abi.ts";
+import { guestEndpoint } from "../native/net-address.ts";
+import type { Stream } from "../native/socket/core.ts";
+import { loopbackConnection } from "../native/socket/inet.ts";
 
 type Init = { method?: string; headers?: Headers; body?: ArrayBuffer | Uint8Array; signal?: AbortSignal };
 
@@ -19,10 +19,11 @@ const received = (stream: Stream) => new Promise<Uint8Array | null>((resolve) =>
   attempt();
 });
 class HttpReader {
+  private readonly stream: Stream;
   private buf: Uint8Array = new Uint8Array(0);
   /** what is left of the chunk being read; -1 before the first */
   private chunkLeft = -1;
-  constructor(private readonly stream: Stream) {}
+  constructor(stream: Stream) { this.stream = stream; }
   private async fill(): Promise<boolean> {
     const bytes = await received(this.stream);
     if (bytes) this.buf = this.buf.length ? concat([this.buf, bytes]) : bytes;

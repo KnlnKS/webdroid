@@ -1,23 +1,23 @@
 // Load an apk's native library headless and run its JNI_OnLoad: the fastest way to shake out the
 // CPU/libc/JNI layers without a browser.
 //
-//   bun scripts/nrun.ts <apk> <libname.so> [--link]
+//   pnpm ts scripts/nrun.ts <apk> <libname.so> [--link]
 //
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
-import { openApk, dexesOf, mountLocalPlatformData } from "./lib";
-import { rt } from "../src/jvm/runtime";
-import { loadDex, loadTier } from "../src/jvm/tier";
-import "../src/jvm/natives/jlang";
-import "../src/jvm/natives/jcoll";
-import "../src/jvm/natives/jvalues";
-import "../src/jvm/natives/jio";
-import { loadNativeLib, linkNativeLib } from "../src/native/loader";
-import { calledMissing, unresolved, hostTrace } from "../src/native/host";
-import { jniMissing, registered } from "../src/native/jni";
-import { codeStats, lastFault } from "../src/native/cpu";
-import { NativeFault } from "../src/native/core";
-import { perf } from "../src/perf";
+import { openApk, dexesOf, mountLocalPlatformData } from "./lib.ts";
+import { rt } from "../src/jvm/runtime.ts";
+import { loadDex, loadTier } from "../src/jvm/tier.ts";
+import "../src/jvm/natives/jlang.ts";
+import "../src/jvm/natives/jcoll.ts";
+import "../src/jvm/natives/jvalues.ts";
+import "../src/jvm/natives/jio.ts";
+import { loadNativeLib, linkNativeLib } from "../src/native/loader.ts";
+import { calledMissing, unresolved, hostTrace } from "../src/native/host.ts";
+import { jniMissing, registered } from "../src/native/jni.ts";
+import { codeStats, lastFault } from "../src/native/cpu.ts";
+import { NativeFault } from "../src/native/core.ts";
+import { perf } from "../src/perf.ts";
 
 const args = process.argv.slice(2);
 const [apk, lib] = args.filter((a) => !a.startsWith("--"));

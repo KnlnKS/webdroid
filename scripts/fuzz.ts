@@ -1,11 +1,12 @@
-import { inventory } from "./fuzz/inventory";
-import { replayBundle, runCampaign } from "./fuzz/campaign";
-import { generateApiCases, generateGraphicsCases } from "./fuzz/generate";
-import { validateProbeCase } from "./fuzz/model";
-import { Random, randomSeed } from "./fuzz/random";
-import { replayUiBundle, runUi } from "./fuzz/ui";
-import { generateUiAction } from "./fuzz/ui-model";
-import { runInjectedSmoke } from "./fuzz/self-test";
+import { readFileSync } from "node:fs";
+import { inventory } from "./fuzz/inventory.ts";
+import { replayBundle, runCampaign } from "./fuzz/campaign.ts";
+import { generateApiCases, generateGraphicsCases } from "./fuzz/generate.ts";
+import { validateProbeCase } from "./fuzz/model.ts";
+import { Random, randomSeed } from "./fuzz/random.ts";
+import { replayUiBundle, runUi } from "./fuzz/ui.ts";
+import { generateUiAction } from "./fuzz/ui-model.ts";
+import { runInjectedSmoke } from "./fuzz/self-test.ts";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -81,8 +82,8 @@ switch (command) {
   case "replay": {
     const path = args.find((arg) => !arg.startsWith("-"));
     const oracle = value("--oracle");
-    if (!path) throw new Error("usage: bun run fuzz replay <failure.json> [--oracle <adb-serial>]");
-    const header = JSON.parse(await Bun.file(path).text()) as { kind?: unknown; injected?: unknown };
+    if (!path) throw new Error("usage: pnpm fuzz replay <failure.json> [--oracle <adb-serial>]");
+    const header = JSON.parse(readFileSync(path, "utf8")) as { kind?: unknown; injected?: unknown };
     const kind = header.kind;
     if (kind !== "ui" && header.injected !== true && !oracle) throw new Error("API and graphics replay require --oracle <adb-serial>");
     const reproduced = kind === "ui" ? await replayUiBundle(path, oracle) : await replayBundle(path, oracle!);
@@ -103,5 +104,5 @@ switch (command) {
     }
     break;
   default:
-    throw new Error("usage: bun run fuzz <inventory|api|graphics|ui|replay|smoke> [options]");
+    throw new Error("usage: pnpm fuzz <inventory|api|graphics|ui|replay|smoke> [options]");
 }

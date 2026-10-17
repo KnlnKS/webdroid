@@ -2,11 +2,11 @@
 // that reads tzdata: raw access to guest memory, which is little-endian as the host is, so a
 // `swap` reverses each element's bytes. Addresses from EXTERNAL up are outside guest memory:
 // immutable file pages (Region), or live owner leases which Java accesses through RPC (LiveRegion).
-import { mem } from "../../native/mem";
-import { rt } from "../runtime";
-import { after } from "./jentry";
-import { readFully, type FileSource } from "../../shell/lazyfile";
-import type { ProcessMapping } from "../../native/process-fd";
+import { mem } from "../../native/mem.ts";
+import { rt } from "../runtime.ts";
+import { after } from "./jentry.ts";
+import { readFully, type FileSource } from "../../shell/lazyfile.ts";
+import type { ProcessMapping } from "../../native/process-fd.ts";
 
 type Elements = Int8Array | Uint16Array | Int16Array | Int32Array | BigInt64Array | Float32Array | Float64Array;
 
@@ -20,11 +20,13 @@ const mappedPages = new WeakMap<FileSource, Map<string, Paged>>();
  *  27 MB, of which a date format reads about 2). Native code, which reads memory directly, gets a
  *  copy in guest memory (`guestAddress`). */
 class Region {
+  private readonly source: FileSource; private readonly offset: number; readonly size: number; readonly release?: () => Promise<void>;
   readonly pages: (Uint8Array | undefined)[];
   private readonly loading: Map<number, Promise<void>>;
   private readonly copies = new Map<string, Uint8Array>();
   guest = 0n;
-  constructor(private readonly source: FileSource, private readonly offset: number, readonly size: number, readonly release?: () => Promise<void>) {
+  constructor(source: FileSource, offset: number, size: number, release?: () => Promise<void>) {
+    this.source = source; this.offset = offset; this.size = size; this.release = release;
     const key = `${offset}+${size}`;
     let ranges = mappedPages.get(source), paged = ranges?.get(key);
     if (!ranges) mappedPages.set(source, ranges = new Map());
@@ -79,9 +81,11 @@ class Region {
 }
 /** Java accesses await the canonical owner. Raw guest loads cannot use an RPC address. */
 class LiveRegion {
+  private readonly mapping: ProcessMapping;
   private ranges: [number,number][];
   readonly size: number;
-  constructor(private readonly mapping: ProcessMapping) {
+  constructor(mapping: ProcessMapping) {
+    this.mapping = mapping;
     this.size = mapping.size;
     this.ranges = [[0,Math.ceil(this.size / 4096) * 4096]];
   }

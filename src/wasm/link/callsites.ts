@@ -1,19 +1,19 @@
 // ART interpreter_common.cc DoResolveCallSite: cache successes, allow bootstrap races, and use the first published candidate.
-import { WIDEN, BOX } from "../compiler/fields";
-import type { Program } from "../compiler/program";
-import { OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
-import { methodOf } from "../compiler/ids";
-import { typeFailure } from "../compiler/linkage";
-import { constClass, typeName } from "./classes";
-import { box, chain, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles";
-import type { DexFile, EncVal } from "../../jvm/dex";
-import type { Compiler } from "../compiler/j2w";
-import type { Code } from "../compiler/code";
-import type { MethodInfo } from "../compiler/program";
-import type { World } from "./world";
-import type { Strand } from "./sched";
-import { resolveHandleReference, resolveSignatureTypes } from "./resolution";
+import { WIDEN, BOX } from "../compiler/fields.ts";
+import type { Program } from "../compiler/program.ts";
+import { OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { methodOf } from "../compiler/ids.ts";
+import { typeFailure } from "../compiler/linkage.ts";
+import { constClass, typeName } from "./classes.ts";
+import { box, chain, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles.ts";
+import type { DexFile, EncVal } from "../../jvm/dex.ts";
+import type { Compiler } from "../compiler/j2w.ts";
+import type { Code } from "../compiler/code.ts";
+import type { MethodInfo } from "../compiler/program.ts";
+import type { World } from "./world.ts";
+import type { Strand } from "./sched.ts";
+import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();

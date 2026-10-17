@@ -24,6 +24,19 @@ public class Th {
   static synchronized int callbackOwner(int x) { return delayedCallback(x); }
   static native int await(int x);       // an async native
   static native int driven(int x);      // a generator native
+  static native int drivenEnters(int x); // a generator native that waits, takes a value it yields at once and then enters Java (onDriven)
+  static native int afterEnters(int x);  // a plain native that enters Java (onDriven) through `after` once a Promise settles
+  static int onDriven(int x) { return Thread.currentThread().getName().equals("driven") ? x : -1; }
+  /** what a native enters Java with after a wait runs on the native's thread */
+  static int onDrivenThread(java.util.function.IntUnaryOperator call, int x) throws Exception {
+    int[] r = new int[1];
+    Thread t = new Thread(() -> r[0] = call.applyAsInt(x), "driven");
+    t.start();
+    t.join();
+    return r[0];
+  }
+  static int drivenThread(int x) throws Exception { return onDrivenThread(Th::drivenEnters, x); }
+  static int afterThread(int x) throws Exception { return onDrivenThread(Th::afterEnters, x); }
   static native int nested(int x);      // an async native that enters Java again, which waits again
   static native int flagged(int x);     // a plain native that answers a Promise
   static native int viaJs(int x);       // a plain native that calls Java which waits (a JS frame between the entry and the import)

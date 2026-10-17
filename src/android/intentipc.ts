@@ -2,10 +2,10 @@
 // through its CREATOR), the bytes the broker already carries for binder transactions. Its
 // extras stay parcelled until the receiving side reads them, so a process routing an intent
 // needs none of the classes they name.
-import { vcall } from "../jvm/natives/jentry";
-import { awaited, rt, type Gen } from "../jvm/runtime";
-import { asSystem, parcelled, unparcelled, type ParcelData } from "./binder";
-import type { IntentCodec } from "../shell/pendingintents";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { awaited, rt, type Gen } from "../jvm/runtime.ts";
+import { asSystem, parcelled, unparcelled, type ParcelData } from "./binder.ts";
+import type { IntentCodec } from "../shell/pendingintents.ts";
 
 export const encodeIntent = parcelled;
 export const decodeIntent = (data: ParcelData) => unparcelled("android/content/Intent", data);

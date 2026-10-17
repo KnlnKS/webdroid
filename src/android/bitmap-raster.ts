@@ -1,8 +1,8 @@
-import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline";
-import type { NativePath } from "./path";
-import { isRecording, type Ctx2D } from "./recording";
-import type { NativePaint } from "./paint";
-import type { NativeCanvas } from "./canvas";
+import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline.ts";
+import type { NativePath } from "./path.ts";
+import { isRecording, type Ctx2D } from "./recording.ts";
+import type { NativePaint } from "./paint.ts";
+import type { NativeCanvas } from "./canvas.ts";
 
 function eligible(canvas: NativeCanvas, paint: NativePaint): boolean {
   return !!canvas.bmp && !paint.shader && !paint.maskFilter && (!paint.pathEffect || !!paint.dash) &&

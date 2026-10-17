@@ -1,15 +1,15 @@
 // WebViewFactory's provider: the WebView implementation package is this one (webkit.ts's provider),
 // and what AOSP's WebView statics reach through it.
-import { awaited, rt, JObj, stubs, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
-import { vcall, scall, newObj, linkClass } from "../jvm/natives/jentry";
-import { boxBool } from "../jvm/natives/jbox";
-import { hostStub } from "./binder";
-import { onMain } from "./mainloop";
-import { cookieManager } from "./cookies";
-import { createFunctor } from "./webfunctor";
-import { newSettings } from "./websettings";
-import { defaultUserAgent, providerVersion } from "./webuseragent";
-import type { WebViewChromium } from "./webkit";
+import { awaited, rt, JObj, stubs, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { vcall, scall, newObj, linkClass } from "../jvm/natives/jentry.ts";
+import { boxBool } from "../jvm/natives/jbox.ts";
+import { hostStub } from "./binder.ts";
+import { onMain } from "./mainloop.ts";
+import { cookieManager } from "./cookies.ts";
+import { createFunctor } from "./webfunctor.ts";
+import { newSettings } from "./websettings.ts";
+import { defaultUserAgent, providerVersion } from "./webuseragent.ts";
+import type { WebViewChromium } from "./webkit.ts";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 const WEBVIEW_PACKAGE = "com.android.webview";

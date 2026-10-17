@@ -1,22 +1,22 @@
-import { emitSymbolicSite } from "./sites";
-import { Code, OP } from "./code";
-import { T, ref, refNull, type VT } from "./wasmbin";
-import { kindOf, type Kind, type MethodInfo } from "./program";
-import type { Compiler } from "./j2w";
-import { H, elemKindOf, type ElemKind } from "./consts";
-import { isWide } from "../../jvm/abi";
-import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
-import { Flow, Go, structureAny } from "../../jvm/structure";
-import { mid } from "./ids";
-import { constClass, emitStoreCheck } from "../link/classes";
-import { emitPolymorphic } from "./poly";
-import { emitCustom, emitHandleConstant, emitTypeConstant } from "../link/mhandles";
-import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
-import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
-import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
-import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo";
-import { emitRestored, FUEL } from "../link/sched";
-import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
+import { emitSymbolicSite } from "./sites.ts";
+import { Code, OP } from "./code.ts";
+import { T, ref, refNull, type VT } from "./wasmbin.ts";
+import { kindOf, type Kind, type MethodInfo } from "./program.ts";
+import type { Compiler } from "./j2w.ts";
+import { H, elemKindOf, type ElemKind } from "./consts.ts";
+import { isWide } from "../../jvm/abi.ts";
+import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { type Flow, Go, structureAny } from "../../jvm/structure.ts";
+import { mid } from "./ids.ts";
+import { constClass, emitStoreCheck } from "../link/classes.ts";
+import { emitPolymorphic } from "./poly.ts";
+import { emitCustom, emitHandleConstant, emitTypeConstant } from "../link/mhandles.ts";
+import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
+import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
+import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc.ts";
+import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo.ts";
+import { emitRestored, FUEL } from "../link/sched.ts";
+import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer.ts";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
@@ -49,6 +49,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
 }
 
 export class MC {
+  cx: Compiler; m: MethodInfo;
   symbolic = true;
   code: Code; prepared!: PreparedMethod; flow!: Flow; typing!: Typing; item; dex;
   /** wasm local of each web */
@@ -87,7 +88,8 @@ export class MC {
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
-  constructor(public cx: Compiler, public m: MethodInfo) {
+  constructor(cx: Compiler, m: MethodInfo) {
+    this.cx = cx; this.m = m;
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     this.tries = this.item.tries.length > 0;

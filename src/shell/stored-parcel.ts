@@ -1,14 +1,15 @@
-import type { ParcelData } from "../android/binder";
-import { FileDescriptors, type RetainedDescriptor } from "./file-descriptors";
+import type { ParcelData } from "../android/binder.ts";
+import type { FileDescriptors, RetainedDescriptor } from "./file-descriptors.ts";
 
 export class StoredParcelError extends Error {}
 
 /** Broker-local descriptor ownership; no retained right is exposed as a wire token. */
 export class StoredParcel {
+  private kernel: FileDescriptors; private data: ParcelData;
   private rights=new Map<number,RetainedDescriptor>();
   private closed=false;
   private closing:Promise<void>|undefined;
-  private constructor(private kernel:FileDescriptors,private data:ParcelData) {}
+  private constructor(kernel:FileDescriptors,data:ParcelData) { this.kernel = kernel; this.data = data; }
   static async retain(kernel:FileDescriptors,pid:number,data:ParcelData): Promise<StoredParcel> {
     const stored=new StoredParcel(kernel,{bytes:data.bytes.slice(),objects:[]});
     const positions=new Set<number>();

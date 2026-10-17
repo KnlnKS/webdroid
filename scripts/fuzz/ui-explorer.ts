@@ -1,7 +1,9 @@
-import { createReadStream, renameSync } from "node:fs";
-import type { UiNode } from "../../tests/e2e/types";
-import { Random } from "./random";
-import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction, type UiAction } from "./ui-model";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { writeWhole } from "../generated.ts";
+import type { UiNode } from "../../tests/e2e/types.ts";
+import type { Random } from "./random.ts";
+import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction, type UiAction } from "./ui-model.ts";
 
 const MAX_STATES = 256;
 const MAX_ACTIONS_PER_STATE = 256;
@@ -53,24 +55,26 @@ function parseJournal(value: unknown, apkHash: string): Journal {
 }
 
 export class UiExplorer {
+  private readonly file: string; private readonly apkHash: string;
   private readonly states: Record<string, State>;
   private readonly signals: Set<string>;
   private readonly scrollAttempts: Record<string, number>;
   private liveCandidates: UiAction[] = [];
   private liveKey = "";
 
-  private constructor(private readonly file: string, private readonly apkHash: string, journal: Journal) {
+  private constructor(file: string, apkHash: string, journal: Journal) {
+    this.file = file; this.apkHash = apkHash;
     this.states = journal.states;
     this.scrollAttempts = journal.scrollAttempts;
     this.signals = new Set(journal.signals);
   }
 
   static async open(directory: string, pkg: string, apk: string): Promise<UiExplorer> {
-    const digest = new Bun.CryptoHasher("sha256");
+    const digest = createHash("sha256");
     for await (const chunk of createReadStream(apk)) digest.update(chunk);
     const apkHash = digest.digest("hex");
     const file = `${directory}/${pkg}-${apkHash.slice(0, 12)}-v2.exploration.json`;
-    const stored: unknown = await Bun.file(file).exists() ? JSON.parse(await Bun.file(file).text()) :
+    const stored: unknown = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) :
       { schemaVersion: 2, apkHash, states: {}, scrollAttempts: {}, signals: [] };
     return new UiExplorer(file, apkHash, parseJournal(stored, apkHash));
   }
@@ -144,9 +148,7 @@ export class UiExplorer {
   async save(): Promise<void> {
     const journal: Journal = { schemaVersion: 2, apkHash: this.apkHash, states: this.states, scrollAttempts: this.scrollAttempts,
       signals: [...this.signals] };
-    const temporary = `${this.file}.${process.pid}.tmp`;
-    await Bun.write(temporary, JSON.stringify(journal));
-    renameSync(temporary, this.file);
+    writeWhole(this.file, JSON.stringify(journal));
   }
 
   summary(): { states: number; actions: number; signals: number } {

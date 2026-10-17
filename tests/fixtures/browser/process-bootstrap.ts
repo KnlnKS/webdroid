@@ -1,18 +1,18 @@
-import { processBroker, type ProcessEndpoint } from "../../../src/shell/processes";
-import { packages, PackageRecord } from "../../../src/android/packages";
-import { Resources } from "../../../src/android/res";
-import { TV } from "../../../src/android/axml";
-import { vfs } from "../../../src/shell/vfs";
-import { packedArchives } from "../../../src/shell/packedarchive";
-import { RemoteFile } from "../../../src/shell/remote-file";
-import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data";
-import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock";
-import { callProxy } from "../../../src/shell/process-port";
-import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes";
-import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo";
+import { processBroker, type ProcessEndpoint } from "../../../src/shell/processes.ts";
+import { packages, PackageRecord } from "../../../src/android/packages.ts";
+import { Resources } from "../../../src/android/res.ts";
+import { TV } from "../../../src/android/axml.ts";
+import { vfs } from "../../../src/shell/vfs.ts";
+import { packedArchives } from "../../../src/shell/packedarchive.ts";
+import { RemoteFile } from "../../../src/shell/remote-file.ts";
+import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
+import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
+import { callProxy } from "../../../src/shell/process-port.ts";
+import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes.ts";
+import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
 
 export async function bootstrapOwnership() {
-  const {sendFrames} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port");
+  const {sendFrames} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port.ts");
   const displays: Promise<void>[] = [];
   let reads = 0, began!: () => void;
   const waiting = new Promise<void>(resolve => began = resolve);
@@ -288,7 +288,7 @@ export async function clockBootstrapOwnership() {
       const endpoint = new MessageChannel();
       await serveWorkerEndpoint(endpoint.port1);
       const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
-      const {RemoteFile} = await import(${JSON.stringify(location.origin + "/file.js")});
+      const {RemoteFile} = await import(${JSON.stringify(location.origin + "/remote-file.js")});
       const file = new RemoteFile(data.registry.find(record=>record.pkg===data.pkg).source);
       const archive = Array.from(await file.read(0,1));
       setGuestTimeout(()=>{
@@ -480,7 +480,7 @@ export async function clipboardOwnership() {
     const retainedMetadata = (await peers[0].endpoint.fileStat(directory)).value?.uid === packages.get(pkg)!.uid;
     const changedMode = await ask("fileSetAttributes",directory,{mode:0o700}) === 0 && ((await peers[0].endpoint.fileStat(directory)).value!.mode & 0o7777) === 0o700;
     await broker.files.flush();
-    const {PrivateFiles} = await import("../../../src/shell/privatefiles");
+    const {PrivateFiles} = await import("../../../src/shell/privatefiles.ts");
     const restarted = new PrivateFiles(), hooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
     let restoredMetadata = false;
     try {
@@ -582,7 +582,7 @@ export async function storedClipboardRights() {
 
 
 export async function pointerInputOwnership() {
-  const {attachPointerInput} = await import("../../../src/shell/pointer-input");
+  const {attachPointerInput} = await import("../../../src/shell/pointer-input.ts");
   type Calls = { pointer(owner: number, action: number, x: number, y: number): Promise<void>; release(): Promise<void>; samples(): Promise<number[][]> };
   const code = `import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
     let release, samples=[];
@@ -612,7 +612,7 @@ export async function pointerInputOwnership() {
 }
 
 export async function workerDiagnosticOwnership() {
-  const {workerControlMethods} = await import(location.origin+"/worker-control-methods.js") as typeof import("../../../src/shell/worker-control-methods");
+  const {workerControlMethods} = await import(location.origin+"/worker-control-methods.js") as typeof import("../../../src/shell/worker-control-methods.ts");
   const broker=processBroker(),pkg="test.worker.diagnostics",clients:ReturnType<typeof callProxy>[]=[];
   const root={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
@@ -737,7 +737,7 @@ export async function locationOwnership() {
 }
 
 export async function imeOwnership() {
-  const {receiveIme} = await import(location.origin+"/ime-port.js") as typeof import("../../../src/shell/ime-port");
+  const {receiveIme} = await import(location.origin+"/ime-port.js") as typeof import("../../../src/shell/ime-port.ts");
   const canvas = document.createElement("canvas"); document.body.append(canvas);
   const port = new MessageChannel(), owner = receiveIme(port.port1,canvas), inputs:string[]=[];
   let entered!:()=>void; const first = new Promise<void>(resolve=>entered=resolve);

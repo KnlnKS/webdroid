@@ -2,13 +2,13 @@
 // the stack allocator can march into), a fresh Cpu, and the slice loop run to the return
 // sentinel. Encodings in the tests come from `clang -target aarch64-linux-gnu`, never hand-derived.
 // Every program also runs past the heat threshold so its region compiles (synchronously under
-// bun), and the JIT's register file must agree with the interpreter's.
-import { expect } from "bun:test";
-import { mem } from "./mem";
-import { Cpu } from "./cpu";
-import { core, jitStats, JIT_HEAT } from "./core";
-import { mainThread } from "../jvm/natives/jentry";
-import { RET_SENTINEL } from "./abi";
+// node), and the JIT's register file must agree with the interpreter's.
+import { expect } from "vite-plus/test";
+import { mem } from "./mem.ts";
+import { Cpu } from "./cpu.ts";
+import { core, jitStats, JIT_HEAT } from "./core.ts";
+import { mainThread } from "../jvm/natives/jentry.ts";
+import { RET_SENTINEL } from "./abi.ts";
 
 export const RET = 0xd65f03c0;
 /** run c's slices to the return sentinel; a fault's synchronous signal throws with its siginfo */
@@ -40,7 +40,7 @@ function execute(at: number, setup: (c: Cpu) => void): Cpu {
   finish(c);
   return c;
 }
-function place(words: number[]): number {
+export function place(words: number[]): number {
   const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
   for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
   return at;
@@ -78,7 +78,6 @@ export function sweep(run1: (at: number, setup: (c: Cpu) => void) => Cpu, at: nu
 export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   return sweep(execute, place(words), setup);
 }
-/** the JIT tier alone: for a fixture that decides its own comparison */
 /** Check one register-only program against many inputs in both tiers without recompiling it per input. */
 export function runCases(words: number[], setups: ((c: Cpu) => void)[], check: (tier: string, c: Cpu, index: number) => void): void {
   const at = place(words);
