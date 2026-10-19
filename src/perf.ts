@@ -31,7 +31,7 @@ export const perf = {
   wasmUpgrades: 0, wasmAhead: 0,
   // build methods the warm Worker had the engine compile ahead of this process (host/warm-worker.ts), and modules it could not instantiate
   wasmWarmed: 0, wasmWarmSkipped: 0,
-  // first-tier units merged away and dropped for collection a batch at a time (World.retire), and those the collector has freed
+  // first-tier units merged away and dropped for collection a batch at a time (Tiering.retire), and those the collector has freed
   wasmRetired: 0, wasmCollected: 0,
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,
   bootMs: 0,

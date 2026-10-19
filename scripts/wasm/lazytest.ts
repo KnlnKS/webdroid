@@ -61,11 +61,11 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   let first = call(40000);
   const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!), initial = w.table.get(slot);
   // the second tier waits until the program has been hot for a few ms
-  if (w.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
+  if (w.tiers.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
   const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
-  check("an upgraded method is not queued again", (call(40000), w.upgradeJob(slot)), undefined);
+  check("an upgraded method is not queued again", (call(40000), w.tiers.upgradeJob(slot)), undefined);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
   check("and the method is compiled afresh", call(1000), 11 * 1000);

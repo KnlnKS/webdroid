@@ -122,11 +122,11 @@ export interface HostNet {
   wait?(w: World): Promise<void>;
 }
 
-/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `World.adoptUnit`; it may defer a job, or decline, and then the World compiles inline. */
+/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `Tiering.adoptUnit`; it may defer a job, or decline, and then the World compiles inline. */
 export interface CompileService {
-  /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); "later" while it has too many waiting, false if it cannot */
+  /** takes the second-tier compile of the method in `slot` (`Tiering.upgradeJob` describes it); "later" while it has too many waiting, false if it cannot */
   submit(w: World, slot: number): boolean | "later";
-  /** the World has first-tier units to merge (World.mergeJob), which the service takes when no second-tier job waits */
+  /** the World has first-tier units to merge (Tiering.mergeJob), which the service takes when no second-tier job waits */
   merge(w: World): void;
   /** dex files were added to a defining namespace, or (null) something the service cannot follow was: it stops serving */
   added(dexes: DexFile[] | null, loader?: Loader): void;

@@ -11,7 +11,7 @@ export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
   try { return new Error(); } finally { Error.stackTraceLimit = prior; }
 }
-/** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
+/** calls and loop iterations a method runs as first-tier code before it is recompiled (Tiering.upgrade) */
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;

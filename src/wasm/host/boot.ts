@@ -54,7 +54,7 @@ declare global {
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
 const START_MS = 15_000;
-/** a slice of idle time spent compiling ahead (World.ahead): an input that arrives meanwhile waits no longer than this */
+/** a slice of idle time spent compiling ahead (AheadCompiler.compile): an input that arrives meanwhile waits no longer than this */
 const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
 let aheading = false;
 
@@ -69,7 +69,7 @@ export const hostLoop: HostLoop = {
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = new World(prog, { holdUpgrades: () => starting, answering: () => answeringFor() > 0, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
-  globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.demandMark(), demandSince: (mark) => w.demandSince(mark) };
+  globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.ahead.demandMark(), demandSince: (mark) => w.ahead.demandSince(mark) };
   w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
@@ -105,7 +105,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.ranBuildSlots().platform });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
     return made;
   };
   if (typeof location === "undefined") {
@@ -173,7 +173,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and not
       // while the app may still be answering an input
       const quiet = () => idle() && !yieldStats.pending() && sinceInput() > AHEAD_AFTER_INPUT_MS;
-      try { while (quiet() && world.ahead(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
+      try { while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
       catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
     },
     beginAppCode(dexes, roots, shown, status) {

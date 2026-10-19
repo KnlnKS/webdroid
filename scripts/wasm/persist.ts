@@ -188,7 +188,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   check("it follows the page's numbering", uc.sync(page.numbers.since(page.base), true), true);
   check("and then numbers the same", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!);
-  const job = page.upgradeJob(slot)!, from = page.numbers.marks();
+  const job = page.tiers.upgradeJob(slot)!, from = page.numbers.marks();
   check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
   if (job.prepared?.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
@@ -209,27 +209,27 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     check("the unit carries the selector it numbered", unit.numbering.selectors.join(), "pst.extra()V");
     check("it was numbered from the page's state", sameMarks(unit.numbering.from, from), true);
     page.selectorId("pst.other()V");        // the page numbered something meanwhile
-    check("a unit that numbered something is not taken after the page did", page.adoptUnit(slot, job, unit, page.epoch), false);
+    check("a unit that numbered something is not taken after the page did", page.tiers.adoptUnit(slot, job, unit, page.epoch), false);
     check("and the page's numbering is untouched", page.numbers.selKeys.at(-1), "pst.other()V");
     // the worker forgets its numbering and follows the page: the next unit is made over the page's state
     check("the worker takes the page's numbering after dropping its own", uc.sync(page.numbers.since(from), false), true);
     check("it forgot the selector it numbered", worker.numbers.selectors.has("pst.extra()V"), false);
     check("and has the page's", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
-    const next = page.upgradeJob(slot)!, again = uc.upgrade(next);
+    const next = page.tiers.upgradeJob(slot)!, again = uc.upgrade(next);
     if (typeof again !== "string") {
-      check("a worker unit without a stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
-      check("a worker unit with the previous stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
+      check("a worker unit without a stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
+      check("a worker unit with the previous stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
     }
-    check("a unit made then is taken", typeof again !== "string" && page.adoptUnit(slot, next, again, page.epoch), true);
+    check("a unit made then is taken", typeof again !== "string" && page.tiers.adoptUnit(slot, next, again, page.epoch), true);
   }
 }
 {
   const page = world(app), worker = world(app, { compileOnly: true }), uc = new UnitCompiler(worker);
   page.entry("Pst", "hot", "(I)I")(10);
   uc.sync(page.numbers.since(page.base), true);
-  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.upgradeJob(slot)!, unit = uc.upgrade(job);
+  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.tiers.upgradeJob(slot)!, unit = uc.upgrade(job);
   page.addDexes([]);
-  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.adoptUnit(slot, job, unit, page.epoch - 1), false);
+  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.tiers.adoptUnit(slot, job, unit, page.epoch - 1), false);
 }
 
 // ---- second-tier units from the worker

@@ -238,7 +238,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const slot = w.slotOf(method), helperSlot = w.slotOf(helper);
     await w.host.link(slot); await w.host.link(helperSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * helperSlot, 1)[0] = HOT_BUDGET;
-    const before = w.upgradeJob(slot);
+    const before = w.tiers.upgradeJob(slot);
     if (!before || [...before.installed, ...before.copies].includes(mid(helper))) throw new Error("symbolic promotion selected an unresolved local copy");
     if (w.prog.initiatedBy(loader, "SymbolicHelper")) throw new Error("promotion eagerly initiated its helper");
     const strand = w.sched.strand();
@@ -247,7 +247,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const winner = w.prog.require(resolved).byKey.get("value()I")!, winnerSlot = w.slotOf(winner);
     await w.host.link(slot); await w.host.link(winnerSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * winnerSlot, 1)[0] = HOT_BUDGET;
-    const after = w.upgradeJob(slot);
+    const after = w.tiers.upgradeJob(slot);
     if (!after?.copies.includes(mid(winner)) || resolved !== helperKey && after.copies.includes(mid(helper))) throw new Error("promotion did not recheck the Java loader's winning helper");
     if (await w.entryAsync(key, "symbolic", "()I")() !== expected) throw new Error("copy fixture changed Java result");
     console.log("promotion copies: unresolved helper excluded without loading; initiated helper copied on next selection; wasm=42");
@@ -608,27 +608,25 @@ async function hotRefreshControl(): Promise<void> {
     const suffix = custom ? "@" + loader.id : "", cls = "HotRefresh" + suffix;
     const run = w.entryAsync(cls, "run", "(Z)I"), root = p.resolve(cls, "run", "(Z)I")!, slot = w.slotOf(root);
     check("seed before later reference", await run(0), expected[0]);
-    const job = w.upgradeJob(slot)!;
+    const job = w.tiers.upgradeJob(slot)!;
     if (!job || !job.copies.some(id => id.startsWith(cls + ".helper"))) throw new Error("hot refresh did not copy the executed callee");
     const cx = new Compiler(w), method = (id: string) => methodOf(p, id)!;
     const built = cx.buildUnit(job.installed.map(id => method(id)!), { copies: job.copies.map(id => method(id)!), hot: true, seq: job.unit });
     if (!cx.symbolicImports.size) throw new Error("hot refresh seed lost the unused later reference");
     // Install the actual compiled unit with the same canonical publication path as inline promotion.
-    const owner = w as unknown as { unitImports(cx: Compiler): Record<string, unknown>; unitClock(): { start: number; accounted: number };
-      install(group: number[], hot: boolean, cx: Compiler, imports: Record<string, unknown>, built: ReturnType<Compiler["buildUnit"]>, slot: number, clock: { start: number; accounted: number }): void };
-    owner.install(job.installed.map(id => w.slotOf(method(id)!)), true, cx, owner.unitImports(cx), built, slot, owner.unitClock());
+    w.tiers.install(job.installed.map(id => w.slotOf(method(id)!)), true, cx, w.unitImports(cx), built, slot, w.unitClock());
     const before = w.table.get(slot), deopts = w.stats.invalidated;
     check("copied callee resolves later reference", await run(1), expected[1]);
     check("hold preserves hot unit", w.table.get(slot), before);
-    check("hold defers refresh", w.hotRefreshes, 0);
+    check("hold defers refresh", w.tiers.hotRefreshes, 0);
     w.opts.holdUpgrades = () => false;
-    for (let i = 0; i < 100 && !w.hotRefreshes; i++) { await new Promise(r => setTimeout(r, 1)); check("refresh result", await run(1), expected[1]); }
-    check("ready sites coalesce into one refresh", w.hotRefreshes, 1);
+    for (let i = 0; i < 100 && !w.tiers.hotRefreshes; i++) { await new Promise(r => setTimeout(r, 1)); check("refresh result", await run(1), expected[1]); }
+    check("ready sites coalesce into one refresh", w.tiers.hotRefreshes, 1);
     check("refresh replaces live export", w.table.get(slot) !== before, true);
     check("refresh is not deoptimization", w.stats.invalidated, deopts);
     const refreshed = w.table.get(slot), units = w.stats.units;
     check("repeat result", await run(1), expected[1]);
-    check("repeat does not refresh", w.hotRefreshes, 1);
+    check("repeat does not refresh", w.tiers.hotRefreshes, 1);
     check("repeat does not compile", w.stats.units, units);
     check("repeat keeps live export", w.table.get(slot), refreshed);
     w.addDexes(loadDexes(late), loader);
@@ -647,22 +645,22 @@ async function hotRefreshControl(): Promise<void> {
   const page = world(files, { natives, holdUpgrades: () => true }), worker = world(files, { compileOnly: true }), uc = new UnitCompiler(worker);
   const run = page.entryAsync("HotRefresh", "run", "(Z)I"), slot = page.slotOf(page.prog.resolve("HotRefresh", "run", "(Z)I")!);
   check("worker seed", await run(0), expected[0]);
-  const job = page.upgradeJob(slot)!, marks = page.numbers.marks(), epoch = page.epoch;
+  const job = page.tiers.upgradeJob(slot)!, marks = page.numbers.marks(), epoch = page.epoch;
   check("worker numbering sync", uc.sync(page.numbers.since(page.base), true), true);
   const result = uc.upgrade(job);
   if (typeof result === "string") throw new Error(result);
   check("resolve before worker publication", await run(1), expected[1]);
-  check("publish after readiness", page.adoptUnit(slot, job, result, epoch), true);
+  check("publish after readiness", page.tiers.adoptUnit(slot, job, result, epoch), true);
   const n = result.numbering, keep = !!(n.names.length + n.tail.length + n.selectors.length + n.gaps.length + n.links.length);
   const syncFrom = keep ? page.numbers.marks() : marks;
-  const refresh = page.upgradeJob(slot)!;
+  const refresh = page.tiers.upgradeJob(slot)!;
   if (refresh?.refresh === undefined) throw new Error("worker publication missed prior readiness");
   check("refresh worker numbering sync", uc.sync(page.numbers.since(syncFrom), keep), true);
   const refreshed = uc.upgrade(refresh);
   if (typeof refreshed === "string") throw new Error(refreshed);
-  check("worker refresh adopted", page.adoptUnit(slot, refresh, refreshed, page.epoch), true);
+  check("worker refresh adopted", page.tiers.adoptUnit(slot, refresh, refreshed, page.epoch), true);
   check("worker refresh result", await run(1), expected[1]);
-  check("worker refresh coalesced", page.hotRefreshes, 1);
+  check("worker refresh coalesced", page.tiers.hotRefreshes, 1);
   await hotRefreshPendingControl(files, late);
   console.log(`hot refresh: ${checks} JDK-matched checks; root/custom, hold, late override and worker publication/generation`);
 }
@@ -677,13 +675,11 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
     return { w, run, slot };
   };
   const build = (w: ReturnType<typeof world>, slot: number) => {
-    const owner = w as unknown as { unitImports(cx: Compiler): Record<string, unknown>; unitClock(): { start: number; accounted: number };
-      install(group: number[], hot: boolean, cx: Compiler, imports: Record<string, unknown>, built: ReturnType<Compiler["buildUnit"]>, slot: number, clock: { start: number; accounted: number }): void };
-    const clock = owner.unitClock(), job = w.upgradeJob(slot);
+    const clock = w.unitClock(), job = w.tiers.upgradeJob(slot);
     if (!job) throw new Error("pending control has no real compilation job");
     const cx = new Compiler(w), methods = job.installed.map(id => methodOf(w.prog, id)!);
     const built = cx.buildUnit(methods, { copies: job.copies.map(id => methodOf(w.prog, id)!), hot: true, seq: job.unit });
-    return () => owner.install(methods.map(m => w.slotOf(m)), true, cx, owner.unitImports(cx), built, slot, clock);
+    return () => w.tiers.install(methods.map(m => w.slotOf(m)), true, cx, w.unitImports(cx), built, slot, clock);
   };
   const state = (w: ReturnType<typeof world>, slot: number) => w.slots.peek(slot) as { pending?: boolean; hot?: boolean };
   const connect = (w: ReturnType<typeof world>) => {
@@ -745,7 +741,7 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
         check("actual refresh adopted", c.client.stats.adopted, 1);
         check("actual refresh releases pending", state(w, slot).pending, false);
         check("actual refresh replaces export", w.table.get(slot) !== saved, true);
-        check("actual refresh increments count", w.hotRefreshes, 1);
+        check("actual refresh increments count", w.tiers.hotRefreshes, 1);
       } else if (outcome === "stale") {
         const response = c.compile();
         build(w, slot)(); const replacement = w.table.get(slot);
@@ -775,7 +771,7 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
         check("failed refresh recorded", c.client.stats.failed, 1);
         check("failed refresh releases pending", state(w, slot).pending, false);
         check("failed refresh keeps valid export", w.table.get(slot), saved);
-        check("failed refresh drops only tracking", w.upgradeJob(slot), undefined);
+        check("failed refresh drops only tracking", w.tiers.upgradeJob(slot), undefined);
       }
       check("settled transition executes", await run(1), 1536);
       if (outcome === "failed") check("failed refresh does not retry", c.client.stats.jobs, 1);

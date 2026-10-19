@@ -100,7 +100,7 @@ export class NeedsNumber extends Error { method?: MethodInfo }
 export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
   | "idOf" | "slotOf" | "vslot" | "selectorId" | "ensureSlot" | "ensureBody" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
   | "needsSymbolicSite" | "guestShared" | "sharedHelpers">;
-/** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (World.group) */
+/** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** how Compiler.buildUnit compiles its methods */
 export interface UnitOptions {
@@ -141,7 +141,7 @@ export class Compiler implements Base {
   linkErrors: string[] = [];
   /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
   absent: [string, MethodInfo | undefined][] = [];
-  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
+  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see Tiering.upgrade) */
   counting = true;
   /** the classes this module allocates */
   allocs = new Set<string>();
@@ -334,7 +334,7 @@ export class Compiler implements Base {
     if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
-  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
+  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see Planner.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
     return (this.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
   }
