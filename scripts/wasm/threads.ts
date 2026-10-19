@@ -24,6 +24,7 @@ import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/compiler/exc.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
+
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { filesIn, shellIn } from "./tools.ts";
 

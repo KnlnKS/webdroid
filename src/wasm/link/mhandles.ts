@@ -5,17 +5,16 @@
 // calls the member through a generated thunk and answers the boxed result, which the site unboxes. Transformer handles run their unchanged
 // libcore Java code over EmulatedStackFrame; invokeExactWithFrame re-enters the direct-handle dispatcher.
 import { T } from "../compiler/wasmbin.ts";
-import { ACC, javaName, kindOf, type FieldInfo, type Kind, type MethodInfo, type Program } from "../compiler/program.ts";
+import { ACC, javaName, kindOf, type FieldInfo, type Kind, type MethodInfo, type Program, descOf, typeName } from "../compiler/program.ts";
 import { isWide, descToName, parseMethodDesc } from "../../jvm/abi.ts";
-import { hostReflect, RInfo } from "./reflect.ts";
+import { hostReflect } from "./reflect.ts";
 import { BOX } from "../compiler/fields.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import type { MC } from "../compiler/method.ts";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
-import { canAccess, constClass, descOf, typeName } from "./classes.ts";
-import { failed, prettyType, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage.ts";
+import { failed, prettyType, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "../compiler/linkage.ts";
 import { type Strand } from "./sched.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { emitVarHandleAccess } from "../compiler/poly.ts";
@@ -23,6 +22,7 @@ import { invokeVarHandleView } from "./vhandleviews.ts";
 import { invokeCustom } from "./callsites.ts";
 import { mid } from "../compiler/ids.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
+import { RInfo } from "../compiler/info.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** leaves the element array of the Object[] (anyref) on the stack */
@@ -75,9 +75,9 @@ function emitMethodType(cx: Compiler, c: Code, ret: string, params: string[]): v
   cx.emitNewArray(c, `[L${CLASS};`, () => c.i32(params.length)); c.lset(arr);
   params.forEach((d, i) => {
     c.lget(arr); objects(cx, c).i32(i);
-    constClass(cx, c, typeName(d)); c.arraySet(cx.tData.ref);
+    cx.constClass(c, typeName(d)); c.arraySet(cx.tData.ref);
   });
-  constClass(cx, c, typeName(ret)); c.lget(arr);
+  cx.constClass(c, typeName(ret)); c.lget(arr);
   cx.callMethod(c, cx.prog.resolve(MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`)!);
 }
 
@@ -100,7 +100,7 @@ type HandleFailure = LinkFailure | { errorClass: string; message: string };
 export function resolveHandleMember(w: World, referrer: MethodInfo, index: number): HandleMember | HandleFailure {
   const prog = w.prog, dex = referrer.dex, h = dex.methodHandle(index);
   const access = (owner: string, flags: number, member: string): HandleFailure | undefined =>
-    canAccess(referrer.cls, prog.require(owner), flags, w) ? undefined : { errorClass: "java/lang/IllegalAccessError", message: `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}` };
+    canAccess(prog, referrer.cls, prog.require(owner), flags) ? undefined : { errorClass: "java/lang/IllegalAccessError", message: `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}` };
   if (h.type <= 3) {
     const r = resolveFieldRef(prog, dex, h.idx, h.type <= 1, referrer.cls);
     if (failed(r)) return r;
@@ -144,7 +144,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
       c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");
       cx.callMethod(c, prog.resolve("java/lang/invoke/MethodHandles", "lookup", `()L${L};`)!); c.lset(lookup);
-      c.lget(lookup); constClass(cx, c, cls); c.lget(type);
+      c.lget(lookup); cx.constClass(c, cls); c.lget(type);
       cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); return true;
     }
     kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
@@ -410,13 +410,13 @@ function readFrame(cx: Compiler, c: Code, reader: number, desc: string): void {
   const name = `${FRAME}$StackFrameReader`;
   c.lget(reader);
   if (BOX[desc]) { cx.callMethod(c, cx.prog.resolve(name, "next" + primitiveNames[desc], `()${desc}`)!); box(cx, c, desc); }
-  else { constClass(cx, c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`)!); }
+  else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`)!); }
 }
 function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: () => void): void {
   const name = `${FRAME}$StackFrameWriter`;
   c.lget(writer); value();
   if (BOX[desc]) { unbox(cx, c, desc); cx.callMethod(c, cx.prog.resolve(name, "putNext" + primitiveNames[desc], `(${desc})V`)!); }
-  else { constClass(cx, c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
+  else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
 }
 function signatureOf(w: World, type: object): { params: string[]; ret: string } {
   const s = state(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));

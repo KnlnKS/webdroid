@@ -68,6 +68,15 @@ export function resolveSymbolicMethod(prog: Program, cls: string, name: string, 
 /** Package-private slots retain their declaring runtime package even when binary prototypes match. */
 export const dispatchMethodKey = (key: string): string => key.slice(key.indexOf("\0") + 1);
 export const dispatchSlotKey = (m: MethodInfo): string => (m.flags & (ACC.PUBLIC | ACC.PROTECTED) ? "" : m.cls + "\0") + javaName(m.key);
+/** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
+ *  the caller's own, in the caller's package, or protected and inherited */
+export function canAccess(prog: Program, caller: string, decl: JClass, flags: number): boolean {
+  const samePackage = sameRuntimePackage(prog, caller, decl.name);
+  if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
+  if (flags & ACC.PUBLIC || caller === decl.name) return true;
+  if (flags & ACC.PRIVATE) return false;
+  return samePackage || !!(flags & ACC.PROTECTED) && prog.isSubclass(caller, decl.name);
+}
 export const overridesMethod = (prog: Program, cls: string, m: MethodInfo): boolean => !(m.flags & ACC.PRIVATE) && (!!(m.flags & (ACC.PUBLIC | ACC.PROTECTED)) || sameRuntimePackage(prog, cls, m.cls));
 
 /** Select an override of this declaration, rather than a same-named inaccessible member. */

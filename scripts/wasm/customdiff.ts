@@ -16,14 +16,16 @@ import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
 import { mem } from "../../src/native/mem.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
-import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe.ts";
+import { fieldCookie } from "../../src/wasm/link/unsafe.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { definingLoader } from "../../src/wasm/link/loaders.ts";
 import { idOfClass } from "../../src/wasm/link/classes.ts";
+
 import { definitionReady } from "../../src/wasm/link/resolution.ts";
 import { androidPlatform } from "../android-sdk.ts";
+import { UInfo } from "../../src/wasm/compiler/info.ts";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {

@@ -2,6 +2,7 @@ import { OP, type Code } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { MATH_IMPORTS, type Compiler, type Intrinsic } from "../compiler/j2w.ts";
 import { emitRefCopy, classIntrinsics } from "./classes.ts";
+
 import { unsafeIntrinsics } from "./unsafe.ts";
 import { reflectIntrinsics } from "./reflect.ts";
 import { H, type ElemKind } from "../compiler/consts.ts";

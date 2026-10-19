@@ -1,5 +1,6 @@
 import { javaName, type Loader } from "../compiler/program.ts";
 import { idOfClass } from "./classes.ts";
+
 import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders.ts";
 import type { Strand } from "./sched.ts";
 import type { World } from "./world.ts";

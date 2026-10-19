@@ -4,7 +4,7 @@ import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "
 import { Code, OP } from "./code.ts";
 import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
-import { H, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
+import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import type { PreparedMethod } from "../../jvm/prepared.ts";
 import type { Typing } from "./infer.ts";
@@ -15,7 +15,6 @@ import type { LinkFailure } from "./linkage.ts";
 import { Block, Sync, FUEL, emitBlock, emitSync } from "./hostcalls.ts";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
 import { StructStrings, stringCtor } from "../link/strings.ts";
-import { emitStoreCheck } from "../link/classes.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -426,6 +425,21 @@ export class Compiler implements Base {
       return f;
     }, GENERIC_LOCALS.has(key) ? type : undefined);
   }
+  /** push the Class of `name` */
+  constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
+  /** call the method of `cls` that `name` and `desc` resolve to */
+  callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
+  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+  vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
+  /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
+  emitStoreCheck(c: Code, arr: number, value: () => void): void {
+    // Object[] takes anything; a value of exactly the component class (nearly every store into a typed array) needs no call
+    const comp = c.scratch();
+    c.lget(arr).refCast(this.tArr.ref).structGet(this.tArr.ref, 0).i32(ELEM).arrayGet(this.tVT).ltee(comp).i32(this.idOf("java/lang/Object")).raw(OP.i32_ne).if_();
+    value(); c.refIsNull().raw(OP.i32_eqz).if_();
+    value(); this.vtId(c).lget(comp).raw(OP.i32_ne).if_().lget(arr); value(); this.callRt(c, "astore"); c.end();
+    c.end().end();
+  }
   /** push a new object of constructor `ctor`'s class, initialized by it with the arguments `args` pushes; a String is made by its factory, as at an invoke-direct */
   construct(c: Code, ctor: MethodInfo, args: () => void = () => {}): void {
     if (ctor.cls === "java/lang/String") {
@@ -586,7 +600,7 @@ export class Compiler implements Base {
           const c = new Code(3), data = c.newLocal(ref(this.tData[k]));
           c.lget(0).refCast(this.tArr[k]).structGet(this.tArr[k], 2).lset(data);
           c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); this.callThrower(c, "aioobe"); c.end();
-          if (k === "ref") emitStoreCheck(this, c, 0, () => c.lget(2));
+          if (k === "ref") this.emitStoreCheck(c, 0, () => c.lget(2));
           return c.lget(data).lget(1).lget(2).arraySet(this.tData[k]).finish();
         }];
       }

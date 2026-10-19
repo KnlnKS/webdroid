@@ -2,8 +2,9 @@
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime.ts";
 import { newInstance, refOf, type Bridge } from "./bridge.ts";
-import { idOfClass, typeName } from "../link/classes.ts";
-import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program.ts";
+import { idOfClass } from "../link/classes.ts";
+
+import { ACC, javaName, type FieldInfo, type MethodInfo, typeName } from "../compiler/program.ts";
 import { failed, symbolicImplFor } from "../compiler/linkage.ts";
 import type { World } from "../link/world.ts";
 import type { Strand } from "../link/sched.ts";

@@ -18,8 +18,7 @@ import type { Compiler } from "../compiler/j2w.ts";
 import { OP, type Code } from "../compiler/code.ts";
 import { fromBits, refOf, toBits, type Bridge } from "./bridge.ts";
 import { failed } from "../compiler/linkage.ts";
-import { UInfo } from "../link/unsafe.ts";
-import { constClass } from "../link/classes.ts";
+import { UInfo } from "../compiler/info.ts";
 import { box } from "../link/mhandles.ts";
 import { count } from "./stats.ts";
 import { note, Ev } from "../../timeline.ts";
@@ -277,7 +276,7 @@ export function hostThrowable(cls: string, msg: string | null): JThrowable {
   return e;
 }
 /** the Class object of `cls`, a Java reference */
-export const classRef = (w: World, cls: string): object => w.hostFn("j:class:" + cls, [], "L", (cx, c) => { constClass(cx, c, cls); })() as object;
+export const classRef = (w: World, cls: string): object => w.hostFn("j:class:" + cls, [], "L", (cx, c) => { cx.constClass(c, cls); })() as object;
 /** the box `valueOf` of primitive type `desc` makes of the host value `v`, a Java reference: a host function, so a first call's link cannot suspend it */
 export const boxRef = (w: World, desc: string, v: number | bigint): object => w.hostFn("j:box:" + desc, [kindOf(desc)], "L", (cx, c) => { c.lget(0); box(cx, c, desc); })(toBits(v, desc)) as object;
 /** an instance of the Java class `cls` made by the host, as `rt.make` makes one for a native that fills in a result (a Struct*) or an exception (UnixException)

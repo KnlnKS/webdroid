@@ -2,8 +2,9 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { javaName, type JClass } from "../compiler/program.ts";
-import { idOfClass, fieldId, typeName } from "./classes.ts";
+import { javaName, type JClass, typeName } from "../compiler/program.ts";
+import { idOfClass, fieldId } from "./classes.ts";
+
 import { executableSlot, methodAt } from "./reflect.ts";
 import { BOX } from "../compiler/fields.ts";
 import { VIEWS } from "../compiler/copy.ts";

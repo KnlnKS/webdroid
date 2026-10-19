@@ -14,6 +14,7 @@ import type { ClassRt, World } from "./world.ts";
 import { sameMarks, type Marks, type Numbering, type Tail } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
 import type { InfoRecord } from "./classes.ts";
+
 import type { DexFile } from "../../jvm/dex.ts";
 import { methodCount, type Loader, type MethodInfo } from "../compiler/program.ts";
 import type { Compiler, FnTrace } from "../compiler/j2w.ts";

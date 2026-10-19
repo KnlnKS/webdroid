@@ -2,16 +2,15 @@
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { ACC, kindOf, type Kind } from "./program.ts";
+import { ACC, kindOf, type Kind, typeName } from "./program.ts";
 import { elemKindOf } from "./consts.ts";
 import { descToName, isWide, varHandleValues } from "../../jvm/abi.ts";
-import { emitStoreCheck, classMethod, typeName, Info } from "../link/classes.ts";
-import { UInfo } from "../link/unsafe.ts";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import type { Compiler } from "./j2w.ts";
 import type { Code } from "./code.ts";
 import type { MC } from "./method.ts";
 import { emitHandleCall } from "../link/mhandles.ts";
+import { Info, UInfo } from "./info.ts";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Family = "I" | "F" | "J" | "D" | "L";
@@ -145,14 +144,14 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
     nonNull(handle); c.refCast(vhs).structGet(vhs, cx.fieldIndex(VH, { owner: VH, name: "coordinateType0", desc: "Ljava/lang/Class;" })).lset(handleType);
     nonNull(() => read("L", 0)); c.lset(wrapper);
     // the array must be of the handle's array class (a String[] handle does not take an Object[]), and of the storage the site's element type implies
-    c.lget(handleType); c.lget(wrapper); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z"); c.lget(wrapper).refTest(t).raw(OP.i32_and).raw(OP.i32_eqz).if_(); classCast(); c.end();
+    c.lget(handleType); c.lget(wrapper); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z"); c.lget(wrapper).refTest(t).raw(OP.i32_and).raw(OP.i32_eqz).if_(); classCast(); c.end();
     c.lget(wrapper).refCast(t).structGet(t, 2).lset(data);
     read("I", 1); c.lset(idx).lget(idx).lget(data).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
     c.lget(idx).lget(data).refAsNonNull().arrayLen(); cx.callThrower(c, "aioobe"); c.end();
     const vals = readValues();
     access({ load: () => { c.lget(data).refAsNonNull().lget(idx); if (letter === "B" || letter === "S") c.arrayGetS(d); else if (letter === "Z" || letter === "C") c.arrayGetU(d); else c.arrayGet(d); },
       store: (v) => {
-        if (ek === "ref") emitStoreCheck(cx, c, wrapper, () => c.lget(v));
+        if (ek === "ref") cx.emitStoreCheck(c, wrapper, () => c.lget(v));
         c.lget(data).refAsNonNull().lget(idx).lget(v).arraySet(d);
       }, narrow: () => narrowTo(c, letter) }, vals);
   } else {
@@ -193,7 +192,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       const owner = () => c.lget(fid).i32(12).raw(OP.i32_shr_u), index = () => c.lget(fid).i32(0xfff).raw(OP.i32_and);
       if (stat) { cx.info(c, Info.EnsureSlot, owner); c.callIndirect(cx.sig([], "V")); }
       else {
-        owner(); cx.callRt(c, "classOf"); c.lget(recv); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
+        owner(); cx.callRt(c, "classOf"); c.lget(recv); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
         c.raw(OP.i32_eqz).if_(); classCast(); c.end();
       }
       cx.info(c, stat ? UInfo.StaticGet : UInfo.FieldGet, () => c.lget(fid), () => c.i32(kind)); c.lset(getter);

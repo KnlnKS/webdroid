@@ -29,10 +29,9 @@ import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { UnitCompiler } from "../../src/wasm/link/unit.ts";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler.ts";
 import type { CompileRequest, CompileResponse } from "../../src/wasm/host/compile-serve.ts";
-import { typeFailure, symbolicImplFor } from "../../src/wasm/compiler/linkage.ts";
+import { typeFailure, symbolicImplFor, canAccess } from "../../src/wasm/compiler/linkage.ts";
 import type { Code } from "../../src/wasm/compiler/code.ts";
 import { St } from "../../src/wasm/compiler/hostcalls.ts";
-import { canAccess } from "../../src/wasm/link/classes.ts";
 import { HOSTED } from "../../src/wasm/link/hostapi.ts";
 import { wasmEntry } from "../../src/wasm/host/entry.ts";
 import { mountPlatform, natives } from "./harness.ts";
@@ -447,12 +446,11 @@ for (const asynchronous of [false, true]) {
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
   const peer = synthetic("fixture/Peer");
   base.addClass(peer, base.root);
-  const accessWorld = world(base);
   const appClass = base.require("fixture/BaseApp"), childClass = base.require(`fixture/BaseCustom@${custom.id}`);
-  if (!canAccess(peer.name, appClass, 0, accessWorld) || canAccess(childClass.name, appClass, 0, accessWorld)
-    || !canAccess(childClass.name, appClass, ACC.PUBLIC, accessWorld)) throw new Error("runtime package access lost defining-loader identity");
+  if (!canAccess(base, peer.name, appClass, 0) || canAccess(base, childClass.name, appClass, 0)
+    || !canAccess(base, childClass.name, appClass, ACC.PUBLIC)) throw new Error("runtime package access lost defining-loader identity");
   appClass.flags = 0;
-  if (!canAccess(peer.name, appClass, ACC.PUBLIC, accessWorld) || canAccess(childClass.name, appClass, ACC.PUBLIC, accessWorld)) throw new Error("non-public class crossed runtime packages");
+  if (!canAccess(base, peer.name, appClass, ACC.PUBLIC) || canAccess(base, childClass.name, appClass, ACC.PUBLIC)) throw new Error("non-public class crossed runtime packages");
   appClass.flags = ACC.PUBLIC;
   const derived = new Program([], base);
   if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== derived.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");

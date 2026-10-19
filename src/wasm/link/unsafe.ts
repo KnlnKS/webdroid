@@ -13,8 +13,10 @@ import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { idOfClass } from "./classes.ts";
+
 import { rt } from "../compiler/rtfns.ts";
 import { nativeLeaf } from "./memory.ts";
+import { UInfo } from "../compiler/info.ts";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
@@ -38,9 +40,6 @@ const ELEM: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" }
 /** Field accessor bodies are pure; install them before returning their slot so linking cannot split a VarHandle update. */
 const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
 
-/** host.info kinds of this file */
-export const UInfo = { FieldGet: 100, FieldPut: 101, FieldCas: 102, ComponentScale: 103, AllocInstance: 104, StaticGet: 105, StaticPut: 106, ObjGet: 107, ObjPut: 108, ObjCas: 109 } as const;
-export type UInfo = (typeof UInfo)[keyof typeof UInfo];
 /** an access by offset as the access by field id that names the same accessor: offsets are this World's own */
 export const byFieldId = (w: World, kind: number, a: number): [number, number] => {
   const f = kind >= UInfo.ObjGet ? cookies.get(w)?.fields[a / 8 - 1] : undefined;

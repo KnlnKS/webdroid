@@ -11,9 +11,10 @@ import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { filesIn, onJdk, shellIn } from "./tools.ts";
 import { ACC, declaredMethod } from "../../src/wasm/compiler/program.ts";
 import { Cha } from "../../src/wasm/compiler/cha.ts";
-import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe.ts";
+import { fieldCookie, hostUnsafe } from "../../src/wasm/link/unsafe.ts";
 import { OP } from "../../src/wasm/compiler/code.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
+import { UInfo } from "../../src/wasm/compiler/info.ts";
 
 const out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = shellIn(out);

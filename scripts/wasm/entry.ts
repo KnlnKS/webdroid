@@ -6,7 +6,7 @@ import { mangleField } from "../../src/jvm/abi.ts";
 import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry.ts";
 import { perf } from "../../src/perf.ts";
 import { runningThread, wasmEntry } from "../../src/wasm/host/entry.ts";
-import { UInfo } from "../../src/wasm/link/unsafe.ts";
+import { UInfo } from "../../src/wasm/compiler/info.ts";
 import { world } from "./lib.ts";
 import { mountPlatform, natives } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";

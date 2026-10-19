@@ -9,14 +9,15 @@ import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../c
 import { compileSymbolicSite } from "../compiler/symbolic.ts";
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type FunctionType } from "../compiler/wasmbin.ts";
 import { CALLEE, Code, OP } from "../compiler/code.ts";
-import { type Program, ACC, kindOf, changedTypes, declaredMethod, declaresNaming, declaresStaticOf, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { type Program, ACC, kindOf, changedTypes, declaredMethod, declaresNaming, declaresStaticOf, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo, typeName } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
 import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
 import { Sched, defaultLoop, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
 import { rtfns, type Synth } from "../compiler/rtfns.ts";
-import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes.ts";
+import { hostInfo, infoRecord, replayInfo, type InfoRecord } from "./classes.ts";
+
 import { HostClasses } from "./hostclass.ts";
 import { mhInvoke } from "./mhandles.ts";
 import { hostText } from "./members.ts";

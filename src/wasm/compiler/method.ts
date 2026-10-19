@@ -8,7 +8,6 @@ import { isWide } from "../../jvm/abi.ts";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "../../jvm/structure.ts";
 import { mid } from "./ids.ts";
-import { constClass, emitStoreCheck } from "../link/classes.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "../link/mhandles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
@@ -772,7 +771,7 @@ export class MC {
       case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
       case "const-wide": this.constWide(ins.wideLit); return;
       case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
-      case "const-class": if (this.unresolved(dex.type(b))) return; constClass(cx, c, dex.typeName(b)); this.set("L"); return;
+      case "const-class": if (this.unresolved(dex.type(b))) return; cx.constClass(c, dex.typeName(b)); this.set("L"); return;
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": emitHandleConstant(this, b); return;
       case "const-method-type": emitTypeConstant(this, b); return;
@@ -907,7 +906,7 @@ export class MC {
     this.nonNull(ins.b); c.lset(this.tmpL);
     c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
-    if (k === "ref") emitStoreCheck(cx, c, this.tmpL, () => this.get("L", ins.a));
+    if (k === "ref") cx.emitStoreCheck(c, this.tmpL, () => this.get("L", ins.a));
     c.lget(d); this.get("I", ins.c);
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);

@@ -5,11 +5,11 @@
 import { OP } from "./code.ts";
 import { T } from "./wasmbin.ts";
 import { ACC } from "./program.ts";
-import { Info, fieldId, vtId, classMethod } from "../link/classes.ts";
-import { UInfo } from "../link/unsafe.ts";
+import { fieldId } from "../link/classes.ts";
 import { rt } from "./rtfns.ts";
 import type { Code } from "./code.ts";
 import type { Compiler, Intrinsic } from "./j2w.ts";
+import { Info, UInfo } from "./info.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
 /** the field letters a value of each type may be assigned to, which is also what a get of each may be read as */
@@ -53,8 +53,8 @@ rt("fprep", ["L", "L", "I"], "I", (cx, c) => {
   cx.info(c, Info.EnsureSlot, () => c.lget(cid)); c.callIndirect(cx.sig([], "V"));
   c.else_();
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(cid); cx.callRt(c, "classOf"); c.lget(1); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
-  c.raw(OP.i32_eqz).if_().lget(cid).lget(1); vtId(cx, c); cx.callThrower(c, "recv"); c.end();
+  c.lget(cid); cx.callRt(c, "classOf"); c.lget(1); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
+  c.raw(OP.i32_eqz).if_().lget(cid).lget(1); cx.vtId(c); cx.callThrower(c, "recv"); c.end();
   c.end();
   c.lget(0).refCast(ao).structGet(ao, cx.fieldIndex(ACCESSIBLE, { owner: ACCESSIBLE, name: "override", desc: "Z" })).lset(override);
   // ART's VerifyAccess passes a public member before it looks for the caller
@@ -143,8 +143,8 @@ rt("fset", ["L", "L", "L"], "V", (cx, c) => {
   c.lget(letter).i32(code("L")).raw(OP.i32_eq).lget(letter).i32(code("[")).raw(OP.i32_eq).raw(OP.i32_or).if_();
   // a reference: null, or an instance of the field's type
   c.lget(2).refIsNull().raw(OP.i32_eqz).if_();
-  c.lget(ty); cx.callRt(c, "classOf"); c.lget(2); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
-  c.raw(OP.i32_eqz).if_().lget(ty).lget(2).refAsNonNull(); vtId(cx, c); cx.callThrower(c, "ftm"); c.end().end();
+  c.lget(ty); cx.callRt(c, "classOf"); c.lget(2); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
+  c.raw(OP.i32_eqz).if_().lget(ty).lget(2).refAsNonNull(); cx.vtId(c); cx.callThrower(c, "ftm"); c.end().end();
   const ref = accessor(cx, c, id, flags, true, 2);
   c.lget(1).lget(2).lget(ref).callIndirect(cx.sig(["L", "L"], "V")).ret().end();
   // a primitive: the wrapper's class says which type it holds
@@ -159,7 +159,7 @@ rt("fset", ["L", "L", "L"], "V", (cx, c) => {
     }
     c.end();
   }
-  c.lget(ty).lget(2).refAsNonNull(); vtId(cx, c); cx.callThrower(c, "ftm");
+  c.lget(ty).lget(2).refAsNonNull(); cx.vtId(c); cx.callThrower(c, "ftm");
 });
 
 export const fieldIntrinsics = new Map<string, Intrinsic>();

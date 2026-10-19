@@ -5,11 +5,11 @@
 // instruction would, boxes the result and wraps what the method throws in InvocationTargetException.
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
-import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program.ts";
+import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
 import { H } from "../compiler/consts.ts";
-import { emitString, idOfClass, classMethod, emitNameEq, typeName, vtId } from "./classes.ts";
-import { UInfo } from "./unsafe.ts";
+import { emitString, idOfClass, emitNameEq } from "./classes.ts";
+import { UInfo, RInfo } from "../compiler/info.ts";
 import { WIDEN, BOX } from "../compiler/fields.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
@@ -20,8 +20,6 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
-export type RInfo = (typeof RInfo)[keyof typeof RInfo];
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
 function members(jc: JClass | undefined): string[] {
@@ -99,7 +97,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
   if (!ctor && !m.isStatic) {
     c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-    if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
+    if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
     const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
@@ -108,7 +106,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     else if (wrap && p !== "Ljava/lang/Object;") {
       const a = c.newLocal(T.anyref);
       c.lset(a).lget(a).refIsNull().raw(OP.i32_eqz).if_().lget(a); cx.emitInstanceOf(c, descToName(p)); c.raw(OP.i32_eqz).if_();
-      c.i32(i).i32(ty).lget(a); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
+      c.i32(i).i32(ty).lget(a); cx.vtId(c); cx.callThrower(c, "iarg"); c.end().end();
       c.lget(a);
     }
     return c.lset(v), v;
@@ -144,7 +142,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
   }
   if (m.ret === "V") c.anyNull();
   else if (BOX[m.ret]) {
-    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
+    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); cx.callNamed(c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
   }
 }
 
@@ -175,7 +173,7 @@ rt("mnameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, RInfo.Meth
 rt("findMethod", ["I", "L", "L", "I"], "I", (cx, c) => {
   const nc = c.newLocal(T.i32), j = c.newLocal(T.i32), k = c.newLocal(T.i32), plen = c.newLocal(T.i32), len = c.newLocal(T.i32), i = c.newLocal(T.i32);
   const pdata = c.newLocal(refNull(cx.tData.ref));
-  c.lget(1).refIsNull().raw(OP.i32_eqz).if_().lget(1); classMethod(cx, c, "java/lang/String", "length", "()I"); c.lset(len).end();
+  c.lget(1).refIsNull().raw(OP.i32_eqz).if_().lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len).end();
   c.lget(2).refIsNull().raw(OP.i32_eqz).if_().lget(2).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(pdata).lget(pdata).refAsNonNull().arrayLen().lset(plen).end();
   info(cx, c, RInfo.MethodsNamed, 0, () => { c.lget(3).if_(T.i32); c.i32(INIT_HASH).else_().lget(1).call(cx.helper("shash")).end(); }); c.lset(nc);
   c.block().loop().lget(j).lget(nc).raw(OP.i32_ge_s).brIf(1);
@@ -284,6 +282,6 @@ rt("argp", ["L", "I", "I", "I"], "J", (cx, c) => {
     }
     c.end();
   }
-  c.lget(2).lget(3).lget(0); vtId(cx, c); cx.callThrower(c, "iarg");
+  c.lget(2).lget(3).lget(0); cx.vtId(c); cx.callThrower(c, "iarg");
   c.i64(0n);
 });

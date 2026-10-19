@@ -5,7 +5,6 @@ import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
-import { constClass, typeName } from "./classes.ts";
 import { box, chain, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles.ts";
 import type { DexFile, EncVal } from "../../jvm/dex.ts";
 import type { Compiler } from "../compiler/j2w.ts";
@@ -14,6 +13,7 @@ import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
+import { typeName } from "../compiler/program.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
@@ -55,7 +55,7 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
     case 0x17: cx.str.literal(c, value as string); return true;
     case 0x18: {
       const desc = dex.type((value as { idx: number }).idx), failure = typeFailure(cx.prog, desc);
-      if (failure) { cx.linkError(c, failure); return false; } constClass(cx, c, typeName(desc)); return true;
+      if (failure) { cx.linkError(c, failure); return false; } cx.constClass(c, typeName(desc)); return true;
     }
     case 0x15: return emitTypeValue(cx, c, dex, (value as { idx: number }).idx);
     case 0x16: return emitHandleValue(cx, c, referrer, (value as { idx: number }).idx);
@@ -103,10 +103,10 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
       if (h.type !== 4) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
       if (invalid) { cx.throwNew(c, invalid.cls, invalid.message); return; }
       if (target && target.flags & 0x80) {
-        c.lget(handle); constClass(cx, c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
+        c.lget(handle); cx.constClass(c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
       }
       cx.emitNewArray(c, "[Ljava/lang/Object;", () => c.i32(values.length)); c.lset(args);
-      cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); constClass(cx, c, referrer.cls); c.i32(15);
+      cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); cx.constClass(c, referrer.cls); c.i32(15);
       cx.callMethod(c, cx.prog.resolve(LOOKUP, "<init>", "(Ljava/lang/Class;I)V")!);
       c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(0).lget(lookup).arraySet(cx.tData.ref);
       const params = [`L${LOOKUP};`];
