@@ -9,11 +9,11 @@ import { runningThread, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { UInfo } from "../../src/wasm/link/unsafe.ts";
 import { world } from "./lib.ts";
 import { mountPlatform, natives } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 
-const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => PLATFORM_PATHS[i]);
+const dex = entryDex(), jars = platformJars("core-oj", "core-libart", "framework", "core-icu4j");
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "E.expected.txt"));
 

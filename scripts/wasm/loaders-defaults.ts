@@ -6,8 +6,10 @@ import { ACC, Program } from "../../src/wasm/compiler/program.ts";
 import { symbolicImplFor } from "../../src/wasm/compiler/linkage.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { loadDexes, program, world } from "./lib.ts";
-import { JAVA, PLATFORM_PATHS } from "./paths.ts";
+import { JAVA, platformJars } from "./paths.ts";
 import { androidFixture, filesIn, java, javac, tempDir, type Suite } from "./tools.ts";
+
+const core = () => program(platformJars("core-oj", "core-libart"));
 
 /** `build` compiles fixture sources into a dex of a directory of its own (loaders.ts) */
 export async function defaults(suite: Suite, build: (dir: string, sources: string[]) => string): Promise<void> {
@@ -17,7 +19,7 @@ export async function defaults(suite: Suite, build: (dir: string, sources: strin
 
 async function interfaceSuper({ check, fail }: Suite, dex: string): Promise<void> {
   {
-    const p = new Program(loadDexes(dex), program(PLATFORM_PATHS.slice(0, 2))), target = world(p), loader = p.newLoader(p.root, null);
+    const p = new Program(loadDexes(dex), core()), target = world(p), loader = p.newLoader(p.root, null);
     target.addDexes(loadDexes(dex), loader);
     const face = p.definedBy(loader, "InterfaceSuper$C")!, replacement = p.definedBy(loader, "InterfaceSuper$B")!;
     p.addClass({ name: "Outside", sup: "java/lang/Object", ifaces: [face], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, p.root);
@@ -29,7 +31,7 @@ async function interfaceSuper({ check, fail }: Suite, dex: string): Promise<void
   const names = ["selected", "reversed", "declared", "inherited", "classSuper", "virtualDefault", "interfaceDefault", "unusedAbstract"];
   const jdk = java(dirname(dex), "InterfaceSuper").trim().split("\n").map(Number);
   if (!check("interface-super JDK control", jdk.slice(0, names.length).join(","), "22,22,33,11,44,22,22,55")) return;
-  const p = new Program(loadDexes(dex), program(PLATFORM_PATHS.slice(0, 2))), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
+  const p = new Program(loadDexes(dex), core()), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
   const code = target.dex.code(target.codeOff).insns, ref = target.dex.method(code[1]);
   if ((code[0] & 0xff) !== 0x6f || target.dex.rawType(ref.cls) !== "LInterfaceSuper$C;") fail("D8 did not preserve invoke-super C.f");
   if (p.get("InterfaceSuper$Default")!.byKey.has("f()I")) fail("D8 introduced a default forwarder");
@@ -63,7 +65,7 @@ async function abstractDefault({ check, fail }: Suite, dex: string): Promise<voi
   for (const file of filesIn(old, /^AbstractDefaultUse.*\.class$/)) copyFileSync(file, join(dir, file.split("/").pop()!));
   androidFixture({ out: dir });
   if (!check("binary-evolution JDK control", java(dir, "AbstractDefaultUse").trim(), "42\n1\n42\n1")) return;
-  const p = new Program(loadDexes(dex), program(PLATFORM_PATHS.slice(0, 2))), w = world(p);
+  const p = new Program(loadDexes(dex), core()), w = world(p);
   for (let index = 0; index < 3; index++) {
     let cls = "AbstractDefaultUse";
     if (index) { const loader = p.newLoader(p.boot, null); w.addDexes(loadDexes(dex), loader); cls += "@" + loader.id; }

@@ -31,7 +31,6 @@
     "e2e": "scripts/node tests/e2e/run.ts",
     "textcmp": "scripts/node scripts/textcmp.ts",
     "lat": "scripts/node scripts/lat/run.ts",
-    "jbench": "scripts/node scripts/wasm/run.ts jbench",
     "conform": "scripts/node scripts/wasm/run.ts conform",
     "wasm": "scripts/node scripts/wasm/run.ts",
     "aot": "scripts/node scripts/wasm/run.ts aot"

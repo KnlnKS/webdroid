@@ -3,12 +3,12 @@
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker, fixture } from "./tools.ts";
 
 const dex = join(fixture({ sources: [join(JAVA, "Nest.java")], release: 11, minApi: 34 }), "classes.dex");
 await mountPlatform(ROOT);
-const w = world([dex, ...[0, 1, 12].map((i) => PLATFORM_PATHS[i])], { natives });
+const w = world([dex, ...CORE_PATHS], { natives });
 await startProcess(w);
 const listed = await w.entryAsync("Nest", "loop", "(I)I")(3) as number;
 const suite = checker("nested entries");

@@ -13,12 +13,12 @@ import { St } from "../../src/wasm/link/monitor.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 
-const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => PLATFORM_PATHS[i]);
+const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "core-icu4j");
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 

@@ -1,14 +1,20 @@
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 
 export const ROOT = join(import.meta.dirname, "../..");
 export const AOSP = join(ROOT, "vendor/aosp");
 /** every platform jar in the checkout, in class path order */
 export const PLATFORM_PATHS: string[] = PLATFORM_JARS.map((j) => join(AOSP, j));
-/** core-oj, core-libart and core-icu4j: what String, the collections and the ICU-backed natives need */
-export const CORE_PATHS: string[] = [...PLATFORM_PATHS.slice(0, 2), join(AOSP, "boot/core-icu4j.jar")];
+/** the platform jars named (core-oj, framework, ...), in class path order */
+export function platformJars(...names: string[]): string[] {
+  const paths = PLATFORM_PATHS.filter((p) => names.includes(basename(p, ".jar")));
+  if (paths.length !== names.length) throw new Error(`not every one of ${names} is a platform jar`);
+  return paths;
+}
+/** what String, the collections and the ICU-backed natives need */
+export const CORE_PATHS = platformJars("core-oj", "core-libart", "core-icu4j");
 /** the Java sources the suites compile with javac and d8 */
 export const JAVA = join(ROOT, "tests/fixtures/wasm/java");
 /** where g1.ts and watdump.ts build and read the benchmark dex: per checkout, so worktrees running side by side do not share it */

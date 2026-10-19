@@ -11,7 +11,7 @@ import { ACC } from "../../src/wasm/compiler/program.ts";
 import { irreducibleClass } from "./irfuzz.ts";
 import { Irreducible, Flow } from "../../src/jvm/structure.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { checker, fixture, onJdk, tempDir } from "./tools.ts";
 import { argv } from "../args.ts";
 
@@ -135,7 +135,7 @@ fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA,
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);
-const w = world([dex, ...PLATFORM_PATHS.slice(0, 2)], { natives });
+const w = world([dex, ...platformJars("core-oj", "core-libart")], { natives });
 w.onGap = (gap) => hit.push(gap);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
 const cyclic = irreducible ? methods.filter((m) => {
