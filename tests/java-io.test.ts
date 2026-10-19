@@ -1,6 +1,6 @@
 import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
-import { mkPfd, pfdBackingBytes, fdContents, ashmemFd, readBytes, writeBytes } from "../src/android/os.ts";
+import { mkPfd, pfdBackingBytes, fdContents, ashmemFd } from "../src/android/os.ts";
 import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder.ts";
 import { StoredParcel } from "../src/shell/stored-parcel.ts";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel.ts";
@@ -17,15 +17,15 @@ import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs.ts";
+import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, openFd } from "../src/native/fs.ts";
+import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
 import { scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { descriptorTransport, isRemoteFd, stageBinderFd, takeBinderFd } from "../src/native/process-fd.ts";
-import { type JBuffer, addressOf, directAddress, bufferBytes, readBufferBytes, writeBufferBytes } from "../src/jvm/natives/jnio.ts";
-import { memoryAt } from "../src/jvm/natives/jmemory.ts";
+import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
 import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path.ts";
 
 
@@ -730,7 +730,7 @@ describe("rename", () => {
 });
 
 describe("shared-memory", () => {
-  test("Worker shared memory keeps Java views live across descriptor transfer and partial unmap", async () => {
+  test("Worker shared memory maps into guest memory and hands Java stores to the owner", async () => {
     const owner = new FileDescriptors(), ports = [1001,1002].map(pid => {
       const channel = new MessageChannel(), stop = serveCalls(channel.port1,owner.session(pid,() => 0));
       return {stop,proxy:callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"])};
@@ -742,8 +742,13 @@ describe("shared-memory", () => {
       descriptorTransport.importCalls = descriptorTransport.calls;
       first = await scall("android/os/SharedMemory","create","(Ljava/lang/String;I)Landroid/os/SharedMemory;","aliases",8192);
       a = await vcall(first,"mapReadWrite","()Ljava/nio/ByteBuffer;") as JBuffer;
+      expect(await directAddress(a)).toBe(Number(addressOf(a)));
+      await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4096,0x12345678);
       const fd = fdInt(await vcall(first,"getFileDescriptor","()Ljava/io/FileDescriptor;"));
-      const staged = await stageBinderFd(fd);
+      // the descriptor leaves with the stores its mappings hold
+      const staged = await stageBinderFd(fd), held = new Uint8Array(4);
+      expect(await javaPreadFd(fd,held,4096)).toBe(4);
+      expect(new DataView(held.buffer).getInt32(0)).toBe(0x12345678);
       const token = await owner.receive(1001,staged!,1002);
       descriptorTransport.calls = () => ports[1].proxy.endpoint;
       descriptorTransport.importCalls = descriptorTransport.calls;
@@ -752,33 +757,17 @@ describe("shared-memory", () => {
       expect(await vcall(second,"setProtect","(I)Z",1)).toBe(1);
       expect(await vcall(first,"setProtect","(I)Z",3)).toBe(0);
       b = await vcall(second,"map","(III)Ljava/nio/ByteBuffer;",1,4096,4096) as JBuffer;
-      await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4096,0x12345678);
       expect(await vcall(b,"getInt","(I)I",0)).toBe(0x12345678);
-      const ints = await vcall(a,"asIntBuffer","()Ljava/nio/IntBuffer;");
-      await vcall(ints,"put","(II)Ljava/nio/IntBuffer;",1025,0x34567812);
-      expect(await vcall(b,"getInt","(I)I",4)).toBe(0x34567812);
-      await scall("libcore/io/Memory","pokeByteArray","(J[BII)V",addressOf(a) + 4104n,Int8Array.of(9,8,7),0,3);
-      expect([...(await memoryAt(addressOf(b) + 8n,3))]).toEqual([9,8,7]);
-      expect([...(await readBufferBytes(ints,4104,3))]).toEqual([9,8,7]);
-      await writeBufferBytes(ints,Uint8Array.of(6,5,4),4104);
-      expect([...(await readBufferBytes(b,8,3))]).toEqual([6,5,4]);
-      const unsafe = await scall("sun/misc/Unsafe","getUnsafe","()Lsun/misc/Unsafe;");
-      await vcall(unsafe,"putLong","(Ljava/lang/Object;JJ)V",null,addressOf(a) + 4112n,0x1122334455667788n);
-      expect(await vcall(unsafe,"getLong","(J)J",addressOf(b) + 16n)).toBe(0x1122334455667788n);
-      await readBytes("read",a,4120,3,async target => { await Promise.resolve(); target.set([4,5,6]); return 3; });
-      expect(await writeBytes(b,24,3,bytes => [...bytes])).toEqual([4,5,6]);
-      await vcall(a,"position","(I)Ljava/nio/Buffer;",4128);
-      const slice = await vcall(a,"slice","()Ljava/nio/ByteBuffer;");
-      await vcall(slice,"put","([B)Ljava/nio/ByteBuffer;",Int8Array.of(2,3));
-      expect([...(await memoryAt(addressOf(b) + 32n,2))]).toEqual([2,3]);
-      expect(await directAddress(a)).toBe(0);
-      expect(() => bufferBytes(a!)).toThrow();
+      // the mapping outlives its descriptors, and unmapping a page carries its stores to the owner
+      await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4100,0x34567812);
+      const fd2 = fdInt(await vcall(second,"getFileDescriptor","()Ljava/io/FileDescriptor;")), reopened = javaDupFd(fd2);
       await vcall(first,"close","()V"); await vcall(second,"close","()V");
-      await scall("android/system/Os","munmap","(JJ)V",addressOf(a),4096n);
-      const unmapped = addressOf(a);
-      await expect(Promise.resolve().then(() => memoryAt(unmapped,1))).rejects.toBeDefined();
-      expect(await vcall(b,"getInt","(I)I",0)).toBe(0x12345678);
-      await scall("android/system/Os","munmap","(JJ)V",addressOf(a) + 4096n,4096n); a = undefined;
+      await scall("android/system/Os","munmap","(JJ)V",addressOf(a) + 4096n,4096n);
+      await settleRemoteMaps();
+      expect(await javaPreadFd(reopened,held,4100)).toBe(4);
+      expect(new DataView(held.buffer).getInt32(0)).toBe(0x34567812);
+      await javaCloseFd(reopened);
+      await scall("android/system/Os","munmap","(JJ)V",addressOf(a),4096n); a = undefined;
       await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",b); b = undefined;
     } finally {
       if (a) await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",a);

@@ -10,9 +10,8 @@ import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal
 import { addressSize } from "./jvmruntime.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared, trackSharedMap } from "../../native/mappings.ts";
-import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
+import { openFd as openFile, javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
   javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fs.ts";
-import { processMapping, isRemoteFd } from "../../native/process-fd.ts";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
@@ -141,7 +140,7 @@ function ioStatus(n: number, reading: boolean): number {
 /** a read into native memory: the bytes land once it completes, since guest memory may move meanwhile */
 function readInto(address: bigint, len: number, read: (target: Uint8Array) => number | Promise<number>): number | Promise<number> {
   const scratch = new Uint8Array(len);
-  return after(read(scratch),n => after(n > 0 ? writeAt(address,scratch.subarray(0,n)) : undefined,() => ioStatus(n,true)));
+  return after(read(scratch),n => { if (n > 0) writeAt(address,scratch.subarray(0,n)); return ioStatus(n,true); });
 }
 /** iovec i of an IOVecWrapper array: its base, a native address, and its length */
 function iovec(iov: bigint, i: number): [bigint, number] {
@@ -178,7 +177,7 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
       const [base, len] = iovec(iov, i), scratch = new Uint8Array(len);
       const n = yield* awaited(javaReadFd(openFd(d), scratch));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, true)); }
-      yield* awaited(writeAt(base,scratch.subarray(0,n)));
+      writeAt(base,scratch.subarray(0,n));
       total += n;
       if (n < len) break;
     }
@@ -222,9 +221,10 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   "map0(IJJ)J": function (this: JObj, prot: number, position: bigint, length: bigint) {
     const fd = openFd((this as unknown as Record<string, JObj>)[channelFd ??= declaredField("sun/nio/ch/FileChannelImpl", "fd")]);
     const start = Number(position), n = Number(length);
-    if (isRemoteFd(fd)) {
+    const remote = openFile(fd)?.remote;
+    if (remote) {
       if (prot === MAP_PV) return BigInt(lastError(-E.NOTSUP,"Map failed"));
-      return processMapping(fd,start,n,prot === MAP_RO ? 1 : 3).then(mapping => typeof mapping === "number" ? BigInt(lastError(mapping,"Map failed")) : mapRemote(mapping));
+      return mapRemote(remote,start,n,prot === MAP_RO ? 1 : 3).then(address => typeof address === "number" ? BigInt(lastError(address,"Map failed")) : address);
     }
     const file = fdFile(fd);
     if (prot === MAP_RO && file?.source && !writable(file.source)) return mapExternal(file.source, start, n);
@@ -237,7 +237,7 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
     }));
   },
   "unmap0(JJ)I": (address: bigint, length: bigint) => {
-    if (isExternal(address)) return after(unmapExternal(address,Number(length)),() => 0);
+    if (isExternal(address)) return after(unmapExternal(address),() => 0);
     else { syncShared(address, Number(length), true); mem.unmapVa(address, Number(length)); }
     return 0;
   },

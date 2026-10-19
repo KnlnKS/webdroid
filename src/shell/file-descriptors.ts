@@ -29,7 +29,6 @@ type Operations = {
   mappingAcquire: [{ fd: number; offset: number; length: number; prot: number }, { lease: number; region: number; immutable: boolean }];
   mappingRead: [{ lease: number; offset: number; length: number }, Uint8Array];
   mappingWrite: [{ lease: number; offset: number; bytes: Uint8Array }, never];
-  mappingSync: [{ lease: number }, never];
   mappingRelease: [{ lease: number }, never];
 };
 export type DescriptorKind = keyof Operations;
@@ -45,8 +44,7 @@ export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; c
 function rangeError(mapping: Mapping, offset: number, length: number, access: number): number {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || offset > mapping.length - length) return E.INVAL;
   if (!(mapping.prot & access)) return E.ACCES;
-  // This is a live file-range lease, not a guest mmap bridge. EOF/page-cache
-  // tails and raw cross-process loads need the separate shared-memory design.
+  // the bytes of a mapping's last page past EOF are its own, not the file's
   return mapping.offset + offset + length > mapping.file.content.len ? E.NOTSUP : 0;
 }
 
@@ -221,7 +219,6 @@ export class FileDescriptors {
       const error = rangeError(mapping, offset, bytes.length, 2);
       return error ? -error : javaPwriteFd(mapping.fd,bytes,mapping.offset + offset);
     }),
-    mappingSync: (session, {lease}) => this.inOrder(session, session.mappings.get(lease), mapping => this.synced(mapping.fd)),
     mappingRelease: (session, {lease}) => {
       const mapping = session.mappings.get(lease);
       if (!mapping) return -E.BADF;

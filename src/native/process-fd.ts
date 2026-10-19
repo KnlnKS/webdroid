@@ -5,6 +5,7 @@ import type { FileSource } from "../shell/lazyfile.ts";
 import { isMutablePath } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
 import type { DescriptorCalls } from "../shell/file-descriptors.ts";
+import { settleRemoteMaps } from "./mappings.ts";
 
 /** Bound lazily after the process is registered; the page's kernel never installs this. */
 export const descriptorTransport: {
@@ -40,6 +41,31 @@ export class RemoteDescriptor {
   sync(): Promise<number> { return this.calls().fileDescriptor({kind:"sync",fd:this.token}); }
   fcntl(command: number, arg: number): Promise<number> { return this.calls().fileDescriptor({kind:"fcntl",fd:this.token,command,arg}); }
   stat(): Promise<FdStat | null> { return this.calls().fileDescriptor({kind:"stat",fd:this.token}).then(reply => typeof reply === "number" ? null : reply); }
+  /** a lease on [offset, offset + length) of the open file */
+  async map(offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
+    const calls = this.calls, acquired = await calls().fileDescriptor({kind:"mappingAcquire",fd:this.token,offset,length,prot});
+    if (typeof acquired === "number") return acquired;
+    const {lease, region, immutable} = acquired;
+    return {
+      size:length,
+      region,
+      immutable,
+      async read(offset,length) {
+        const bytes = await calls().fileDescriptor({kind:"mappingRead",lease,offset,length});
+        if (typeof bytes === "number") throw new Error(`shared mapping read: ${-bytes}`);
+        if (bytes.length !== length) throw new Error("short shared mapping read");
+        return bytes;
+      },
+      async write(offset,bytes) {
+        const n = await calls().fileDescriptor({kind:"mappingWrite",lease,offset,bytes:bytes.slice()});
+        if (n !== bytes.length) throw new Error(`shared mapping write: ${n}`);
+      },
+      async close() {
+        const n = await calls().fileDescriptor({kind:"mappingRelease",lease});
+        if (n < 0 && n !== -E.BADF) throw new Error(`shared mapping release: ${-n}`);
+      },
+    };
+  }
   /** a regular file as a source of its size now, read through its owner */
   source(): Promise<FileSource | null> {
     return this.stat().then(stat => stat && (stat.mode & S_IFMT) === S_IFREG ? { size: stat.size, read: (offset, length) => {
@@ -61,7 +87,10 @@ function installRemote(token: number, calls: () => DescriptorCalls, path: string
 }
 export function stageBinderFd(fd: number): number | Promise<number> | null {
   const remote = openFd(fd)?.remote;
-  return remote ? remote.calls().fileDescriptor({kind:"stage",fd:remote.token}) : descriptorTransport.stageLocal?.(fd) ?? null;
+  if (!remote) return descriptorTransport.stageLocal?.(fd) ?? null;
+  // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
+  const settled = settleRemoteMaps(), stage = () => remote.calls().fileDescriptor({kind:"stage",fd:remote.token});
+  return settled ? settled.then(stage) : stage();
 }
 export function unstageBinderFd(token: number): Promise<number> {
   const calls = descriptorTransport.calls ?? descriptorTransport.importCalls;
@@ -100,41 +129,8 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
 /** hostnatives' name for javaReadFd, which reads every kind of open file */
 export const processReadFd = javaReadFd;
 
-/** A live owner lease; a mapping outlives the descriptor that acquired it. */
-export type ProcessMapping = { size: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; force(): Promise<void>; close(): Promise<void> };
-export async function processMapping(fd: number, offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
-  const remote = openFd(fd)?.remote, calls = remote?.calls ?? descriptorTransport.importCalls;
-  if (!calls) return -E.NOTSUP;
-  const token = remote?.token ?? descriptorTransport.stageLocal?.(fd);
-  if (token === undefined) return -E.NOTSUP;
-  let acquired;
-  try { acquired = await calls().fileDescriptor({kind:"mappingAcquire",fd:token,offset,length,prot}); }
-  finally { if (!remote) await unstageBinderFd(token); }
-  if (typeof acquired === "number") return acquired;
-  const {lease, immutable} = acquired;
-  return {
-    size:length,
-    immutable,
-    async read(offset,length) {
-      const bytes = await calls().fileDescriptor({kind:"mappingRead",lease,offset,length});
-      if (typeof bytes === "number") throw new Error(`shared mapping read: ${-bytes}`);
-      if (bytes.length !== length) throw new Error("short shared mapping read");
-      return bytes;
-    },
-    async write(offset,bytes) {
-      const n = await calls().fileDescriptor({kind:"mappingWrite",lease,offset,bytes:bytes.slice()});
-      if (n !== bytes.length) throw new Error(`shared mapping write: ${n}`);
-    },
-    async force() {
-      const n = await calls().fileDescriptor({kind:"mappingSync",lease});
-      if (n < 0) throw new Error(`shared mapping sync: ${-n}`);
-    },
-    async close() {
-      const n = await calls().fileDescriptor({kind:"mappingRelease",lease});
-      if (n < 0 && n !== -E.BADF) throw new Error(`shared mapping release: ${-n}`);
-    },
-  };
-}
+/** An owner's lease on a range of a file, which outlives the descriptor that took it; `region` names the file. */
+export type ProcessMapping = { size: number; region: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
 export function processAshmemCreate(size: number): Promise<number> | null {
   const calls = descriptorTransport.calls;
   return calls ? calls().fileDescriptor({kind:"ashmemCreate",size}).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;

@@ -8,7 +8,7 @@ import { type Cpu, cpuFor, type CallArg } from "./cpu.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
 import { after, curThread } from "../jvm/natives/jentry.ts";
-import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory.ts";
+import { isExternal, guestAddress } from "../jvm/natives/jmemory.ts";
 import { vm, type JniClass, type JniField } from "./jnivm.ts";
 
 export const jniMissing = new Set<string>();
@@ -492,7 +492,7 @@ export function jniInit(): void {
   });
   def(231, "GetDirectBufferCapacity", (cpu, a) => {
     a.p(); const b = object(a.p(), cpu), address = vm.bufferAddress(b);
-    return address && !isLive(address) ? BigInt(vm.bufferCapacity(b)) : -1n;
+    return address ? BigInt(vm.bufferCapacity(b)) : -1n;
   });
   def(232, "GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : h & WEAK_BIT ? 3 : 1; });
 

@@ -4,15 +4,15 @@
 // last agreed on with the file, so a sync carries exactly the bytes stored through it to the file
 // and into every other mapping of them, and never an older copy of bytes another mapping stored.
 // The mappings live on their VfsFile, whose writeAt and reads drive them for every writer and reader.
-// A file another process owns (a process Worker's) is mapped through its owner's lease instead: the
-// bytes are read in when mapped and stores go back through the lease at msync and munmap, reaching this
-// process's other mappings of the file then; stores of other processes reach a mapping only when it is
-// mapped again.
+// A file another process owns (a process Worker's) is mapped through its owner's lease instead, by
+// native and Java code alike: the bytes are read in when mapped and stores go back through the lease at
+// msync and munmap, reaching this process's other mappings of the file then, and before a descriptor
+// leaves for another process; stores of other processes reach a mapping only when it is mapped again.
 import { guestAt, mem } from "./mem.ts";
 import { vfs, type VfsFile } from "../shell/vfs.ts";
 import { E } from "./abi.ts";
-import { processMapping, type ProcessMapping } from "./process-fd.ts";
-import { javaFdStat } from "./fs.ts";
+import type { ProcessMapping } from "./process-fd.ts";
+import { openFd } from "./fs.ts";
 
 type SharedMapping = { va: bigint; n: number; off: number; base: Uint8Array | null };
 const overlaps = (m: SharedMapping, va: bigint, end: bigint) => m.va < end && va < m.va + BigInt(m.n);
@@ -74,13 +74,13 @@ export function trackSharedMap(va: bigint, n: number, off: number, file: VfsFile
 }
 
 /** `off` of a remote mapping is its offset in the lease, which starts at offset `start` of the file */
-type Lease = { lease: ProcessMapping; path: string | null; start: number };
+type Lease = { lease: ProcessMapping; start: number };
 type RemoteMapping = SharedMapping & { owner: Lease };
 let remoteMaps: RemoteMapping[] = [];
-/** the lease operations not yet done of each file (of each lease, when its file has no path), which run in order and a new mapping of the file waits for */
-const queues = new Map<string | Lease, Promise<void>>();
+/** the lease operations not yet done on each file (by its owner's region), which run in order and a new mapping of the file waits for */
+const queues = new Map<number, Promise<void>>();
 const leased = (owner: Lease, operation: () => Promise<void>) => {
-  const key = owner.path ?? owner;
+  const key = owner.lease.region;
   const done: Promise<void> = (queues.get(key) ?? Promise.resolve()).then(operation).catch((error) => console.error("[mmap]", error))
     .then(() => { if (queues.get(key) === done) queues.delete(key); });
   queues.set(key, done);
@@ -88,13 +88,12 @@ const leased = (owner: Lease, operation: () => Promise<void>) => {
 /** The stores through remote mapping `m` go to its file, and into this process's other mappings of that
  *  file, which one page cache would share */
 function flushRemote(m: RemoteMapping): void {
-  const { owner } = m, { path } = owner;
+  const { owner } = m, { region } = owner.lease;
   stored(m, m.n, (i, bytes) => {
     leased(owner, () => owner.lease.write(m.off + i, bytes));
-    if (path === null) return;
     const at = owner.start + m.off + i;
     for (const o of remoteMaps) {
-      if (o === m || o.owner.path !== path) continue;
+      if (o === m || o.owner.lease.region !== region) continue;
       const from = o.owner.start + o.off, lo = Math.max(at, from), hi = Math.min(at + bytes.length, from + o.n);
       if (lo >= hi) continue;
       const part = bytes.subarray(lo - at, hi - at);
@@ -103,24 +102,32 @@ function flushRemote(m: RemoteMapping): void {
     }
   });
 }
+/** a shared mapping at va of `lease`, which covers the file from offset `start`. Like a read of the file, it
+ *  holds what this process's other mappings of the file stored. */
+export async function mapLease(va: bigint, lease: ProcessMapping, start: number, prot: number): Promise<void> {
+  for (const m of remoteMaps) if (m.owner.lease.region === lease.region) flushRemote(m);
+  await queues.get(lease.region);
+  const bytes = await lease.read(0, lease.size);
+  mem.write(guestAt(va), bytes);
+  remoteMaps.push({ va, n: lease.size, off: 0, base: prot & 2 ? bytes.slice() : null, owner: { lease, start } });
+}
 /** a shared mapping at va of [off, off + n) of the file `fd` reaches in another process; an errno, or 0. File bytes past
  *  EOF are not the file's, so the lease covers what the file holds and the rest of the mapping stays zero. */
 export async function mapRemoteShared(va: bigint, n: number, off: number, fd: number, prot: number): Promise<number> {
-  const stat = await javaFdStat(fd);
-  if (!stat) return E.BADF;
-  const path = stat.path, length = Math.max(0, Math.min(n, stat.size - off));
+  const remote = openFd(fd)?.remote, stat = await remote?.stat();
+  if (!remote || !stat) return E.BADF;
+  const length = Math.max(0, Math.min(n, stat.size - off));
   if (!length) return 0;
-  // like a read of the file, the new mapping sees what this process's mappings of it stored
-  if (path !== null) {
-    for (const m of remoteMaps) if (m.owner.path === path) flushRemote(m);
-    await queues.get(path);
-  }
-  const lease = await processMapping(fd, off, length, prot);
+  const lease = await remote.map(off, length, prot);
   if (typeof lease === "number") return -lease;
-  const bytes = await lease.read(0, length);
-  mem.write(guestAt(va), bytes);
-  remoteMaps.push({ va, n: length, off: 0, base: prot & 2 ? bytes.slice() : null, owner: { lease, path, start: off } });
+  await mapLease(va, lease, off, prot);
   return 0;
+}
+/** this process's stores through remote mappings, on their way to their files, where another process sees them */
+export function settleRemoteMaps(): Promise<unknown> | null {
+  if (!remoteMaps.length) return null;
+  for (const m of remoteMaps) flushRemote(m);
+  return Promise.all(queues.values());
 }
 
 /** private file mappings: the file range each copied, which mremap's growth reads on from */

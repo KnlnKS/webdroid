@@ -20,7 +20,7 @@ import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
 import { remoteFilePath, changeFileAttributes, pathStat } from "../shell/file-path.ts";
-import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd.ts";
+import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, localFdStat, javaPipeFds, javaReadFd, javaPreadFd,
   javaWriteFd, javaPwriteFd, javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath,
   S_IFMT, S_IFDIR, type FileStat } from "../native/fs.ts";
@@ -338,11 +338,12 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         throw errno("mmap", E.INVAL);
       if (flags & 0x10) throw errno("mmap", E.NOTSUP);
       const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : fdInt(d);
-      if (!anonymous && (isRemoteFd(fd) || ashmemProt(fd) !== undefined && descriptorTransport.importCalls && descriptorTransport.stageLocal)) {
+      const remote = anonymous ? undefined : openFd(fd)?.remote;
+      if (remote) {
         if (!(flags & 1)) throw errno("mmap",E.NOTSUP);
-        const mapping = yield* awaited(processMapping(fd,Number(offset),size,prot));
-        if (typeof mapping === "number") throw errno("mmap",-mapping);
-        return mapRemote(mapping);
+        const address = yield* awaited(mapRemote(remote,Number(offset),size,prot));
+        if (typeof address === "number") throw errno("mmap",-address);
+        return address;
       }
       const source = anonymous ? null : yield* awaited(javaFdSource(fd));
       if (!anonymous && !source) throw errno("mmap", E.BADF);
@@ -366,7 +367,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "munmap(JJ)V": (address: bigint, count: bigint) => {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
-      if (isExternal(address)) return unmapExternal(address,size);
+      if (isExternal(address)) return unmapExternal(address);
       syncShared(address, size, true);
       if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
     },
