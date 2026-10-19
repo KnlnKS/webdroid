@@ -1,22 +1,22 @@
 import type { vfs, FileAttributes } from "./vfs.ts";
-import { knownUid } from "../android/packages.ts";
+import { packageOfPath } from "./file-path.ts";
 import { openDb, txDone } from "./idb.ts";
 import { DiskFile, DiskStore } from "./diskstore.ts";
 
 type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number; attributes?: FileAttributes };
 type DiskValue = Extract<FileValue, { kind: "disk" }>;
-const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
-/** a path under a package's directories: the package, then the path within them */
-const appPath = new RegExp("^(?:" + roots.join("|") + ")([^/]+)(?:/(.*))?$");
+/** where packageOfPath's private directories are: each package's are stored apart from shared storage */
+const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/", "/sdcard/Android/obb/"];
+const appPath = (path: string) => { const owner = packageOfPath(path); return owner?.private ? owner : undefined; };
 const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
-const sharedPath = (path: string) => path.startsWith("/sdcard/") && !appPath.test(path);
+const sharedPath = (path: string) => path.startsWith("/sdcard/") && !appPath(path);
 /** a persisted file grown through an open descriptor past this moves to disk; whole-file writers
  *  (SQLite, preferences) keep their bytes in memory and read them back synchronously */
 const SPILL_BYTES = 4 << 20;
 const isOwnerId = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
-/** a stored record as the value it persisted, or null for a shape no version wrote; records
- *  written before attributes were kept get the package's owner */
-function decodeRecord(path: string, value: unknown): FileValue | null {
+/** a stored record as the value it persisted, or null for a shape no version wrote; one written
+ *  before attributes were kept takes the VFS's default owner */
+function decodeRecord(value: unknown): FileValue | null {
   if (!value || typeof value !== "object" || !("kind" in value)) return null;
   const mtime = "mtime" in value && typeof value.mtime === "number" ? value.mtime : undefined;
   const a = "attributes" in value ? value.attributes : null;
@@ -24,10 +24,6 @@ function decodeRecord(path: string, value: unknown): FileValue | null {
   if (a && typeof a === "object" && "uid" in a && "gid" in a && "mode" in a && isOwnerId(a.uid) && isOwnerId(a.gid) &&
     typeof a.mode === "number" && Number.isInteger(a.mode) && a.mode >= 0 && a.mode <= 0o7777)
     attributes = {uid:a.uid,gid:a.gid,mode:a.mode};
-  else {
-    const pkg = appPath.exec(path)?.[1], uid = pkg ? knownUid(pkg) : undefined;
-    if (uid !== undefined) attributes = {uid,gid:uid,mode:value.kind === "directory" ? 0o755 : 0o644};
-  }
   if (value.kind === "directory") return { kind: "directory", mtime, attributes };
   if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") return { kind: "disk", id: value.id, size: value.size, mtime, attributes };
   if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) return { kind: "file", bytes: value.bytes, mtime, attributes };
@@ -56,9 +52,9 @@ export class PrivateFiles {
     view.onWrite = (path, change) => {
       // a process that has died writes nothing more
       if (this.views.get(pid) !== view) return;
-      const app = appPath.exec(path);
+      const app = appPath(path);
       if (!app && !sharedPath(path)) return;
-      const cache = !!app && /^(?:cache|code_cache)(?:\/|$)/.test(app[2] ?? "");
+      const cache = !!app && /^(?:cache|code_cache)(?:\/|$)/.test(app.within);
       const value = this.valueOf(view, path, change === "modify" && !cache);
       this.update(path, value);
       if (cache) return;
@@ -131,7 +127,7 @@ export class PrivateFiles {
             if (!cursor) return;
             const path = cursor.key;
             if (typeof path === "string" && include(path) && !this.values.has(path) && !this.pending.has(path)) {
-              const value = decodeRecord(path, cursor.value);
+              const value = decodeRecord(cursor.value);
               if (value?.kind === "disk") disks.push([path, value]);
               else if (value) this.update(path, value);
             }
@@ -159,10 +155,11 @@ export class PrivateFiles {
       this.load(pkg, roots.map((root) => root + pkg + "/"), () => true),
     ]);
   }
-  /** installd's clearAppData: the package's data directories and its external app directories */
+  /** installd's clearAppData: the package's data directories and its Android/data and Android/media
+   *  ones; its OBBs go only when it is uninstalled */
   async clear(pkg: string): Promise<void> {
     await this.prepare(pkg);
-    const dirs = [...roots, "/sdcard/Android/media/"].map((root) => root + pkg);
+    const dirs = [...roots.filter((root) => !root.endsWith("/obb/")), "/sdcard/Android/media/"].map((root) => root + pkg);
     for (const path of new Set([...dirs, ...this.values.keys()])) {
       if (!dirs.some((dir) => path === dir || path.startsWith(dir + "/"))) continue;
       this.update(path, null);

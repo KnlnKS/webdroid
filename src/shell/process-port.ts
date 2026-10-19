@@ -39,12 +39,13 @@ export function closePort(port: MessagePort, error?: ProcessFailure): void {
   port.close();
 }
 
-/** what releases a method's result that never reached its caller */
-type Undelivered<C extends Contract> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => unknown };
+/** per method, what acts on a call's result */
+type ByResult<C extends Contract, R> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => R };
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
- *  this endpoint while the request that caused it is suspended. */
+ *  this endpoint while the request that caused it is suspended. `undelivered` releases a result that never reached its caller;
+ *  `transfer` names what a result gives away. */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
-  undelivered: Undelivered<C> = {}): () => void {
+  undelivered: ByResult<C, unknown> = {}, transfer: ByResult<C, Transferable[]> = {}): () => void {
   const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
   let closed = false;
   const close = (error?: ProcessFailure) => {
@@ -65,8 +66,9 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       note(Ev.Served, at);
       if (data.kind === "call") {
         const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
+        const given = transfer[data.method] as ((value: unknown) => Transferable[]) | undefined;
         if (closed) await release?.(value);
-        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
+        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? []); }
         catch (error) { await release?.(value); throw error; }
       }
     } catch (error) {

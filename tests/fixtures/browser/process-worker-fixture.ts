@@ -36,28 +36,28 @@ const roles: Record<string, () => (data: never) => void> = {
     const steps: Record<number, (intent: ParcelData) => Promise<BinderHandle>> = {
       42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: clips }),
       43: async () => {
-        fd = (await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 })).result;
-        const foreign = await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 });
-        await broker.fileDescriptor({ kind: "pwrite", fd, bytes: Uint8Array.of(55), offset: 0 });
-        return { pid: fd, id: foreign.result };
+        fd = (await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
+        const foreign = await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
+        await broker.fileDescriptor({ kind: "write", fd, bytes: Uint8Array.of(55), offset: 0 });
+        return { pid: fd, id: foreign };
       },
       44: async () => {
-        const reply = await broker.fileDescriptor({ kind: "pread", fd, length: 1, offset: 0 });
-        return { pid: reply.bytes?.[0] ?? -1, id: reply.result };
+        const reply = await broker.fileDescriptor({ kind: "read", fd, length: 1, offset: 0 }) as Uint8Array;
+        return { pid: reply[0] ?? -1, id: reply.length };
       },
       45: async () => {
         const stage = await broker.fileDescriptor({ kind: "stage", fd });
         received = descriptor(await broker.transact({ handle: { pid: 8001, id: 1 }, code: 3, flags: 0,
-          data: { bytes: new Uint8Array(0), objects: [[0, { descriptor: stage.result }]] } }));
-        const read = await broker.fileDescriptor({ kind: "read", fd: received, length: 1 });
+          data: { bytes: new Uint8Array(0), objects: [[0, { descriptor: stage }]] } }));
+        const read = await broker.fileDescriptor({ kind: "read", fd: received, length: 1 }) as Uint8Array;
         const position = await broker.fileDescriptor({ kind: "seek", fd, offset: 0, whence: 1 });
         await broker.fileDescriptor({ kind: "close", fd });
-        return { pid: read.bytes![0], id: position.result };
+        return { pid: read[0], id: position };
       },
       46: async () => {
-        const read = await broker.fileDescriptor({ kind: "pread", fd: received, length: 1, offset: 0 });
+        const read = await broker.fileDescriptor({ kind: "read", fd: received, length: 1, offset: 0 }) as Uint8Array;
         await broker.fileDescriptor({ kind: "close", fd: received });
-        return { pid: read.bytes![0], id: read.result };
+        return { pid: read[0], id: read.length };
       },
       47: async () => {
         const live = await life.alive(8001), system = await life.alive(0), absent = await life.alive(9999);

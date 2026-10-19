@@ -1,13 +1,13 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
 import { rt } from "../jvm/runtime.ts";
-import { curThread, threadSwitch, after } from "../jvm/natives/jentry.ts";
-import { type JBuffer, isLiveBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, writeBufferBytes, position, limit, elementShift } from "../jvm/natives/jnio.ts";
+import { curThread, threadSwitch } from "../jvm/natives/jentry.ts";
+import { type JBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, position, limit, elementShift } from "../jvm/natives/jnio.ts";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap.ts";
 import { gles1String } from "../native/gles1.ts";
 import { gles3Extensions } from "../native/gles3.ts";
 import { activeUniformInfo, externalSamplersAs2D, textureTarget } from "../native/gles3-state.ts";
-import { pixelStore, pixelParam, pixelArray, pixelByteSize, pixelRows } from "../native/gles3-pixels.ts";
+import { pixelStore, pixelArray } from "../native/gles3-pixels.ts";
 import { perf } from "../perf.ts";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
@@ -27,10 +27,10 @@ type Tables = {
   /** the context's error flags: one raised host-side, reported before WebGL's; `clean` while WebGL
    *  has latched none since it last answered NO_ERROR; `mixed` once a caller outside gles3 (whose
    *  state tracking proves calls error-free) has used it */
-  err: number; clean: boolean; mixed: boolean; deferredErrors: number[];
+  err: number; clean: boolean; mixed: boolean;
 };
 const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers: [null], textures: [null], uniforms: [null],
-  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap(), err: 0, clean: false, mixed: false, deferredErrors: [] });
+  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap(), err: 0, clean: false, mixed: false });
 const tablesOf = new WeakMap<GL, Tables>();
 let T: Tables = freshTables();
 export const tables = (): Tables => T;
@@ -58,8 +58,6 @@ export function selectGL(ctx: GL | null) {
 export function takeError(): number {
   const e = T.err;
   if (e) { T.err = 0; return e; }
-  const deferred = T.deferredErrors.shift();
-  if (deferred) return deferred;
   if (!gl || (T.clean && !gl.isContextLost())) return 0;
   const w = gl.getError();
   T.clean = w === 0 && !T.mixed;
@@ -262,33 +260,13 @@ rt.registerJnis("android/opengl/GLES20", bindings({
   "glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.fbos, (o) => gl?.deleteFramebuffer(o), n, arr, off),
   "glReadPixels(IIIIIILjava/nio/Buffer;)V": (x: number, y: number, w: number, h: number, format: number, type: number, data: JBuffer) => {
     if (!gl) return;
-    const start = position(data) * 2 ** elementShift(data), bytes = pixelByteSize(format,type);
-    const rows = pixelRows(w,h,bytes,pixelParam(gl,0x0d05),pixelParam(gl,0x0d02) || w,pixelParam(gl,0x0d03),pixelParam(gl,0x0d04));
-    const remote = isLiveBuffer(data), remaining = (limit(data) - position(data)) * 2 ** elementShift(data);
-    const extent = bytes && w > 0 && h > 0 && Number.isSafeInteger(rows.extent) && rows.extent >= 0 ? rows.extent : 0;
-    const read = remote ? new Uint8Array(Math.min(remaining,extent)) : readRemainingBytes(data);
-    return afterGL(read,b => {
+    return afterGL(readRemainingBytes(data),b => {
       if (!gl) return;
       const C = pixelArray(type), aligned = b.byteOffset % C.BYTES_PER_ELEMENT === 0;
       const pixels = aligned ? new C(b.buffer as ArrayBuffer,b.byteOffset,Math.floor(b.byteLength / C.BYTES_PER_ELEMENT))
         : new C(b.slice().buffer,0,Math.floor(b.byteLength / C.BYTES_PER_ELEMENT));
-      const preserveErrors = () => {
-        let failed = false, error: number;
-        while ((error = gl!.getError())) { if (!T.deferredErrors.includes(error)) T.deferredErrors.push(error); failed = true; }
-        return failed;
-      };
-      if (remote) preserveErrors();
       gl.readPixels(x,y,w,h,format,type,pixels);
-      if (!remote) { if (!aligned) b.set(new Uint8Array(pixels.buffer)); return; }
-      if (preserveErrors() || gl.isContextLost() || !bytes || w <= 0 || h <= 0 || rows.extent > b.length) return;
-      const out = new Uint8Array(pixels.buffer,pixels.byteOffset,pixels.byteLength);
-      if (rows.stride === w * bytes) return writeBufferBytes(data,out.subarray(rows.skip,rows.extent),start + rows.skip);
-      let pending: void | Promise<void> = undefined;
-      for (let row = 0; row < h; row++) {
-        const at = rows.skip + row * rows.stride;
-        pending = after(pending,() => writeBufferBytes(data,out.subarray(at,at + w * bytes),start + at));
-      }
-      return pending;
+      if (!aligned) b.set(new Uint8Array(pixels.buffer));
     });
   },
   "glDrawArrays(III)V": (mode: number, first: number, count: number) => {

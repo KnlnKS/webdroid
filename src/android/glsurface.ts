@@ -1,7 +1,7 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { awaited, rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, stubs, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
 import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -408,9 +408,7 @@ rt.register({
 type Ctx = { egl: EglContext | null };
 type Surf = { surf: GlSurface | null; owned: boolean };
 const DEFAULT = 1n;
-let handleField = "";
-const mHandle = () => handleField ||= declaredField("android/opengl/EGLObjectHandle", "mHandle");
-const handleOf = (o: JObj | null): bigint => o ? (o as unknown as Record<string, bigint>)[mHandle()] : 0n;
+const handleOf = (o: JObj | null): bigint => o ? getDeclared<bigint>(o, "android/opengl/EGLObjectHandle", "mHandle") : 0n;
 const eglObject = (cls: string, h: bigint): JObj => setDeclared(rt.make("android/opengl/" + cls), "android/opengl/EGLObjectHandle", { mHandle: h });
 const ctxOf = (o: JObj | null) => deref<Ctx | undefined>(handleOf(o));
 const surfOf = (o: JObj | null) => deref<Surf | undefined>(handleOf(o));

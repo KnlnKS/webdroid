@@ -15,7 +15,7 @@ export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
 
 // errno values (bionic/Linux ARM)
 export const E = {
-  PERM: 1, NOENT: 2, SRCH: 3, INTR: 4, IO: 5, TOOBIG: 7, BADF: 9, CHILD: 10, AGAIN: 11, NOMEM: 12, ACCES: 13, FAULT: 14, BUSY: 16, EXIST: 17,
+  PERM: 1, NOENT: 2, SRCH: 3, INTR: 4, IO: 5, NXIO: 6, TOOBIG: 7, BADF: 9, CHILD: 10, AGAIN: 11, NOMEM: 12, ACCES: 13, FAULT: 14, BUSY: 16, EXIST: 17,
   NODEV: 19, NOTDIR: 20, ISDIR: 21, INVAL: 22, MFILE: 24, NOTTY: 25, NOSPC: 28, SPIPE: 29, PIPE: 32, DOM: 33, RANGE: 34, DEADLK: 35, NOSYS: 38, NOTSUP: 95,
   NOTEMPTY: 39, NOTSOCK: 88, DESTADDRREQ: 89, MSGSIZE: 90, PROTOTYPE: 91, NOPROTOOPT: 92, PROTONOSUPPORT: 93, SOCKTNOSUPPORT: 94, AFNOSUPPORT: 97,
   ADDRINUSE: 98, ADDRNOTAVAIL: 99, NETUNREACH: 101, CONNRESET: 104,
@@ -23,7 +23,7 @@ export const E = {
 } as const;
 
 export const ERRSTR: Record<number, string> = {
-  1: "Operation not permitted", 2: "No such file or directory", 4: "Interrupted system call", 5: "I/O error", 9: "Bad file descriptor", 10: "No child processes",
+  1: "Operation not permitted", 2: "No such file or directory", 4: "Interrupted system call", 5: "I/O error", 6: "No such device or address", 9: "Bad file descriptor", 10: "No child processes",
   11: "Try again", 12: "Out of memory", 13: "Permission denied", 16: "Device or resource busy", 17: "File exists", 20: "Not a directory",
   21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 25: "Inappropriate ioctl for device", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",
   35: "Resource deadlock would occur", 38: "Function not implemented", 39: "Directory not empty", 101: "Network is unreachable", 110: "Connection timed out",

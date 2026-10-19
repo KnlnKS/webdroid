@@ -48,8 +48,7 @@ rt.registerJnis("android/media/SoundPool", {
   "native_release()V": pools.detach,
   "_load(Ljava/io/FileDescriptor;JJI)I": function (this: JObj, fd: JObj | null, offset: bigint, length: bigint) {
     if (fd === null) rt.npe();
-    const source = fdSlice(fdInt(fd), offset, length);
-    return source ? after(readFully(source), (bytes) => pools.get(this).load(bytes)) : 0;
+    return after(fdSlice(fdInt(fd), offset, length), source => source ? after(readFully(source), (bytes) => pools.get(this).load(bytes)) : 0);
   },
   "_play(IFFIIFI)I": P((p, id: number, l: number, r: number, prio: number, loop: number, rate: number) => {
     const buf = p.sounds.get(id);
