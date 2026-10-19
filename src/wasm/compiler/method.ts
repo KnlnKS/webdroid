@@ -780,9 +780,9 @@ export class MC {
       c.lget(this.tmpL); pushArgs(this, ins, p.params);
       c.lget(this.tmpL).refCast(cx.tObj).structGet(cx.tObj, 0);
       if (declC && !declC.isInterface) {
-        c.i32(cx.w.vslot(decl, target.key)).arrayGet(cx.tVT);
+        c.i32(cx.w.dispatch.vslot(decl, target.key)).arrayGet(cx.tVT);
       } else if (prog.get("java/lang/Object")!.byKey.has(target.key)) {
-        c.i32(cx.w.vslot("java/lang/Object", target.key)).arrayGet(cx.tVT);
+        c.i32(cx.w.dispatch.vslot("java/lang/Object", target.key)).arrayGet(cx.tVT);
       } else {
         const sel = cx.w.selectorId(target.key), s = sel % H.IMT_N;
         // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)

@@ -188,7 +188,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   const flush = () => {
     if (!group.length) return;
     w.beginTouch();
-    const bytes = w.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.slots.blockOf(w.link(n).slotBase));
+    const bytes = w.classModules.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.slots.blockOf(w.link(n).slotBase));
     group = []; size = 0;
     // a module V8 rejects leaves its classes to the on-demand builder
     if (invalidFunction(bytes)) return;

@@ -153,7 +153,7 @@ const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
   const names = blocks.map((b) => w.slots.blockClass[b]);
   w.beginTouch();
-  const bytes = w.classModule(names.map((n) => w.link(n)));
+  const bytes = w.classModules.classModule(names.map((n) => w.link(n)));
   const touch = w.endTouch();
   const header: DHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch) };
   const bad = check(bytes);
@@ -173,7 +173,7 @@ do {
   const names = extraNames();
   extras = names.length;
   w.beginTouch();
-  xbytes = w.classModule(names.map((n) => w.link(n)));
+  xbytes = w.classModules.classModule(names.map((n) => w.link(n)));
   xtouch = w.endTouch();
 } while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");

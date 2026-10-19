@@ -386,7 +386,7 @@ export class AotRuntime {
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
     if (head.version !== VERSION) { this.rejectedData.add(file); return undefined; }
-    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubImports(mod) }).exports;
+    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubs.stubImports(mod) }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
     for (const id of head.touch) this.touch(id);
@@ -411,7 +411,7 @@ export class AotRuntime {
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
     for (const s of head.synth) if (this.synthIn.get(s) !== file) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []) };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolic.symbolicImports(head.symbols ?? []) };
     w.classImports(head.classImports, imports);
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
     if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
@@ -561,7 +561,7 @@ export class AotRuntime {
     if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []) };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolic.symbolicImports(head.symbols ?? []) };
     // Retired data groups bind each class's published globals instead of creating another owner.
     let bindClasses = app;
     for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) imports[m] = ex; else bindClasses = true; }

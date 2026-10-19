@@ -46,13 +46,13 @@ const immediate = w.synchronous(() => entry.callOn(origin, () => entry.newObj("E
 if (immediate instanceof Promise) { failed++; console.log("FAIL warm synchronous constructor became asynchronous"); }
 const immediateObject = await immediate;
 if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL synchronous constructor caller"); }
-const originalCall = w.callFn;
+const originalCall = w.helpers.callFn;
 // newObj allocates through the suspending invoker of the class's allocator (host/entry.ts alloc); `then` runs before that allocation answers
 const ownerAlloc = w.host.info(UInfo.AllocInstance, w.idOf("E$Owner"), 0);
 let delayedAllocs = 0;
 const delayAllocation = (then: () => void) => {
-  w.callFn = (key, ...a) => {
-    const f = originalCall.call(w, key, ...a);
+  w.helpers.callFn = (key, ...a) => {
+    const f = originalCall.call(w.helpers, key, ...a);
     return key !== "invs:>L" ? f : (s, slot, ...args) => slot !== ownerAlloc ? f(s, slot, ...args) : Promise.resolve(f(s, slot, ...args)).then(value => {
       delayedAllocs++; then(); return value;
     });
@@ -63,7 +63,7 @@ try {
   const delayed = await entry.callOn(origin, () => entry.newObj("E$Owner"));
   if (delayedAllocs !== 1) { failed++; console.log(`FAIL the allocation was delayed ${delayedAllocs} times, not once`); }
   if (await entry.callOn(origin, () => entry.vcall(delayed, "owner", "()Ljava/lang/Thread;")) !== current) { failed++; console.log("FAIL asynchronous constructor lost allocating caller"); }
-} finally { w.callFn = originalCall; }
+} finally { w.helpers.callFn = originalCall; }
 console.log(failed === ownerFailures ? "3/3 constructor ownership checks pass" : "FAIL constructor ownership checks");
 const parentFailures = failed;
 const originRec = entry.callOn(origin, () => runningThread(w)), backgroundRec = entry.callOn(background, () => runningThread(w));
@@ -94,7 +94,7 @@ try {
   }
   if (delayedAllocs !== 3) { failed++; console.log(`FAIL the parent/monitor allocations were delayed ${delayedAllocs - 1} times, not twice`); }
 } finally {
-  w.callFn = originalCall; w.bridge.invokeOn = originalInvoke;
+  w.helpers.callFn = originalCall; w.bridge.invokeOn = originalInvoke;
   w.sched.monitors.exit(lock, parent); parent.end(); interposed.end(); w.sched.idle();
 }
 console.log(failed === parentFailures ? "2/2 constructor parent/monitor contexts pass" : "FAIL constructor parent/monitor contexts");

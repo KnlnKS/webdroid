@@ -115,7 +115,7 @@ export class Tiering {
       done.push(this.w.table.get(slot) as Function);
       this.w.table.set(slot, this.w.rt.nop);
       const s = at < 0 ? undefined : this.w.slots.at(at);
-      if (s?.k === "method" && s.done && this.w.restoreStub(at, s)) { s.done = false; s.hot = false; this.groupOf.delete(at); this.hotUnits.forget(at); }
+      if (s?.k === "method" && s.done && this.w.stubs.restoreStub(at, s)) { s.done = false; s.hot = false; this.groupOf.delete(at); this.hotUnits.forget(at); }
       return false;
     });
     if (done.length) this.retire(done);
@@ -331,7 +331,7 @@ export class Tiering {
     const owner = (at: number) => this.w.slots.method(at)!.m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
-    const imports: Record<string, any> = { rt: this.w.rtImports(), host: this.w.host, n: this.w.nativeImports(head.natives), symbolic: this.w.symbolicImports(head.symbols ?? []) };
+    const imports: Record<string, any> = { rt: this.w.rtImports(), host: this.w.host, n: this.w.nativeImports(head.natives), symbolic: this.w.symbolic.symbolicImports(head.symbols ?? []) };
     this.w.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.w.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.w.allocated.add(c);
@@ -384,7 +384,7 @@ export class Tiering {
       if (hot) {
         const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
         const unit = this.hotUnits.publish(group, names, this.w.table);
-        for (const name of unit?.sites ?? []) if (this.w.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
+        for (const name of unit?.sites ?? []) if (this.w.symbolic.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
       } else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
     };

@@ -84,9 +84,9 @@ if (combinedAt >= 0) {
   }
   const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.slots.blockOf(image.slotOf(method)));
   check("CLI combined image executes its app code module", module !== undefined && module >= 0 && image.aot!.loaded.includes(`c${module}.wasm`), true);
-  const resolutions = image.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
+  const resolutions = image.symbolic.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
   check("CLI combined image warm result", await image.entryAsync("Pst", "hot", "(I)I")(10), expected);
-  check("CLI combined image warm resolutions", image.symbolicResolutions, resolutions);
+  check("CLI combined image warm resolutions", image.symbolic.symbolicResolutions, resolutions);
 }
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
@@ -395,9 +395,9 @@ if (saved) {
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
   later.addDexes(late);
   check("a falsified decision of the app build is undone", later.entry("Pst2", "sub", "()I")(), 500);
-  const resolutions = later.symbolicResolutions;
+  const resolutions = later.symbolic.symbolicResolutions;
   check("and the others hold", later.entry("Pst", "chain", "()I")(), 6);
-  check("late dex preserves resolved symbolic identities", later.symbolicResolutions, resolutions);
+  check("late dex preserves resolved symbolic identities", later.symbolic.symbolicResolutions, resolutions);
   // the dex is in the Program from the start, behind the app's: the build still attaches, and the decision does not hold
   const together = world([...app, ...late], { app: { index, store } });
   check("the build attaches with later dex files in the Program", together.appAttached, true);

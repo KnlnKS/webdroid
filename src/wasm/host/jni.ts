@@ -93,7 +93,7 @@ export function wasmJni(w: World): JniVm {
     isInstance: (o, c) => isSub(w.classNameOf(o as object), c.name),
     init(c) {
       if (!prog.get(c.name) || !w.needsInit(c.name)) return null;
-      const done = nest((s) => w.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
+      const done = nest((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
       return done instanceof Promise ? done.then(() => {}) : null;
     },
 

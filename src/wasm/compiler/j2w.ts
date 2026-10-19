@@ -98,7 +98,7 @@ const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
 export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
-  | "idOf" | "slotOf" | "vslot" | "selectorId" | "ensureSlot" | "ensureBody" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
+  | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
   | "needsSymbolicSite" | "guestShared" | "sharedHelpers">;
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
@@ -723,7 +723,7 @@ export class Compiler implements Base {
     }
     const inits = ensures.map((cls) => {
       const name = "$ensure:" + cls, f = mb.reserveFunc(this.sig([], "V"), name), code = new Code(0);
-      w.ensureBody(this, cls, code);
+      w.classModules.ensureBody(this, cls, code);
       mb.setBody(f, code.finish()); mb.export("m" + w.ensureSlot(cls), "func", f);
       return { name, f, code };
     });

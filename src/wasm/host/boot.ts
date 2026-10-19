@@ -74,9 +74,9 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
   // the frames of Java code: a method the host implements is not one
-  rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
+  rt.javaFrames = () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   rt.userClassLoader = () => {
-    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
+    for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
     return null;
   };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);

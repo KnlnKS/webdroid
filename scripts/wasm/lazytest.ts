@@ -103,7 +103,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 {
   const w = world([join(out, "classes.dex"), ...jars]), callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
   const backtrace = w.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;"), state = backtrace(callA(1) as object) as object;
-  const frames = w.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
+  const frames = w.stacks.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
   check("frames", frames.slice(0, 3).map((f) => `${f.cls}.${f.method}`).join(" "), "Ex.c Ex.b Ex.a");
   for (const f of frames.slice(0, 3)) {
     const m = w.prog.resolve("Ex", f.method, f.method === "a" ? "(I)Ljava/lang/Throwable;" : "(I)V")!;
@@ -116,7 +116,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   // the same after the three methods have run enough to be recompiled with each other copied in (the frames of a copy carry the same names)
   for (let i = 0; i < 6000 || (!w.stats.upgrades && i < 1e6); i++) callA(0); // the second tier waits until the program has been hot for a few ms
   check("methods were recompiled", w.stats.upgrades > 0, true);
-  check("frames after the second tier", where(w.stackTrace(backtrace(callA(1) as object) as object)), where(frames));
+  check("frames after the second tier", where(w.stacks.stackTrace(backtrace(callA(1) as object) as object)), where(frames));
   let top: unknown;
   try { top = w.entry("Ex", "top", "([Ljava/lang/StackTraceElement;)I")(w.entry("java/lang/Throwable", "nativeGetStackTrace", "(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;")(state)); }
   catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.numbers.gapList.join("; "); }

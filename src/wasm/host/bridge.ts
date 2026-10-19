@@ -222,7 +222,7 @@ export class Bridge implements HostBridge {
   /** the Java frames the throwable `o` recorded, for the report of an exception nothing caught */
   private frames(o: object): string[] | undefined {
     const f = this.fieldsOf(THROWABLE).get(mangleField(THROWABLE, "backtrace")), state = f && this.accessor("get", f)(o);
-    return state ? this.w.stackTrace(state).map((x) => `${x.cls}.${x.method}:${x.line}`) : undefined;
+    return state ? this.w.stacks.stackTrace(state).map((x) => `${x.cls}.${x.method}:${x.line}`) : undefined;
   }
 
   // ---------- host objects (hostclass.ts)
@@ -292,8 +292,8 @@ export class Bridge implements HostBridge {
     const { params: kinds, ret: rk } = methodKinds(m);
     const slot = this.w.slotOf(m), ensure = m.isStatic && this.w.needsInit(m.cls) ? this.w.ensureSlot(m.cls) : -1;
     let call: Fn;
-    if (suspend) { const invoke = this.w.invoker(kinds, rk, true); call = (s: Strand, ...a: unknown[]) => invoke(s, slot, ensure, ...a); }
-    else { const invoke = this.w.invoker(kinds, rk); call = (...a: unknown[]) => invoke(slot, ensure, ...a); }
+    if (suspend) { const invoke = this.w.helpers.invoker(kinds, rk, true); call = (s: Strand, ...a: unknown[]) => invoke(s, slot, ensure, ...a); }
+    else { const invoke = this.w.helpers.invoker(kinds, rk); call = (...a: unknown[]) => invoke(slot, ensure, ...a); }
     cache.set(m, entry = { cls: m.cls, key: m.key, call, rk });
     return entry;
   }

@@ -140,13 +140,13 @@ for (const method of ["memberConstraints", "memberInterfaceConstraints", "member
   if (result !== 255) throw new Error(`${method}: ${result}`);
 }
 for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
-  const original = w.javaString, hostFn = w.hostFn, failure = new Error("constraint host failure");
+  const original = w.javaString, hostFn = w.helpers.hostFn, failure = new Error("constraint host failure");
   let injected = false;
   if (method === "memberHostRetry") w.javaString = function(value: string) {
     if (!injected && value === "MemberType") { injected = true; throw failure; }
     return original.call(this, value);
   };
-  else w.hostFn = function(...args: Parameters<typeof hostFn>) {
+  else w.helpers.hostFn = function(...args: Parameters<typeof hostFn>) {
     const fn = hostFn.apply(this, args);
     return args[0] !== "resolve:classId" ? fn : (...values: unknown[]) => {
       const id = fn(...values);
@@ -158,7 +158,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     let caught: unknown;
     try { await w.entryAsync("Ldr", method, desc)(...paths); } catch (error) { caught = error; }
     if (caught !== failure || !injected) throw new Error(`${method}: signature host failure changed kind`);
-  } finally { w.javaString = original; w.hostFn = hostFn; }
+  } finally { w.javaString = original; w.helpers.hostFn = hostFn; }
   const retry = await w.entryAsync("Ldr", method, desc)(...paths);
   if (retry !== 7) throw new Error(`${method}: signature host failure prevented retry: ${retry}`);
   console.log(`${method}: original host error propagated, same class retries successfully`);
@@ -266,15 +266,15 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     call = w.entryAsync(key, "symbolic", "()I");
     if (await call() !== 42) throw new Error("symbolic direct entry failed");
   } finally { Compiler.prototype.buildUnit = buildUnit; }
-  const resolutions = w.symbolicResolutions, stubModules = w.symbolicStubModules;
+  const resolutions = w.symbolic.symbolicResolutions, stubModules = w.symbolic.symbolicStubModules;
   for (let i = 0; i < 3; i++) if (await call() !== 42) throw new Error("cached symbolic operation failed");
-  if (w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
-  if (w.symbolicStubModules !== stubModules) throw new Error("warm symbolic operation rebuilt stub modules");
-  console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolicResolutions - resolutions}, stub modules=${w.symbolicStubModules - stubModules}`);
+  if (w.symbolic.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
+  if (w.symbolic.symbolicStubModules !== stubModules) throw new Error("warm symbolic operation rebuilt stub modules");
+  console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolic.symbolicResolutions - resolutions}, stub modules=${w.symbolic.symbolicStubModules - stubModules}`);
   {
     const method = w.prog.require(key).byKey.get("symbolic()I")!;
     const ins = prepareMethod(method.dex.code(method.codeOff)).instructions.find(ins => ins.name === "invoke-static")!;
-    const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
+    const before = { ...w.stats }, symbols = w.symbolic.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
     if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs) throw new Error("symbolic stub compilation unaccounted");
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
@@ -323,7 +323,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
       Compiler.prototype.buildSyntheticGroup = function (...args: Parameters<typeof group>) { compilers.push(new WeakRef(this)); return group.apply(this, args); };
       const before = { ...w.stats.phase };
       try {
-        const bindings = w.symbolicImports(Array.from({ length: 32 }, (_, i) => [`memory:${i}`, key, method.index, ins.pc, [], "I"]));
+        const bindings = w.symbolic.symbolicImports(Array.from({ length: 32 }, (_, i) => [`memory:${i}`, key, method.index, ins.pc, [], "I"]));
         for (let i = 0; i < 32; i++) {
           const slot = (bindings[`memory:${i}`] as WebAssembly.Global).value as number;
           stubs.push(new WeakRef((bindings.table as WebAssembly.Table).get(slot)!));
@@ -467,7 +467,7 @@ for (const asynchronous of [false, true]) {
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {
     const value = resolver.throwable(error);
-    if (value) console.log("Class.forName fixture failure", resolver.classNameOf(value), resolver.hostString(resolver.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(value)), resolver.stackTrace(resolver.fieldReader<object>("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(value)));
+    if (value) console.log("Class.forName fixture failure", resolver.classNameOf(value), resolver.hostString(resolver.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(value)), resolver.stacks.stackTrace(resolver.fieldReader<object>("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(value)));
     throw error;
   }
   if (forName !== 63) throw new Error(`Class.forName loader/error boundaries: ${forName}`);
@@ -820,8 +820,8 @@ async function nativePathControl(): Promise<void> {
     const base = program([...PLATFORM_PATHS, common]);
     const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
     let managed = 0;
-    const callFn = target.callFn;
-    target.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };
+    const callFn = target.helpers.callFn;
+    target.helpers.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };
     const construct = async (cls = "dalvik/system/DexClassLoader", path = paths[0], parent: object | null = null) => {
       const desc = cls.includes("$") ? "(Ljava/lang/String;Ljava/lang/ClassLoader;)V" : "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V";
       const ctor = p.resolve(cls, "<init>", desc)!;

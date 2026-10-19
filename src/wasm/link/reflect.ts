@@ -132,7 +132,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
     c.lget(0).call(cx.helper("vtab"));
-    if (!decl.isInterface) c.i32(cx.w.vslot(m.cls, m.key)).arrayGet(cx.tVT);
+    if (!decl.isInterface) c.i32(cx.w.dispatch.vslot(m.cls, m.key)).arrayGet(cx.tVT);
     else {
       const sel = cx.w.selectorId(m.key), s = sel % H.IMT_N, vt = c.newLocal(refNull(cx.tVT));
       c.lset(vt).lget(vt).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)

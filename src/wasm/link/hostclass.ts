@@ -93,7 +93,7 @@ export class HostClasses {
     for (const { cls, keys } of this.changed) {
       if (name === cls || !prog.get(name)?.isInterface && prog.isSubclass(name, cls)) for (const key of keys) {
         const at = key.indexOf("("), m = prog.implFor(name, key.slice(0, at), key.slice(at));
-        if (m) out.push([this.w.vslot(name, key), this.w.slotOf(m)]);
+        if (m) out.push([this.w.dispatch.vslot(name, key), this.w.slotOf(m)]);
       }
     }
     return out;
@@ -141,7 +141,7 @@ export class HostClasses {
     // a class the host implements whole does not run its platform initializer: one taken above already stores the spec's values
     if (clinit && !taken.includes(clinit) && this.w.opts.hostWhole?.(jc.name)) { bodies.set(clinit, () => {}); taken.push(clinit); }
     this.w.addClass(over, bodies);
-    if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.repairLinked(); }
+    if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.classModules.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);
     if (hosted.methods.length) this.w.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
   }
