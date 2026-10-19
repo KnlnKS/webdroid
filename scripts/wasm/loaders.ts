@@ -1,9 +1,8 @@
 // Class loaders: two DexClassLoaders over dex files that define the same class name (tests/fixtures/wasm/java/Ldr.java) keep distinct classes, statics and Class
 // objects, see the app's interface through their parent, and answer Class.forName, loadClass, getClassLoader and reflection each in its own namespace.
 // Needs javac and d8. Run: pnpm wasm loaders
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { zipSync } from "fflate";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
@@ -37,16 +36,13 @@ import { HOSTED } from "../../src/wasm/link/hostapi.ts";
 import { wasmEntry } from "../../src/wasm/host/entry.ts";
 import { mountPlatform, natives } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
+import { androidFixture, filesIn, java, javac, tempDir } from "./tools.ts";
 
-import { androidPlatform, androidTool } from "../android-sdk.ts";
-
-const out = mkdtempSync(join(tmpdir(), "j2w-ldr-"));
-const sh = shellIn(out), androidJar = `${androidPlatform(35)}/android.jar`;
+const out = tempDir();
 /** compiles `sources` (against the Android API and `classpath`) and dexes the classes; answers the dex */
-const build = (dir: string, sources: string[], classpath?: string) => {
-  sh(["mkdir", "-p", dir]);
-  sh(["javac", "--release", "11", "-Xlint:-options", "-cp", [androidJar, classpath].filter(Boolean).join(":"), "-d", join(out, dir), ...sources.map((s) => join(JAVA, s))]);
+const build = (dir: string, sources: string[], classpath: string[] = []) => {
+  const to = join(out, dir);
+  javac(to, sources.map((s) => join(JAVA, s)), { release: 11, classpath, android: true });
   if (dir === "b") {
     const p = new Pool(), self = p.cls("TypeSite"), sup = p.cls("java/lang/Object");
     const method = (name: string, descriptor: string) => {
@@ -54,16 +50,16 @@ const build = (dir: string, sources: string[], classpath?: string) => {
       return [...u2(9), ...u2(p.utf8(name)), ...u2(p.utf8("()Ljava/lang/invoke/MethodType;")), ...u2(1), ...u2(p.utf8("Code")), ...u4(body.length), ...body];
     };
     const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
-    writeFileSync(join(out, dir, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
+    writeFileSync(join(to, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
   }
-  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...readdirSync(join(out, dir), { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path)).map(path => join(out, dir, path)).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
-  return join(out, dir, "classes.dex");
+  const classes = readdirSync(to, { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
+  return join(androidFixture({ out: to, classpath, minApi: dir === "b" ? 34 : 26, classes }), "classes.dex");
 };
 if (process.argv.includes("--abstract-default")) { await abstractDefaultControl(); process.exit(0); }
 if (process.argv.includes("--hot-refresh")) { await hotRefreshControl(); process.exit(0); }
 const app = build("app", ["Ldr.java", "Tag.java"]);
-const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
+const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], [join(out, "app")]);
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], [join(out, "app")]), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")]);
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
 const ordered = world([apk, ...PLATFORM_PATHS], { natives });
@@ -165,9 +161,8 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
   console.log(`${method}: original host error propagated, same class retries successfully`);
 }
 {
-  sh(["mkdir", "-p", "witness"]);
-  sh(["javac", "--release", "11", "-d", join(out, "witness"), join(JAVA, "PackageLoaderControl.java")]);
-  const control = sh(["java", "-cp", join(out, "witness"), "PackageLoaderControl", join(out, "a"), join(out, "b")]).trim();
+  javac(join(out, "witness"), [join(JAVA, "PackageLoaderControl.java")], { release: 11 });
+  const control = java(join(out, "witness"), "PackageLoaderControl", [join(out, "a"), join(out, "b")]).trim();
   if (control !== "1122\n1122\n2222\n112222\n112222\n222222") throw new Error(`package runtime-package JDK control: ${control}`);
   console.log(`package runtime-package JDK control: ${control.replaceAll("\n", ",")}`);
   for (const ownType of [true, false]) {
@@ -556,7 +551,7 @@ async function interfaceSuperControl(): Promise<void> {
   }
 
   const names = ["selected", "reversed", "declared", "inherited", "classSuper", "virtualDefault", "interfaceDefault", "unusedAbstract"];
-  const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
+  const jdk = java(join(out, "interfaceSuper"), "InterfaceSuper").trim().split("\n").map(Number);
   if (jdk.slice(0, names.length).join(",") !== "22,22,33,11,44,22,22,55") throw new Error("interface-super JDK control changed");
   const base = program(PLATFORM_PATHS.slice(0, 2));
   let checks = 0;
@@ -597,8 +592,8 @@ async function interfaceSuperControl(): Promise<void> {
 }
 
 async function hotRefreshControl(): Promise<void> {
-  const dex = build("refresh", ["HotRefresh.java"]), late = build("refresh-late", ["HotRefreshLate.java"], join(out, "refresh"));
-  const expected = sh(["java", "-cp", [join(out, "refresh"), join(out, "refresh-late")].join(":"), "HotRefresh"]).trim().split("\n").map(Number);
+  const dex = build("refresh", ["HotRefresh.java"]), late = build("refresh-late", ["HotRefreshLate.java"], [join(out, "refresh")]);
+  const expected = java([join(out, "refresh"), join(out, "refresh-late")].join(":"), "HotRefresh").trim().split("\n").map(Number);
   if (expected.join(",") !== "896,1536,2048") throw new Error("hot refresh JDK control changed");
   const base = program(PLATFORM_PATHS.slice(0, 2));
   let checks = 0;
@@ -788,14 +783,13 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
 
 async function abstractDefaultControl(): Promise<void> {
   const dex = build("abstractDefault", ["InterfaceSuper.java", "ClassReabstract.java"]);
-  const old = join(out, "oldInterfaceSuper");
-  sh(["mkdir", "-p", old]);
+  const old = tempDir();
   writeFileSync(join(old, "InterfaceSuper.java"), readFileSync(join(JAVA, "InterfaceSuper.java"), "utf8").replace("interface Reabstracted extends C { int f(); }", "interface Reabstracted extends C {}").replace("interface OtherReabstracted extends C { int f(); }", "interface OtherReabstracted extends C {}"));
   writeFileSync(join(old, "ClassReabstract.java"), readFileSync(join(JAVA, "ClassReabstract.java"), "utf8").replace("  public abstract int f();", ""));
-  sh(["javac", "--release", "11", "-d", old, join(old, "InterfaceSuper.java"), join(old, "ClassReabstract.java"), join(JAVA, "AbstractDefaultUse.java")]);
-  for (const file of filesIn(old, /^AbstractDefaultUse.*\.class$/)) sh(["cp", file, join(out, "abstractDefault")]);
-  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, "abstractDefault"), "--lib", androidJar, ...filesIn(join(out, "abstractDefault"), /\.class$/)]);
-  const expected = sh(["java", "-cp", join(out, "abstractDefault"), "AbstractDefaultUse"]).trim();
+  javac(old, [join(old, "InterfaceSuper.java"), join(old, "ClassReabstract.java"), join(JAVA, "AbstractDefaultUse.java")], { release: 11 });
+  for (const file of filesIn(old, /^AbstractDefaultUse.*\.class$/)) copyFileSync(file, join(out, "abstractDefault", file.split("/").pop()!));
+  androidFixture({ out: join(out, "abstractDefault") });
+  const expected = java(join(out, "abstractDefault"), "AbstractDefaultUse").trim();
   if (expected !== "42\n1\n42\n1") throw new Error("binary-evolution JDK control changed: " + expected);
   const failures: string[] = [], base = program(PLATFORM_PATHS.slice(0, 2));
   {

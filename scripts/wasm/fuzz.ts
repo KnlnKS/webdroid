@@ -2,8 +2,7 @@
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm and on the JDK; results must be bit-identical.
 // Run from the repository root: pnpm wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
 // (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
@@ -13,7 +12,7 @@ import { irreducibleClass } from "./irfuzz.ts";
 import { Irreducible, Flow } from "../../src/jvm/structure.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { fixture, onJdk, tempDir } from "./tools.ts";
 import { argv } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
@@ -128,13 +127,11 @@ const generated = `public class F {
   ${Array.from({ length: count }, (_, i) => method(i)).join("\n  ")}
 }\n`;
 
-const out = mkdtempSync(join(tmpdir(), "j2w-fuzz-"));
-const sh = shellIn(out);
+const out = tempDir("j2w-fuzz-");
 const file = opt("--file"), irreducible = flag("--irreducible");
 if (irreducible) writeFileSync(join(out, "F.class"), irreducibleClass("F", count, rnd));
 else writeFileSync(join(out, "F.java"), file === undefined ? generated : readFileSync(file, "utf8"));
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...irreducible ? [] : ["F.java"], join(JAVA, "Ref.java")]);
-sh(["d8", ...(flag("--debug") ? [] : ["--release"]), "--output", out, join(out, "F.class"), ...filesIn(out, /^F\$.*\.class$/)]);
+fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA, "Ref.java")], debug: flag("--debug"), classes: /^F(\$.*)?\.class$/ });
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);
@@ -147,7 +144,7 @@ const cyclic = irreducible ? methods.filter((m) => {
 }).length : 0;
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);
-const jdk = onJdk(sh, out, cases.map(caseLine));
+const jdk = onJdk(out, cases.map(caseLine));
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, jdk, hit);
 console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);

@@ -1,7 +1,6 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
 // MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: pnpm wasm customdiff
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { loadDexes, program, world } from "./lib.ts";
@@ -10,7 +9,7 @@ import type { World } from "../../src/wasm/link/world.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { Pool, u2, u4 } from "./classfile.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { fixture, javac, onJdk, tempDir } from "./tools.ts";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles.ts";
 import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
@@ -23,7 +22,6 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { definingLoader } from "../../src/wasm/link/loaders.ts";
 import { idOfClass } from "../../src/wasm/link/classes.ts";
 import { definitionReady } from "../../src/wasm/link/resolution.ts";
-import { androidPlatform } from "../android-sdk.ts";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
@@ -150,11 +148,10 @@ const javaError = (w: World, what: string, e: unknown) => {
   const t = w.throwable(e);
   return new Error(`${what}: ${t ? w.classNameOf(t) : String(e)} (${w.lastMessage})`, { cause: e });
 };
-const out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
-const sh = shellIn(out);
+const out = tempDir();
 for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, n + ".class"), bytes);
-sh(["javac", "--release", "17", "-cp", `${out}:${androidPlatform(35)}/android.jar`, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...filesIn(out, /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/)]);
+javac(out, ["Rec", "Mh", "Vh", "Px", "Pt", "Ind", "Ref", "Bootstrap"].map((c) => join(JAVA, c + ".java")), { release: 17, classpath: [out], android: true });
+fixture({ out, minApi: 34, d8: ["--no-desugaring"], classes: /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/ });
 const dex = join(out, "classes.dex"), jars = CORE_PATHS;
 await mountPlatform(ROOT);
 
@@ -228,7 +225,7 @@ const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
   ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], tCustomRangeNull: [0, 3], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
-const jdk = onJdk(sh, out, cases.map(caseLine));
+const jdk = onJdk(out, cases.map(caseLine));
 // ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; JDKs before 21.0.12 narrow Object.clone's
 // protected receiver to Mc and throw, so those rows take ART's receiver rule and array clone semantics.
 cases.forEach((c, i) => { if (c.m.name === "tConstClone" && jdk[i] === "throw") jdk[i] = String(Number(c.args[0]) + 1); });
@@ -269,7 +266,7 @@ await checkDeferredSignatures();
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
   forceAdmission = name === "tInvokerConcurrent";
-  const waiting = [-1, 7], reference = onJdk(sh, out, waiting.map(a => `${cls}.${name} ${a}`));
+  const waiting = [-1, 7], reference = onJdk(out, waiting.map(a => `${cls}.${name} ${a}`));
   for (const [i, a] of waiting.entries()) {
     const value = await w.entryAsync(cls, name, "(I)I")(a);
     if (String(value) !== reference[i]) throw new Error(`suspended ${name}(${a}): ${value} != ${reference[i]}`);

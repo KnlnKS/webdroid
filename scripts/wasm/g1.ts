@@ -15,7 +15,7 @@ import { NODE_FLAGS } from "../node.ts";
 import { fileResponse, serve } from "../serve.ts";
 import type { G1Config, G1Result } from "./g1run.ts";
 import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { bundleFor, cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { androidFixture, bundleFor, cutWorkloads } from "./tools.ts";
 import { sourceKey } from "./aot-key.ts";
 import { createHash } from "node:crypto";
 import { geo, med, sampleError } from "./g1report.ts";
@@ -40,7 +40,6 @@ if (![reps, runs].every(n => Number.isInteger(n) && n > 0) || engines.some(e => 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
 const out = G1_DIR, sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
 mkdirSync(out, { recursive: true });
-const sh = shellIn(out);
 const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
   const { names: own, source } = cutWorkloads(readFileSync(file, "utf8"));
   for (const n of own) { names.push(n); classOf.set(n, cls); }
@@ -50,7 +49,7 @@ const dex = join(out, "classes.dex");
 if (only.some(name => !names.includes(name))) throw new Error(`unknown workload: ${only.filter(name => !names.includes(name)).join(", ")}`);
 if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file).mtimeMs)) {
   for (const c of cut) writeFileSync(join(out, `${c.cls}.java`), c.text);
-  dexAndroid(sh, out, cut.map((c) => `${c.cls}.java`));
+  androidFixture({ out, sources: cut.map((c) => join(out, `${c.cls}.java`)) });
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
 

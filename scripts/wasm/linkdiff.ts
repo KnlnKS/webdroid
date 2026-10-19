@@ -1,25 +1,22 @@
 // Unresolved references (java/lk): a class or member the dex names that the running program lacks must fail at its use site with the error and
 // message ART gives, and execution up to it must be unaffected. The error class is compared with the JDK; the messages are ART's (class_linker.cc,
 // common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: pnpm wasm linkdiff
-import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { filesIn, fixture, javac, onJdk, tempDir } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-lk-")), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
-const sh = shellIn(out);
+const out = tempDir(), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const src = (d: string, ...n: string[]) => n.map((x) => join(JAVA, "lk", d, `${x}.java`));
-for (const d of [v1, v2, run, gone]) mkdirSync(d);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", v1, ...src("", "Lk", "LkX", "LkGone", "LkGoneEx", "LkP", "LkI", "LkC")]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-cp", v1, "-d", v2, ...src("v2", "LkP", "LkI", "LkC")]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", run, join(JAVA, "Ref.java")]);
+javac(v1, src("", "Lk", "LkX", "LkGone", "LkGoneEx", "LkP", "LkI", "LkC"));
+javac(v2, src("v2", "LkP", "LkI", "LkC"), { classpath: [v1] });
+javac(run, [join(JAVA, "Ref.java")]);
 // the program that runs: Lk against the changed classes, without LkGone and LkGoneEx
 for (const f of [...filesIn(v2, /\.class$/), ...filesIn(v1, /^LkX?\.class$/)]) copyFileSync(f, join(run, f.split("/").pop()!));
-sh(["d8", "--release", "--output", out, ...filesIn(run, /^Lk/)]);
-sh(["d8", "--release", "--output", gone, ...filesIn(v1, /^LkGone/)]);
+fixture({ out, classes: filesIn(run, /^Lk/) });
+fixture({ out: gone, classes: filesIn(v1, /^LkGone/) });
 
 const loc = join(out, "classes.dex"), at = (cls: string) => ` (declaration of '${cls}' appears in ${loc})`;
 const gonePart = (d = "LLkGone;") => `java.lang.NoClassDefFoundError: Failed resolution of: ${d}`;
@@ -41,7 +38,7 @@ await startProcess(w);
 const hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 const names = Object.keys(expected);
-const jdk = onJdk(sh, run, names.map((n) => `Lk.${n}`));
+const jdk = onJdk(run, names.map((n) => `Lk.${n}`));
 const catchGone = w.entry("LkX", "catchGone", "()Ljava/lang/String;")();
 if (catchGone !== "rte") { console.log(`FAIL catchGone: ${catchGone}`); process.exit(1); }
 let failed = 0;

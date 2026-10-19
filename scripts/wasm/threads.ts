@@ -1,11 +1,9 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
-// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH.
+// answers a Promise or waits under a JS frame. Needs javac and java on PATH.
 // Run: pnpm wasm threads [case,case,... | substrate]
-import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
@@ -25,12 +23,9 @@ import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
+import { fixture } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^Th.*\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

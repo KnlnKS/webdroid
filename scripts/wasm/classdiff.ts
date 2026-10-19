@@ -1,35 +1,29 @@
 // Class-model differential test: the static int(int) methods of java/C.java, compiled lazily over the AOSP boot dex, against the
 // JDK. Each method runs once in a fresh World (class initialization state persists).
-// Needs javac, d8 and java on PATH. Run: pnpm wasm classdiff [method-name-filter]
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+// Needs javac and java on PATH. Run: pnpm wasm classdiff [method-name-filter]
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { intrinsics } from "../../src/wasm/link/intrinsics.ts";
 import { mountPlatform, natives } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { fixture, java, javac, onJdk, tempDir } from "./tools.ts";
 import { ACC, declaredMethod } from "../../src/wasm/compiler/program.ts";
 import { Cha } from "../../src/wasm/compiler/cha.ts";
 import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe.ts";
 import { OP } from "../../src/wasm/compiler/code.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-c-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "C.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^C.*\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "C.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^C.*\.class$/ });
 
 await mountPlatform(ROOT);
 // System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
 intrinsics.set("java/lang/System.<clinit>()V", () => {});
 
 // AbstractMethodError: Sub inherits m() from a Base that was recompiled abstract
-sh(["mkdir", "-p", "am"]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am1/Am.java"), join(JAVA, "am1/AmBase.java")]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am2/AmBase.java")]);
-sh(["d8", "--release", "--output", join(out, "am"), ...filesIn(join(out, "am"), /^Am.*\.class$/)]);
-const amExpected = sh(["java", "-cp", join(out, "am"), "Am"]).trim();
+const am = tempDir();
+javac(am, [join(JAVA, "am1/Am.java"), join(JAVA, "am1/AmBase.java")]);
+fixture({ out: am, sources: [join(JAVA, "am2/AmBase.java")] });
+const amExpected = java(am, "Am").trim();
 const dex = join(out, "classes.dex"), jars = PLATFORM_PATHS.slice(0, 2);
 const prog = program([dex, ...jars]), only = process.argv[2];
 const resolved = prog.resolve("C", "classIdent", "(I)I")!;
@@ -58,7 +52,7 @@ if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== reg
 }
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const cases = methods.map((m) => ({ m, args: [0n] }));
-const jdk = onJdk(sh, out, cases.map((c) => `C.${c.m.name} 0`));
+const jdk = onJdk(out, cases.map((c) => `C.${c.m.name} 0`));
 let bad = 0;
 const hit: string[] = [];
 for (const [i, c] of cases.entries()) {
@@ -70,7 +64,7 @@ for (const [i, c] of cases.entries()) {
   if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].join("; ")}`); hit.length = 0; }
 }
 {
-  const w = world([join(out, "am/classes.dex"), ...jars]);
+  const w = world([join(am, "classes.dex"), ...jars]);
   let r: string;
   try { r = String(w.entry("Am", "run", "(I)I")(0)); } catch (e) { const t = w.throwable(e); r = t ? "java " + w.classNameOf(t) : String(e); }
   if (r !== amExpected) { bad++; console.log(`MISMATCH Am.run: jvm=${amExpected} wasm=${r}`); }

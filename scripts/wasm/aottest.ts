@@ -1,8 +1,7 @@
 // Precompiled platform code (aot.ts) stays sound when classes arrive after the build: it relies on no class-hierarchy decision, so a dex that
 // overrides a method it calls takes effect through dispatch, whether the dex is added later or present from the start, and the code stays installed.
 // Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `pnpm wasm aottest` makes when it is unset.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
@@ -15,17 +14,13 @@ import { natives } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 import { JAVA, PLATFORM_PATHS } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { checker, filesIn, fixture, tempDir } from "./tools.ts";
 
 const build = process.env.WEBDROID_AOT;
 if (!build) { console.log("aottest: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
 const jars = PLATFORM_PATHS;
-const out = mkdtempSync(join(tmpdir(), "j2w-aot-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Aot.java"), join(JAVA, "Aot2.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^Aot(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Aot2(\$\w+)?\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Aot.java"), join(JAVA, "Aot2.java")], classes: /^Aot(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Aot2(\$\w+)?\.class$/) });
 
 const suite = checker(), { check } = suite;
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
@@ -270,19 +265,15 @@ const modules = /^[cd]\d+\.wasm$/;
 // An app build made under the root's shared libraries keeps the classes its data modules laid out when Java binds those libraries after they were linked: the app's own
 // copy of a class the library defines first is the superclass before the binding, the library's after it, as the build has it.
 {
-  sh(["mkdir", "-p", "lib3", "app3"]);
-  const lib = (v: number) => `public class Aot3Lib { public int v() { return ${v}; } }`;
-  writeFileSync(join(out, "lib3/Aot3Lib.java"), lib(5));
-  writeFileSync(join(out, "app3/Aot3Lib.java"), lib(3));
-  writeFileSync(join(out, "app3/Aot3.java"), "public class Aot3 extends Aot3Lib { public static int run() { return new Aot3().v() + 1; } }");
-  for (const d of ["lib3", "app3"]) {
-    sh(["javac", "--release", "8", "-Xlint:-options", "-d", join(out, d), ...filesIn(join(out, d), /\.java$/)]);
-    sh(["d8", "--release", "--output", join(out, d), ...filesIn(join(out, d), /\.class$/)]);
-  }
-  const platform = program(jars), app = () => loadDexes(join(out, "app3/classes.dex"));
+  const lib3 = tempDir(), app3 = tempDir(), lib = (v: number) => `public class Aot3Lib { public int v() { return ${v}; } }`;
+  writeFileSync(join(lib3, "Aot3Lib.java"), lib(5));
+  writeFileSync(join(app3, "Aot3Lib.java"), lib(3));
+  writeFileSync(join(app3, "Aot3.java"), "public class Aot3 extends Aot3Lib { public static int run() { return new Aot3().v() + 1; } }");
+  for (const d of [lib3, app3]) fixture({ out: d, sources: filesIn(d, /\.java$/) });
+  const platform = program(jars), app = () => loadDexes(join(app3, "classes.dex"));
   const bind = (w: ReturnType<typeof world>) => {
     const library = w.prog.newLoader(w.prog.boot, null);
-    w.addDexes(loadDexes(join(out, "lib3/classes.dex")), library);
+    w.addDexes(loadDexes(join(lib3, "classes.dex")), library);
     w.bindLibraries(w.prog.root, [library], []);
   };
   const producer = world(new Program(app(), platform), { natives, compileOnly: true });

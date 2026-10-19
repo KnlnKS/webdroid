@@ -1,7 +1,6 @@
 // Differential test: every static method of W.java, S.java and N.java runs as Wasm (this compiler, S and N over the AOSP boot dex) and on the
-// JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: pnpm wasm diff [method-name-filter]
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+// JDK; results must be bit-identical. Needs javac and java on PATH. Run: pnpm wasm diff [method-name-filter]
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
@@ -11,12 +10,9 @@ import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { fixture, onJdk } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "W.java"), join(JAVA, "S.java"), join(JAVA, "N.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^[WSN](\$\w+)?\.class$/)]);
+const out = fixture({ sources: ["W", "S", "N", "Ref"].map((c) => join(JAVA, c + ".java")), classes: /^[WSN](\$\w+)?\.class$/ });
 
 const dex = join(out, "classes.dex");
 // the d8 that built the apps ended a try range at the invoke, leaving its move-result outside (a block of its own, Doodle Jump's RamLogger.Append); this one keeps it inside: end every range that way
@@ -50,7 +46,7 @@ const small: Record<string, number[]> = {
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
 const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
-const jdk = onJdk(sh, out, cases.map(caseLine));
+const jdk = onJdk(out, cases.map(caseLine));
 const r = await compare(cases, (m) => entries.get(m)!, jdk, hit);
 let wideBad = 0, dispatchBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);

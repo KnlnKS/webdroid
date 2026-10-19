@@ -5,8 +5,7 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { guestMemory } from "../../src/wasm/host/guest.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { APP_VERSION, VERSION, packModule } from "../../src/wasm/link/aot.ts";
@@ -27,16 +26,13 @@ import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { current, fakeAot, loadDexes } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { checker, filesIn, fixture } from "./tools.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;
 if (!AOT) { console.log("persist: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
-const out = mkdtempSync(join(tmpdir(), "j2w-persist-")), sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^Pst(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Pst2(\$\w+)?\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")], classes: /^Pst(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Pst2(\$\w+)?\.class$/) });
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
 await mountPlatform(ROOT);
 

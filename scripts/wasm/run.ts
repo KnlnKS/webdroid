@@ -1,5 +1,5 @@
-// The Wasm backend's tests and tools, each in a node process of its own: pnpm wasm <test|tool> [args], or `all` for the tests marked so. They need javac,
-// d8 and java (and the Android SDK for the fixtures built against android.jar) on PATH.
+// The Wasm backend's tests and tools, each in a node process of its own: pnpm wasm <test|tool> [args], or `all` for the tests marked so. They need javac
+// and java on PATH and the Android SDK (its d8 dexes every fixture, tools.ts).
 // Tests (in `all` unless noted):
 //   diff         every static method of the W, S and N fixtures as Wasm and on the JDK
 //   classdiff    class initialisation and the class model against the JDK

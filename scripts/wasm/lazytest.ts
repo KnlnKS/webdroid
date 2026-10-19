@@ -1,23 +1,16 @@
 // The linker's own tests: CHA devirtualisation undone by a dex loaded later, the implicit exceptions with their messages, heap limits,
 // stack traces, StackOverflowError at the Java edge. Needs javac and d8. Run: pnpm wasm lazytest
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { JAVA, PLATFORM_PATHS } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { checker, filesIn, fixture } from "./tools.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 
 const jars = PLATFORM_PATHS.slice(0, 2);
-const out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
-const sh = shellIn(out);
-const src = ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`));
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...src]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^(Ex|Lz)(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Lz2(\$\w+)?\.class$/)]);
+const out = fixture({ sources: ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`)), classes: /^(Ex|Lz)(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Lz2(\$\w+)?\.class$/) });
 
 const suite = checker(), { check } = suite;
 

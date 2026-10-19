@@ -5,20 +5,16 @@
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
 //   pnpm wasm boot-probe          (after pnpm aot)
 import { join } from "node:path";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { fileResponse, serve } from "../serve.ts";
 import { aotFile, aotManifest } from "./aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { bundleFor, filesIn, shellIn } from "./tools.ts";
+import { bundleFor, fixture } from "./tools.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)
 const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
 const worker = await bundleFor("browser", join(ROOT, "src/wasm/host/compile-worker.ts"));
-const appDir = mkdtempSync(join(tmpdir(), "wasm-probe-app-")), sh = shellIn(appDir);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", appDir, join(JAVA, "Pst.java")]);
-sh(["d8", "--release", "--output", appDir, ...filesIn(appDir, /\.class$/)]);
+const appDir = fixture({ sources: [join(JAVA, "Pst.java")] });
 
 const server = await serve({ fetch(req) {
   const p = new URL(req.url).pathname;
