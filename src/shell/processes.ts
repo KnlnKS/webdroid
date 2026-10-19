@@ -141,7 +141,29 @@ export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?
   /** the home screen started it, so it starts its launcher activity as the user's app does */
   launcher: { assetKey: string } | null;
   /** what hears how it ended */
-  watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void> };
+  watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void>;
+  session: ProcessSession };
+/** what the broker holds for a live process, which its death releases */
+export class ProcessSession {
+  /** what its bootstrap exported: its archives, broker port and the page's ends of its surfaces */
+  bootstrap: (() => void)[] = [];
+  /** the endpoint it serves, once it is ready */
+  endpoint: (() => void) | null = null;
+  /** the command ports it holds */
+  readonly callers = new Set<() => void>();
+  sqlite: ReturnType<typeof createSQLiteSession> | null = null;
+  /** what tells it of account and settings changes */
+  accounts: (() => void) | null = null;
+  settings: (() => void) | null = null;
+  /** its location subscriptions' tokens, by id */
+  readonly locations = new Map<number, number>();
+  dispose(): void {
+    this.sqlite?.close(); this.settings?.(); this.accounts?.(); this.endpoint?.();
+    for (const close of [...this.callers, ...this.bootstrap]) close();
+    this.sqlite = this.settings = this.accounts = this.endpoint = null;
+    this.bootstrap = []; this.callers.clear(); this.locations.clear();
+  }
+}
 /** p, or late()'s result once `ms` pass first */
 function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -212,7 +234,6 @@ export class ProcessBroker {
     this.intents.cancel(id);
   }
   readonly location = new BrowserLocation();
-  private locationTokens = new Map<string, number>();
   readonly settings = settingsStore();
   constructor() {
     this.location.enabledChanged = () => this.settings.changed("secure", "location_mode");
@@ -232,17 +253,11 @@ export class ProcessBroker {
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
   private booted = false;
-  private bootstrapPorts = new Map<number, (() => void)[]>();
-  private endpointPorts = new Map<number, () => void>();
-  private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
   private fileDescriptors = new FileDescriptors();
   private clipboard = new Clipboard(this.fileDescriptors, {
     uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
     changed: pid => { if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.clipboardChanged())); },
   });
-  private accountClients = new Map<number, () => void>();
-  private settingsClients = new Map<number, () => void>();
-  private callerPorts = new Map<number, Set<() => void>>();
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
@@ -288,7 +303,7 @@ export class ProcessBroker {
       this.spare = undefined;
       if (spare.url !== new URL(this.workerUrl(spare.pid, wide), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
     }
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, translucent: false, dead: false, launcher: null, watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, translucent: false, dead: false, launcher: null, watchers: new Set(), pending: new Set(), session: new ProcessSession(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -374,18 +389,15 @@ export class ProcessBroker {
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       entry.ime = ime; entry.display = frames;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
-      for (const close of this.bootstrapPorts.get(pid) ?? []) close();
-      this.bootstrapPorts.set(pid, ports);
+      for (const close of entry.session.bootstrap) close();
+      entry.session.bootstrap = ports;
       return data;
     } catch (error) { for (const close of ports) close(); throw error; }
   }
   /** A process's reverse Binder/service channel. Only these serialized operations are exported. */
   brokerPort(pid: number): MessagePort { return this.serveBrokerPort(pid).port; }
   private serveBrokerPort(pid: number): { port: MessagePort; close(): void } {
-    this.entry(pid);
-    const { port1, port2 } = new MessageChannel();
-    let owned = this.callerPorts.get(pid);
-    if (!owned) this.callerPorts.set(pid, owned = new Set());
+    const { callers, locations } = this.entry(pid).session, { port1, port2 } = new MessageChannel();
     const accountCommands = canonicalAccountCommands(this.accounts, () => {
       const caller = this.entry(pid);
       return accountAuthority(caller.pkg, caller.uid);
@@ -431,6 +443,9 @@ export class ProcessBroker {
         throw rt.mkThrowable("java/lang/SecurityException", "Service start state belongs to another process");
       return this.serviceStarts(pid);
     };
+    const unsubscribe = (id: number, token: number) => {
+      if (locations.get(id) === token) { locations.delete(id); this.location.remove(pid, id); }
+    };
     const watches = new Map<number, () => void>();
     const ui = Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) => {
       this.entry(pid); return (hostUi()[name] as (...args: never[]) => unknown)(...args);
@@ -455,27 +470,21 @@ export class ProcessBroker {
       locationLast: async () => { await requireLocation(); return this.location.last; },
       locationSubscribe: async (id, token, high, active) => {
         await requireLocation();
-        const key = pid + ":" + id;
-        this.locationTokens.set(key, token);
+        locations.set(id, token);
+        const current = () => this.alive(pid) && locations.get(id) === token;
         try {
           this.location.subscribe(pid,id,high,active,event => { unawaited((async () => {
             try {
-              if (!this.alive(pid) || this.locationTokens.get(key) !== token) return;
+              if (!current()) return;
               const allowed = await locationAllowed();
-              if (!this.alive(pid) || this.locationTokens.get(key) !== token) return;
-              if (!allowed) { this.locationTokens.delete(key); this.location.remove(pid,id); return; }
+              if (!current()) return;
+              if (!allowed) { unsubscribe(id, token); return; }
               await this.request(this.entry(pid), endpoint => endpoint.locationChanged(id,token,event));
             } catch (error) { if (this.alive(pid)) throw error; }
           })()); });
-        } catch (error) {
-          if (this.locationTokens.get(key) === token) { this.locationTokens.delete(key); this.location.remove(pid,id); }
-          throw error;
-        }
+        } catch (error) { unsubscribe(id, token); throw error; }
       },
-      locationRemove: async (id, token) => {
-        this.entry(pid); const key = pid + ":" + id;
-        if (this.locationTokens.get(key) === token) { this.locationTokens.delete(key); this.location.remove(pid,id); }
-      },
+      locationRemove: async (id, token) => { this.entry(pid); unsubscribe(id, token); },
       serviceCreated: async (cls, intent) => starts(cls).created(cls, intent),
       serviceDestroyed: async cls => starts(cls).destroyed(cls),
       serviceStart: async (cls, intent) => starts(cls).start(cls, intent),
@@ -586,25 +595,22 @@ export class ProcessBroker {
       settingsPut: async (table, name, value) => { this.watchSettings(pid); return this.settings.put(table, name, value); },
       settingsSsaid: async () => { this.watchSettings(pid); return this.settings.ssaidKey(); },
       sqlite: request => {
-        this.entry(pid);
-        let session = this.sqliteSessions.get(pid);
-        if (!session) this.sqliteSessions.set(pid, session = createSQLiteSession());
-        return session.call(request);
+        const session = this.entry(pid).session;
+        return (session.sqlite ??= createSQLiteSession()).call(request);
       },
       transact: request => this.transact(pid, request),
       service: (pkg, process, request) => this.service(pid, pkg, process, request),
       contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
       broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
-    }, () => { for (const cancel of watches.values()) cancel(); watches.clear(); owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); }, async (method,value) => {
+    }, () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, async (method,value) => {
       if (method === "transact") await this.discardDescriptors(pid,(value as TransactionReply).data,false);
       if (method === "clipboardGet" && value) await this.discardDescriptors(pid,value as ParcelData,false);
     });
-    owned.add(stop);
+    callers.add(stop);
     return { port: port2, close: stop };
   }
   ready(pid: number, endpoint: ProcessEndpoint): void {
-    this.entry(pid);
-    if (this.endpointPorts.has(pid)) return;
+    if (this.entry(pid).session.endpoint) return;
     const { port1, port2 } = new MessageChannel();
     this.publishEndpoint(pid, port2, serveProcess(port1, endpoint));
   }
@@ -613,28 +619,26 @@ export class ProcessBroker {
   private publishEndpoint(pid: number, port: MessagePort, stop = () => {}): void {
     try {
       const entry = this.entry(pid);
-      if (this.endpointPorts.has(pid)) { port.postMessage({ kind: "close" }); port.close(); stop(); return; }
+      if (entry.session.endpoint) { port.postMessage({ kind: "close" }); port.close(); stop(); return; }
       const proxy = processProxy(port, error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error),
         error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); });
-      this.endpointPorts.set(pid, () => { stop(); proxy.close(); });
+      entry.session.endpoint = () => { stop(); proxy.close(); };
       entry.resolve(proxy.endpoint);
     } catch (error) { port.postMessage({ kind: "close" }); port.close(); stop(); throw error; }
   }
   /** Root uses its local Java watcher; remote processes keep only this owner-side notifier. */
   watchAccounts(pid: number, local?: () => void): void {
-    const entry = this.entry(pid);
-    if (local) { this.accountClients.get(pid)?.(); this.accountClients.set(pid, local); return; }
-    if (this.accountClients.has(pid)) return;
-    this.accountClients.set(pid, this.accounts.watch(() => {
+    const entry = this.entry(pid), session = entry.session;
+    if (local) { session.accounts?.(); session.accounts = local; return; }
+    session.accounts ??= this.accounts.watch(() => {
       if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.accountsChanged()));
-    }));
+    });
   }
   private watchSettings(pid: number): void {
     const entry = this.entry(pid);
-    if (this.settingsClients.has(pid)) return;
-    this.settingsClients.set(pid, this.settings.watch((table, name) => {
+    entry.session.settings ??= this.settings.watch((table, name) => {
       if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
-    }));
+    });
   }
   /** a process ended, or its Worker failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
@@ -649,22 +653,14 @@ export class ProcessBroker {
         (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED)},
     };
     entry.dead = true; entry.reject(error);
-    this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
+    entry.session.dispose();
     this.fileDescriptors.close(pid);
-    this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
-    this.accountClients.get(pid)?.(); this.accountClients.delete(pid);
-    this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
-    for (const close of this.callerPorts.get(pid) ?? []) close();
-    this.callerPorts.delete(pid);
-    for (const close of this.bootstrapPorts.get(pid) ?? []) close();
-    this.bootstrapPorts.delete(pid);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     entry.presented?.resolve();
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    for (const key of this.locationTokens.keys()) if (key.startsWith(pid + ":")) this.locationTokens.delete(key);
     this.workerReads.delete(pid); this.workerLiveness.delete(pid);
     entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
     this.activities.processDied(pid);
@@ -742,7 +738,7 @@ export class ProcessBroker {
     return (await this.workerSnapshots([entry]))[0] ?? null;
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
-  starting(): boolean { return [...this.entries.values()].some(e => e.worker && !e.dead && !this.endpointPorts.has(e.pid)); }
+  starting(): boolean { return [...this.entries.values()].some(e => e.worker && !e.dead && !e.session.endpoint); }
   /** settles once the process has presented a frame, or has died */
   presented(pid: number): Promise<void> { return this.entries.get(pid)?.presented?.promise ?? Promise.resolve(); }
   foregroundWorker(): Entry["worker"] {
