@@ -379,13 +379,14 @@ function copyBitmap(src: NativeBitmap, config: number): NativeBitmap {
 const wrap = (b: NativeBitmap, mutable: number | boolean) => { b.immutable = !mutable; return javaBitmap(b); };
 
 rt.registerJnis(BITMAP, {
-  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": (colors: Int32Array | null, off: number, stride: number, w: number, h: number, config: number, mutable: number, cs: bigint) => {
+  // the Java Bitmap's constructor can wait, and a native that takes an array cannot be parked
+  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": waits((colors: Int32Array | null, off: number, stride: number, w: number, h: number, config: number, mutable: number, cs: bigint) => {
     if (colors && colors.length < Math.abs(stride) * h) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
     const b = new NativeBitmap(w, h, creatable(config));
     if (config !== ALPHA_8) b.space = spaceOf(cs);
     if (colors) setPixels(b, colors, off, stride, 0, 0, w, h);
     return wrap(b, mutable);
-  },
+  }),
   // HARDWARE is our raster, as a GPU buffer is on a device: immutable, drawn without a readback
   "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bitmapAt(h), config), mutable),
   "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bitmapAt(h), ARGB_8888), 0),
@@ -458,8 +459,8 @@ rt.registerJnis(BITMAP, {
     b.immutable = !mutable;
     return javaBitmap(b, density);
   },
-  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true),
+  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": waits((h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
+    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true)),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bitmapAt(h).hasAlpha,
