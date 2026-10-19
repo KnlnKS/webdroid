@@ -1,7 +1,7 @@
 // AudioTrack's native half (MODE_STREAM): PCM written from Java is scheduled back-to-back on the
 // shared AudioContext. The periodic position event is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
-import { rt, type JObj } from "../jvm/runtime.ts";
+import { rt, waits, type JObj } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readBufferBytes } from "../jvm/natives/jnio.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -82,9 +82,9 @@ rt.registerJnis(AT, {
   "native_write_byte([BIIIZ)I": writeSamples,
   "native_write_short([SIIIZ)I": writeSamples,
   "native_write_float([FIIIZ)I": writeSamples,
-  "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
+  "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": waits(function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
     return after(readBufferBytes(buffer,pos,n), bytes => writeSamples.call(this,new Int8Array(bytes.buffer,bytes.byteOffset,bytes.length),0,n,f,b));
-  },
+  }),
   "native_get_position()I": T((tr) => tr.position() | 0),
   "native_get_timestamp([J)I": T((tr, out: BigInt64Array) => {
     if (!tr.playing || !tr.written) return -7;   // ERROR_WOULD_BLOCK until frames are presented

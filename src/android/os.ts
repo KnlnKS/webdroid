@@ -4,7 +4,7 @@ import { processEnv } from "../shell/environment.ts";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
 import { guestAt, mem } from "../native/mem.ts";
 import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
-import { awaited, rt, type JObj, noops, driven, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, noops, driven, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
 import { i8, jarray, utf8 } from "../jvm/abi.ts";
 import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
@@ -210,9 +210,9 @@ export function ashmemSetProt(fd: number, prot: number): number | Promise<number
   return 0;
 }
 rt.registerJnis("android/os/SharedMemory", {
-  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); }),
-  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => ashmemSize(fdInt(d)),
-  "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => after(ashmemSetProt(fdInt(d), prot), n => -n),
+  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": waits((_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); })),
+  "nGetSize(Ljava/io/FileDescriptor;)I": waits((d: JObj | null) => ashmemSize(fdInt(d))),
+  "nSetProt(Ljava/io/FileDescriptor;I)I": waits((d: JObj | null, prot: number) => after(ashmemSetProt(fdInt(d), prot), n => -n)),
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
@@ -270,14 +270,14 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (!st) throw errno("fstat", E.BADF);
       return yield* awaited(statOf(st.path, st.size, st.mode, st.mtime, st));
     }),
-    [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target)),
-    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position))),
-    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaWriteFd(fdInt(d), bytes), n => ioResult("write", n))),
-    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n))),
+    [`readBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target))),
+    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position)))),
+    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      writeBytes(buffer, offset, count, (bytes) => after(javaWriteFd(fdInt(d), bytes), n => ioResult("write", n)))),
+    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      writeBytes(buffer, offset, count, (bytes) => after(javaPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))),
     [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(javaTruncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
     [`fsync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fsync", n)),
     [`fdatasync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fdatasync", n)),
@@ -315,7 +315,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
     }),
-    [`close(${FD})V`]: (d: JObj | null) => {
+    [`close(${FD})V`]: waits((d: JObj | null) => {
       if (d === null) return rt.npe();
       const fd = fdInt(d), owner = getDeclared<bigint | undefined>(d, "java/io/FileDescriptor", "ownerId");
       setFdInt(d, -1);
@@ -325,12 +325,12 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         return pending instanceof Promise ? 0 : pending;
       });
       return after(pending ?? immediate, n => sys("close", n));
-    },
-    [`dup(${FD})${FD}`]: (d: JObj | null) => {
+    }),
+    [`dup(${FD})${FD}`]: waits((d: JObj | null) => {
       const fd = javaDupFd(fdInt(d));
       if (fd < 0) throw errno("dup", -fd);
       return mkFd(fd);
-    },
+    }),
     [`mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JObj | null, offset: bigint): Gen {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
@@ -364,13 +364,13 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       else if (file) trackPrivateMap(BigInt(address), size, Number(offset), file);
       return BigInt(address);
     }),
-    "munmap(JJ)V": (address: bigint, count: bigint) => {
+    "munmap(JJ)V": waits((address: bigint, count: bigint) => {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
       if (isExternal(address)) return unmapExternal(address);
       syncShared(address, size, true);
       if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
-    },
+    }),
     "gettid()I": () => threadTid(curThread),
     "getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
       if (key === null) rt.npe();
@@ -389,8 +389,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "getpid()I": () => PROCESS_PID,
     "getuid()I": () => zygoteRunning ? 0 : PROCESS_UID,
     // bionic's passwd entry: every id has one, named as appUserName names it
-    "getpwuid(I)Landroid/system/StructPasswd;": (uid: number) =>
-      newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh"),
+    "getpwuid(I)Landroid/system/StructPasswd;": waits((uid: number) =>
+      newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh")),
     "uname()Landroid/system/StructUtsname;": () => setDeclared(rt.make("android/system/StructUtsname"), "android/system/StructUtsname",
       (({ domainname: _, ...fields }) => fields)(uname(is64BitProcess()))),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
@@ -567,7 +567,7 @@ const passwdName = (id: number) => bytesOf(appUserName(id));
 const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   // SUPPORTS_OPENAT | SUPPORTS_FUTIMES: bionic has openat64, fstatat64, unlinkat, renameat, futimesat
   // and fdopendir. UnixException is initialized first, since the natives throw it synchronously.
-  "init()I": () => after(initClass("sun/nio/fs/UnixException"), () => 6),
+  "init()I": waits(() => after(initClass("sun/nio/fs/UnixException"), () => 6)),
   "getcwd()[B": () => bytesOf("/"),
   "strerror(I)[B": (e: number) => bytesOf(strerror(e)),
   "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),

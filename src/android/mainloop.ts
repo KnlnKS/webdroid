@@ -6,7 +6,7 @@
 // onMain, as an asynchronous message on the main looper: it keeps its order with the app's own
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
-import { rt, JObj, declaredField, type Gen } from "../jvm/runtime.ts";
+import { rt, JObj, declaredField, waits, type Gen } from "../jvm/runtime.ts";
 import { curThread, mainThread, scall, newObj, vcall, callOn, classNameOf, initClass, linkClass, type JThread } from "../jvm/natives/jentry.ts";
 import { dispatchUncaught, toThread, type Escape } from "../jvm/natives/jthrowable.ts";
 import { processExited } from "../process-exit.ts";
@@ -132,7 +132,7 @@ function mainHandler(): JObj {
 
 /** a Runnable over a JS closure, for host work that must go through a Handler queue */
 class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
-rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
+rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": waits(function (this: JFnRunnable) { return this.fn(); }) } });
 export function fnRunnable(fn: () => unknown): JFnRunnable {
   linkClass("webdroid/FnRunnable");
   const r = new JFnRunnable(); r.fn = fn; return r;

@@ -3,7 +3,7 @@
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, type JObj, declaredField } from "../runtime.ts";
+import { rt, type JObj, declaredField, waits } from "../runtime.ts";
 import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared } from "../../native/mappings.ts";
@@ -206,10 +206,10 @@ rt.registerJnis("com/android/icu/charset/NativeConverter", {
   },
   "getAvailableCharsetNames()[Ljava/lang/String;": () => jarray(CHARSETS.map((cs) => cs.name), "Ljava/lang/String;"),
   // ICU names the converter; the Java name, the one CharsetICU's codecs open, stands for it
-  "charsetForName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string) => {
+  "charsetForName(Ljava/lang/String;)Ljava/nio/charset/Charset;": waits((name: string) => {
     const cs = charsetNamed(name);
     return cs && newObj("com/android/icu/charset/CharsetICU", "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V", cs.name, cs.name, jarray(cs.aliases, "Ljava/lang/String;"));
-  },
+  }),
   "contains(Ljava/lang/String;Ljava/lang/String;)Z": (a: string, b: string) => {
     const x = charsetNamed(a), y = charsetNamed(b);
     return +(!!x && !!y && covers(x, y));

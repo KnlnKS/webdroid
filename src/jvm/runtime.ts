@@ -314,3 +314,7 @@ export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */
 type Driven<T> = unknown extends T ? unknown : T | Promise<T>;
+/** Marks native `fn`, which answers a Promise for some calls though it is neither `driven` nor async (it hands on an `after`
+ *  or `awaited` result): the Wasm tier imports it as Suspending rather than parking the strand that called it. */
+export const waits = <F extends Function>(fn: F): F => Object.assign(fn, { $waits: true });
+export const isWaiting = (fn: Function): boolean => (fn as { $waits?: boolean }).$waits === true;

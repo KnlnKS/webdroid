@@ -1,7 +1,7 @@
 // Unsafe's natives over raw addresses: the process's native heap (sun.nio.fs passes paths through it,
 // sun.nio.ch's NativeObject its iovecs) or an external mapping, whose accesses may suspend. The Wasm
 // tier's intrinsics make every access to a Java object or array, and call these with a null base.
-import { rt } from "../runtime.ts";
+import { rt, waits } from "../runtime.ts";
 import { PRIMS } from "../abi.ts";
 import { mem } from "../../native/mem.ts";
 import { physical, isExternal, externalRead, externalWrite, writeAt } from "./jmemory.ts";
@@ -19,7 +19,7 @@ const ACCESS: Record<string, { ld(p: number): any; st(p: number, v: any): void; 
   F: { ld: (p) => mem.ldf32(p), st: (p, v) => mem.stf32(p, v), get: (v, i) => v.getFloat32(i, true), put: (v, i, x) => v.setFloat32(i, x, true) },
   D: { ld: (p) => mem.ldf64(p), st: (p, v) => mem.stf64(p, v), get: (v, i) => v.getFloat64(i, true), put: (v, i, x) => v.setFloat64(i, x, true) },
 };
-const read = (d: string) => { const k = ACCESS[d], width = PRIMS[d].size; return (a: bigint) => isExternal(a) ? externalRead(a, width, k.get) : k.ld(physical(a)); };
+const read = (d: string) => { const k = ACCESS[d], width = PRIMS[d].size; return waits((a: bigint) => isExternal(a) ? externalRead(a, width, k.get) : k.ld(physical(a))); };
 const write = (d: string) => { const k = ACCESS[d], width = PRIMS[d].size; return (a: bigint, v: unknown) => isExternal(a) ? externalWrite(a, width, v, k.put) : k.st(physical(a), v); };
 const unsupportedRaw = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "raw reference or atomic Unsafe access is unsupported"); };
 
@@ -34,8 +34,8 @@ const shared: Record<string, Function> = {
   },
   "freeMemory(J)V": (address: bigint) => mem.free(physical(address)),
   "putByte(JB)V": write("B"),
-  [`getIntVolatile(${O}J)I`]: (_o: null, a: bigint) => read("I")(a),
-  [`getLongVolatile(${O}J)J`]: (_o: null, a: bigint) => read("J")(a),
+  [`getIntVolatile(${O}J)I`]: waits((_o: null, a: bigint) => read("I")(a)),
+  [`getLongVolatile(${O}J)J`]: waits((_o: null, a: bigint) => read("J")(a)),
   [`putIntVolatile(${O}JI)V`]: (_o: null, a: bigint, v: number) => write("I")(a, v),
   [`putLongVolatile(${O}JJ)V`]: (_o: null, a: bigint, v: bigint) => write("J")(a, v),
   [`putOrderedLong(${O}JJ)V`]: (_o: null, a: bigint, v: bigint) => write("J")(a, v),
@@ -44,7 +44,7 @@ const shared: Record<string, Function> = {
 };
 for (const d in ACCESS) {
   const get = read(d), put = write(d), { title } = PRIMS[d];
-  shared[`get${title}(${O}J)${d}`] = (_o: null, a: bigint) => get(a);
+  shared[`get${title}(${O}J)${d}`] = waits((_o: null, a: bigint) => get(a));
   shared[`put${title}(${O}J${d})V`] = (_o: null, a: bigint, v: unknown) => put(a, v);
 }
 

@@ -4,7 +4,7 @@
 // pages of immutable files (Region).
 import { mem } from "../../native/mem.ts";
 import { E } from "../../native/abi.ts";
-import { rt } from "../runtime.ts";
+import { rt, waits } from "../runtime.ts";
 import { after } from "./jentry.ts";
 import { readFully, type FileSource } from "../../shell/lazyfile.ts";
 import { mapLease } from "../../native/mappings.ts";
@@ -216,13 +216,13 @@ const I8: Get<number> = (v, i) => v.getInt8(i), I16: Get<number> = (v, i) => v.g
 const I32: Get<number> = (v, i) => v.getInt32(i, true), I64: Get<bigint> = (v, i) => v.getBigInt64(i, true);
 
 const natives: Record<string, (...args: never[]) => unknown> = {
-  "peekByte(J)B": (address: bigint) => isExternal(address) ? externalRead(address, 1, I8) : mem.ld8s(physical(address)),
+  "peekByte(J)B": waits((address: bigint) => isExternal(address) ? externalRead(address, 1, I8) : mem.ld8s(physical(address))),
   "pokeByte(JB)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st8(physical(address), value),
-  "peekShortNative(J)S": (address: bigint) => isExternal(address) ? externalRead(address, 2, I16) : mem.ld16s(physical(address)),
+  "peekShortNative(J)S": waits((address: bigint) => isExternal(address) ? externalRead(address, 2, I16) : mem.ld16s(physical(address))),
   "pokeShortNative(JS)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st16(physical(address), value),
-  "peekIntNative(J)I": (address: bigint) => isExternal(address) ? externalRead(address, 4, I32) : mem.ld32(physical(address)),
+  "peekIntNative(J)I": waits((address: bigint) => isExternal(address) ? externalRead(address, 4, I32) : mem.ld32(physical(address))),
   "pokeIntNative(JI)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st32(physical(address), value),
-  "peekLongNative(J)J": (address: bigint) => isExternal(address) ? externalRead(address, 8, I64) : mem.ld64(physical(address)),
+  "peekLongNative(J)J": waits((address: bigint) => isExternal(address) ? externalRead(address, 8, I64) : mem.ld64(physical(address))),
   "pokeLongNative(JJ)V": (address: bigint, value: bigint) => isExternal(address) ? readOnly(address) : mem.st64(physical(address), value),
   "peekByteArray(J[BII)V": peekArray,
   "pokeByteArray(J[BII)V": pokeArray,
@@ -239,14 +239,14 @@ for (const [sig, fn] of Object.entries(natives)) {
 }
 // between arrays and direct buffers (or within one): byte offsets and counts, as NIO's buffers use them
 rt.registerJni("libcore/io/Memory", "memmove(Ljava/lang/Object;ILjava/lang/Object;IJ)V",
-  (dst: Elements | object | null, dstOffset: number, src: Elements | object | null, srcOffset: number, count: bigint) => {
+  waits((dst: Elements | object | null, dstOffset: number, src: Elements | object | null, srcOffset: number, count: bigint) => {
     const n = Number(count);
     return after(objectBytes(src,srcOffset,n),from => {
       if (dst !== null && !ArrayBuffer.isView(dst)) return writeAt(bufferAddress!(dst) + BigInt(dstOffset),from);
       const to = arrayBytes(dst as Elements | null,dstOffset,n);
       to.set(from);
     });
-  });
+  }));
 // the element array is indexed in elements, the byte array in bytes (libcore_io_Memory.cpp)
 rt.registerJni("libcore/io/Memory", "unsafeBulkGet(Ljava/lang/Object;II[BIIZ)V",
   (dst: Elements | null, dstOffset: number, count: number, src: Int8Array | null, srcOffset: number, size: number, swap: number) => {

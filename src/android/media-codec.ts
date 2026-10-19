@@ -1,7 +1,7 @@
 // MediaCodec's and MediaCodecList's natives over WebCodecs: the codec list is the definitions
 // below that the browser's decoders accept, and a codec is a VideoDecoder or AudioDecoder behind
 // MediaCodec's buffer-index protocol, which libmediandk's AMediaCodec shares.
-import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, rt, setDeclared, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { concat, jarray } from "../jvm/abi.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio.ts";
@@ -437,12 +437,12 @@ rt.registerJnis(MC, {
   },
   "native_release()V": peers.detach,
   "native_finalize()V": peers.detach,
-  "native_configure([Ljava/lang/String;[Ljava/lang/Object;Landroid/view/Surface;Landroid/media/MediaCrypto;Landroid/os/IHwBinder;I)V": C((c,
+  "native_configure([Ljava/lang/String;[Ljava/lang/Object;Landroid/view/Surface;Landroid/media/MediaCrypto;Landroid/os/IHwBinder;I)V": waits(C((c,
     keys: string[] | null, values: unknown[] | null, surface: JObj | null, crypto: unknown, descrambler: unknown, flags: number) => {
     // a decoder cannot encode (CONFIGURE_FLAG_ENCODE), and no crypto plugin exists to decrypt
     if (flags & 1 || crypto || descrambler) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
     return after(copiedFormatFromJava(keys,values),format => c.configure(format,surface));
-  }),
+  })),
   "native_setCallback(Landroid/media/MediaCodec$Callback;)V": C((c, cb: JObj | null) => { c.async = !!cb; }),
   "native_enableOnFrameRenderedListener(Z)V": C((c, enable: number) => { c.frameEvents = !!enable; }),
   "native_start()V": C((c) => after(directReady(), () => c.start())),

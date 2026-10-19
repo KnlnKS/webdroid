@@ -1,5 +1,5 @@
 import type { Sample } from "mp4box";
-import { rt, type JObj } from "../jvm/runtime.ts";
+import { rt, waits, type JObj } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format.ts";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio.ts";
@@ -161,7 +161,7 @@ rt.registerJnis("android/media/MediaExtractor", {
   "unselectTrack(I)V": E((p, i: number) => { trackAt(p, i).selected = false; }),
   "seekTo(JI)V": E((p, time: bigint, mode: number) => p.extractor.seek(Number(time), mode)),
   "advance()Z": E((p) => +p.extractor.advance()),
-  "readSampleData(Ljava/nio/ByteBuffer;I)I": E((p, buffer: JBuffer, offset: number) => {
+  "readSampleData(Ljava/nio/ByteBuffer;I)I": waits(E((p, buffer: JBuffer, offset: number) => {
     if (!p.source || !p.extractor.current()) return -1;
     return after(p.extractor.read(p.source), (data) => {
       if (!data) return -1;
@@ -171,7 +171,7 @@ rt.registerJnis("android/media/MediaExtractor", {
         return data.length;
       });
     });
-  }),
+  })),
   "getSampleTrackIndex()I": E((p) => p.extractor.current()?.index ?? -1),
   "getSampleTime()J": E((p) => BigInt(p.extractor.current()?.time ?? -1)),
   // SAMPLE_FLAG_SYNC

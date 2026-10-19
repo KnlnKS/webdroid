@@ -11,7 +11,7 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { awaited, rt, type JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, declaredField, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
@@ -435,11 +435,11 @@ rt.registerJnis(BITMAP, {
   },
   "nativeSetPixels(J[IIIIIII)V": (h: bigint, colors: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) =>
     setPixels(bitmapAt(h), colors, off, stride, x, y, w, ht),
-  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => writeRemainingBytes(buffer,memoryOf(bitmapAt(h))),
-  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => {
+  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": waits((h: bigint, buffer: JBuffer) => writeRemainingBytes(buffer,memoryOf(bitmapAt(h)))),
+  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": waits((h: bigint, buffer: JBuffer) => {
     const b = bitmapAt(h);
     return after(readBufferBytes(buffer,position(buffer) << elementShift(buffer),byteSize(b)),bytes => setMemory(b,bytes.slice()));
-  },
+  }),
   "nativeGenerationId(J)I": (h: bigint) => bitmapAt(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {

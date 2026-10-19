@@ -13,7 +13,7 @@
 // there because that said so.
 
 import { startMainLooper } from "./mainloop.ts";
-import { rt, noops, declaredField, type Gen } from "../jvm/runtime.ts";
+import { rt, noops, declaredField, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles.ts";
 import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics.ts";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix.ts";
@@ -166,14 +166,14 @@ delegate("android/graphics/Typeface", {
   "nativeRegisterGenericFamily(Ljava/lang/String;J)V": (_name: string, h: bigint) => addFontCollections(typefaceAt(h)),
   "nativeAddFontCollections(J)V": (h: bigint) => addFontCollections(typefaceAt(h)),
   ...noops("nativeRegisterLocaleList(Ljava/lang/String;)V"),
-  "nativeWarmUpCache(Ljava/lang/String;)V": (path: string) => warmUpCache(path),
+  "nativeWarmUpCache(Ljava/lang/String;)V": waits((path: string) => warmUpCache(path)),
   // the font map the system server serializes for applications (Typeface.serializeFontMap)
-  "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": (b: JBuffer, at: number) =>
-    after(readBufferBytes(b, at), bytes => BigInt64Array.from(readTypefaces(bytes), handle)),
-  "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": (b: JBuffer | null, at: number, typefaces: BigInt64Array) => {
+  "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": waits((b: JBuffer, at: number) =>
+    after(readBufferBytes(b, at), bytes => BigInt64Array.from(readTypefaces(bytes), handle))),
+  "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": waits((b: JBuffer | null, at: number, typefaces: BigInt64Array) => {
     const bytes = writeTypefaces(Array.from(typefaces, (h) => deref<NativeTypeface>(h)));
     return b ? after(writeBufferBytes(b, bytes, at), () => bytes.length) : bytes.length;
-  },
+  }),
 });
 
 // ── android.graphics.fonts ─────────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@ const PACKED_ITALIC = 1 << 16;
 delegate("android/graphics/fonts/Font$Builder", {
   "nInitBuilder()J": () => handle({ axes: [] as Axis[] }),
   "nAddAxis(JIF)V": (b: bigint, tag: number, value: number) => { deref<{ axes: Axis[] }>(b).axes.push({ tag, value }); },
-  "nBuild(JLjava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/String;IZI)J": (b: bigint, buffer: JBuffer | null, path: string, locales: string, weight: number, italic: number, ttcIndex: number) => {
+  "nBuild(JLjava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/String;IZI)J": waits((b: bigint, buffer: JBuffer | null, path: string, locales: string, weight: number, italic: number, ttcIndex: number) => {
     const { axes } = take<{ axes: Axis[] }>(b);
     // a system font is the mapping of its file: its glyphs load when first shaped or drawn
     if (buffer && isExternal(addressOf(buffer)) && isPlatformFont(path)) return wrapFont(NativeFont.platform(path, ttcIndex, weight, !!italic, axes, locales));
@@ -200,7 +200,7 @@ delegate("android/graphics/fonts/Font$Builder", {
       if (!font.faceMetrics) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Failed to create internal object. maybe invalid font data.");
       return wrapFont(font);
     });
-  },
+  }),
   // Skia's makeClone over the same data: new axes, style and collection index
   "nClone(JJIZI)J": (font: bigint, b: bigint, weight: number, italic: number, ttcIndex: number) => {
     const { axes } = take<{ axes: Axis[] }>(b);
@@ -253,9 +253,9 @@ delegate("android/graphics/fonts/FontFamily", {
   "nGetVariant(J)I": (h: bigint) => deref<NativeFamily>(h).variant,
 });
 delegate("android/graphics/fonts/FontFileUtil", {
-  "nGetFontRevision(Ljava/nio/ByteBuffer;I)J": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => fontRevision(bytes, index)),
-  "nGetFontPostScriptName(Ljava/nio/ByteBuffer;I)Ljava/lang/String;": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => postScriptName(bytes, index)),
-  "nIsPostScriptType1Font(Ljava/nio/ByteBuffer;I)I": (b: JBuffer | null, index: number) => directBytes(b, (bytes) => isPostScriptType1(bytes, index)),
+  "nGetFontRevision(Ljava/nio/ByteBuffer;I)J": waits((b: JBuffer | null, index: number) => directBytes(b, (bytes) => fontRevision(bytes, index))),
+  "nGetFontPostScriptName(Ljava/nio/ByteBuffer;I)Ljava/lang/String;": waits((b: JBuffer | null, index: number) => directBytes(b, (bytes) => postScriptName(bytes, index))),
+  "nIsPostScriptType1Font(Ljava/nio/ByteBuffer;I)I": waits((b: JBuffer | null, index: number) => directBytes(b, (bytes) => isPostScriptType1(bytes, index))),
 });
 
 // ── android.graphics.Path, PathMeasure and PathIterator ────────────────────────────────

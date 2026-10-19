@@ -2,7 +2,7 @@
 // android.icu bytecode over the reference build's ICU data, where the device runs ICU4C over the
 // same data. Each follows what AOSP's C++ computes; the charset and regex natives are separate.
 
-import { rt, driven, type Gen } from "../runtime.ts";
+import { rt, driven, waits, type Gen } from "../runtime.ts";
 import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry.ts";
 import type { JavaClass } from "../tier.ts";
 import { jarray } from "../abi.ts";
@@ -18,11 +18,11 @@ function versionString(parts: number[]): string {
   while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop();
   return parts.join(".");
 }
-const icuVersion = () => after(staticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
+const icuVersion = waits(() => after(staticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
   const parts: number[] = [];
   for (const part of ["getMajor", "getMinor", "getMilli", "getMicro"]) parts.push(yield vcall(version, part, "()I"));
   return versionString(parts);
-}));
+})));
 
 // The Unicode and CLDR versions are read from the ICU data as ICU4C reads them: System.<clinit> asks
 // before its properties exist, and ICU4J's data loader reads System properties.
