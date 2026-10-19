@@ -58,6 +58,7 @@ import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts"
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsCalls, SettingsTable } from "./settings.ts";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port.ts";
+import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -362,7 +363,7 @@ export class ProcessBroker {
     const params = new URLSearchParams(location.search);
     params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
     if (!wide) params.set("abi", "32");
-    return "/process-worker.js?" + params;
+    return WORKER_SCRIPTS.process.url + "?" + params;
   }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */

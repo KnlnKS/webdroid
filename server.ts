@@ -22,6 +22,7 @@ import { aotFile, aotManifest } from "./scripts/wasm/aot-serve.ts";
 import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
+import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
@@ -94,9 +95,9 @@ const fontIndexJson = memo(() => runNode("scripts/font-index.ts"));
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
 const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(`${apkDirectory}/${apk}`))).zip);
-/** a worker (src/wasm/host/compile-worker.ts, src/wasm/host/warm-worker.ts, src/process-worker.ts) bundled for the page, until a source changes */
+/** a Worker script bundled for the page, until a source changes */
 const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
-const compileWorker = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+const workerScript = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 
 type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Response>;
 const ROUTES: [RegExp, Route][] = [
@@ -110,9 +111,7 @@ const ROUTES: [RegExp, Route][] = [
     // a browser resolves every *.localhost name to this loopback server, each its own site
     return Response.json(`${url.protocol}//*.localhost:${url.port}`);
   }],
-  [/^\/wasm-compile-worker\.js$/, () => compileWorker("src/wasm/host/compile-worker.ts")],
-  [/^\/wasm-warm-worker\.js$/, () => compileWorker("src/wasm/host/warm-worker.ts")],
-  [/^\/process-worker\.js$/, () => compileWorker("src/process-worker.ts")],
+  ...Object.values(WORKER_SCRIPTS).map(({ url, entry }): [RegExp, Route] => [new RegExp(`^${url.replaceAll(".", "\\.")}$`), () => workerScript(entry)]),
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
   [/^\/webview-worker\.js$/, () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } })],
   [/^\/dns-query$/, (req) => forwardDnsMessage(req)],
