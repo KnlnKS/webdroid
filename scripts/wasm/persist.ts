@@ -493,6 +493,8 @@ if (saved) {
   fs.files.set("a/x", blob(5));
   check("a damaged entry is not loaded", await p.load("a"), undefined);
   check("and is removed", [...fs.files.keys()].some((k) => k.startsWith("a/")), false);
+  await Promise.all([p.save("e", [["x", blob(20)]]), p.save("f", [["x", blob(20)]])]);
+  check("overlapping saves keep both entries", [await p.load("e") !== undefined, await p.load("f") !== undefined].join(), "true,true");
   check("replacing an entry leaves one", (await p.save("c", [["z", blob(10)]]), [...fs.files.keys()].filter((k) => k.startsWith("c/")).join()), "c/z");
   const prefix = { from: { names: 1, tail: 2, selectors: 3, gaps: 0, links: 0 }, names: ["A$$host", "B"], tail: [["B", 4]] as [string, number][], selectors: ["m()V"], gaps: [], links: [] };
   check("no prefix is kept before one is saved", await p.prefix("platform"), undefined);
