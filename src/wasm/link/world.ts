@@ -6,7 +6,7 @@
 //    calls the runtime's linker (runtime.ts), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 import { symbolicInstruction } from "../compiler/sites.ts";
-import { type Program, declaredMethod, methodCount, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { type Program, declaredMethod, methodCount, methodKinds, type Loader, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
@@ -81,7 +81,8 @@ export interface WorldOptions {
   compileOnly?: boolean;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
-export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
+/** the statics' import module `mod` of a linked class, and who laid it out: this World's class modules, or the platform build's or the app build's data modules */
+export interface ClassRt { name: string; id: number; mod: string; from: "own" | "platform" | "app"; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
 /** when a unit's compile began, and the compile time accounted by then (Units.account) */
 export type Clock = { start: number; accounted: number };
 export type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
@@ -249,16 +250,7 @@ export class World {
   /** asks again for the synthetic functions the hosts asked for in a World whose classes have other ids */
   replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
   /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
-  ensureSynth(name: string): void {
-    if (name.startsWith("conflict:")) {
-      const [key, message] = JSON.parse(name.slice("conflict:".length)) as [string, string];
-      this.dispatch.conflictSlot(key, message); return;
-    }
-    const kinds = /^(abstract|interfaceAccess):([ILJ]*)>([ILJV])$/.exec(name);
-    if (!kinds) { this.synthSlot(name, rtfns.get(name)!); return; }
-    const k: Kinds = { params: [...kinds[2]] as Kind[], ret: kinds[3] as Kind | "V" };
-    if (kinds[1] === "abstract") this.dispatch.abstractSlot(k); else this.dispatch.interfaceAccessSlot(k);
-  }
+  ensureSynth(name: string): void { if (!this.dispatch.ensureNamed(name)) this.synthSlot(name, rtfns.get(name)!); }
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
@@ -288,7 +280,7 @@ export class World {
     let slotBase = this.aot?.reservedBase(name) ?? this.slots.preassigned.get(name);
     slotBase ??= this.slots.numberBlock(name, methods.length + 1);
     if (!this.instantiates) {
-      this.classes.set(name, rt = { name, id, mod: this.opts.build ? this.aot!.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
+      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: this.aot!.extraMod, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     this.classes.set(name, rt = this.classModules.lazy(name, id, slotBase, jc));

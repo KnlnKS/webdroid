@@ -376,7 +376,7 @@ export class AotRuntime {
     // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
     if (!exports && app === undefined) this.fallbackD.add(g);
     const jc = w.prog.get(name);
-    return exports && { name, id, mod: (app === undefined ? "g" + g : "e" + app), slotBase: base, nMethods: jc ? methodCount(jc) : 0, exports };
+    return exports && { name, id, ...app === undefined ? { mod: "g" + g, from: "platform" as const } : { mod: "e" + app, from: "app" as const }, slotBase: base, nMethods: jc ? methodCount(jc) : 0, exports };
   }
   private loadD(g: number): WebAssembly.Exports | undefined { return this.data(`d${g}.wasm`, this.dExports, g); }
   private data(file: string, memo: (WebAssembly.Exports | undefined)[], g: number): WebAssembly.Exports | undefined {

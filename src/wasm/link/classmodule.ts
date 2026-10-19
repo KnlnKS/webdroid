@@ -23,7 +23,7 @@ export class ClassModules {
    *  meanwhile, and its slots start with shared stubs */
   lazy(name: string, id: number, slotBase: number, jc: JClass | undefined): ClassRt {
     let exports: WebAssembly.Exports | undefined;
-    const self = this, rt: ClassRt = { name, id, mod: "c" + id, slotBase, nMethods: jc?.methods.length ?? 0,
+    const self = this, rt: ClassRt = { name, id, mod: "c" + id, from: "own", slotBase, nMethods: jc?.methods.length ?? 0,
       get exports() { if (!exports) self.buildClasses(); return exports!; }, set exports(x) { exports = x; } };
     this.unbuilt.push(rt);
     this.stubClass(rt, jc);
@@ -53,7 +53,7 @@ export class ClassModules {
     for (const [at, slot] of repairs) set(at, slot);
   }
   /** a host class defined after classes were linked from the build: repairs the vtables of the ones it concerns */
-  repairLinked(): void { for (const [name, rt] of this.w.classes) if (rt.mod[0] === "g" || rt.mod[0] === "e") this.repair(name); }
+  repairLinked(): void { for (const [name, rt] of this.w.classes) if (rt.from !== "own") this.repair(name); }
   /** The bytes of a module that defines classes `rts`: what a build (aot-build, apps.ts) stores beside its unit modules and instantiates in the same
    *  order (importing the same table). A `lean` module (a class linked on demand) holds only the class's globals, since a module with code costs the
    *  engine far more: its slots get shared stubs and its ensure() is compiled on first call. */

@@ -89,7 +89,7 @@ export class Namespaces {
       return w.exception(w.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
     };
     // A kept app build was made under the new graph: the classes laid out by its data modules already have the new hierarchy and dispatch.
-    const kept = keepApp(), builtUnderNew = (name: string) => kept && w.classes.get(name)?.mod[0] === "e";
+    const kept = keepApp(), builtUnderNew = (name: string) => kept && w.classes.get(name)?.from === "app";
     for (const old of dispatch) {
       if (builtUnderNew(old.name)) continue;
       const methods = dispatchOf(old.name);

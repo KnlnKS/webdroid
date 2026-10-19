@@ -1,6 +1,6 @@
 // Virtual and interface dispatch: the vtable slots of a class's virtual methods, the words of its vtable (its type display, interface hash table and ids), and the
 // slots of what fills an entry with no method (AbstractMethodError, a default-method conflict, an inaccessible interface implementation).
-import { ACC, kindOf, javaName, type Kinds, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
+import { ACC, kindOf, javaName, type Kind, type Kinds, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER } from "../compiler/consts.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicMethod, resolveSymbolicMethod } from "../compiler/linkage.ts";
@@ -116,6 +116,15 @@ export class Dispatch {
   }
   private dispatchSlot(key: string, target: ReturnType<typeof symbolicDispatchFor>): number {
     return target ? failed(target) ? this.conflictSlot(key, target.message) : this.w.slotOf(target) : this.abstractSlot(entryKinds(key));
+  }
+  /** the slot of a synthetic function of the families below, made again from its name as a precompiled module numbered it; false for another name */
+  ensureNamed(name: string): boolean {
+    const at = name.indexOf(":"), family = name.slice(0, at), rest = name.slice(at + 1);
+    if (family === "conflict") { const [key, message] = JSON.parse(rest) as [string, string]; this.conflictSlot(key, message); return true; }
+    if (family !== "abstract" && family !== "interfaceAccess") return false;
+    const [params, ret] = rest.split(">"), kinds: Kinds = { params: [...params] as Kind[], ret: ret as Kind | "V" };
+    if (family === "abstract") this.abstractSlot(kinds); else this.interfaceAccessSlot(kinds);
+    return true;
   }
   /** a stub for a method the class does not implement: AbstractMethodError, with the signature of the vtable entry it fills */
   abstractSlot({ params, ret }: Kinds): number {
