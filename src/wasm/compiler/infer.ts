@@ -263,12 +263,19 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
 }
 
 /** the operand and result kinds of the unary operations 0x7b (neg-int) to 0x8f (int-to-short) */
-const UNARY: readonly [number, number][] = [
+/** the operand and result kinds of each unary op, neg-int (0x7b) to int-to-short (0x8f) */
+export const UNARY: readonly [number, number][] = [
   [I, I], [I, I], [J, J], [J, J], [F, F], [D, D],
   [I, J], [I, F], [I, D], [J, I], [J, F], [J, D],
   [F, I], [F, J], [F, D], [D, I], [D, J], [D, F],
   [I, I], [I, I], [I, I],
 ];
+/** the operations of the binary ops in DEX order: int and long take all eleven, float and double the first five; a literal op's second is rsub */
+export const BINOPS = ["add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr"] as const;
+export type Binop = (typeof BINOPS)[number];
+/** the operand kind and operation of a binary op without a literal (0x90-0xcf, either form) */
+export const binopKind = (op: number): number => { const i = (op - 0x90) & 0x1f; return i < 11 ? I : i < 22 ? J : i < 27 ? F : D; };
+export const binopName = (op: number): Binop => { const i = (op - 0x90) & 0x1f; return BINOPS[i < 11 ? i : i < 22 ? i - 11 : i < 27 ? i - 22 : i - 27]; };
 
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
   const { op, a, b, c } = x;
@@ -341,10 +348,8 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   }
   if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }
   if (op >= 0x90 && op <= 0xcf) {
-    const two = op >= 0xb0, base = two ? op - 0xb0 + 0x90 : op;
-    let t: number, shiftTwo = false;
-    if (base <= 0x9a) t = I; else if (base <= 0xa5) { t = J; shiftTwo = base >= 0xa3; } else if (base <= 0xaa) t = F; else t = D;
-    const src2 = shiftTwo ? I : t;
+    const two = op >= 0xb0, t = binopKind(op), name = binopName(op);
+    const src2 = t === J && (name === "shl" || name === "shr" || name === "ushr") ? I : t;
     return two ? E([a, t, b, src2], a, t) : E([b, t, c, src2], a, t);
   }
   if (op >= 0xd0 && op <= 0xe2) return E([b, I], a, I);

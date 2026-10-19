@@ -16,7 +16,7 @@ import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
 import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo.ts";
 import { emitRestored, FUEL } from "./hostcalls.ts";
-import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer.ts";
+import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
@@ -25,11 +25,34 @@ const NONE: readonly string[] = [];
 const CHUNK = 1024;
 /** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
 const INVOKE_USE: Record<string, number> = { "invoke-virtual": 0, "invoke-direct": 1, "invoke-static": 2, "invoke-interface": 3 };
-/** the opcode of each binary operation that is one Wasm instruction, by operand type */
-const INT_OPS: Record<string, number> = { add: OP.i32_add, sub: OP.i32_sub, mul: OP.i32_mul, and: OP.i32_and, or: OP.i32_or, xor: OP.i32_xor, shl: OP.i32_shl, shr: OP.i32_shr_s, ushr: OP.i32_shr_u };
-const LONG_OPS: Record<string, number> = { add: OP.i64_add, sub: OP.i64_sub, mul: OP.i64_mul, and: OP.i64_and, or: OP.i64_or, xor: OP.i64_xor };
-const FLOAT_OPS: Record<string, number> = { add: OP.f32_add, sub: OP.f32_sub, mul: OP.f32_mul, div: OP.f32_div };
-const DOUBLE_OPS: Record<string, number> = { add: OP.f64_add, sub: OP.f64_sub, mul: OP.f64_mul, div: OP.f64_div };
+/** the Wasm instruction of each binary operation that is one, by operand kind */
+const WASM_BINOP: Record<number, Partial<Record<Binop, number>>> = {
+  [KI]: { add: OP.i32_add, sub: OP.i32_sub, mul: OP.i32_mul, div: OP.i32_div_s, rem: OP.i32_rem_s, and: OP.i32_and, or: OP.i32_or, xor: OP.i32_xor, shl: OP.i32_shl, shr: OP.i32_shr_s, ushr: OP.i32_shr_u },
+  [KJ]: { add: OP.i64_add, sub: OP.i64_sub, mul: OP.i64_mul, and: OP.i64_and, or: OP.i64_or, xor: OP.i64_xor, shl: OP.i64_shl, shr: OP.i64_shr_s, ushr: OP.i64_shr_u },
+  [KF]: { add: OP.f32_add, sub: OP.f32_sub, mul: OP.f32_mul, div: OP.f32_div },
+  [KD]: { add: OP.f64_add, sub: OP.f64_sub, mul: OP.f64_mul, div: OP.f64_div },
+};
+type Around = (c: Code, operand: () => void) => void;
+const after = (...ops: number[]): Around => (c, x) => { x(); c.raw(...ops); };
+const trunc = (n: number): Around => (c, x) => { x(); c.satTrunc(n); };
+/** the Wasm of each unary op around its operand, in the order of infer.ts UNARY */
+const UNARY_CODE: Around[] = [
+  (c, x) => { c.i32(0); x(); c.raw(OP.i32_sub); }, (c, x) => { x(); c.i32(-1).raw(OP.i32_xor); },
+  (c, x) => { c.i64(0n); x(); c.raw(OP.i64_sub); }, (c, x) => { x(); c.i64(-1n).raw(OP.i64_xor); },
+  after(OP.f32_neg), after(OP.f64_neg),
+  after(OP.i64_extend_i32_s), after(OP.f32_convert_i32_s), after(OP.f64_convert_i32_s),
+  after(OP.i32_wrap_i64), after(OP.f32_convert_i64_s), after(OP.f64_convert_i64_s),
+  trunc(0), trunc(4), after(OP.f64_promote_f32),
+  trunc(2), trunc(6), after(OP.f32_demote_f64),
+  after(OP.i32_extend8_s), (c, x) => { x(); c.i32(0xffff).raw(OP.i32_and); }, after(OP.i32_extend16_s),
+];
+/** the element storage, sign and value kind of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type */
+const ELEMS: { k: ElemKind; sign: "s" | "u" | ""; kind: Kind }[] = [
+  { k: "i32", sign: "", kind: "I" }, { k: "i64", sign: "", kind: "J" }, { k: "ref", sign: "", kind: "L" }, { k: "i8", sign: "u", kind: "I" },
+  { k: "i8", sign: "s", kind: "I" }, { k: "i16", sign: "u", kind: "I" }, { k: "i16", sign: "s", kind: "I" },
+];
+/** the comparison of if-lt, if-ge, if-gt and if-le, and of their -z forms */
+const COMPARE = [OP.i32_lt_s, OP.i32_ge_s, OP.i32_gt_s, OP.i32_le_s];
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
@@ -153,12 +176,13 @@ export class MC {
     }
     this.store(ins);
   }
-  /** push a float or double operand as f32/f64 */
-  f32(reg: number) { if (this.load(reg) !== KF) throw new Error(`v${reg} is not a float at ${this.cur.pc}`); }
-  f64(reg: number) { if (this.load(reg) !== KD) throw new Error(`v${reg} is not a double at ${this.cur.pc}`); }
-  /** pop an f32/f64 into what the current instruction defines */
-  setF32() { this.store(this.cur); }
-  setF64() { this.store(this.cur); }
+  /** push `reg` as a number of kind `k` (infer.ts I, J, F or D): an int or long in the bits ABI, a float or double as itself */
+  num(k: number, reg: number): void {
+    if (k === KI || k === KJ) { this.get(k === KJ ? "J" : "I", reg); return; }
+    if (this.load(reg) !== k) throw new Error(`v${reg} is not a ${k === KF ? "float" : "double"} at ${this.cur.pc}`);
+  }
+  /** pop a number of kind `k` into what the current instruction defines */
+  setNum(k: number): void { if (k === KI || k === KJ) this.set(k === KJ ? "J" : "I"); else this.store(this.cur); }
 
   run(): void {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
@@ -752,51 +776,46 @@ export class MC {
     }
     if (isInvoke(op)) return this.emitInvoke(ins);
     if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
-    const n = ins.name, c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
-    switch (n) {
-      case "nop": return;
-      case "move": case "move/from16": case "move/16": case "move-wide": case "move-wide/from16": case "move-wide/16":
-      case "move-object": case "move-object/from16": case "move-object/16": {
+    if (op >= 0x32 && op <= 0x3d) return this.emitIf(ins);
+    const c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
+    switch (op) {
+      case 0x00: return; // nop
+      case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07: case 0x08: case 0x09: { // move, move-wide, move-object
         if (this.typing.def(ins.pc) < 0) return;
         if (this.load(b) !== this.typing.kind[this.typing.def(ins.pc)]) throw new Error(`move between kinds at ${ins.pc}`);
         this.store(ins); return;
       }
-      case "move-result": case "move-result-wide": case "move-result-object": throw new Error("move-result without invoke at " + ins.pc);
-      case "move-exception": c.lget(this.excLocal); this.set("L"); return;
-      case "return-void": this.methodReturn(); return;
-      case "return": this.get("I", a); this.methodReturn(); return;
-      case "return-wide": this.get("J", a); this.methodReturn(); return;
-      case "return-object": this.get("L", a); this.methodReturn(); return;
-      case "const/4": case "const/16": case "const": this.constNarrow(b); return;
-      case "const/high16": this.constNarrow(b << 16); return;
-      case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
-      case "const-wide": this.constWide(ins.wideLit); return;
-      case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
-      case "const-class": if (this.unresolved(dex.type(b))) return; cx.constClass(c, dex.typeName(b)); this.set("L"); return;
-      case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
-      case "const-method-handle": emitHandleConstant(this, b); return;
-      case "const-method-type": emitTypeConstant(this, b); return;
-      case "monitor-enter": case "monitor-exit": this.nonNull(a); this.monitor(ins.name === "monitor-enter"); return;
-      case "check-cast": {
+      case 0x0a: case 0x0b: case 0x0c: throw new Error("move-result without invoke at " + ins.pc);
+      case 0x0d: c.lget(this.excLocal); this.set("L"); return; // move-exception
+      case 0x0e: this.methodReturn(); return; // return-void
+      case 0x0f: this.get("I", a); this.methodReturn(); return;
+      case 0x10: this.get("J", a); this.methodReturn(); return;
+      case 0x11: this.get("L", a); this.methodReturn(); return;
+      case 0x12: case 0x13: case 0x14: this.constNarrow(b); return; // const/4, const/16, const
+      case 0x15: this.constNarrow(b << 16); return; // const/high16
+      case 0x16: case 0x17: this.constWide(BigInt(b)); return; // const-wide/16, const-wide/32
+      case 0x18: this.constWide(ins.wideLit); return;
+      case 0x19: this.constWide(BigInt(b) << 48n); return; // const-wide/high16
+      case 0x1a: case 0x1b: cx.str.literal(c, dex.string(b)); this.set("L"); return; // const-string
+      case 0x1c: if (this.unresolved(dex.type(b))) return; cx.constClass(c, dex.typeName(b)); this.set("L"); return;
+      case 0x1d: case 0x1e: this.nonNull(a); this.monitor(op === 0x1d); return;
+      case 0x1f: { // check-cast
         if (this.unresolved(dex.type(b))) return;
         const name = dex.typeName(b);
         if (name === "java/lang/Object") { this.copyReference(a); return; }
         this.get("L", a); cx.emitCast(c, name); this.set("L"); return;
       }
-      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, dex.typeName(ins.c)); this.set("I"); return;
-      case "array-length": this.arrayLength(b); this.set("I"); return;
-      case "new-instance": {
+      case 0x20: if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, dex.typeName(ins.c)); this.set("I"); return;
+      case 0x21: this.arrayLength(b); this.set("I"); return;
+      case 0x22: { // new-instance
         if (this.unresolved(dex.type(b))) return;
         const name = dex.typeName(b);
         // a String is made by the constructor call, which assigns its register
         if (name === STRING) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
-      case "new-array": {
-        if (this.unresolved(dex.type(ins.c))) return;
-        cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
-      }
-      case "filled-new-array": case "filled-new-array/range": {
+      case 0x23: if (this.unresolved(dex.type(ins.c))) return; cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
+      case 0x24: case 0x25: { // filled-new-array
         const desc = dex.type(b), ek = elemKindOf(desc);
         if (this.unresolved(desc)) { this.consumeResult(ins); return; }
         c.gget(cx.vtGlobal(desc)).refAsNonNull().i64(0n);
@@ -804,27 +823,25 @@ export class MC {
         c.arrayNewFixed(cx.tData[ek], ins.regs.length).structNew(cx.tArr[ek]);
         this.finishResult(ins, "L"); return;
       }
-      case "fill-array-data": {
+      case 0x26: { // fill-array-data
         const payload = ins.pc + b, insns = this.item.insns, width = insns[payload + 1], count = insns[payload + 2] | (insns[payload + 3] << 16);
         const bytes = new Uint8Array(insns.buffer, insns.byteOffset + (payload + 4) * 2, width * count).slice();
         const seg = cx.mb.addDataPassive(bytes);
         const ek: ElemKind = width === 1 ? "i8" : width === 2 ? "i16" : width === 4 ? "i32" : "i64";
-        this.nonNull(a); c.refCast(cx.tArr[ek]).structGet(cx.tArr[ek], 2).i32(0)
+        this.nonNull(a); cx.arrayData(c, ek).i32(0)
           .i32(0).i32(count).arrayNewData(cx.tData[ek], seg).i32(0).i32(count).arrayCopy(cx.tData[ek], cx.tData[ek]);
         return;
       }
-      case "throw": this.nonNull(a); c.throw_(cx.tag); return;
-      case "goto": case "goto/16": case "goto/32": this.jump(ins.pc + a, true); return;
-      case "packed-switch": case "sparse-switch": this.emitSwitch(ins); return;
-      case "cmpl-float": this.f32(b); this.f32(ins.c); c.call(cx.helper("cmplf")); this.set("I"); return;
-      case "cmpg-float": this.f32(b); this.f32(ins.c); c.call(cx.helper("cmpgf")); this.set("I"); return;
-      case "cmpl-double": this.f64(b); this.f64(ins.c); c.call(cx.helper("cmpld")); this.set("I"); return;
-      case "cmpg-double": this.f64(b); this.f64(ins.c); c.call(cx.helper("cmpgd")); this.set("I"); return;
-      case "cmp-long": this.get("J", b); this.get("J", ins.c); c.raw(0x55); this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_lt_s).raw(OP.i32_sub); this.set("I"); return;
-      case "if-eq": case "if-ne": case "if-eqz": case "if-nez": case "if-lt": case "if-ge": case "if-gt": case "if-le":
-      case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(ins); return;
+      case 0x27: this.nonNull(a); c.throw_(cx.tag); return;
+      case 0x28: case 0x29: case 0x2a: this.jump(ins.pc + a, true); return; // goto
+      case 0x2b: case 0x2c: this.emitSwitch(ins); return;
+      case 0x2d: case 0x2e: this.num(KF, b); this.num(KF, ins.c); c.call(cx.helper(op === 0x2d ? "cmplf" : "cmpgf")); this.set("I"); return;
+      case 0x2f: case 0x30: this.num(KD, b); this.num(KD, ins.c); c.call(cx.helper(op === 0x2f ? "cmpld" : "cmpgd")); this.set("I"); return;
+      case 0x31: this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_gt_s); this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_lt_s).raw(OP.i32_sub); this.set("I"); return; // cmp-long
+      case 0xfe: emitHandleConstant(this, b); return;
+      case 0xff: emitTypeConstant(this, b); return;
     }
-    this.emitArith(ins);
+    throw new Error(`no translation of ${ins.name} at ${ins.pc}`);
   }
   private monObj = -1; private monHdr = -1;
   /** monitor-enter or -exit of the object on the stack: the uncontended lock of a free object, and the release of a lock held once, inline; the rest is the helper's (j2w.ts menter) */
@@ -863,21 +880,10 @@ export class MC {
     for (let i = 0; i < kinds.length; i++) {
       const k = kinds[i];
       if (i < kinds.length - 1) c.lget(this.tmpL).refTest(cx.tArr[k]).if_(T.i32);
-      c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).arrayLen();
+      c.lget(this.tmpL); cx.arrayData(c, k).arrayLen();
       if (i < kinds.length - 1) c.else_();
     }
     for (let i = 0; i < kinds.length - 1; i++) c.end();
-  }
-  elemOf(name: string): { k: ElemKind; sign: "s" | "u" | "" } {
-    switch (name) {
-      case "aget": case "aput": return { k: "i32", sign: "" };
-      case "aget-wide": case "aput-wide": return { k: "i64", sign: "" };
-      case "aget-object": case "aput-object": return { k: "ref", sign: "" };
-      case "aget-boolean": case "aput-boolean": return { k: "i8", sign: "u" };
-      case "aget-byte": case "aput-byte": return { k: "i8", sign: "s" };
-      case "aget-char": case "aput-char": return { k: "i16", sign: "u" };
-      default: return { k: "i16", sign: "s" };
-    }
   }
   /** the local of each element kind that holds the data array of the array being accessed */
   dataLocal = new Map<ElemKind, number>();
@@ -888,28 +894,27 @@ export class MC {
     this.get("I", idxReg); c.lget(d).arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
   }
   emitAget(ins: Ins) {
-    const c = this.code, cx = this.cx, { k, sign } = this.elemOf(ins.name), d = this.dloc(k);
-    this.nonNull(ins.b); c.refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
+    const c = this.code, cx = this.cx, { k, sign, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k);
+    this.nonNull(ins.b); cx.arrayData(c, k).lset(d);
     this.idxCheck(k, ins.c);
     c.lget(d); this.get("I", ins.c);
     sign === "s" ? c.arrayGetS(cx.tData[k]) : sign === "u" ? c.arrayGetU(cx.tData[k]) : c.arrayGet(cx.tData[k]);
-    this.set(k === "ref" ? "L" : k === "i64" ? "J" : "I");
+    this.set(kind);
   }
   emitAput(ins: Ins) {
-    const c = this.code, cx = this.cx, { k } = this.elemOf(ins.name);
+    const c = this.code, cx = this.cx, { k, kind } = ELEMS[ins.op - 0x4b];
     // a static initializer runs once, and its long array literals take the engine longer to compile than to run: their stores are a call
     if (this.m.name === "<clinit>") {
-      this.nonNull(ins.b); this.get("I", ins.c); this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
+      this.nonNull(ins.b); this.get("I", ins.c); this.get(kind, ins.a);
       c.call(cx.helper("aput:" + k));
       return;
     }
     const d = this.dloc(k);
     this.nonNull(ins.b); c.lset(this.tmpL);
-    c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
+    c.lget(this.tmpL); cx.arrayData(c, k).lset(d);
     this.idxCheck(k, ins.c);
     if (k === "ref") cx.emitStoreCheck(c, this.tmpL, () => this.get("L", ins.a));
-    c.lget(d); this.get("I", ins.c);
-    this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
+    c.lget(d); this.get("I", ins.c); this.get(kind, ins.a);
     c.arraySet(cx.tData[k]);
   }
   fieldOf(idx: number, isStatic: boolean) { return this.resolved(8 * idx + 4 + +isStatic, () => resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls)); }
@@ -947,7 +952,7 @@ export class MC {
     if (cx.w.claims(f)) { this.refTo(ins.b, st); c.externConvertAny(); this.get("J", ins.a); c.call(cx.imp.claim); }
   }
   emitStatic(ins: Ins) {
-    const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), r = this.fieldOf(ins.b, true);
+    const cx = this.cx, c = this.code, put = ins.op >= 0x67, r = this.fieldOf(ins.b, true);
     if (failed(r)) return this.linkFail(r);
     const { f } = r;
     this.ensure(f.owner);
@@ -955,25 +960,19 @@ export class MC {
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
   }
   emitIf(ins: Ins) {
-    const c = this.code, flow = this.flow, target = ifTarget(ins), n = ins.name;
-    const refA = (n === "if-eq" || n === "if-ne" || n === "if-eqz" || n === "if-nez") && this.kindOf(ins.a) === KR;
+    const c = this.code, flow = this.flow, target = ifTarget(ins), op = ins.op, zero = op >= 0x38;
+    const ref = (op <= 0x33 || op === 0x38 || op === 0x39) && this.kindOf(ins.a) === KR;
     const cond = () => {
-      switch (n) {
-        case "if-eq": case "if-ne":
-          if (refA) { this.get("L", ins.a); this.get("L", ins.b); c.call(this.cx.helper("acmp")); } else { this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_eq); }
-          if (n === "if-ne") c.raw(OP.i32_eqz); return;
-        case "if-eqz": case "if-nez":
-          if (refA) { this.get("L", ins.a); c.refIsNull(); } else { this.get("I", ins.a); c.raw(OP.i32_eqz); }
-          if (n === "if-nez") c.raw(OP.i32_eqz); return;
-        case "if-lt": this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_lt_s); return;
-        case "if-ge": this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_ge_s); return;
-        case "if-gt": this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_gt_s); return;
-        case "if-le": this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_le_s); return;
-        case "if-ltz": this.get("I", ins.a); c.i32(0).raw(OP.i32_lt_s); return;
-        case "if-gez": this.get("I", ins.a); c.i32(0).raw(OP.i32_ge_s); return;
-        case "if-gtz": this.get("I", ins.a); c.i32(0).raw(OP.i32_gt_s); return;
-        case "if-lez": this.get("I", ins.a); c.i32(0).raw(OP.i32_le_s); return;
+      if (op <= 0x33 || op === 0x38 || op === 0x39) { // if-eq, if-ne, if-eqz, if-nez
+        this.get(ref ? "L" : "I", ins.a);
+        if (zero) { if (ref) c.refIsNull(); else c.raw(OP.i32_eqz); }
+        else { this.get(ref ? "L" : "I", ins.b); if (ref) c.call(this.cx.helper("acmp")); else c.raw(OP.i32_eq); }
+        if (op === 0x33 || op === 0x39) c.raw(OP.i32_eqz);
+        return;
       }
+      this.get("I", ins.a);
+      if (zero) c.i32(0); else this.get("I", ins.b);
+      c.raw(COMPARE[op - (zero ? 0x3a : 0x34)]);
     };
     const fall = ins.pc + ins.len;
     if (flow.blockAt[target] === flow.blockAt[fall]) return;
@@ -1099,72 +1098,22 @@ export class MC {
   vtl = -1;
   vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(ref(this.cx.tVT)); return this.vtl; }
 
+  /** unary (0x7b-0x8f) and binary (0x90-0xe2) arithmetic, in the operand kinds infer.ts gives them */
   emitArith(ins: Ins) {
-    const c = this.code, n = ins.name, a = ins.a, b = ins.b, cx = this.cx;
-    type K = "I" | "J" | "F" | "D";
-    const un = (from: K, to: K, f: () => void) => {
-      from === "F" ? this.f32(b) : from === "D" ? this.f64(b) : this.get(from, b);
-      f();
-      to === "F" ? this.setF32() : to === "D" ? this.setF64() : this.set(to);
-    };
-    switch (n) {
-      case "neg-int": c.i32(0); this.get("I", b); c.raw(OP.i32_sub); this.set("I"); return;
-      case "not-int": this.get("I", b); c.i32(-1).raw(OP.i32_xor); this.set("I"); return;
-      case "neg-long": c.i64(0n); this.get("J", b); c.raw(OP.i64_sub); this.set("J"); return;
-      case "not-long": this.get("J", b); c.i64(-1n).raw(OP.i64_xor); this.set("J"); return;
-      case "neg-float": un("F", "F", () => c.raw(OP.f32_neg)); return;
-      case "neg-double": un("D", "D", () => c.raw(OP.f64_neg)); return;
-      case "int-to-long": un("I", "J", () => c.raw(OP.i64_extend_i32_s)); return;
-      case "int-to-float": un("I", "F", () => c.raw(OP.f32_convert_i32_s)); return;
-      case "int-to-double": un("I", "D", () => c.raw(OP.f64_convert_i32_s)); return;
-      case "long-to-int": un("J", "I", () => c.raw(OP.i32_wrap_i64)); return;
-      case "long-to-float": un("J", "F", () => c.raw(OP.f32_convert_i64_s)); return;
-      case "long-to-double": un("J", "D", () => c.raw(OP.f64_convert_i64_s)); return;
-      case "float-to-int": un("F", "I", () => c.satTrunc(0)); return;
-      case "float-to-long": un("F", "J", () => c.satTrunc(4)); return;
-      case "float-to-double": un("F", "D", () => c.raw(OP.f64_promote_f32)); return;
-      case "double-to-int": un("D", "I", () => c.satTrunc(2)); return;
-      case "double-to-long": un("D", "J", () => c.satTrunc(6)); return;
-      case "double-to-float": un("D", "F", () => c.raw(OP.f32_demote_f64)); return;
-      case "int-to-byte": un("I", "I", () => c.raw(OP.i32_extend8_s)); return;
-      case "int-to-char": un("I", "I", () => c.i32(0xffff).raw(OP.i32_and)); return;
-      case "int-to-short": un("I", "I", () => c.raw(OP.i32_extend16_s)); return;
-    }
-    const two = n.endsWith("/2addr"), lit = n.includes("/lit") || n === "rsub-int";
-    const base = n.replace("/2addr", "").replace("/lit16", "").replace("/lit8", "");
-    const xr = two ? a : b, yr = two ? b : ins.c;
-    const type = base.endsWith("-int") || base === "rsub-int" ? "int" : base.endsWith("-long") ? "long" : base.endsWith("-float") ? "float" : "double";
-    const opn = base.replace(/-(int|long|float|double)$/, "");
-    const X = () => type === "int" ? this.get("I", xr) : type === "long" ? this.get("J", xr) : type === "float" ? this.f32(xr) : this.f64(xr);
-    const Y = () => {
-      if (lit) { type === "int" ? c.i32(ins.c) : c.i64(BigInt(ins.c)); return; }
-      type === "int" ? this.get("I", yr) : type === "long" ? this.get("J", yr) : type === "float" ? this.f32(yr) : this.f64(yr);
-    };
-    const fin = () => (type === "float" ? this.setF32() : this.setF64());
-    if (type === "int") {
-      if (n.startsWith("rsub-int")) { c.i32(ins.c); this.get("I", b); c.raw(OP.i32_sub); this.set("I"); return; }
-      if (opn === "div" || opn === "rem") {
-        const direct = lit && ins.c !== 0 && ins.c !== -1;
-        X(); Y();
-        if (direct) c.raw(opn === "div" ? OP.i32_div_s : OP.i32_rem_s); else c.call(cx.helper(opn === "div" ? "idiv" : "irem"));
-        this.set("I"); return;
-      }
-      X(); Y(); c.raw(INT_OPS[opn]); this.set("I"); return;
-    }
-    if (type === "long") {
-      if (opn === "shl" || opn === "shr" || opn === "ushr") {
-        X(); this.get("I", yr); c.raw(OP.i64_extend_i32_u, opn === "shl" ? OP.i64_shl : opn === "shr" ? OP.i64_shr_s : OP.i64_shr_u); this.set("J"); return;
-      }
-      if (opn === "div" || opn === "rem") { X(); Y(); c.call(cx.helper(opn === "div" ? "ldiv" : "lrem")); this.set("J"); return; }
-      X(); Y(); c.raw(LONG_OPS[opn]); this.set("J"); return;
-    }
-    // float/double
-    if (opn === "rem") {
-      if (type === "float") { X(); c.raw(OP.f64_promote_f32); Y(); c.raw(OP.f64_promote_f32).call(cx.imp.fmod).raw(OP.f32_demote_f64); }
-      else { X(); Y(); c.call(cx.imp.fmod); }
-      fin(); return;
-    }
-    X(); Y(); c.raw((type === "float" ? FLOAT_OPS : DOUBLE_OPS)[opn]); fin();
+    const c = this.code, op = ins.op;
+    if (op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; UNARY_CODE[op - 0x7b](c, () => this.num(from, ins.b)); this.setNum(to); return; }
+    const lit = op >= 0xd0, li = op - (op >= 0xd8 ? 0xd8 : 0xd0), k = lit ? KI : binopKind(op), name = lit ? BINOPS[li] : binopName(op);
+    const [x, y] = op >= 0xb0 && !lit ? [ins.a, ins.b] : [ins.b, ins.c];
+    if (lit && li === 1) { c.i32(ins.c); this.num(KI, x); c.raw(OP.i32_sub); this.set("I"); return; } // rsub-int
+    const fmod = name === "rem" && (k === KF || k === KD), wideShift = k === KJ && (name === "shl" || name === "shr" || name === "ushr");
+    this.num(k, x);
+    if (fmod && k === KF) c.raw(OP.f64_promote_f32);
+    if (lit) c.i32(ins.c); else this.num(wideShift ? KI : k, y);
+    if (fmod) { if (k === KF) c.raw(OP.f64_promote_f32); c.call(this.cx.imp.fmod); if (k === KF) c.raw(OP.f32_demote_f64); }
+    // Wasm traps on a zero divisor and on MIN / -1, where Java throws or wraps: the helpers do as Java does, unless a literal rules both out
+    else if ((name === "div" || name === "rem") && (k === KI || k === KJ) && !(lit && ins.c !== 0 && ins.c !== -1)) c.call(this.cx.helper((k === KI ? "i" : "l") + name));
+    else { if (wideShift) c.raw(OP.i64_extend_i32_u); c.raw(WASM_BINOP[k][name]!); }
+    this.setNum(k);
   }
 }
 

@@ -1,5 +1,5 @@
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
-import { OP, type Code } from "./code.ts";
+import type { Code } from "./code.ts";
 import { Compiler, type LinkEnv } from "./j2w.ts";
 import { MC } from "./method.ts";
 import type { Kind, MethodInfo } from "./program.ts";
@@ -18,8 +18,6 @@ class SymbolicMC extends MC {
   override consumeResult(): void {}
   protected override copyReference(reg: number): void { this.get("L", reg); this.set("L"); }
   override set(_kind: Kind): void { this.code.lset(this.outputLocal); }
-  override setF32(): void { this.code.raw(OP.i32_reinterpret_f32); this.set("I"); }
-  override setF64(): void { this.code.raw(OP.i64_reinterpret_f64); this.set("J"); }
   override finishResult(_ins: PreparedInstruction, kind: Kind | "V"): void { if (kind !== "V") this.set(kind); }
   override useWeb(reg: number): number { return reg; }
   override get(kind: Kind, reg: number): void {
