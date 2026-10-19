@@ -8,6 +8,7 @@ import { PLATFORM_DATA } from "../src/jvm/bootclasspath.ts";
 import { AOT_ROOT, sourceKey, type AotManifest } from "./wasm/aot-key.ts";
 import { bundle } from "./bundle.ts";
 import { runNode } from "./node.ts";
+import { WORKER_SCRIPTS } from "../src/worker-scripts.ts";
 
 const PART_SIZE = 24 * 1024 * 1024;
 const aospFiles = [...PLATFORM_JARS, "framework-res.apk", ...Object.keys(PLATFORM_DATA).map((path) => path.slice(1))];
@@ -49,7 +50,8 @@ async function copyAot(out: string): Promise<void> {
   await writeFile(join(out, "_headers"), "/aot/*/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 }
 
-const WORKERS = [["src/wasm/host/compile-worker.ts", "wasm-compile-worker.js"], ["src/wasm/host/warm-worker.ts", "wasm-warm-worker.js"], ["src/process-worker.ts", "process-worker.js"]];
+/** each Worker script's entry and the file it is served from (its URL without the leading slash) */
+const WORKERS = Object.values(WORKER_SCRIPTS).map(({ entry, url }) => [entry, url.slice(1)] as const);
 
 export function prodAssets(): Plugin {
   let out = "dist", systemPackages: Promise<string>, emitted: Promise<string[]>;

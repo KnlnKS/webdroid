@@ -23,8 +23,6 @@ const MAX_QUEUE = 16, MAX_FAILURES = 3;
  *  faster than collections shrink it, in the address space the page's compile workers share (compilehost.ts) */
 const MERGE_REST = 2;
 
-/** where the server and the production build serve compile-worker.ts */
-export const COMPILE_WORKER_URL = "/wasm-compile-worker.js";
 /** what starts a compile worker: the ports of its protocol, of its fetches and of its end (it posts a failure's message, and is terminated when sent anything) */
 export interface CompileWorkerRequest { port: MessagePort; fetcher: MessagePort; ctl: MessagePort }
 /** A compile worker. The page's compile host starts it in a process of its own (compilehost.ts) when `host` is that host's port; a realm without one starts

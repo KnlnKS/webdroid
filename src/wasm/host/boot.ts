@@ -33,7 +33,8 @@ import { declareWaiting } from "./suspend.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
 import { openPersist } from "./persist.ts";
-import { COMPILE_WORKER_URL, spawnCompileWorker, type CompileClient } from "./compiler.ts";
+import { spawnCompileWorker, type CompileClient } from "./compiler.ts";
+import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { onProcessExit, processExited } from "../../process-exit.ts";
 import type { WarmAnswer } from "./warm-worker.ts";
 
@@ -131,7 +132,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
   let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
   const prepare = async (app: Asked, dexes: DexFile[], prefix: Numbering) =>
-    prepareApp({ ...app, dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist: await persisting, spawn: () => spawnCompileWorker(compileHost, COMPILE_WORKER_URL), prefix, signal: lifetime.signal,
+    prepareApp({ ...app, dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist: await persisting, spawn: () => spawnCompileWorker(compileHost, WORKER_SCRIPTS.compile.url), prefix, signal: lifetime.signal,
       warm: warmPort && warming() ? (request, transfer) => warmPort!.postMessage(request, transfer ?? []) : undefined });
   // a process that never presents a frame, such as a service's, is launched when the start window ends
   const launched = () => { clearTimeout(startWindow); starting = false; if (world) code?.watch(world); };
@@ -258,15 +259,13 @@ export function usePagePorts(aot: MessagePort, compile: MessagePort, warm: Messa
 }
 export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
 const countWarm = ({ warmed, skipped }: WarmAnswer) => { perf.wasmWarmed += warmed; perf.wasmWarmSkipped += skipped; };
-/** where the server and the production build serve warm-worker.ts */
-const WARM_WORKER_URL = "/wasm-warm-worker.js";
 let warmer: Worker | null | undefined;
 /** whether the page runs a warm Worker: where V8 compiles a function on its first call and shares the code between Workers, and the machine has cores to spare */
 const warming = (): boolean => navigator.hardwareConcurrency >= 4 && /Chrome\//.test(navigator.userAgent);
 /** Gives a process Worker's port to the page's warm Worker, made with the first. Until processes ask, it warms what launches of the platform build ran. */
 export function serveWarm(port: MessagePort): void {
   if (warmer === undefined) {
-    warmer = warming() ? new Worker(WARM_WORKER_URL, { type: "module" }) : null;
+    warmer = warming() ? new Worker(WORKER_SCRIPTS.warm.url, { type: "module" }) : null;
     if (warmer) {
       warmer.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
       void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base }); });

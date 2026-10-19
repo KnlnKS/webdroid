@@ -3,7 +3,8 @@
 // cage of its own, so the compile workers of every process Worker run there; a browser that keeps such a frame in the page's process runs them as before.
 // Each worker the host starts reads the platform's jars from the page's Blobs while its script loads, rather than taking them from the realm that asked for it (43 MB
 // copied on that realm's thread for each worker).
-import { COMPILE_WORKER_URL, startCompileWorker, type CompileWorkerRequest } from "./compiler.ts";
+import { startCompileWorker, type CompileWorkerRequest } from "./compiler.ts";
+import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { platformJarBlobs } from "../../android/framework.ts";
 
 const STALL_MS = 5000;
@@ -14,7 +15,7 @@ async function workerScript(): Promise<Blob> {
     const abort = new AbortController(), parts: Uint8Array<ArrayBuffer>[] = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const reader = (await fetch(COMPILE_WORKER_URL, { signal: abort.signal })).body!.getReader();
+      const reader = (await fetch(WORKER_SCRIPTS.compile.url, { signal: abort.signal })).body!.getReader();
       const read = () => { clearTimeout(timer); timer = setTimeout(() => abort.abort(), STALL_MS); return reader.read(); };
       for (let chunk; !(chunk = await read()).done;) parts.push(chunk.value);
       return new Blob(parts);
@@ -50,6 +51,6 @@ onmessage=({data})=>{if(data.source){url=blob((${shim})(blob(data.source)));jars
 export function serveCompileWorkers(port: MessagePort): void {
   compileHost().catch(() => {});
   port.onmessage = ({ data }: MessageEvent<CompileWorkerRequest>) => {
-    void compileHost().then((start) => start(data), () => startCompileWorker(COMPILE_WORKER_URL, data));
+    void compileHost().then((start) => start(data), () => startCompileWorker(WORKER_SCRIPTS.compile.url, data));
   };
 }
