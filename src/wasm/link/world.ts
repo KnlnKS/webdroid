@@ -3,37 +3,25 @@
 //  - A class module (one per class, built the first time any code names the class) defines the class's vtable, init flag and static
 //    fields as exported globals; its methods' contiguous block of table slots starts with the lazy-link stub of each one's signature.
 //  - Every call between modules is `call_indirect slot` after storing the slot in rt.callee, so a compiled method needs no relinking. A stub
-//    calls host.link(callee), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
+//    calls the runtime's linker (runtime.ts), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 import { symbolicInstruction } from "../compiler/sites.ts";
-import { HT, ModuleBuilder, T, refNull, sleb, uleb } from "../compiler/wasmbin.ts";
-import { Code } from "../compiler/code.ts";
-import { type Program, declaredMethod, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { type Program, declaredMethod, methodCount, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
-import { H } from "../compiler/consts.ts";
-import { MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
+import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
 import { Sched, defaultLoop, type HostLoop, type Strand } from "./sched.ts";
 import { rtfns, type Synth } from "../compiler/rtfns.ts";
-import { hostInfo, infoRecord, replayInfo, type InfoRecord } from "./classes.ts";
-
+import { replayInfo, type InfoRecord } from "./classes.ts";
 import { HostClasses } from "./hostclass.ts";
-import { mhInvoke } from "./mhandles.ts";
-import type { InvokeMode } from "../compiler/handles.ts";
-import { hostText } from "./members.ts";
-import { ASYNC } from "./inet.ts";
-import { generateProxy, type ProxyDefinition } from "./proxy.ts";
-import { hostObject } from "./annotations.ts";
-import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders.ts";
-import { initiatedInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution.ts";
-import { hasSignatureConstraints, validateSignatures } from "./signatures.ts";
-import { SLOT, FIRST_FREE_SLOT, SCRATCH_BASE, INIT_DONE, THROWERS, ALLOC_WINDOW, excMessage, isStackOverflow, type JavaFrame, type Thrower } from "../compiler/exc.ts";
-import { type PreparedInstruction } from "../../jvm/prepared.ts";
-import { HEAP_LIMIT } from "../../jvm/abi.ts";
+import type { ProxyDefinition } from "./proxy.ts";
+import { initiatedInstruction, resolveClass } from "./resolution.ts";
+import { hasSignatureConstraints } from "./signatures.ts";
+import { SLOT, FIRST_FREE_SLOT, SCRATCH_BASE, INIT_DONE, isStackOverflow } from "../compiler/exc.ts";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { mid } from "../compiler/ids.ts";
-import { unresolvedClass } from "../compiler/linkage.ts";
-import { NO_INDEX, type DexFile } from "../../jvm/dex.ts";
-import { compileModule, suspending } from "./module.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import { compileModule } from "./module.ts";
 import { AotRuntime, type AotBuild, type AotStore, type AppIndex } from "./aot.ts";
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
@@ -47,10 +35,10 @@ import { HostFunctions } from "./hostfns.ts";
 import { StackTraces } from "./stacks.ts";
 import { SymbolicSites } from "./symbolicsites.ts";
 import { Units } from "./units.ts";
+import { startRuntime, type Runtime } from "./runtime.ts";
+import { hostImports, type HostImports } from "./hostimports.ts";
 import { Assumptions } from "./assumptions.ts";
 import { Namespaces } from "./namespaces.ts";
-import { Sync, ROOT } from "../compiler/hostcalls.ts";
-
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -110,8 +98,6 @@ export class World {
   onGap: (what: string) => void = () => {};
   /** a site naming a class, method or field the loaded classes lack ran (linkage.ts): ART's message, and the class when that is what is missing */
   onUnresolved: (message: string, cls: string | undefined) => void = () => {};
-  /** the gap site that ran last, which the UnsatisfiedLinkError the code throws next names */
-  private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
   stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0 };
@@ -141,8 +127,8 @@ export class World {
   bridge: HostBridge;
   /** the classes the host implements (hostclass.ts) */
   hosts = new HostClasses(this);
-  host: Record<string, Function>;
-  rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; callee: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void; nop: Function };
+  host!: HostImports;
+  rt!: Runtime;
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
   aot?: AotRuntime;
@@ -159,91 +145,9 @@ export class World {
     this.natives = opts.natives;
     this.bridge = this.natives.bridge(this);
     this.cha = new Cha(prog);
-    // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
-    const heap = opts.heapUsed, heapBase = heap(), limit = opts.heapLimit ?? HEAP_LIMIT;
-    const names = (id: number) => javaName(this.numbers.names[id]);
-    // a host call whose answer is pending parks the strand, which annotationWait settles with the answer
-    const park = (value: unknown, none: null | 0): unknown => {
-      if (!(value instanceof Promise)) return value;
-      this.sched.parkNative(value); return none;
-    };
-    this.host = {
-      ...Object.fromEntries(Object.keys(MATH_IMPORTS).map((f) => [f, Math[f as keyof typeof MATH_IMPORTS]])),
-      fmod: (a: number, b: number) => a % b,
-      gap: (id: number) => { this.lastGap = id; this.onGap(this.numbers.gapList[id]); },
-      link: (slot: number) => this.tiers.linkSlot(slot),
-      linkDue: (slot: number) => +(this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
-      linkWait: suspending((slot: number) => this.sched.admitLink(() => this.tiers.linkSlot(slot), () => this.aot?.prepare(slot))),
-      sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
-      block: suspending((op: number, obj: object | null, a: number, b: number) => {
-        try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
-      }),
-      hot: (slot: number) => this.tiers.upgrade(slot),
-      long: (slot: number) => { const s = this.slots.at(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
-      imtMiss: (cls: number, sel: number) => this.dispatch.imtMiss(cls, sel),
-      heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
-      info: (kind: number, a: number, b: number) => {
-        const synths = this.slots.synthCount, answer = hostInfo(this, kind, a, b);
-        if (this.slots.synthCount !== synths && !opts.compileOnly) this.demand.infos.push(infoRecord(this, kind, a, b));
-        return answer;
-      },
-      text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
-      obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
-      annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(this, kind, a, b, filter), null),
-      proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
-      net: (node: unknown, family: number, flags: number) => opts.net ? opts.net(this, this.hostString(node) as string, family, flags) : ASYNC,
-      netByte: (found: number[][], i: number, j: number) => j < 0 ? found[i].length : found[i][j],
-      mhInvoke: (mh: object, args: object, site: string, mode: InvokeMode) => {
-        const value = mhInvoke(this, mh, args, site, mode);
-        return park(value instanceof Promise ? value.then((v) => this.javaValue(v)) : this.javaValue(value), null);
-      },
-      galloc: (owner: object, n: number) => this.allocGuest(owner, n),
-      gwrote: (address: number, length: number) => opts.guest!.wrote(address >>> 0, length >>> 0),
-      gblock: (address: number) => this.blockSizes.get(address >>> 0) ?? 0,
-      intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
-      claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
-      watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.helpers.cleaners.register(referent, cleaner); },
-      classByName: (name: string, scope: unknown, mode: number) => {
-        const text = this.hostString(name) as string;
-        return park(mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current()) : classByName(this, text, scope, mode), 0);
-      },
-      dexOpen: (path: unknown, loader: object | null) => park(dexOpen(this, path, loader), null),
-      dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(this, buffers, arrays, starts, ends, loader), null),
-      // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
-      stackClass: (n: number) => {
-        const frames = this.stacks.callerFrames(n + 2), f = frames[n + 1];
-        return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
-      },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => {
-        const message = this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.numbers.gapList[this.lastGap] : this.numbers.links.message(id)!);
-        if (message !== null && (kind === SLOT.ncdfr || kind === SLOT.nsme || kind === SLOT.nsfer)) this.onUnresolved(message, kind === SLOT.ncdfr ? unresolvedClass(message) : undefined);
-        return message;
-      },
-      capture: (exn: object) => this.stacks.capture(exn),
-      stFrames: (state: object | null) => state ? this.stacks.stackTrace(state) : [],
-      // a frame's class, method and the source file its class def names (null without one)
-      stString: (frames: JavaFrame[], i: number, which: number) => {
-        const f = frames[i], c = which === 2 ? this.prog.get(f.cls.replace(/\./g, "/")) : undefined;
-        return which === 0 ? javaName(f.cls) : which === 1 ? f.method : c?.def && c.def.sourceFileIdx !== NO_INDEX ? c.dex!.string(c.def.sourceFileIdx) : null;
-      },
-      stLine: (frames: JavaFrame[], i: number) => frames[i].line,
-      // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead
-      len: (answer: unknown[] | number) => typeof answer === "number" ? answer : answer.length,
-    };
-    this.startRuntime();
+    this.rt = startRuntime(this);
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
-    this.host.annotationWait = this.sched.settle();
-    const catchBlock = (cls: number, index: number, pc: number, throwable: object) => {
-      const method = methodAt(this.prog.require(this.nameOf(cls)), index);
-      if (!method) throw new Error("Missing catch dispatcher method");
-      return resolveCatch(this, method, pc, throwable, this.sched.current());
-    };
-    this.host.catchSync = () => this.symbolic.symbolicSync();
-    this.host.catchBlock = (...args: Parameters<typeof catchBlock>) => this.synchronous(() => catchBlock(...args));
-    this.host.catchBlockWait = this.sched.suspending(catchBlock);
-    const signatures = (id: number) => validateSignatures(this, this.nameOf(id), this.sched.current());
-    this.host.initSignatures = (id: number) => this.synchronous(() => signatures(id));
-    this.host.initSignaturesWait = this.sched.suspending(signatures);
+    this.host = hostImports(this);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
@@ -293,10 +197,8 @@ export class World {
   selectorId(key: string): number { return this.numbers.selectorId(key); }
   linkId(message: string): number { return this.numbers.linkId(message); }
   gapId(what: string): number { return this.numbers.gapId(what); }
-  /** the String objects made of JS strings, which are the constants and what String.intern answers */
-  private interned = new Map<string, object>();
   /** a value a host function answers, as a Java value: a JS string becomes a String */
-  private javaValue(v: unknown): unknown { return typeof v === "string" ? this.javaString(v) : v; }
+  javaValue(v: unknown): unknown { return typeof v === "string" ? this.javaString(v) : v; }
   /** a String a host function is given, as the JS string it works with */
   hostString(v: unknown): unknown {
     return typeof v === "object" && v !== null && this.classNameOf(v) === "java/lang/String" ? this.bridge.toHost(v) : v;
@@ -306,11 +208,11 @@ export class World {
   javaString(s: string): unknown {
     return (this.fromJs ??= this.helpers.hostFn("str:from", ["L"], "L", (cx, c) => { c.lget(0).externConvertAny(); cx.str.fromHost(c); }))(s);
   }
-  /** how `m` is implemented without its bytecode, if it is */
   /** whether `ins` must link at run time: `m`'s loader links by name and the class the instruction names has no ready definition it initiated */
   needsSymbolicSite(m: MethodInfo, ins: PreparedInstruction): boolean {
     return !this.prog.linksStatically(this.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(this, m, ins);
   }
+  /** how `m` is implemented without its bytecode, if it is */
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.madeUp.get(mid(m)) ?? intrinsicFor(this.opts.intrinsics, this.natives, m); }
   /** the bodies of the methods of classes made at run time (addClass), by method id */
   private madeUp = new Map<string, Intrinsic>();
@@ -358,9 +260,6 @@ export class World {
     if (kinds[1] === "abstract") this.dispatch.abstractSlot(k); else this.dispatch.interfaceAccessSlot(k);
   }
 
-
-
-
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
     const t0 = performance.now(), mod = compileModule(bytes);
@@ -373,58 +272,6 @@ export class World {
     this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
     return inst;
   }
-  private addLinker(mb: ModuleBuilder, state: [number, number, number]): number {
-    const sig = mb.addFuncType([T.i32], []), link = mb.importFunc("host", "link", sig);
-    const due = mb.importFunc("host", "linkDue", mb.addFuncType([T.i32], [T.i32]));
-    const wait = mb.importFunc("host", "linkWait", sig), sync = mb.importFunc("host", "sync", mb.addFuncType([T.i32, T.externref, T.f64], [T.i32]));
-    const c = new Code(1);
-    const saved = [c.newLocal(T.i32), c.newLocal(T.anyref), c.newLocal(T.i32)];
-    const restore = () => {
-      state.forEach((global, i) => c.lget(saved[i]).gset(global));
-      c.i32(Sync.Resume).refNull(HT.extern).f64const(0n).call(sync).drop();
-    };
-    c.lget(0).call(due).if_();
-    state.forEach((global, i) => c.gget(global).lset(saved[i]));
-    // Promise reactions may idle another strand after admission restores it, before Wasm resumes.
-    c.block().block(T.exnref).tryTable(null, [[3, 0, 0]]).lget(0).call(wait).end().br(1).end();
-    restore(); c.throwRef(); c.end();
-    restore();
-    c.else_().lget(0).call(link).end();
-    return mb.addFunc(sig, c.finish(), "$link");
-  }
-  private startRuntime(): void {
-    const mb = new ModuleBuilder(), b = declareBase(mb);
-    mb.importTable("rt", "table", T.funcref, 0);
-    mb.export("tag", "tag", mb.addTag(b.tTagFn));
-    const i32Init = (v: number) => { const o = [0x41]; sleb(v, o); return o; };
-    mb.export("callee", "global", mb.addGlobal(T.i32, true, i32Init(0)));
-    const uleb2 = (v: number) => { const o: number[] = []; uleb(v, o); return o; };
-    mb.export("alloc", "global", mb.addGlobal(T.i32, true, i32Init(-ALLOC_WINDOW)));
-    mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
-    // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
-    mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
-    mb.export("unsafeSlots", "global", mb.addGlobal(refNull(b.tVT), true, new Code(0).refNull(b.tVT).b));
-    const sid = mb.addGlobal(T.i32, true, i32Init(ROOT)), thr = mb.addGlobal(T.anyref, true, [0xd0, 0x6e]), depth = mb.addGlobal(T.i32, true, i32Init(0));
-    mb.export("sid", "global", sid); mb.export("thr", "global", thr); mb.export("depth", "global", depth);
-    const link = this.addLinker(mb, [sid, thr, depth]);
-    mb.export("link", "func", link);
-    mb.export("iw", "global", mb.addGlobal(T.i32, true, i32Init(0)));
-    mb.export("wait", "global", mb.addGlobal(T.i32, true, i32Init(0)));
-    const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
-    mb.export("classId", "func", cid);
-    mb.export("nop", "func", mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "nop"));
-    for (const name of Object.keys(SLOT) as Thrower[]) {
-      const params = THROWERS[name].params.map((k) => kindVT(k)), sig = mb.addFuncType(params, []);
-      const c = new Code(params.length).i32(SLOT[name]).call(link);
-      params.forEach((_, i) => c.lget(i));
-      const f = mb.addFunc(sig, c.i32(SLOT[name]).callIndirect(sig).finish(), "stub:" + name);
-      mb.addElemActive(0, SLOT[name], [f]);
-      this.slots.set(SLOT[name], { k: "thrower", name, done: false });
-    }
-    const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, callee: x.callee, classId: x.classId, link: x.link, nop: x.nop };
-  }
-
   rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
 
   /** the class module of `name`, built on first use */
@@ -459,8 +306,6 @@ export class World {
   longLoops = new Set<string>();
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
-  // ---------- compiling ahead of the first call, in idle time
-
   // ---------- open world
   resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
     return resolveClass(this, loader, name, owner);
@@ -493,17 +338,6 @@ export class World {
       this.nm.set(i, object as never);
     }
     return i;
-  }
-  /** the native blocks of the direct buffers, freed when the object that owns each is collected, and their sizes by address */
-  private blocks = new FinalizationRegistry<bigint>((address) => { this.blockSizes.delete(Number(address)); this.opts.guest!.free(address); });
-  private blockSizes = new Map<number, number>();
-  /** a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0 */
-  private allocGuest(owner: object, n: number): bigint {
-    const guest = this.opts.guest;
-    if (!guest) throw new Error("this World has no guest memory");
-    const address = guest.alloc(n);
-    if (address) { this.blocks.register(owner, address); this.blockSizes.set(Number(address), n); }
-    return address;
   }
   /** whether the guest memory is shared, which a module that imports it must declare */
   get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }

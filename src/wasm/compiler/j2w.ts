@@ -85,9 +85,11 @@ const HOST_IMPORTS = {
   sync: { params: [T.i32, T.externref, T.f64], results: [T.i32] },
   block: { params: [T.i32, T.externref, T.f64, T.i32], results: [T.i32] },
 } satisfies Record<string, FunctionType>;
-const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as (keyof typeof HOST_IMPORTS)[];
+/** what compiled code imports as "host" (link/hostimports.ts) */
+export type HostImport = keyof typeof HOST_IMPORTS;
+const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as HostImport[];
 /** each host import's function index: every module imports them first, in this order */
-const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => [name, i])) as Record<keyof typeof HOST_IMPORTS, number>;
+const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => [name, i])) as Record<HostImport, number>;
 /** the host imports that can run Java code */
 const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", "proxy", "obj", "dexOpen", "dexOpenMemory", "classByName", "net", "sync", "block",
   "catchBlock", "catchBlockWait"] as const).map((name) => HOST_IMPORT_INDEX[name]));

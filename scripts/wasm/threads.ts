@@ -53,6 +53,8 @@ const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   }
   return pending;
 } } });
+/** host imports only this suite's generated code calls */
+const extra = w.host as Record<string, Function>;
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const ordered: (() => void)[] = [];
@@ -152,7 +154,7 @@ if (substrate) {
       ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
-    heap.host.heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
+    (heap.host as Record<string, Function>).heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
     const allocate = heap.hostFn("substrate:heap:" + mode, [], "V", (cx, c) => {
       if (mode === "bridge") c.call(bridge);
       else { cx.emitNewArray(c, "[B", () => c.i32(ALLOC_WINDOW)); c.drop(); }
@@ -174,8 +176,8 @@ if (substrate) {
       const deferred = mode !== "immediate";
       const error = new Error("suspending import failure");
       let fail = 0, prepare = 0, caught = 0;
-      w.host.importThrowPrepare = () => { globals.depth.value = 23; };
-      w.host.importThrow = w.sched.suspending(() => {
+      extra.importThrowPrepare = () => { globals.depth.value = 23; };
+      extra.importThrow = w.sched.suspending(() => {
         if (!deferred) throw error;
         const p = Promise.reject(error);
         if (mode === "interposed") {
@@ -187,7 +189,7 @@ if (substrate) {
         }
         return p;
       });
-      w.host.importThrowCaught = () => {
+      extra.importThrowCaught = () => {
         expect(`${mode} import catch retains strand`, w.sched.current().id, importStrand.id);
         expect(`${mode} import catch retains Thread`, globals.thr.value === importStrand.thread.obj, true);
         expect(`${mode} import catch retains depth`, globals.depth.value, 23);
@@ -209,7 +211,7 @@ if (substrate) {
     }
   } finally {
     importStrand.end();
-    delete w.host.importThrowPrepare; delete w.host.importThrow; delete w.host.importThrowCaught;
+    delete extra.importThrowPrepare; delete extra.importThrow; delete extra.importThrowCaught;
   }
   const lookupStrand = w.sched.strand(w.sched.hostThread()), lookupGlobals = w.rtImports();
   const oldLookup = w.host.classByName, oldWait = w.host.annotationWait, oldSuspending = w.sched.suspending;
@@ -232,8 +234,8 @@ if (substrate) {
     w.host.annotationWait = w.sched.settle();
     w.sched.suspending = oldSuspending;
     w.host.classByName = () => { w.sched.parkNative(Promise.reject(lookupError)); return 0; };
-    w.host.lookupPrepare = () => { lookupGlobals.depth.value = 23; };
-    w.host.lookupCaught = () => {
+    extra.lookupPrepare = () => { lookupGlobals.depth.value = 23; };
+    extra.lookupCaught = () => {
       expect("classForName rejected wait retains strand", w.sched.current().id, lookupStrand.id);
       expect("classForName rejected wait retains Thread", lookupGlobals.thr.value === lookupStrand.thread.obj, true);
       expect("classForName rejected wait retains depth", lookupGlobals.depth.value, 23);
@@ -254,7 +256,7 @@ if (substrate) {
   } finally {
     lookupStrand.end();
     w.host.classByName = oldLookup; w.host.annotationWait = oldWait; w.sched.suspending = oldSuspending;
-    delete w.host.lookupPrepare; delete w.host.lookupCaught;
+    delete extra.lookupPrepare; delete extra.lookupCaught;
   }
   // the cases' common-pool workers stay parked across the probe
   const parked = w.sched.strands.filter(Boolean).length;

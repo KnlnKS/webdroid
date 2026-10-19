@@ -236,7 +236,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const helperKey = w.prog.lookup(loader, "SymbolicHelper")!, helper = w.prog.require(helperKey).byKey.get("value()I")!;
     if (w.prog.initiatedBy(loader, "SymbolicHelper")) throw new Error("copy fixture helper already initiated");
     const slot = w.slotOf(method), helperSlot = w.slotOf(helper);
-    await w.host.link(slot); await w.host.link(helperSlot);
+    await w.tiers.linkSlot(slot); await w.tiers.linkSlot(helperSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * helperSlot, 1)[0] = HOT_BUDGET;
     const before = w.tiers.upgradeJob(slot);
     if (!before || [...before.installed, ...before.copies].includes(mid(helper))) throw new Error("symbolic promotion selected an unresolved local copy");
@@ -245,7 +245,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     let resolved: string;
     try { resolved = await w.resolveClass(loader, "SymbolicHelper", strand); } finally { strand.end(); }
     const winner = w.prog.require(resolved).byKey.get("value()I")!, winnerSlot = w.slotOf(winner);
-    await w.host.link(slot); await w.host.link(winnerSlot);
+    await w.tiers.linkSlot(slot); await w.tiers.linkSlot(winnerSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * winnerSlot, 1)[0] = HOT_BUDGET;
     const after = w.tiers.upgradeJob(slot);
     if (!after?.copies.includes(mid(winner)) || resolved !== helperKey && after.copies.includes(mid(helper))) throw new Error("promotion did not recheck the Java loader's winning helper");
