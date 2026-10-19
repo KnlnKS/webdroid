@@ -32,15 +32,16 @@ def("java/lang/Throwable.nativeFillInStackTrace()Ljava/lang/Object;", (cx, m, c)
 /** leaves the StackTraceElement[] of the frames the host recorded for the stack state in local `state` (null: none) */
 function emitFrames(cx: Compiler, c: Code, state: number): void {
   const STE = "java/lang/StackTraceElement", ctor = cx.prog.resolve(STE, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
-  const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref), e = c.newLocal(T.anyref);
+  const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref), frames = c.newLocal(T.externref);
   if (!ctor) { cx.gap(c, "StackTraceElement.<init>"); return; }
-  c.lget(state).externConvertAny().call(cx.imp.stFrames).lset(n);
+  // the frames stay this code's own while the constructor runs Java
+  c.lget(state).externConvertAny().call(cx.imp.stFrames).ltee(frames).call(cx.imp.len).lset(n);
   cx.emitNewArray(c, "[L" + STE + ";", () => c.lget(n)); c.lset(arr);
+  const text = (which: number) => { c.lget(frames).lget(i).i32(which).call(cx.imp.stString); cx.str.fromHost(c); };
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
-  cx.emitEnsure(c, STE); cx.emitNew(c, STE); c.lset(e);
-  c.lget(e).lget(i).i32(0).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(1).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(2).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).call(cx.imp.stLine);
-  cx.callMethod(c, ctor);
-  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i).lget(e).arraySet(cx.tData.ref);
+  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i);
+  cx.construct(c, ctor, () => { text(0); text(1); text(2); c.lget(frames).lget(i).call(cx.imp.stLine); });
+  c.arraySet(cx.tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(arr);
 }
 // Throwable.nativeGetStackTrace(state): the frames the host recorded for the state, as StackTraceElement(class, method, file, line)

@@ -152,7 +152,6 @@ export class World {
   private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) };
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
-  private frames: JavaFrame[] = [];
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
   absent = new Map<string, Set<number>>();
@@ -224,7 +223,8 @@ export class World {
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
       annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(this, kind, a, b, filter), null),
       proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
-      net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
+      net: (node: unknown, family: number, flags: number) => opts.net ? opts.net(this, this.hostString(node) as string, family, flags) : ASYNC,
+      netByte: (found: number[][], i: number, j: number) => j < 0 ? found[i].length : found[i][j],
       mhInvoke: (mh: object, args: object, site: string, exact: number) => {
         const value = mhInvoke(this, mh, args, site, exact);
         return park(value instanceof Promise ? value.then((v) => this.javaValue(v)) : this.javaValue(value), null);
@@ -255,13 +255,15 @@ export class World {
         const stack = deepStack();
         this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) ? this.javaStack(stack.stack ?? "") : stack);
       },
-      stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
+      stFrames: (state: object | null) => state ? this.stackTrace(state) : [],
       // a frame's class, method and the source file its class def names (null without one)
-      stString: (i: number, which: number) => {
-        const f = this.frames[i], c = which === 2 ? this.prog.get(f.cls.replace(/\./g, "/")) : undefined;
+      stString: (frames: JavaFrame[], i: number, which: number) => {
+        const f = frames[i], c = which === 2 ? this.prog.get(f.cls.replace(/\./g, "/")) : undefined;
         return which === 0 ? javaName(f.cls) : which === 1 ? f.method : c?.def && c.def.sourceFileIdx !== NO_INDEX ? c.dex!.string(c.def.sourceFileIdx) : null;
       },
-      stLine: (i: number) => this.frames[i].line,
+      stLine: (frames: JavaFrame[], i: number) => frames[i].line,
+      // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead
+      len: (answer: unknown[] | number) => typeof answer === "number" ? answer : answer.length,
     };
     this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();

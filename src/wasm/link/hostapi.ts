@@ -115,9 +115,9 @@ export interface NativeBinder {
   bridge(w: World): HostBridge;
 }
 
-/** answers `host.net` for libcore's getaddrinfo (inet.ts): an address count or minus an EAI code for a lookup, a byte of a found address */
+/** answers `host.net` for libcore's getaddrinfo (inet.ts): the addresses of `node`, minus an EAI code, or ASYNC while the relay looks it up */
 export interface HostNet {
-  (w: World, op: number, node: string, a: number, b: number): number;
+  (w: World, node: string, family: number, flags: number): number[][] | number;
   /** settles the lookup the last Resolve answered ASYNC for, after which the same Resolve answers it */
   wait?(w: World): Promise<void>;
 }
