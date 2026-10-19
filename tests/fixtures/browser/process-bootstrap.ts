@@ -99,11 +99,11 @@ export async function endpointOwnership() {
         const owner=callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods);
         try {
           const read=await owner.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1});
-          await owner.endpoint.fileDescriptor({kind:"pwrite",fd:right.descriptor,offset:0,bytes:Uint8Array.of(77)});
+          await owner.endpoint.fileDescriptor({kind:"write",fd:right.descriptor,offset:0,bytes:Uint8Array.of(77)});
           await owner.endpoint.fileDescriptor({kind:"seek",fd:right.descriptor,offset:0,whence:0});
           const stage=await owner.endpoint.fileDescriptor({kind:"stage",fd:right.descriptor});
           await owner.endpoint.fileDescriptor({kind:"close",fd:right.descriptor});
-          return {handled:read.bytes![0],data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage.result}]]}};
+          return {handled:(read as Uint8Array)[0],data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage}]]}};
         } finally {owner.close();}
       }
       entered(); return new Promise(() => {});
@@ -125,22 +125,22 @@ export async function endpointOwnership() {
       service:async(request)=>{
         if(request.intent?.bytes[0]===42){const reply=await broker.transact({handle:{pid:8001,id:1},code:2,flags:0,data:request.intent,caller:{pid:9999,uid:9999}});return {pid:reply.handled,id:clips};}
         if(request.intent?.bytes[0]===43){
-          fd=(await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.two/fd.bin',flags:2})).result;
+          fd=(await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.two/fd.bin',flags:2})).token;
           const foreign=await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.one/fd.bin',flags:2});
-          await broker.fileDescriptor({kind:'pwrite',fd,bytes:Uint8Array.of(55),offset:0});
-          return {pid:fd,id:foreign.result};
+          await broker.fileDescriptor({kind:'write',fd,bytes:Uint8Array.of(55),offset:0});
+          return {pid:fd,id:foreign};
         }
-        if(request.intent?.bytes[0]===44){const reply=await broker.fileDescriptor({kind:'pread',fd,length:1,offset:0});return {pid:reply.bytes?.[0]??-1,id:reply.result};}
+        if(request.intent?.bytes[0]===44){const reply=await broker.fileDescriptor({kind:'read',fd,length:1,offset:0});return {pid:reply[0]??-1,id:reply.length};}
         if(request.intent?.bytes[0]===45){
           const stage=await broker.fileDescriptor({kind:'stage',fd});
-          const reply=await broker.transact({handle:{pid:8001,id:1},code:3,flags:0,data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage.result}]]}});
+          const reply=await broker.transact({handle:{pid:8001,id:1},code:3,flags:0,data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage}]]}});
           received=reply.data.objects[0][1].descriptor;
           const read=await broker.fileDescriptor({kind:'read',fd:received,length:1});
           const position=await broker.fileDescriptor({kind:'seek',fd,offset:0,whence:1});
           await broker.fileDescriptor({kind:'close',fd});
-          return {pid:read.bytes[0],id:position.result};
+          return {pid:read[0],id:position};
         }
-        if(request.intent?.bytes[0]===46){const read=await broker.fileDescriptor({kind:'pread',fd:received,length:1,offset:0});await broker.fileDescriptor({kind:'close',fd:received});return {pid:read.bytes[0],id:read.result};}
+        if(request.intent?.bytes[0]===46){const read=await broker.fileDescriptor({kind:'read',fd:received,length:1,offset:0});await broker.fileDescriptor({kind:'close',fd:received});return {pid:read[0],id:read.length};}
         if(request.intent?.bytes[0]===47){
           const live=await life.alive(8001),system=await life.alive(0),absent=await life.alive(9999);
           cancel=await life.watch(8001,()=>{deaths+=100;});cancel();
@@ -541,35 +541,36 @@ export async function storedClipboardRights() {
   try {
     const started=new Promise<void>(resolve=>ready=resolve),port=broker.brokerPort(8401);worker.postMessage({port},[port]);await started;
     await ask("fileMkdir",`/data/data/${pkg}`);
-    const fd=(await ask("fileDescriptor",{kind:"open",path,flags:0x42}) as {result:number}).result;
-    if(fd<0)throw new Error("Stored clipboard open failed: "+fd);
+    const opened=await ask("fileDescriptor",{kind:"open",path,flags:0x42}) as number|{token:number};
+    if(typeof opened==="number")throw new Error("Stored clipboard open failed: "+opened);
+    const fd=opened.token;
     await ask("fileDescriptor",{kind:"write",fd,bytes:Uint8Array.of(1,2,3,4)});
     await ask("fileDescriptor",{kind:"seek",fd,offset:0,whence:0});
-    const deniedStage=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const deniedStage=await ask("fileDescriptor",{kind:"stage",fd}) as number;
     const denied=await ask("pendingCreate",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:deniedStage}]]}) as {error?:string};
-    const retired=(await ask("fileDescriptor",{kind:"stat",fd:deniedStage}) as {result:number}).result < 0;
-    const staged=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const retired=typeof await ask("fileDescriptor",{kind:"stat",fd:deniedStage})==="number";
+    const staged=await ask("fileDescriptor",{kind:"stage",fd}) as number;
     const published=await ask("clipboardSet",{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string}|undefined;
     if(published?.error)throw new Error(published.error);
-    const candidate=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const candidate=await ask("fileDescriptor",{kind:"stage",fd}) as number;
     const failure=await ask("clipboardSet",{bytes:new Uint8Array(48),objects:[[0,{descriptor:candidate}],[24,{descriptor:-1}]]}) as {error?:string};
     const replacementRejected=failure.error==="Invalid retained Parcel descriptor" &&
-      (await ask("fileDescriptor",{kind:"stat",fd:candidate}) as {result:number}).result < 0;
+      typeof await ask("fileDescriptor",{kind:"stat",fd:candidate})==="number";
     const has=await reader.endpoint.clipboardHas(),reads:number[]=[];
     for(let i=0;i<2;i++) {
       const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
       if(!right || !("descriptor" in right))throw new Error("Missing retained clipboard right");
       imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
-      reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1})).bytes![0]);
+      reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1}) as Uint8Array)[0]);
     }
     worker.terminate();broker.fail(8401,"stored rights sender ended",NOT_CRASHED);
     const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
     if(!right || !("descriptor" in right))throw new Error("Retained clipboard lost on sender death");
     imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
-    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1})).bytes![0]);
+    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1}) as Uint8Array)[0]);
     await reader.endpoint.clipboardSet(null);
-    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:imported[0],length:1})).bytes![0]);
-    await reader.endpoint.fileDescriptor({kind:"pwrite",fd:imported[0],offset:0,bytes:Uint8Array.of(9)});
+    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:imported[0],length:1}) as Uint8Array)[0]);
+    await reader.endpoint.fileDescriptor({kind:"write",fd:imported[0],offset:0,bytes:Uint8Array.of(9)});
     return {has,cleared:!(await reader.endpoint.clipboardHas()),reads,backing:[...vfs.read(path)!],replacementRejected,pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
   } finally {
     for(const fd of imported)await reader.endpoint.fileDescriptor({kind:"close",fd});

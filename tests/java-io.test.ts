@@ -66,31 +66,34 @@ describe("file-descriptor", () => {
     try {
       javaSeekFd(fd,23,0);
       const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
-      expect((await call({kind:"take",fd:token})).result).toBe(0);
-      const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3}), a = acquired.result;
-      expect(a).toBeGreaterThan(0);
+      expect(await call({kind:"take",fd:token})).toBe(0);
+      const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3});
+      if (typeof acquired === "number") throw new Error(`mappingAcquire: ${acquired}`);
+      const a = acquired.lease;
       expect(await vcall(shared,"setProtect","(I)Z",1)).toBe(1);
-      expect((await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3})).result).toBe(-E.PERM);
-      const duplicate = (await call({kind:"dup",fd:token,cloexec:true})).result;
-      const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1}), b = alias.result;
-      expect(alias.mapping).toEqual({...acquired.mapping!,offset:1,length:4095,prot:1});
+      expect(await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3})).toBe(-E.PERM);
+      const duplicate = await kernel.duplicateTo(1002,token,1002);
+      const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1});
+      if (typeof alias === "number") throw new Error(`mappingAcquire: ${alias}`);
+      const b = alias.lease;
+      expect(alias).toEqual({lease:b,region:acquired.region,immutable:false});
       await vcall(shared,"close","()V");
       await call({kind:"close",fd:token});
       await call({kind:"close",fd:duplicate});
       expect(file.references).toBe(2);
-      expect((await call({kind:"mappingWrite",fd:a,offset:0,bytes:Uint8Array.of(8)})).result).toBe(1);
+      expect(await call({kind:"mappingWrite",lease:a,offset:0,bytes:Uint8Array.of(8)})).toBe(1);
       vfs.writeAt(file.content,1,Uint8Array.of(9));
-      expect([...(await call({kind:"mappingRead",fd:a,offset:0,length:2})).bytes!]).toEqual([8,9]);
-      expect([...(await call({kind:"mappingRead",fd:b,offset:0,length:1})).bytes!]).toEqual([9]);
+      expect(await call({kind:"mappingRead",lease:a,offset:0,length:2})).toEqual(Uint8Array.of(8,9));
+      expect(await call({kind:"mappingRead",lease:b,offset:0,length:1})).toEqual(Uint8Array.of(9));
       expect(file.pos).toBe(23);
-      expect((await call({kind:"mappingWrite",fd:b,offset:0,bytes:Uint8Array.of(7)})).result).toBe(-E.ACCES);
-      expect((await clients[0].fileDescriptor({kind:"mappingRead",fd:a,offset:0,length:1})).result).toBe(-E.BADF);
-      await call({kind:"mappingRelease",fd:a});
+      expect(await call({kind:"mappingWrite",lease:b,offset:0,bytes:Uint8Array.of(7)})).toBe(-E.ACCES);
+      expect(await clients[0].fileDescriptor({kind:"mappingRead",lease:a,offset:0,length:1})).toBe(-E.BADF);
+      await call({kind:"mappingRelease",lease:a});
       expect(file.references).toBe(1);
       kernel.close(1002);
       await new Promise(resolve => setTimeout(resolve,0));
       expect(file.references).toBe(0);
-      expect((await call({kind:"mappingRead",fd:b,offset:0,length:1})).result).toBe(-E.BADF);
+      expect(await call({kind:"mappingRead",lease:b,offset:0,length:1})).toBe(-E.BADF);
     } finally {
       await vcall(shared,"close","()V"); kernel.close(1001); kernel.close(1002);
     }
@@ -152,7 +155,7 @@ describe("file-descriptor", () => {
       await scall("android/system/Os","pwrite","(Ljava/io/FileDescriptor;[BIIJ)I",received,Int8Array.of(9),0,1,0n);
       expect([...vfs.read(path)!]).toEqual([9,2,3,4]);
       const rejected=await proxies[1].endpoint.fileDescriptor({kind:"stage",fd:-1});
-      await expect(StoredParcel.retain(kernel,1002,{bytes:new Uint8Array(),objects:[[0,{descriptor:rejected.result}]]})).rejects.toThrow("Invalid retained");
+      await expect(StoredParcel.retain(kernel,1002,{bytes:new Uint8Array(),objects:[[0,{descriptor:rejected}]]})).rejects.toThrow("Invalid retained");
     } finally {
       for(const pfd of recipients)await vcall(pfd,"close","()V");await stored?.close();
       descriptorTransport.calls=previous.calls;Object.assign(descriptorTransport,previous);proxies.forEach(proxy=>proxy.close());stops.forEach(stop=>stop());
@@ -249,24 +252,25 @@ describe("file-descriptor", () => {
     const proxies = channels.map(channel => callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
     const [a,b] = proxies.map(proxy => proxy.endpoint.fileDescriptor);
     try {
-      expect((await b({kind:"open",path,flags:2})).result).toBe(-E.ACCES);
-      const fd = (await a({kind:"open",path,flags:2})).result;
+      expect(await b({kind:"open",path,flags:2})).toBe(-E.ACCES);
+      const fd = (await a({kind:"open",path,flags:2}) as {token: number}).token;
       expect(await owner.receive(1001,fd,1002)).toBe(-E.BADF);
-      const copy = (await a({kind:"dup",fd,cloexec:true})).result;
-      expect((await a({kind:"fcntl",fd:copy,command:1,arg:0})).result).toBe(1);
-      expect((await a({kind:"fcntl",fd,command:1,arg:0})).result).toBe(0);
+      const copy = await owner.duplicateTo(1001,fd,1001);
+      await a({kind:"fcntl",fd:copy,command:2,arg:1});
+      expect(await a({kind:"fcntl",fd:copy,command:1,arg:0})).toBe(1);
+      expect(await a({kind:"fcntl",fd,command:1,arg:0})).toBe(0);
       const passed = await owner.duplicateTo(1001,copy,1002);
       expect(passed).toBeGreaterThan(0);
-      expect((await b({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(1));
-      expect((await a({kind:"read",fd,length:1})).bytes).toEqual(Uint8Array.of(2));
-      await b({kind:"pwrite",fd:passed,bytes:Uint8Array.of(9),offset:0});
-      expect((await a({kind:"pread",fd,length:2,offset:0})).bytes).toEqual(Uint8Array.of(9,2));
-      expect((await a({kind:"seek",fd:copy,offset:0,whence:1})).result).toBe(2);
+      expect(await b({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(1));
+      expect(await a({kind:"read",fd,length:1})).toEqual(Uint8Array.of(2));
+      await b({kind:"write",fd:passed,bytes:Uint8Array.of(9),offset:0});
+      expect(await a({kind:"read",fd,length:2,offset:0})).toEqual(Uint8Array.of(9,2));
+      expect(await a({kind:"seek",fd:copy,offset:0,whence:1})).toBe(2);
       await a({kind:"fcntl",fd:copy,command:4,arg:0x400});
-      expect((await b({kind:"fcntl",fd:passed,command:3,arg:0})).result & 0x400).toBe(0x400);
+      expect(await b({kind:"fcntl",fd:passed,command:3,arg:0}) & 0x400).toBe(0x400);
       await a({kind:"fcntl",fd,command:4,arg:0});
-      expect((await b({kind:"stat",fd})).result).toBe(-E.BADF);
-      const stagedLate = (await a({kind:"stage",fd})).result;
+      expect(await b({kind:"stat",fd})).toBe(-E.BADF);
+      const stagedLate = await a({kind:"stage",fd});
       const late = await owner.receive(1001,stagedLate,1002), channel = new MessageChannel();
       let enter!: () => void, release!: () => void, dispose!: () => void;
       const entered = new Promise<void>(resolve => { enter=resolve; });
@@ -278,22 +282,22 @@ describe("file-descriptor", () => {
       try {
         const result = pending.endpoint.reply().catch(() => -1);
         await entered;stop();release();await disposed;await result;
-        expect((await b({kind:"stat",fd:late})).result).toBe(-E.BADF);
+        expect(await b({kind:"stat",fd:late})).toBe(-E.BADF);
       } finally { release();pending.close();stop(); }
       owner.close(1001);
-      expect((await a({kind:"read",fd,length:1})).result).toBe(-E.BADF);
-      expect((await b({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(3));
+      expect(await a({kind:"read",fd,length:1})).toBe(-E.BADF);
+      expect(await b({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(3));
       await b({kind:"truncate",fd:passed,length:3});
-      expect((await b({kind:"stat",fd:passed})).stat?.size).toBe(3);
-      expect((await b({kind:"read",fd:passed,length:1})).result).toBe(0);
+      expect(await b({kind:"stat",fd:passed})).toMatchObject({size:3});
+      expect(await b({kind:"read",fd:passed,length:1})).toEqual(new Uint8Array(0));
       vfs.setAttributes(path,{uid:12345,gid:1078,mode:0o660});
       vfs.delete(path);
-      expect((await b({kind:"stat",fd:passed})).stat).toMatchObject({uid:12345,gid:1078,mode:0o100660,path:null});
-      await b({kind:"pwrite",fd:passed,bytes:Uint8Array.of(8),offset:0});
-      expect((await b({kind:"pread",fd:passed,length:1,offset:0})).bytes).toEqual(Uint8Array.of(8));
+      expect(await b({kind:"stat",fd:passed})).toMatchObject({uid:12345,gid:1078,mode:0o100660,path:null});
+      await b({kind:"write",fd:passed,bytes:Uint8Array.of(8),offset:0});
+      expect(await b({kind:"read",fd:passed,length:1,offset:0})).toEqual(Uint8Array.of(8));
       expect(vfs.exists(path)).toBe(false);
-      expect((await b({kind:"close",fd:passed})).result).toBe(0);
-      expect((await b({kind:"close",fd:passed})).result).toBe(-E.BADF);
+      expect(await b({kind:"close",fd:passed})).toBe(0);
+      expect(await b({kind:"close",fd:passed})).toBe(-E.BADF);
     } finally {
       owner.close(1001); owner.close(1002);
       proxies.forEach(proxy => proxy.close()); stops.forEach(stop => stop()); vfs.delete(path);
@@ -308,21 +312,21 @@ describe("file-descriptor", () => {
     vfs.mount(path,{size:4,read:async (offset,length) => { entered(); await waiting; return Uint8Array.of(1,2,3,4).slice(offset,offset+length); }});
     const a = owner.session(1001,() => 0), b = owner.session(1002,() => 0);
     try {
-      const fd = (await a.fileDescriptor({kind:"open",path,flags:0})).result;
+      const fd = (await a.fileDescriptor({kind:"open",path,flags:0}) as {token: number}).token;
       const passed = await owner.duplicateTo(1001,fd,1002);
-      const staged = (await a.fileDescriptor({kind:"stage",fd})).result;
+      const staged = await a.fileDescriptor({kind:"stage",fd});
       const read = a.fileDescriptor({kind:"read",fd,length:2});
       await started;
       const receive = owner.receive(1001,staged,1002);
       const position = b.fileDescriptor({kind:"seek",fd:passed,offset:0,whence:1});
-      const duplicate = b.fileDescriptor({kind:"dup",fd:passed,cloexec:false});
+      const duplicate = owner.duplicateTo(1002,passed,1002);
       owner.close(1001); release();
-      expect((await read).result).toBe(-E.BADF);
+      expect(await read).toBe(-E.BADF);
       expect(await receive).toBe(-E.BADF);
-      expect((await position).result).toBe(2);
-      const second = (await duplicate).result;
-      expect((await b.fileDescriptor({kind:"read",fd:second,length:1})).bytes).toEqual(Uint8Array.of(3));
-      expect((await b.fileDescriptor({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(4));
+      expect(await position).toBe(2);
+      const second = await duplicate;
+      expect(await b.fileDescriptor({kind:"read",fd:second,length:1})).toEqual(Uint8Array.of(3));
+      expect(await b.fileDescriptor({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(4));
     } finally { release(); owner.close(1001); owner.close(1002); vfs.delete(path); }
   });
 
@@ -396,7 +400,7 @@ describe("file-descriptor", () => {
         expect(await owner.receive(1002,right.descriptor,1001)).toBe(-E.BADF);
         const received=await owner.receive(1001,right.descriptor,1002);
         expect(received).toBeGreaterThan(0);
-        expect((await recipient.endpoint.fileDescriptor({kind:"fcntl",fd:received,command:1,arg:0})).result).toBe(1);
+        expect(await recipient.endpoint.fileDescriptor({kind:"fcntl",fd:received,command:1,arg:0})).toBe(1);
         expect(await owner.receive(1001,right.descriptor,1002)).toBe(-E.BADF);
         descriptorTransport.calls=()=>recipient.endpoint;
         incoming=await importParcel({...data,objects:[[data.objects[0]![0],{descriptor:received}]]});

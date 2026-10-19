@@ -31,9 +31,9 @@ export function processError(error: ProcessFailure): Error {
 const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
 
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
- *  this endpoint while the request that caused it is suspended. */
+ *  this endpoint while the request that caused it is suspended. `transfer` names what a result gives away. */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
-  onUndelivered?: (method: string, value: unknown) => void | Promise<void>): () => void {
+  onUndelivered?: (method: string, value: unknown) => void | Promise<void>, transfer?: (method: string, value: unknown) => Transferable[]): () => void {
   const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
   let closed = false;
   const close = (error?: ProcessFailure) => {
@@ -54,7 +54,7 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       note(Ev.Served, at);
       if (data.kind === "call") {
         if (closed) await onUndelivered?.(data.method,value);
-        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
+        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, transfer?.(data.method, value) ?? []); }
         catch (error) { await onUndelivered?.(data.method,value);throw error; }
       }
     } catch (error) {
