@@ -11,10 +11,8 @@ import { settleRemoteMaps } from "./mappings.ts";
 export const descriptorTransport: {
   calls?: () => DescriptorCalls;
   importCalls?: () => DescriptorCalls;
-  stageLocal?: (fd: number) => number;
-  takeLocal?: (token: number) => number;
-  unstageLocal?: (token: number) => Promise<number>;
-  discardLocal?: (token: number) => Promise<number>;
+  /** the page's own rights, which its kernel answers directly */
+  local?: DescriptorRights;
 } = {};
 
 /** An open file another realm owns: its position, flags and bytes live there, so every operation is a request. */
@@ -91,13 +89,13 @@ const kernelCalls = () => descriptorTransport.calls ?? descriptorTransport.impor
 export const processRights: DescriptorRights = {
   stage(fd) {
     const remote = openFd(fd)?.remote;
-    if (!remote) return descriptorTransport.stageLocal?.(fd) ?? null;
+    if (!remote) return descriptorTransport.local?.stage(fd) ?? null;
     // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
     const settled = settleRemoteMaps(), stage = () => remote.calls().fileDescriptor({kind:"stage",fd:remote.token});
     return settled ? settled.then(stage) : stage();
   },
   async take(token) {
-    if (descriptorTransport.takeLocal) return descriptorTransport.takeLocal(token);
+    if (descriptorTransport.local) return descriptorTransport.local.take(token);
     const calls = kernelCalls();
     if (!calls) return -E.BADF;
     const stat = await calls().fileDescriptor({kind:"stat",fd:token});
@@ -108,8 +106,9 @@ export const processRights: DescriptorRights = {
     return taken < 0 ? taken : installRemote(token,calls,stat.path ?? "",flags,(stat.mode & S_IFMT) === S_IFDIR,true);
   },
   discard(token, staged) {
-    const local = staged ? descriptorTransport.unstageLocal : descriptorTransport.discardLocal, calls = kernelCalls();
-    return local?.(token) ?? (calls ? calls().fileDescriptor({kind:staged ? "unstage" : "close",fd:token}) : Promise.resolve(-E.BADF));
+    const local = descriptorTransport.local, calls = kernelCalls();
+    if (local) return local.discard(token, staged);
+    return calls ? calls().fileDescriptor({kind:staged ? "unstage" : "close",fd:token}) : Promise.resolve(-E.BADF);
   },
 };
 

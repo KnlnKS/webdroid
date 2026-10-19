@@ -10,7 +10,7 @@ import { AccountStore, type AccountCalls } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
-import { asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
+import { asSystem, releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent, type ComponentRef } from "../android/intent.ts";
 import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
@@ -37,7 +37,7 @@ import type { CookieCalls } from "./cookie-access.ts";
 import type { LocationCalls } from "./location-access.ts";
 import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
 import type { FilePathCalls } from "./file-path.ts";
-import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
+import { FileDescriptors, type DescriptorCalls, type DescriptorRights } from "./file-descriptors.ts";
 import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import { PrivateFiles } from "./privatefiles.ts";
@@ -471,17 +471,15 @@ export class ProcessBroker {
       throw error;
     } finally { await this.discardDescriptors(callerPid,request.data,true); }
   }
-  stageDescriptor(pid: number, fd: number): number {
-    this.entry(pid);this.fileDescriptors.ensureReceiver(pid);
-    return this.fileDescriptors.stageLocal(pid,fd);
+  /** the descriptor rights of `pid`, a process in this realm: staging and taking need it alive, discarding does not */
+  descriptorRights(pid: number): DescriptorRights {
+    const rights = this.fileDescriptors.rights(pid);
+    return {...rights,
+      stage: fd => { this.entry(pid);this.fileDescriptors.ensureReceiver(pid);return rights.stage(fd); },
+      take: token => { this.entry(pid);return rights.take(token); }};
   }
-  takeDescriptor(pid: number, token: number): number {
-    this.entry(pid);return this.fileDescriptors.takeLocal(pid,token);
-  }
-  unstageDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,true); }
-  discardDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,false); }
-  async discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
-    await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? this.fileDescriptors.discard(pid,object.descriptor,staged) : undefined));
+  discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
+    return releaseRights(data,this.fileDescriptors.rights(pid),staged);
   }
   async transferDescriptors(from: number, to: number, data: ParcelData, broker = false): Promise<ParcelData> {
     this.entry(from);if (!broker) this.entry(to);this.fileDescriptors.ensureReceiver(to);

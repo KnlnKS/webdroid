@@ -189,10 +189,7 @@ export function connectProcess(): ProcessEndpoint {
   connectCommandTransports();
   connectActivityCommands();
   broker.files.attach(PROCESS_PID, vfs);
-  descriptorTransport.stageLocal = fd => broker.stageDescriptor(PROCESS_PID,fd);
-  descriptorTransport.takeLocal = token => broker.takeDescriptor(PROCESS_PID,token);
-  descriptorTransport.unstageLocal = token => broker.unstageDescriptor(PROCESS_PID,token);
-  descriptorTransport.discardLocal = token => broker.discardDescriptor(PROCESS_PID,token);
+  descriptorTransport.local = broker.descriptorRights(PROCESS_PID);
   useNotificationStore(broker.notifications);
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);

@@ -208,8 +208,7 @@ test("foreground broker retains transferred rights after sender death and reject
   let recipient: JObj | undefined;
   try {
     descriptorTransport.calls = () => client.endpoint;
-    descriptorTransport.stageLocal = fd => broker.stageDescriptor(7701, fd);
-    descriptorTransport.unstageLocal = token => broker.unstageDescriptor(7701, token);
+    descriptorTransport.local = broker.descriptorRights(7701);
     notificationTransport.foreground = client.endpoint.notificationForeground;
     grantPermissions(["android.permission.POST_NOTIFICATIONS"]);
     await vcall(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("brokerfd", "Broker FD", 3));
