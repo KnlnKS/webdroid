@@ -33,20 +33,19 @@ export function loadTier(): Promise<void> {
   return loading ??= import("../wasm/host/boot.ts").then(async (host) => { backend = await host.bootWasmTier(); });
 }
 
-/** a process Worker's Wasm modules come from the page's store of the platform build: the page serves the port, the Worker uses it */
-export function serveAot(port: MessagePort): void {
-  void import("../wasm/host/boot.ts").then((host) => host.serveAot(port));
+/** how a process Worker's tier reaches the page's: the page's store of the platform build, its compile host (wasm/host/compilehost.ts),
+ *  which starts the compile workers, and its warm Worker, which compiles the build code launches are about to run */
+export type TierPorts = { aot: MessagePort; compile: MessagePort; warm: MessagePort };
+/** the page serves a new process Worker's tier ports: their Worker ends, and closing the page's */
+export function serveTierPorts(): { ports: TierPorts; close(): void } {
+  const aot = new MessageChannel(), compile = new MessageChannel(), warm = new MessageChannel();
+  void import("../wasm/host/boot.ts").then((host) => { host.serveAot(aot.port1); host.serveWarm(warm.port1); });
+  void import("../wasm/host/compilehost.ts").then((host) => host.serveCompileWorkers(compile.port1));
+  // the warm Worker took its end
+  return { ports: { aot: aot.port2, compile: compile.port2, warm: warm.port2 }, close: () => { aot.port1.close(); compile.port1.close(); } };
 }
-/** and the page's compile host (wasm/host/compilehost.ts) starts its compile workers */
-export function serveCompileWorkers(port: MessagePort): void {
-  void import("../wasm/host/compilehost.ts").then((host) => host.serveCompileWorkers(port));
-}
-/** and the page's warm Worker compiles the build code its launches are about to run */
-export function serveWarm(port: MessagePort): void {
-  void import("../wasm/host/boot.ts").then((host) => host.serveWarm(port));
-}
-export async function usePagePorts(aot: MessagePort, compile: MessagePort, warm: MessagePort): Promise<void> {
-  (await import("../wasm/host/boot.ts")).usePagePorts(aot, compile, warm);
+export async function useTierPorts(ports: TierPorts): Promise<void> {
+  (await import("../wasm/host/boot.ts")).useTierPorts(ports);
 }
 
 /** the Wasm tier begins preparing the app's code from its dex files before they are loaded */

@@ -17,7 +17,7 @@ const post = (status: ProcessWorkerStatus) => globalThis.postMessage(status);
 let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
-async function prepare({ clock, aot, jars, compile, warm }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
+async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
@@ -26,7 +26,7 @@ async function prepare({ clock, aot, jars, compile, warm }: Extract<ProcessWorke
     import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
-  await tier.usePagePorts(aot, compile, warm);
+  await tier.useTierPorts(ports);
   const runtime = Promise.all([skia.loadSkia(), tier.loadTier()]);
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package

@@ -7,7 +7,7 @@ import type { WorkerControl } from "./worker-control.ts";
 import type { WorkerTerminal } from "./worker-diagnostics.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
-import { serveAot, serveCompileWorkers, serveWarm } from "../jvm/tier.ts";
+import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
 import type { PackageRecord } from "../android/packages.ts";
 import { is64BitPackage } from "../jvm/natives/jvmruntime.ts";
@@ -23,7 +23,7 @@ import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 
 /** what the page posts a process Worker: its prestart once spawned, the display's rate once
  *  measured, and its one start */
-export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: MessagePort }
+export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts }
   | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 /** what a process Worker posts the page once its start succeeds or fails */
 export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
@@ -41,15 +41,12 @@ function workerUrl(pid: number, wide: boolean): string {
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */
 function spawn(pid: number, wide: boolean): SpareWorker {
   const url = workerUrl(pid, wide), worker = new Worker(url, { type: "module" });
-  const clock = createGuestClockPort(pid), aot = new MessageChannel(), jars = new MessageChannel(), compile = new MessageChannel(), warm = new MessageChannel();
-  serveAot(aot.port1);
+  const clock = createGuestClockPort(pid), jars = new MessageChannel(), tier = serveTierPorts();
   sendPlatformJars(jars.port1);
-  serveCompileWorkers(compile.port1);
-  serveWarm(warm.port1);
-  const spare: SpareWorker = { pid, url, worker, release: () => { clock.close(); aot.port1.close(); compile.port1.close(); } };
+  const spare: SpareWorker = { pid, url, worker, release: () => { clock.close(); tier.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
-  post(worker, { kind: "prestart", clock: clock.data, aot: aot.port2, jars: jars.port2, compile: compile.port2, warm: warm.port2 },
-    [aot.port2, jars.port2, compile.port2, warm.port2, ...clock.data.port ? [clock.data.port] : []]);
+  post(worker, { kind: "prestart", clock: clock.data, jars: jars.port2, tier: tier.ports },
+    [jars.port2, ...Object.values(tier.ports), ...clock.data.port ? [clock.data.port] : []]);
   // the zygote it runs reads the display's rate
   void displayRate().then(() => post(worker, { kind: "rate", rate: device.refreshRate }));
   return spare;

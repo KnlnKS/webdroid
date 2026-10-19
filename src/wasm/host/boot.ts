@@ -7,7 +7,7 @@ import { rt } from "../../jvm/runtime.ts";
 import type { Entry } from "../../jvm/natives/jentry.ts";
 import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import { appArchives } from "../../jvm/natives/jdex.ts";
-import type { TierBackend } from "../../jvm/tier.ts";
+import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex.ts";
 import { centralDir, entryBytes } from "../../jvm/natives/jzip.ts";
 import { vfs } from "../../shell/vfs.ts";
@@ -261,7 +261,7 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
 let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined, warmPort: MessagePort | undefined;
 /** a process Worker's store takes its modules from the page's (`serveAot`), the page's compile host starts its compile workers, and the page's warm Worker
  *  compiles the build code its launch is about to run (`serveWarm`) */
-export function usePagePorts(aot: MessagePort, compile: MessagePort, warm: MessagePort): void {
+export function useTierPorts({ aot, compile, warm }: TierPorts): void {
   aotPort = aot; compileHost = compile; warmPort = warm;
   warm.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
 }
