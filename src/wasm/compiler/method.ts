@@ -18,6 +18,8 @@ import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo.ts";
 import { emitRestored, FUEL } from "./hostcalls.ts";
 import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
+/** what an invoke names: its kind without /range, the method's name and descriptor, the class whose methods it searches, and the resolved target */
+type InvokeSite = { kind: string; name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
 const NONE: readonly string[] = [];
@@ -380,18 +382,27 @@ export class MC {
     return r;
   }
   private resolveCallee(ins: Ins): MethodInfo | null | "dynamic" {
-    const cx = this.cx, dex = this.dex, kind = ins.name.replace("/range", "");
-    if (kind === "invoke-custom" || kind === "invoke-polymorphic") return "dynamic";
-    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), decl = declared[0] === "[" ? "java/lang/Object" : declared;
-    if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return null;
-    const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
-    if (failed(target)) return null;
+    if (ins.op >= 0xfa) return "dynamic"; // invoke-polymorphic, invoke-custom
+    const { kind, decl, name, target } = this.invoke(ins);
+    if (target === "clone" || failed(target)) return null;
     if (kind === "invoke-static") return target;
-    if (kind === "invoke-direct" && decl === STRING && mr.name === "<init>") return "dynamic";
+    if (kind === "invoke-direct" && decl === STRING && name === "<init>") return "dynamic";
     if (kind === "invoke-direct" || kind === "invoke-super") return target;
-    const only = cx.devirt(decl, mr.name, target.desc);
-    this.virtuals.set(ins.pc, [decl, mr.name, target.desc]);
+    const only = this.cx.devirt(decl, name, target.desc);
+    this.virtuals.set(ins.pc, [decl, name, target.desc]);
     return only === "many" ? "dynamic" : only;
+  }
+  private invokes = new Map<number, InvokeSite>();
+  /** the reference of an invoke other than invoke-polymorphic and invoke-custom, and what it resolves to, read once per site */
+  private invoke(ins: Ins): InvokeSite {
+    let s = this.invokes.get(ins.pc);
+    if (s) return s;
+    const dex = this.dex, kind = ins.name.replace("/range", ""), mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls);
+    // an array's methods are Object's, except clone, which copies the array
+    const decl = declared[0] === "[" ? "java/lang/Object" : declared;
+    const target = declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;" ? "clone" : this.invokeTarget(ins.b, kind, declared, mr.name, desc);
+    this.invokes.set(ins.pc, s = { kind, name: mr.name, desc, decl, target });
+    return s;
   }
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
@@ -694,12 +705,12 @@ export class MC {
     if (this.deferredSite(ins)) return undefined;
     if (ins.op === 0x22) { const name = this.dex.typeName(ins.b); return name === STRING ? undefined : name; }
     if (ins.op <= 0x6d) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
-    const mr = this.dex.method(ins.b), decl = this.dex.typeName(mr.cls);
-    return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
+    const { target } = this.invoke(ins);
+    return target === "clone" || failed(target) ? undefined : target.cls;
   }
   isStringInit(ins: Ins): boolean {
-    const mr = this.dex.method(ins.b);
-    return mr.name === "<init>" && this.dex.typeName(mr.cls) === STRING;
+    const { decl, name } = this.invoke(ins);
+    return name === "<init>" && decl === STRING;
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   definesNonNull(ins: Ins, f: Facts): boolean {
@@ -1035,25 +1046,21 @@ export class MC {
     return nx?.pc === pc && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
-    const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
-    const kind = ins.name.replace("/range", "");
-    if (kind === "invoke-custom") return emitCustom(this, ins);
-    if (kind === "invoke-polymorphic") return emitPolymorphic(this, ins);
-    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), key = mr.name + desc;
-    // an array's methods are Object's, except clone, which copies the array
-    const decl = declared[0] === "[" ? "java/lang/Object" : declared;
-    const p = dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+    const cx = this.cx, c = this.code, prog = cx.prog;
+    if (ins.op >= 0xfc) return emitCustom(this, ins);
+    if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
+    const { kind, name, desc, decl, target } = this.invoke(ins);
+    const p = this.dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     const isStatic = kind === "invoke-static";
     const sigIdx = () => cx.descSig(desc, isStatic);
-    if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
-    const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
+    if (target === "clone") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
     const site = this.sites.has(String(ins.pc));
     if (site) this.enterSite();
     const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (isStatic) {
       this.ensure(target.cls); pushArgs(this, ins, p.params, 0); cx.callMethod(c, target);
-    } else if (kind === "invoke-direct" && decl === STRING && mr.name === "<init>") {
+    } else if (kind === "invoke-direct" && decl === STRING && name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
       pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
