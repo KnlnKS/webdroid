@@ -685,7 +685,7 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
     const built = cx.buildUnit(methods, job.copies.map(id => methodOf(w.prog, id)!), true);
     return () => owner.install(methods.map(m => w.slotOf(m)), true, cx, owner.unitImports(cx), built, slot, clock);
   };
-  const state = (w: ReturnType<typeof world>, slot: number) => w.peek(slot) as { pending?: boolean; hot?: boolean };
+  const state = (w: ReturnType<typeof world>, slot: number) => w.slots.peek(slot) as { pending?: boolean; hot?: boolean };
   const connect = (w: ReturnType<typeof world>) => {
     const requests: CompileRequest[] = [];
     const port: WorkerPort = { onmessage: null, onerror: null, postMessage(message) { requests.push(structuredClone(message) as CompileRequest); }, terminate() {} };
@@ -760,7 +760,7 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
           w.addDexes(loadDexes(late));
           check("busy refresh advances actual DEX epoch", w.epoch > epoch, true);
           check("late implementation invalidates actual guarded code", w.stats.invalidated > invalidated, true);
-          const invalidatedState = w.peek(slot);
+          const invalidatedState = w.slots.peek(slot);
           check("invalidated root requires relink", invalidatedState?.k === "method" && !invalidatedState.done, true);
         }
         const replacement = w.table.get(slot);

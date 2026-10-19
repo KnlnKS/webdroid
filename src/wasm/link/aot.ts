@@ -266,10 +266,10 @@ export class AotRuntime {
     if (w.seedPlatform((d) => mine.has(dexSig(d))) !== index.classes) return undefined;
     for (const name of index.extraNames) w.idOf(name);
     for (const t of index.tail) {
-      if (typeof t === "string") w.reserveSynth(t);
+      if (typeof t === "string") w.slots.reserveSynth(t);
       else {
         if ((w.prog.get(t[0])?.methods.length ?? 0) + 1 !== t[1]) return undefined;
-        a.reservedBases.set(t[0], w.addBlock(t[0], t[1]));
+        a.reservedBases.set(t[0], w.slots.addBlock(t[0], t[1]));
       }
     }
     index.selectors.forEach((k) => w.selectorId(k));
@@ -283,7 +283,7 @@ export class AotRuntime {
     const built = new Set(index.intrinsics), now = new Set(w.opts.intrinsics.keys());
     for (const id of [...now].filter((k) => !built.has(k)).concat(index.intrinsics.filter((k) => !now.has(k)))) {
       const dot = id.indexOf("."), cls = w.numbers.ids.get(id.slice(0, dot)), m = w.prog.get(id.slice(0, dot))?.byKey.get(id.slice(dot + 1));
-      if (m && cls !== undefined && cls <= a.nSeeded) a.overridden.add(w.blockBase[cls - 1] + m.index);
+      if (m && cls !== undefined && cls <= a.nSeeded) a.overridden.add(w.slots.blockBase[cls - 1] + m.index);
     }
     a.platformMarks = w.numbers.marks();
     return a;
@@ -331,7 +331,7 @@ export class AotRuntime {
     if (fresh && !w.adopt(app.prefix)) { this.appRejected = "prefix not adopted"; return false; }
     if (!sameMarks(w.numbers.marks(), app.base) || !w.adopt(app.numbering)) { this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
-    const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
+    const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1);
     cOf.set(this.cOf);
     this.appFrom = this.cState.length;
     for (const [block, module] of app.cOf) cOf[block] = this.appFrom + module;
@@ -353,7 +353,7 @@ export class AotRuntime {
   /** the slots of a class compiled on demand although the build numbered it: those the build gave it */
   reservedBase(name: string): number | undefined {
     const id = this.w.numbers.ids.get(name);
-    return this.reservedBases.get(name) ?? (id !== undefined && id <= this.nSeeded ? this.w.blockBase[id - 1] : undefined);
+    return this.reservedBases.get(name) ?? (id !== undefined && id <= this.nSeeded ? this.w.slots.blockBase[id - 1] : undefined);
   }
 
   // ---- loading
@@ -363,12 +363,12 @@ export class AotRuntime {
     if (id === undefined || this.building && id > this.nSeeded) return undefined;
     let base: number, g = 0, app: number | undefined;
     const reserved = this.reservedBases.get(name);
-    if (id <= this.nSeeded) { base = w.blockBase[id - 1]; g = (this.building ? this.dGroupOf : this.dOf)[id - 1]; }
+    if (id <= this.nSeeded) { base = w.slots.blockBase[id - 1]; g = (this.building ? this.dGroupOf : this.dOf)[id - 1]; }
     else if (reserved !== undefined) { base = reserved; g = this.building ? this.dKeys.length : this.index.extraGroup; }
     else {
       // a class the app build gave a data module to
-      const slots = w.preassigned.get(name);
-      app = slots === undefined ? undefined : this.appDOf.get(w.blockOf(slots));
+      const slots = w.slots.preassigned.get(name);
+      app = slots === undefined ? undefined : this.appDOf.get(w.slots.blockOf(slots));
       if (slots === undefined || app === undefined) return undefined;
       base = slots;
     }
@@ -416,7 +416,7 @@ export class AotRuntime {
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
     if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
     w.instantiate(mod, imports);
-    for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
+    for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined && !w.slots.isStubbed(slot)) w.slots.holdsSynth(n, slot); }
     for (const cls of head.allocs) w.allocated.add(cls);
     this.synthState.set(file, LIVE);
     return true;
@@ -456,12 +456,12 @@ export class AotRuntime {
 
   /** the host implements `m`: the build's code for it is not to be used */
   override(m: MethodInfo): void {
-    const base = this.reservedBase(m.cls) ?? this.w.preassigned.get(m.cls);
+    const base = this.reservedBase(m.cls) ?? this.w.slots.preassigned.get(m.cls);
     if (base !== undefined) this.overridden.add(base + m.index);
   }
   /** whether a loaded code module or app patch installed the method of `slot` */
   installed(slot: number): boolean {
-    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (c >= 0 && this.cState[c] === LIVE && this.has(c, slot)) return true;
     for (const p of this.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
     return false;
@@ -469,12 +469,12 @@ export class AotRuntime {
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
   /** whether a code module of the build holds `slot`'s class, which its first call loads */
   holds(slot: number): boolean {
-    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     return c >= 0 && this.cState[c] !== DEAD;
   }
   /** the loaded code module that holds `slot`'s code, or -1 */
   loadedFrom(slot: number): number {
-    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     return c >= 0 && this.cState[c] === LIVE && this.has(c, slot) ? c : -1;
   }
   /** whether the attached app build has `slot`'s code loaded */
@@ -482,7 +482,7 @@ export class AotRuntime {
   private preparation = new Map<number, Promise<void>>();
   private prepared = new Set<number>();
   private preparationModule(slot: number): number {
-    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1;
+    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1;
     return !this.store?.prefetch || this.building || this.w.opts.compileOnly || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
   }
   private preparationFiles(c: number): string[] {
@@ -533,7 +533,7 @@ export class AotRuntime {
   }
   /** the first call of a method the build compiled: loads its code module. Whether the method is installed afterwards is in its slot. */
   install(slot: number): boolean {
-    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (!(c >= 0)) return false;
     let loaded = this.loadC(c);
     // App patches can remain valid when their platform unit is rejected.
@@ -554,7 +554,7 @@ export class AotRuntime {
     const absent = new Set(head.absent);
     if (this.overriddenSeen !== this.overridden.size) {
       this.overriddenBy.clear();
-      for (const slot of this.overridden) { const m = this.cOf[w.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
+      for (const slot of this.overridden) { const m = this.cOf[w.slots.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
       this.overriddenSeen = this.overridden.size;
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
@@ -571,8 +571,8 @@ export class AotRuntime {
     const t2 = performance.now();
     // slots made before the module was loaded say it is not there; the rest are made from the module's state
     for (const b of head.classes) {
-      const base = w.blockBase[b], n = w.methodsIn(b);
-      for (let i = 0; i < n; i++) { const s = w.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
+      const base = w.slots.blockBase[b], n = w.slots.methodsIn(b);
+      for (let i = 0; i < n; i++) { const s = w.slots.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
     }
     for (const cls of head.allocs) w.allocated.add(cls);
     // a site that fails because a class was not there is undone if it is now
@@ -601,9 +601,9 @@ export class AotRuntime {
   trace(name: string): FnTrace | undefined {
     const w = this.w, m = methodOf(w.prog, name);
     if (!m) return undefined;
-    const base = this.reservedBase(m.cls) ?? w.preassigned.get(m.cls);
+    const base = this.reservedBase(m.cls) ?? w.slots.preassigned.get(m.cls);
     if (base === undefined) return undefined;
-    const c = this.cOf[w.blockOf(base)];
+    const c = this.cOf[w.slots.blockOf(base)];
     if (c < 0) return undefined;
     // a patch of the module has the code of the methods it replaced
     for (const module of [...this.patchesOver.get(c) ?? [], c]) {

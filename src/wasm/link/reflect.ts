@@ -78,7 +78,7 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
 }
 
 export function methodAt(w: World, slot: number): MethodInfo {
-  const entry = w.slotAt(slot);
+  const entry = w.slots.at(slot);
   if (entry?.k !== "method") throw new Error(`invalid executable slot ${slot}`);
   return entry.m;
 }

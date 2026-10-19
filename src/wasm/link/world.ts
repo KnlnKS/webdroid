@@ -40,6 +40,7 @@ import { AotRuntime, VERSION, type AotBuild, type AotStore, type AppIndex } from
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import type { UnitResult, UpgradeJob } from "./unit.ts";
 import { HotUnits } from "./hotunits.ts";
+import { SlotTable } from "./slots.ts";
 import { emitRestored, Sync, ROOT } from "../compiler/hostcalls.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
@@ -89,8 +90,6 @@ export interface ClassRt { name: string; id: number; mod: string; slotBase: numb
 /** a lazy-link stub's signature, its name where a class module imports it */
 const stubKey = (k: Kinds) => k.params.join("") + ":" + k.ret;
 const kindsType = (mb: ModuleBuilder, k: Kinds) => mb.addFuncType(k.params.map((p) => kindVT(p)), k.ret === "V" ? [] : [kindVT(k.ret)]);
-type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean } | { k: "thrower"; name: Thrower; done: boolean }
-  | { k: "synth"; name: string; d?: Synth; done: boolean } | { k: "ensure"; done?: boolean };
 /** what ensure()'s body uses of the module it is compiled into (World.emitEnsure) */
 interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
 /** the vtable words of a class module above which its start function makes the vtables (World.classModule) */
@@ -141,11 +140,7 @@ export class World {
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
   stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0 };
-  private slots: (Slot | undefined)[] = [];
-  /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
-  blockBase: number[] = [];
-  private blockSize: number[] = [];
-  blockClass: string[] = [];
+  readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
   private classes = new Map<string, ClassRt>();
   /** what this World built because no saved code had it: the methods compiled at their first call and the classes whose modules it made, in order (an app build made later includes them) */
   readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], infos: [] as InfoRecord[] };
@@ -172,14 +167,9 @@ export class World {
   private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; callee: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void; nop: Function };
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
-  private synth = new Map<string, number>();
-  /** the synthetic functions whose stub module exists */
-  private stubbed = new Set<number>();
   aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
-  /** the blocks of classes a replayed numbering (`adopt`) gave slots before their modules were made */
-  preassigned = new Map<string, number>();
   /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
   epoch = 0;
   private touching: Set<string> | null = null;
@@ -214,12 +204,12 @@ export class World {
         try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
       }),
       hot: (slot: number) => this.upgrade(slot),
-      long: (slot: number) => { const s = this.slotAt(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
+      long: (slot: number) => { const s = this.slots.at(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
       info: (kind: number, a: number, b: number) => {
-        const synths = this.synth.size, answer = hostInfo(this, kind, a, b);
-        if (this.synth.size !== synths && !opts.compileOnly) this.demand.infos.push(infoRecord(this, kind, a, b));
+        const synths = this.slots.synthCount, answer = hostInfo(this, kind, a, b);
+        if (this.slots.synthCount !== synths && !opts.compileOnly) this.demand.infos.push(infoRecord(this, kind, a, b));
         return answer;
       },
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
@@ -268,7 +258,6 @@ export class World {
       // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead
       len: (answer: unknown[] | number) => typeof answer === "number" ? answer : answer.length,
     };
-    this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host.annotationWait = this.sched.settle();
@@ -300,7 +289,7 @@ export class World {
   /** numbers what `n` numbered, in its order; false, and nothing changed, unless this World has numbered exactly what `n` started from */
   adopt(n: Numbering): boolean {
     if (!this.numbers.adopt(n)) return false;
-    for (const t of n.tail) if (typeof t === "string") this.reserveSynth(t); else this.preassigned.set(t[0], this.addBlock(t[0], t[1]));
+    this.slots.replay(n.tail);
     return true;
   }
   /** forgets what was numbered after `m` (a compile worker drops the numbering of a unit its caller did not take) */
@@ -308,17 +297,8 @@ export class World {
     this.rt.unsafeSlots.value = null;
     const { names, tail } = this.numbers.rollback(m);
     for (const name of names) this.classes.delete(name);
-    let top = this.slots.length;
-    for (const t of tail.reverse()) {
-      if (typeof t === "string") {
-        top = this.synth.get(t)!;
-        this.synth.delete(t); this.stubbed.delete(top);
-      } else {
-        top = this.blockBase.pop()!; this.blockSize.pop(); this.blockClass.pop();
-        this.preassigned.delete(t[0]); this.classes.delete(t[0]);
-      }
-    }
-    this.slots.length = top;
+    for (const t of tail) if (typeof t !== "string") this.classes.delete(t[0]);
+    this.slots.rollback(tail);
   }
   /** the classes (and, as "!name", runtime functions) whose slots code made between `beginTouch` and `endTouch` names: they need their stubs before the code runs */
   beginTouch(): void { this.touching = new Set(); }
@@ -330,38 +310,9 @@ export class World {
     for (const c of this.prog.all()) {
       if (!c.dex || !accept(c.dex)) continue;
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
-      this.addBlock(c.name, methodCount(c) + 1); n++;
+      this.slots.addBlock(c.name, methodCount(c) + 1); n++;
     }
     return n;
-  }
-  /** replays the reservation of a runtime function's slot (aot.ts) */
-  reserveSynth(name: string): void { this.synth.set(name, this.reserveSlots(1)); }
-  /** reserves the slots of a class: one per method and one for its `ensure` */
-  addBlock(name: string, size: number): number {
-    const base = this.reserveSlots(size);
-    this.blockBase.push(base); this.blockSize.push(size); this.blockClass.push(name);
-    return base;
-  }
-  /** the index of the class block that owns `slot` (platform classes come first, in id order), or -1 */
-  blockOf(slot: number): number {
-    let lo = 0, hi = this.blockBase.length - 1;
-    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.blockBase[m] <= slot) lo = m; else hi = m - 1; }
-    return lo < this.blockBase.length && slot >= this.blockBase[lo] && slot < this.blockBase[lo] + this.blockSize[lo] ? lo : -1;
-  }
-  /** how many methods the class of block `b` has (its `ensure` slot is the last of the block) */
-  methodsIn(b: number): number { return this.blockSize[b] - 1; }
-  /** the slot's entry, if it has been made */
-  peek(slot: number): Slot | undefined { return this.slots[slot]; }
-  /** the slot's entry; the slots of classes are made when first asked for */
-  slotAt(slot: number): Slot | undefined {
-    let s = this.slots[slot];
-    if (s) return s;
-    const b = this.blockOf(slot);
-    if (b < 0) return undefined;
-    const i = slot - this.blockBase[b];
-    if (i === this.blockSize[b] - 1) return this.slots[slot] = { k: "ensure" };
-    const m = methodAt(this.prog.get(this.blockClass[b])!, i)!;
-    return this.slots[slot] = { k: "method", m, done: !!this.aot?.installed(slot) };
   }
 
   // ---------- ids, selectors, vtable layout
@@ -499,42 +450,22 @@ export class World {
   }
 
   // ---------- slots
-  private reserveSlots(n: number): number {
-    const base = this.slots.length;
-    this.slots.length += n;
-    const have = this.table.length;
-    if (this.slots.length > have) this.table.grow(Math.max(this.slots.length - have, have));
-    return base;
-  }
   slotOf(m: MethodInfo): number { return this.link(m.cls).slotBase + m.index; }
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called;
    *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
   synthSlot(name: string, d: Synth, eager = false): number {
     this.touching?.add("!" + name);
-    let slot = this.synth.get(name);
-    if (slot === undefined) { this.numbers.reserve(name); this.synth.set(name, slot = this.reserveSlots(1)); }
-    if (this.stubbed.has(slot)) return slot;
-    this.stubbed.add(slot);
-    this.slots[slot] = { k: "synth", name, d, done: false };
+    const { slot, fresh } = this.slots.synthSlot(name);
+    if (!fresh) return slot;
+    const s = { k: "synth" as const, name, d, done: false };
+    this.slots.set(slot, s);
     if (this.aot?.building || this.opts.compileOnly) return slot;
     // the app build may hold its code, which its module puts in the slot
-    if (this.aot?.installSynth(name)) { (this.slots[slot] as { done: boolean }).done = true; return slot; }
+    if (this.aot?.installSynth(name)) { s.done = true; return slot; }
     if (eager) { this.linkSlot(slot); return slot; }
     this.table.set(slot, this.stubsFor([d])[0]);
     return slot;
-  }
-  /** the slot of synthetic function `name`, if it has one */
-  synthSlotOf(name: string): number | undefined { return this.synth.get(name); }
-  /** whether the synthetic function in `slot` has its stub or code */
-  isStubbed(slot: number): boolean { return this.stubbed.has(slot); }
-  /** records that the code of synthetic function `name` is in its slot */
-  holdsSynth(name: string, slot: number): void { this.stubbed.add(slot); this.slots[slot] = { k: "synth", name, done: true }; }
-  /** the synthetic functions of this World that have their descriptors, in numbering order: what a build makes code for */
-  synths(): { name: string; slot: number; d: Synth }[] {
-    const out: { name: string; slot: number; d: Synth }[] = [];
-    for (const [name, slot] of this.synth) { const s = this.slots[slot]; if (s?.k === "synth" && s.d) out.push({ name, slot, d: s.d }); }
-    return out.sort((a, b) => a.slot - b.slot);
   }
   /** asks again for the synthetic functions the hosts asked for in a World whose classes have other ids */
   replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
@@ -625,7 +556,7 @@ export class World {
     return Object.fromEntries(keys.map((key, i) => [key, fns[i]]));
   }
   /** puts the lazy-link stub back in `slot`, unless it holds code nothing here can stand in for */
-  restoreStub(slot: number, s = this.slotAt(slot)): boolean {
+  restoreStub(slot: number, s = this.slots.at(slot)): boolean {
     const k = s?.k === "method" ? methodKinds(s.m) : s?.k === "synth" ? s.d : s?.k === "thrower" ? { params: THROWERS[s.name].params, ret: "V" as const } : undefined;
     if (k) this.table.set(slot, this.stubsFor([k])[0]);
     return !!k;
@@ -676,7 +607,7 @@ export class World {
       params.forEach((_, i) => c.lget(i));
       const f = mb.addFunc(sig, c.i32(SLOT[name]).callIndirect(sig).finish(), "stub:" + name);
       mb.addElemActive(0, SLOT[name], [f]);
-      this.slots[SLOT[name]] = { k: "thrower", name, done: false };
+      this.slots.set(SLOT[name], { k: "thrower", name, done: false });
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, callee: x.callee, classId: x.classId, link: x.link, nop: x.nop };
@@ -695,8 +626,8 @@ export class World {
     if (aot) { this.classes.set(name, aot); this.repairVtable(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
-    if (slotBase === undefined) { this.numbers.reserve([name, methods.length + 1]); slotBase = this.addBlock(name, methods.length + 1); }
+    let slotBase = this.aot?.reservedBase(name) ?? this.slots.preassigned.get(name);
+    slotBase ??= this.slots.numberBlock(name, methods.length + 1);
     if (this.aot?.building || this.opts.compileOnly) {
       this.classes.set(name, rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
       return rt;
@@ -882,7 +813,7 @@ export class World {
   /** host.link: compile what `slot` stands for and put it in the table. A method is compiled alone, cheaply, and counts its calls and loop
    *  iterations; `upgrade` recompiles the hot ones with their small callees. */
   private linkSlot(slot: number): void {
-    const s = this.slotAt(slot);
+    const s = this.slots.at(slot);
     if (!s || s.done) return;
     if (s.k === "ensure") { this.linkEnsure(slot); return; }
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
@@ -906,7 +837,7 @@ export class World {
   private merging: number[][] = [];
   private mergeAt = MERGE_AT;
   private mergeable(g: number[]): boolean {
-    return g.every((at) => { const s = this.peek(at); return s?.k === "method" && s.done && !s.hot && !s.pending && this.groupOf.get(at) === g; });
+    return g.every((at) => { const s = this.slots.peek(at); return s?.k === "method" && s.done && !s.hot && !s.pending && this.groupOf.get(at) === g; });
   }
   /** the oldest loose units, merged into one module by a compile worker; the merged code calls through the table, so each method can be reset alone */
   mergeJob(): UpgradeJob | undefined {
@@ -920,7 +851,7 @@ export class World {
       if (this.mergeable(g)) { groups.push(g); size += g.length; }
     }
     this.loose.splice(0, n);
-    const units = groups.map((g) => g.map((at) => (this.peek(at) as { m: MethodInfo }).m)), refs = this.jobRefs(units), taken = new Set(refs.units);
+    const units = groups.map((g) => g.map((at) => this.slots.peekMethod(at)!.m)), refs = this.jobRefs(units), taken = new Set(refs.units);
     groups.forEach((g, i) => (taken.has(units[i]) ? this.merging : this.loose).push(g));
     this.accountCompilation(clock);
     // what is not ready waits for more units to be linked
@@ -940,7 +871,7 @@ export class World {
         if (this.needsSymbolicSite(c, ins)) continue;
         const mr = c.dex.method(ins.b), t = this.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
         if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) continue;
-        const at = this.slotOf(t), ts = this.slotAt(at);
+        const at = this.slotOf(t), ts = this.slots.at(at);
         if (ts?.k !== "method" || ts.done || ts.pending || this.aot?.install(at) && ts.done) continue;
         out.push(t);
       }
@@ -950,8 +881,8 @@ export class World {
   /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
   private linkEnsure(slot: number): void {
     this.settleInits();
-    const cls = this.blockClass[this.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
-    const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slotAt(at);
+    const cls = this.slots.blockClass[this.slots.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
+    const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slots.at(at);
     const own = clinit?.k === "method" && !clinit.done && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
     const cx = new Compiler(this);
     cx.shareHelpers();
@@ -971,7 +902,7 @@ export class World {
       if (!this.initialized(cls)) return true;
       done.push(this.table.get(slot) as Function);
       this.table.set(slot, this.rt.nop);
-      const s = at < 0 ? undefined : this.slotAt(at);
+      const s = at < 0 ? undefined : this.slots.at(at);
       if (s?.k === "method" && s.done && this.restoreStub(at, s)) { s.done = false; s.hot = false; this.groupOf.delete(at); this.hotUnits.forget(at); }
       return false;
     });
@@ -980,7 +911,7 @@ export class World {
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
     this.refreshHotUnits();
-    const s = this.slotAt(slot);
+    const s = this.slots.at(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
     this.requested.add(slot);
     // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
@@ -1007,7 +938,7 @@ export class World {
     }
     this.refused.delete(pick);
     if (pick !== slot) wait();
-    const m = (this.slotAt(pick) as { m: MethodInfo }).m, cx = new Compiler(this), { installed, copies } = this.group(m);
+    const m = this.slots.method(pick)!.m, cx = new Compiler(this), { installed, copies } = this.group(m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
     this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, clock);
@@ -1021,7 +952,7 @@ export class World {
   private refreshHotUnits(): void {
     if (!this.hotUnits.hasPending() || this.refreshing || this.opts.build || this.opts.compileOnly || this.opts.holdUpgrades?.()) return;
     for (const unit of this.hotUnits.pending()) {
-      const slot = unit.slots[0], s = this.peek(slot);
+      const slot = unit.slots[0], s = this.slots.peek(slot);
       if (!this.hotUnits.live(unit, this.table) || s?.k !== "method" || !s.done || !s.hot) { this.hotUnits.forget(slot); continue; }
       if (s.pending) continue;
       this.refreshing = true;
@@ -1035,7 +966,7 @@ export class World {
         const epoch = this.epoch;
         clock = this.unitClock();
         const cx = new Compiler(this);
-        const members = unit.slots.map(at => (this.peek(at) as { m: MethodInfo }).m);
+        const members = unit.slots.map(at => this.slots.peekMethod(at)!.m);
         const { installed, copies } = this.group(s.m, members);
         const built = cx.buildUnit(installed, copies, true);
         this.stats.units++; this.stats.methods += installed.length + copies.length;
@@ -1064,7 +995,7 @@ export class World {
     return found;
   }
   /** whether the method in `slot` runs first-tier code and no second-tier unit for it is on its way */
-  private waits(slot: number): boolean { const s = this.slotAt(slot); return s?.k === "method" && s.done && !s.hot && !s.pending; }
+  private waits(slot: number): boolean { const s = this.slots.at(slot); return s?.k === "method" && s.done && !s.hot && !s.pending; }
   private requested = new Set<number>();
   /** the methods refused a second-tier compile, longest waiting first, with how often */
   private refused = new Map<number, number>();
@@ -1080,10 +1011,10 @@ export class World {
   }
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
-    const s = this.slotAt(slot);
+    const s = this.slots.at(slot);
     const refresh = this.hotUnits.get(slot);
     if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.table)))) return undefined;
-    const clock = this.unitClock(), members = s.hot ? refresh!.slots.map(at => (this.peek(at) as { m: MethodInfo }).m) : undefined;
+    const clock = this.unitClock(), members = s.hot ? refresh!.slots.map(at => this.slots.peekMethod(at)!.m) : undefined;
     const { installed, copies } = this.group(s.m, members);
     const refs = this.jobRefs([[...installed, ...copies]]);
     this.accountCompilation(clock);
@@ -1133,11 +1064,10 @@ export class World {
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
-    const called = this.blockClass.filter((name, b) => { const n = this.prog.get(name)?.methods.length ?? 0; for (let i = 0; i < n; i++) if ((this.slots[this.blockBase[b] + i] as { done?: boolean } | undefined)?.done) return true; return false; });
-    return { linked: [...this.classes.keys()], called };
+    return { linked: [...this.classes.keys()], called: this.slots.calledClasses() };
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
-  release(slot: number): void { const s = this.slotAt(slot); if (s?.k === "method") s.pending = false; }
+  release(slot: number): void { const s = this.slots.at(slot); if (s?.k === "method") s.pending = false; }
   /** A failed optional refresh keeps its hot code and stops tracking that generation. */
   failedRefresh(slot: number, generation: number): void {
     const unit = this.hotUnits.get(slot);
@@ -1148,7 +1078,7 @@ export class World {
    *  is this World's (it was numbered from `result.numbering.from`) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     if (job.merge) return this.adoptMerged(job, result, epoch);
-    const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
+    const s = this.slots.at(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
     const refresh = this.hotUnits.get(slot);
     if (!this.sound(result, epoch) || s?.k !== "method" || !s.done) return false;
@@ -1156,12 +1086,12 @@ export class World {
     if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
     if (job.refresh !== undefined) {
       const installed = new Set(job.installed);
-      if (refresh!.slots.some(at => !installed.has(mid((this.peek(at) as { m: MethodInfo }).m)))) return false;
+      if (refresh!.slots.some(at => !installed.has(mid(this.slots.peekMethod(at)!.m)))) return false;
       for (const id of job.installed) {
         const method = methodOf(this.prog, id);
         if (!method) return false;
         const at = this.slotOf(method);
-        if (!refresh!.slots.includes(at) && (this.peek(at) as { done?: boolean } | undefined)?.done) return false;
+        if (!refresh!.slots.includes(at) && this.slots.peek(at)?.done) return false;
       }
       for (const [referrer, name, key] of job.resolved ?? []) if (this.prog.initiatedBy(this.prog.loaderOf(referrer), name) !== key || !definitionReady(this, key)) return false;
       for (const [key, sup, ifaces] of job.prepared ?? []) {
@@ -1188,7 +1118,7 @@ export class World {
     for (const id of head.touch) this.link(this.nameOf(id));
     for (const name of head.synth) this.ensureSynth(name);
     const target = (cls: string, key: string) => (cls ? this.prog.get(cls)?.byKey.get(key) : undefined);
-    const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
+    const owner = (at: number) => this.slots.method(at)!.m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []) };
@@ -1235,14 +1165,14 @@ export class World {
   private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
   private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
-    const s = this.slotAt(slot)!;
+    const s = this.slots.at(slot)!;
     const place = (exports: Record<string, any>) => {
       const set = (at: number, name: string) => {
-        (this.slotAt(at) as Exclude<Slot, { k: "ensure" }>).done = true;
+        this.slots.at(at)!.done = true;
         this.table.set(at, exports[name]);
       };
       if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return; }
-      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) this.counts()[x] = 0; }
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); this.slots.method(x)!.hot = hot; if (x < COUNT_SLOTS) this.counts()[x] = 0; }
       if (hot) {
         const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
         const unit = this.hotUnits.publish(group, names, this.table);
@@ -1250,7 +1180,7 @@ export class World {
       } else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.table.set(slot, exports["m" + slot]); }
     };
-    try { this.instantiateUnit(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
+    try { this.instantiateUnit(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
   }
   private unitClock(): Clock { return { start: performance.now(), accounted: this.stats.compileMs }; }
   /** instantiates a built unit, has `place` put its functions where they are called, then records what their code relies on */
@@ -1438,7 +1368,7 @@ export class World {
       const callees: { t: MethodInfo; id: string; ran: number }[] = [];
       for (const t of this.callees(out[i])) {
         const id = mid(t);
-        if (ids.has(id) || this.slotAt(this.slotOf(t))?.k !== "method") continue;
+        if (ids.has(id) || this.slots.at(this.slotOf(t))?.k !== "method") continue;
         const ran = this.ran(t);
         if (ran >= COPY_MIN) callees.push({ t, id, ran });
       }
@@ -1447,14 +1377,14 @@ export class World {
         if (out.length >= MAX_GROUP) break;
         if (ids.has(id)) continue;
         out.push(t); ids.add(id);
-        (this.slotAt(this.slotOf(t)) as { done: boolean }).done ? copies.push(t) : installed.push(t);
+        this.slots.method(this.slotOf(t))!.done ? copies.push(t) : installed.push(t);
       }
     }
     return { installed, copies };
   }
   /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
   private ran(t: MethodInfo): number {
-    const slot = this.slotOf(t), sl = this.slotAt(slot) as { done: boolean; hot?: boolean };
+    const slot = this.slotOf(t), sl = this.slots.method(slot)!;
     // a method that has asked for the second tier has used up a budget, whatever its count since
     if (sl.hot || this.requested.has(slot) || this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
     return sl.done ? this.count(slot) : 0;
@@ -1520,17 +1450,17 @@ export class World {
     let uncompiled = 0;
     for (const [name, rt] of this.classes) for (const m of this.prog.get(name)?.methods ?? []) {
       if (!m.codeOff || m.flags & ACC.NATIVE) continue;
-      const s = this.peek(rt.slotBase + m.index);
+      const s = this.slots.peek(rt.slotBase + m.index);
       if ((!s || s.k === "method" && !s.done) && !this.aot?.holds(rt.slotBase + m.index)) uncompiled++;
     }
     // the methods without code that the methods with code call: every target of a call, and only a call's one target
     const frontier = this.markFrontier = new Set(), single = this.markSingle = new Set();
-    for (const s of this.slots) {
+    for (const s of this.slots.made()) {
       if (s?.k !== "method" || !s.done || !s.m.codeOff) continue;
       for (const { t, targets } of this.calls(s.m)) {
         for (const x of targets ?? (t ? [t] : [])) {
           const at = this.classes.get(x.cls);
-          const xs = at && this.peek(at.slotBase + x.index);
+          const xs = at && this.slots.peek(at.slotBase + x.index);
           if (x.codeOff && !(xs?.k === "method" && xs.done)) { frontier.add(x); if (x === t) single.add(x); }
         }
       }
@@ -1560,7 +1490,7 @@ export class World {
   /** the methods compiled ahead that have run since joining the World's demand, and their calls are compiled ahead in turn */
   noteAheadRuns(): void {
     for (const at of this.aheadUnran) {
-      const s = this.peek(at);
+      const s = this.slots.peek(at);
       if (s?.k !== "method" || !s.done) { this.aheadUnran.delete(at); continue; }
       if (!s.hot && !this.requested.has(at) && !(at < COUNT_SLOTS && this.counts()[at])) continue;
       this.aheadUnran.delete(at);
@@ -1572,7 +1502,7 @@ export class World {
   private aheadSlot(t: MethodInfo): number {
     const rt = this.classes.get(t.cls);
     if (!rt || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) return -1;
-    const slot = rt.slotBase + t.index, s = this.slotAt(slot);
+    const slot = rt.slotBase + t.index, s = this.slots.at(slot);
     return s?.k !== "method" || s.done || s.pending || this.aot?.holds(slot) ? -1 : slot;
   }
   /** Idle time: compiles the first-tier code of the methods that the methods that ran call when the call has one target, then what those call, in units of AHEAD_UNIT,
@@ -1707,9 +1637,9 @@ export class World {
     if (this.prog.dynamicRoot) return;
     this.prog.dynamicRoot = true;
     this.aot?.unbindApp();
-    for (let b = 0; b < this.blockClass.length; b++) {
-      const dex = this.prog.get(this.blockClass[b])?.dex;
-      if (dex && this.prog.loaderOfDex(dex) === this.prog.root) for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
+    for (let b = 0; b < this.slots.blockClass.length; b++) {
+      const dex = this.prog.get(this.slots.blockClass[b])?.dex;
+      if (dex && this.prog.loaderOfDex(dex) === this.prog.root) for (let i = 0; i < this.slots.methodsIn(b); i++) this.invalidate(this.slots.blockBase[b] + i);
     }
     this.epoch++;
     this.opts.compiler?.namespaces();
@@ -1812,9 +1742,9 @@ export class World {
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);
     // a slot without state has never been compiled here
-    const builtUnder = (slot: number) => { const s = this.peek(slot); return (!s || s.k === "method" && !s.hot && !this.demand.methods.has(s.m)) && !!this.aot?.fromAppBuild(slot); };
-    for (let b = 0; b < this.blockClass.length; b++) if (refreshed.has(this.blockClass[b])) {
-      for (let i = 0; i < this.methodsIn(b); i++) if (!kept || !builtUnder(this.blockBase[b] + i)) this.invalidate(this.blockBase[b] + i);
+    const builtUnder = (slot: number) => { const s = this.slots.peek(slot); return (!s || s.k === "method" && !s.hot && !this.demand.methods.has(s.m)) && !!this.aot?.fromAppBuild(slot); };
+    for (let b = 0; b < this.slots.blockClass.length; b++) if (refreshed.has(this.slots.blockClass[b])) {
+      for (let i = 0; i < this.slots.methodsIn(b); i++) if (!kept || !builtUnder(this.slots.blockBase[b] + i)) this.invalidate(this.slots.blockBase[b] + i);
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !kept) this.aot?.unbindApp();
     let lateBy: Map<string, string[]> | undefined;
@@ -1822,7 +1752,7 @@ export class World {
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
       for (const slot of a.slots) {
-        const state = this.peek(slot);
+        const state = this.slots.peek(slot);
         // Unmaterialized AOT slots and private helper owners can still hold live code.
         if (!this.helperInvalidations.has(slot) && state && (state.k === "ensure" || !state.done)) a.slots.delete(slot);
       }
@@ -1963,7 +1893,7 @@ export class World {
     if (helper) { helper(); this.stats.invalidated++; return; }
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       // a slot without state holds compiled code only if a loaded build module installed it
-      const s = this.peek(x) ?? (this.aot?.installed(x) ? this.slotAt(x) : undefined);
+      const s = this.slots.peek(x) ?? (this.aot?.installed(x) ? this.slots.at(x) : undefined);
       if (s?.k === "ensure" || !s?.done || !this.restoreStub(x, s)) continue;
       s.done = false; if (s.k === "method") s.hot = false; this.stats.invalidated++;
       this.groupOf.delete(x);

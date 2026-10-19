@@ -39,7 +39,7 @@ function invalidFunction(bytes: Uint8Array, cx?: Compiler): { name: string; mess
 export function synthModules(w: World, emit: (module: number, bytes: Uint8Array) => void): string[][] {
   const synths: string[][] = [];
   // building a group can name more synthetic functions (one that calls another): the list is read again for the next group
-  for (let at = 0, all = w.synths(); at < all.length; all = w.synths()) {
+  for (let at = 0, all = w.slots.synths(); at < all.length; all = w.slots.synths()) {
     const end = Math.min(at + SYNTH_GROUP, all.length);
     let group = all.slice(at, end);
     for (;;) {
@@ -134,7 +134,7 @@ function planApp(w: World, methods: MethodInfo[], demand: Demand, shards: number
   // classes' methods are in modules of their own.
   const own: MethodInfo[][] = [], patches = new Map<number, MethodInfo[][]>();
   for (const [cls, list] of byClass) {
-    const over = aot.platformModule(w.blockOf(w.link(cls).slotBase));
+    const over = aot.platformModule(w.slots.blockOf(w.link(cls).slotBase));
     if (over < 0) own.push(list); else (patches.get(over) ?? patches.set(over, []).get(over)!).push(list);
   }
   const grouped = (lists: MethodInfo[][], over: number): Group[] => {
@@ -170,9 +170,9 @@ function compileShard(w: World, plan: AppPlan, shard: number, frozen: boolean): 
   const compile = () => plan.groups.forEach(({ methods: group, over }, module) => {
     if (plan.shardOf[module] !== shard) return;
     const { cx, built, touch, skipped } = compileChecked(w, group);
-    const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.blockOf(w.link(c).slotBase));
+    const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.slots.blockOf(w.link(c).slotBase));
     const wanted = new Set(group);
-    const absent = classes.flatMap((b) => w.prog.get(w.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.blockBase[b] + m.index));
+    const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
     const header: CHeader = { ...unitHeader(w, cx, touch), classes, mods: [], absent };
     files.push([`a${module}.wasm`, packModule(header, built.bytes, built.traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })))]);
     if (over < 0) for (const b of classes) cOf.push([b, module]); else patches.push([module, over]);
@@ -188,7 +188,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   const flush = () => {
     if (!group.length) return;
     w.beginTouch();
-    const bytes = w.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.blockOf(w.link(n).slotBase));
+    const bytes = w.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.slots.blockOf(w.link(n).slotBase));
     group = []; size = 0;
     // a module V8 rejects leaves its classes to the on-demand builder
     if (invalidFunction(bytes)) return;

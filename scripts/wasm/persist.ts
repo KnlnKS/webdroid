@@ -82,7 +82,7 @@ if (combinedAt >= 0) {
     const expected = await control.entryAsync("Pst", name, desc)(...args);
     check(`CLI combined image ${name}`, await image.entryAsync("Pst", name, desc)(...args), expected);
   }
-  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.blockOf(image.slotOf(method)));
+  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.slots.blockOf(image.slotOf(method)));
   check("CLI combined image executes its app code module", module !== undefined && module >= 0 && image.aot!.loaded.includes(`c${module}.wasm`), true);
   const resolutions = image.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
   check("CLI combined image warm result", await image.entryAsync("Pst", "hot", "(I)I")(10), expected);
@@ -149,7 +149,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
   const producer = world(app, { compileOnly: true });
-  const name = producer.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
   if (name) {
     const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], infos: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
@@ -162,7 +162,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // A partial final group can discover dependencies that discover another group.
 {
   const w = world(app, { compileOnly: true });
-  const padding = 64 - w.synths().length % 64;
+  const padding = 64 - w.slots.synths().length % 64;
   for (let i = 0; i < padding; i++) w.synthSlot(`pst:padding:${i}`, { params: [], ret: "V", body: () => {} });
   const leaf = { params: [], ret: "V" as const, body: () => {} };
   w.synthSlot("pst:parent", { ...leaf, body: (cx, c) => {

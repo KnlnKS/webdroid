@@ -206,7 +206,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function rebuild(world: World): Promise<Built> {
     // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
-    const ran = !saved ? [] : world.ranBuildSlots().app.flatMap((s) => { const e = world.slotAt(s); return e?.k === "method" ? [mid(e.m)] : []; });
+    const ran = !saved ? [] : world.ranBuildSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
     const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
     const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);

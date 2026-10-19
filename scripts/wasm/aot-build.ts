@@ -127,7 +127,7 @@ const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k
 const empty = new Set<number>();
 const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
-  const methods = blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
+  const methods = blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
   const cx = new Compiler(w);
   w.beginTouch();
@@ -140,7 +140,7 @@ cGroups.forEach((blocks, k) => {
   const { bytes, traces } = built;
   nMethods += methods.length;
   const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
-    absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.blockBase[b] + m.index)) };
+    absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
@@ -151,7 +151,7 @@ const t1 = performance.now();
 // ---- class modules
 const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
-  const names = blocks.map((b) => w.blockClass[b]);
+  const names = blocks.map((b) => w.slots.blockClass[b]);
   w.beginTouch();
   const bytes = w.classModule(names.map((n) => w.link(n)));
   const touch = w.endTouch();
@@ -169,13 +169,13 @@ let extras: number, xbytes: Uint8Array, xtouch: Set<string>, synths: string[][],
 do {
   yBytes = 0;
   synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
-  nSynths = w.synths().length;
+  nSynths = w.slots.synths().length;
   const names = extraNames();
   extras = names.length;
   w.beginTouch();
   xbytes = w.classModule(names.map((n) => w.link(n)));
   xtouch = w.endTouch();
-} while (extraNames().length !== extras || w.synths().length !== nSynths);
+} while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
 writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;

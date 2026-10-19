@@ -188,7 +188,7 @@ if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,me
   let calls = 0;
   probe.host.info = (...args: [number, number, number]) => { calls++; return info(...args); };
   const lookup = probe.hostFn("unsafe:cache", ["I", "I", "I"], "I", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "ufield"); });
-  probe.host.link(probe.synthSlotOf("ufield")!);
+  probe.host.link(probe.slots.synthSlotOf("ufield")!);
   const mark = probe.numbers.marks();
   let first = 0, cookie = 0;
   for (const [kind, name] of ["i", "l", "s"].entries()) {
@@ -213,7 +213,7 @@ const assertEagerFieldAccessors = (tier: typeof w) => {
   tier.host.info = (kind: number, a: number, b: number) => {
     const slot = info(kind, a, b);
     if (([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut] as number[]).includes(kind) && slot) {
-      const state = tier.slotAt(slot);
+      const state = tier.slots.at(slot);
       if (state?.k !== "synth" || !state.done) throw new Error("field accessor still needs lazy admission");
     }
     return slot;
