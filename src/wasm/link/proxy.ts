@@ -23,14 +23,12 @@ proxyIntrinsics.set("java/lang/reflect/Proxy.generateProxy(Ljava/lang/String;[Lj
   c.lget(0).externConvertAny().lget(1).externConvertAny().lget(2).externConvertAny().lget(3).externConvertAny().lget(4).externConvertAny().call(cx.imp.proxy).anyConvertExtern();
 });
 
-interface Readers { art(method: object): bigint; classId(cls: object): number; alen(a: object): number; aget(a: object, i: number): object; classOf(id: number): object }
+interface Readers { art(method: object): bigint; classId(cls: object): number; classOf(id: number): object }
 const readers = new WeakMap<World, Readers>();
 function readersOf(w: World): Readers {
   let r = readers.get(w);
   if (!r) readers.set(w, r = {
     art: w.fieldReader(EXEC, "artMethod", "J") as never, classId: w.fieldReader(CLASS, "dexTypeIndex", "I") as never,
-    alen: w.hostFn("px:alen", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).refAsNonNull().arrayLen(); }),
-    aget: w.hostFn("px:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); }),
     classOf: w.hostFn("px:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); }),
   });
   return r;
@@ -42,12 +40,12 @@ export function generateProxy(w: World, name: string, interfaces: object, object
   // ART's CreateProxyClass requires InsertClass to find no existing definition; public Proxy caching happens in Java.
   if (w.prog.definedBy(loader, binary)) throw w.exception(w.makeThrowable("java/lang/LinkageError", `duplicate proxy definition: ${binary}`));
   const entries = new Map<string, ProxyDefinition["methods"][number]>();
-  for (let i = 0; i < r.alen(methods); i++) {
-    const method = r.aget(methods, i), cookie = r.art(method), src = w.prog.get(w.nameOf(Number(cookie >> 16n)))!.methods[Number(cookie & 0xffffn)];
-    if (!entries.has(src.key)) entries.set(src.key, { name: src.name, desc: src.desc, method: w.pin(method), exceptions: w.pin(r.aget(exceptions, i)) });
+  for (let i = 0; i < w.bridge.arrayLength(methods); i++) {
+    const method = (w.bridge.element(methods, i) as object), cookie = r.art(method), src = w.prog.get(w.nameOf(Number(cookie >> 16n)))!.methods[Number(cookie & 0xffffn)];
+    if (!entries.has(src.key)) entries.set(src.key, { name: src.name, desc: src.desc, method: w.pin(method), exceptions: w.pin((w.bridge.element(exceptions, i) as object)) });
   }
   defineProxy(w, { name: internal, loader: loader === w.prog.boot ? "boot" : loader.id,
-    ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))), methods: [...entries.values()] }, loader);
+    ifaces: Array.from({ length: w.bridge.arrayLength(interfaces) }, (_, i) => w.nameOf(r.classId((w.bridge.element(interfaces, i) as object)))), methods: [...entries.values()] }, loader);
   w.namespaces.initiateClass(loader, binary, internal);
   return r.classOf(w.idOf(internal));
 }

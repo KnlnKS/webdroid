@@ -62,7 +62,7 @@ interface State {
   kinds: Record<string, number>;
   handleKind(mh: object): number; art(mh: object): bigint; typeOf(mh: object): object;
   ptypes(t: object): object; rtype(t: object): object; classId(c: object): number;
-  alen(a: object): number; aget(a: object, i: number): object; aset(a: object, i: number, v: object | null): void; newArray(n: number): object;
+  newArray(n: number): object;
 }
 const states = new WeakMap<World, State>();
 function state(w: World): State {
@@ -73,9 +73,6 @@ function state(w: World): State {
     kinds,
     handleKind: w.fieldReader<number>(MH, "handleKind", "I"), art: w.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.fieldReader<object>(MH, "type", `L${MT};`),
     ptypes: w.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
-    alen: w.hostFn("mh:alen", ["L"], "I", (cx, c) => { c.lget(0); cx.arrayData(c).refAsNonNull().arrayLen(); }),
-    aget: w.hostFn("mh:aget", ["L", "I"], "L", (cx, c) => { c.lget(0); cx.arrayData(c).lget(1).arrayGet(cx.tData.ref); }),
-    aset: w.hostFn("mh:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0); cx.arrayData(c).lget(1).lget(2).arraySet(cx.tData.ref); }),
     newArray: w.hostFn("mh:new", ["I"], "L", (cx, c) => cx.emitNewArray(c, OBJECTS, () => c.lget(0))),
   };
   states.set(w, s);
@@ -105,8 +102,8 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   if (mode === InvokeMode.VarHandle) {
     const separator = siteId.indexOf("@"), mode = siteId.slice(0, separator), site = parseMethodDesc(siteId.slice(separator + 1));
     const s = state(w), list = s.newArray(site.params.length + 1), owner = "java/lang/invoke/VarHandle";
-    s.aset(list, 0, mh);
-    site.params.forEach((_, i) => s.aset(list, i + 1, s.aget(args, i)));
+    w.bridge.setElement(list, 0, mh);
+    site.params.forEach((_, i) => w.bridge.setElement(list, i + 1, w.bridge.element(args, i)));
     const method = w.prog.require(owner).methods.find(m => m.name === mode)!;
     const art = BigInt(w.idOf(owner)) << 16n | BigInt(w.prog.require(owner).methods.indexOf(method));
     return invokeVarHandle(w, list, art, false, [`L${owner};`, ...site.params], site.ret, parent);
@@ -125,10 +122,10 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   const kind = s.handleKind(mh!), K = s.kinds, art = s.art(mh!);
   if (kind === K.INVOKE_VAR_HANDLE || kind === K.INVOKE_VAR_HANDLE_EXACT) return invokeVarHandle(w, args, art, kind === K.INVOKE_VAR_HANDLE_EXACT, np, nr, parent);
   if (kind === K.INVOKE_TRANSFORM) return transform(w, mh!, args, sp, sr, parent);
-  const given = Array.from({ length: sp.length }, (_, i) => s.aget(args, i));
+  const given = Array.from({ length: sp.length }, (_, i) => w.bridge.element(args, i) as object);
   const call = (info: RInfo, cid: number, idx: number, recv: object | null, rest: (object | null)[]) => {
     const list = s.newArray(rest.length);
-    rest.forEach((v, i) => s.aset(list, i, v));
+    rest.forEach((v, i) => w.bridge.setElement(list, i, v));
     const m = w.prog.require(w.nameOf(cid)).methods[idx];
     if (m.isCtor && m.cls === "java/lang/String") {
       return handleThunk(w, `mh:string:${m.desc}`, ["L"], "L", (cx, c, arg) => cx.construct(c, m, () => m.params.forEach((p, i) => {
@@ -173,7 +170,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
 function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, params: string[], ret: string, parent: Strand): Answer {
   const s = state(w), VH = "java/lang/invoke/VarHandle", AM = `${VH}$AccessMode`;
   if (params[0] !== `L${VH};`) fail(w, "java/lang/invoke/WrongMethodTypeException", "Expected leading VarHandle parameter");
-  const handle = s.aget(args, 0);
+  const handle = w.bridge.element(args, 0) as object;
   if (!handle) fail(w, "java/lang/NullPointerException", "Expected argument 1 to be a non-null VarHandle");
   const method = w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)], mode = method.name;
   const accessMode = (cx: Compiler, c: Code) => {
@@ -264,7 +261,7 @@ function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: 
 }
 function signatureOf(w: World, type: object): { params: string[]; ret: string } {
   const s = state(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));
-  return { params: Array.from({ length: s.alen(p) }, (_, i) => desc(s.aget(p, i))), ret: desc(s.rtype(type)) };
+  return { params: Array.from({ length: w.bridge.arrayLength(p) }, (_, i) => desc(w.bridge.element(p, i) as object)), ret: desc(s.rtype(type)) };
 }
 function frameArgs(w: World, frame: object, params: string[], parent: Strand): object | Promise<object> {
   return handleThunk(w, `mh:frameArgs:(${params.join("")})`, ["L"], "L", (cx, c, arg) => {
