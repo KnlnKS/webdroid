@@ -272,7 +272,7 @@ describe("file-descriptor", () => {
       const waiting = new Promise<void>(resolve => { release=resolve; });
       const disposed = new Promise<void>(resolve => { dispose=resolve; });
       const stop = serveCalls(channel.port1,{reply:async () => { enter();await waiting;return late; }},undefined,
-        async (_method,value) => { await owner.discard(1002,value as number,false);dispose(); });
+        {reply:async value => { await owner.discard(1002,value,false);dispose(); }});
       const pending = callProxy<{reply():Promise<number>}>(channel.port2,["reply"]);
       try {
         const result = pending.endpoint.reply().catch(() => -1);

@@ -6,15 +6,14 @@ import type { ProcessLifeCalls } from "./process-life.ts";
 import type { PendingAccess } from "../android/pendingintent.ts";
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
 import { Alarms } from "./alarms.ts";
-import { AccountStore, canonicalAccountCommands, type AccountCalls } from "./accounts.ts";
-import { accountAuthority } from "../android/accounts.ts";
+import { AccountStore, type AccountCalls } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
-import { ownedSystemService, exportBinder, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
+import { asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent, type ComponentRef } from "../android/intent.ts";
-import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, copyExitRecord, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
+import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -25,20 +24,19 @@ import { vfs } from "./vfs.ts";
 import { device, formatScreen, naturalLandscape } from "./config.ts";
 import type { Sender } from "../android/server/broadcastqueue.ts";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm.ts";
-import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions.ts";
+import { checkPermission, PermissionStore, type PermissionCalls } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
-import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite.ts";
-import { preferenceStore, canonicalPreferenceCommands, createAppData, type PreferenceCalls } from "../android/sharedprefs.ts";
-import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification.ts";
+import { sqliteStore, type createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite.ts";
+import { preferenceStore, type PreferenceCalls } from "../android/sharedprefs.ts";
+import { notificationStore, type ForegroundNotificationRequest } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
 import { settingsStore } from "../android/settings.ts";
-import { systemProviders } from "../android/systemproviders.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import type { WebCookies } from "./webcookies.ts";
-import { cookieCalls, type CookieCalls } from "./cookie-access.ts";
+import type { CookieCalls } from "./cookie-access.ts";
 import type { LocationCalls } from "./location-access.ts";
 import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
-import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path.ts";
+import type { FilePathCalls } from "./file-path.ts";
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
 import type { WorkerControl } from "./worker-control.ts";
 import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
@@ -47,21 +45,22 @@ import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
 import { is64BitPackage } from "../jvm/natives/jvmruntime.ts";
 import { serveFile } from "./remote-file.ts";
-import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage.ts";
+import type { WebStorageCalls } from "../android/webstorage.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { receiveMedia } from "./media-port.ts";
-import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
-import { storageAccess, storageEntries, storageWrite } from "./device-storage.ts";
+import { hostUiMethods, type HostUi } from "./host-ui.ts";
+import { storageEntries } from "./device-storage.ts";
 import { receiveIme } from "./ime-port.ts";
 import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsCalls, SettingsTable } from "./settings.ts";
-import { serveProcess, processProxy, processError, serveCalls } from "./process-port.ts";
+import { serveProcess, processProxy, processError } from "./process-port.ts";
+import { serveBrokerPort } from "./broker-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
-const permissionDenied = async (permission: string, pkg: string) =>
+export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
 async function someDenied(permissions: string[], pkg: string): Promise<boolean> {
   for (const permission of permissions) if (await permissionDenied(permission, pkg)) return true;
@@ -71,7 +70,7 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
  *  system_server does it. The broker runs none itself (a caller's realm rebuilds its errors), so
  *  it answers whichever process's JVM has ended, the page's included. */
 export const asBroker = <T>(work: Gen<T>): Promise<T> => asSystem(() => rt.drive(work));
-const unawaited = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
+export const unawaited = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
 export type Receiver = { pkg: string; cls: string; priority: number };
 /** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
 export function* receivers(intent: JObj): Gen<Receiver[]> {
@@ -253,8 +252,8 @@ export class ProcessBroker {
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
   private booted = false;
-  private fileDescriptors = new FileDescriptors();
-  private clipboard = new Clipboard(this.fileDescriptors, {
+  readonly fileDescriptors = new FileDescriptors();
+  readonly clipboard = new Clipboard(this.fileDescriptors, {
     uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
     changed: pid => { if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.clipboardChanged())); },
   });
@@ -372,7 +371,7 @@ export class ProcessBroker {
       this.entry(pid);
       const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
-      const broker = this.serveBrokerPort(pid), canvas = entry.canvas!;
+      const broker = serveBrokerPort(this, pid), canvas = entry.canvas!;
       ports.push(broker.close);
       const media = new MessageChannel(), display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel();
       ports.push(receiveMedia(media.port1));
@@ -395,220 +394,7 @@ export class ProcessBroker {
     } catch (error) { for (const close of ports) close(); throw error; }
   }
   /** A process's reverse Binder/service channel. Only these serialized operations are exported. */
-  brokerPort(pid: number): MessagePort { return this.serveBrokerPort(pid).port; }
-  private serveBrokerPort(pid: number): { port: MessagePort; close(): void } {
-    const { callers, locations } = this.entry(pid).session, { port1, port2 } = new MessageChannel();
-    const accountCommands = canonicalAccountCommands(this.accounts, () => {
-      const caller = this.entry(pid);
-      return accountAuthority(caller.pkg, caller.uid);
-    });
-    const accounts = () => { this.watchAccounts(pid); return accountCommands; };
-    const permissions = canonicalPermissionCommands(this.permissions, pkg => {
-      const caller = this.entry(pid), target = packages.get(pkg);
-      if (caller.uid === 0 || caller.uid === 1000 || target?.uid === caller.uid ||
-        holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
-      throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
-    });
-    const authorizePreference = (name: string, write: boolean) => {
-      const caller = this.entry(pid);
-      const notification = name.startsWith("android:notification-policy:");
-      const pkg = notification ? name.slice("android:notification-policy:".length) : name.split(":", 1)[0];
-      const publicRead = notification || name === `${pkg}:__system_power`;
-      if (caller.uid === 0 || caller.uid === 1000 || packages.get(pkg)?.uid === caller.uid || !write && publicRead) return;
-      throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
-    };
-    const webStorage = canonicalWebStorage(this.entry(pid).pkg);
-    const preferences = canonicalPreferenceCommands(this.preferences, authorizePreference);
-    const authorizePath = (path: string): number => {
-      const caller = this.entry(pid);
-      const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/([^/]+)(?:\/|$)/.exec(path);
-      const external = /^\/sdcard\/Android\/data\/([^/]+)(?:\/|$)/.exec(path);
-      const owner = privatePath?.[1] ?? external?.[1];
-      return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
-    };
-    const paths = canonicalFilePaths(authorizePath,this.entry(pid).uid);
-    const descriptors = this.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13,this.entry(pid).uid);
-    const locationAllowed = async () => {
-      const caller = this.entry(pid);
-      const granted = await permissions.permissionCheck(caller.pkg,["android.permission.ACCESS_FINE_LOCATION","android.permission.ACCESS_COARSE_LOCATION"]);
-      this.entry(pid);
-      return granted.some(Boolean);
-    };
-    const requireLocation = async () => {
-      if (!await locationAllowed()) throw rt.mkThrowable("java/lang/SecurityException", "Location permission denied");
-    };
-    const starts = (cls: string) => {
-      const caller = this.entry(pid), owner = packages.get(caller.pkg), node = owner?.components.service.get(cls);
-      if (!node || owner!.process(node) !== caller.process)
-        throw rt.mkThrowable("java/lang/SecurityException", "Service start state belongs to another process");
-      return this.serviceStarts(pid);
-    };
-    const unsubscribe = (id: number, token: number) => {
-      if (locations.get(id) === token) { locations.delete(id); this.location.remove(pid, id); }
-    };
-    const watches = new Map<number, () => void>();
-    const ui = Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) => {
-      this.entry(pid); return (hostUi()[name] as (...args: never[]) => unknown)(...args);
-    }])) as unknown as HostUi;
-    const stop = serveCalls<BrokerCalls>(port1, {
-      ...ui,
-      processAlive: async target => { this.entry(pid); return target === 0 || this.alive(target); },
-      processSignal: async (target, signal) => this.signal(pid, target, signal),
-      processWatch: async (target, token) => {
-        this.entry(pid);
-        watches.get(token)?.(); watches.delete(token);
-        if (target === 0) return;
-        const entry = this.entry(target);
-        watches.set(token, this.watch(entry.pid, () => {
-          watches.delete(token);
-          if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.processDied(token)));
-        }));
-      },
-      processUnwatch: async token => { this.entry(pid); watches.get(token)?.(); watches.delete(token); },
-      locationAvailable: async () => { this.entry(pid); return this.location.available; },
-      locationEnabled: async () => { this.entry(pid); return this.location.enabled; },
-      locationLast: async () => { await requireLocation(); return this.location.last; },
-      locationSubscribe: async (id, token, high, active) => {
-        await requireLocation();
-        locations.set(id, token);
-        const current = () => this.alive(pid) && locations.get(id) === token;
-        try {
-          this.location.subscribe(pid,id,high,active,event => { unawaited((async () => {
-            try {
-              if (!current()) return;
-              const allowed = await locationAllowed();
-              if (!current()) return;
-              if (!allowed) { unsubscribe(id, token); return; }
-              await this.request(this.entry(pid), endpoint => endpoint.locationChanged(id,token,event));
-            } catch (error) { if (this.alive(pid)) throw error; }
-          })()); });
-        } catch (error) { unsubscribe(id, token); throw error; }
-      },
-      locationRemove: async (id, token) => { this.entry(pid); unsubscribe(id, token); },
-      serviceCreated: async (cls, intent) => starts(cls).created(cls, intent),
-      serviceDestroyed: async cls => starts(cls).destroyed(cls),
-      serviceStart: async (cls, intent) => starts(cls).start(cls, intent),
-      serviceDeliver: async cls => starts(cls).deliver(cls),
-      serviceRequested: async cls => starts(cls).requested(cls),
-      serviceStop: async cls => starts(cls).stop(cls),
-      serviceStopSelf: async (cls, id) => starts(cls).stopSelf(cls, id),
-      serviceDone: async (cls, id, result) => starts(cls).done(cls, id, result),
-      serviceForeground: async (cls, on) => starts(cls).foreground(cls, on),
-      serviceConnected: async (key, binder, dead) => this.serviceConnected(pid, key, binder, dead),
-      // Intent.filterEquals and replaceExtras are Android framework operations on serialized
-      // Intents; the canonical Java owner keeps extras parcelled instead of borrowing a VM.
-      pendingCreate: (pkg, kind, code, flags, intent, intents) => this.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
-      pendingCancel: async id => { this.entry(pid); this.cancelPending(pid, id); },
-      pendingSend: async (id, fill) => { this.entry(pid); return this.intents.send(id, fill); },
-      pendingOperation: async id => this.takePending(pid, id),
-      pendingKind: async id => { this.entry(pid); return this.intents.get(id)?.kind ?? null; },
-      pendingFlags: async id => { this.entry(pid); return this.intents.get(id)?.flags ?? 0; },
-      pendingCreator: async id => {
-        this.entry(pid); const operation = this.intents.get(id);
-        return operation ? {pkg:operation.pkg,uid:operation.uid} : null;
-      },
-      alarmSchedule: async (id, type, at, interval) => { this.entry(pid); this.alarms.schedule(id, type, at, interval); },
-      alarmCancel: async id => { this.entry(pid); this.alarms.cancel(id); },
-      systemService: async name => {
-        this.entry(pid);
-        if (name !== "notification" && name !== "mount") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
-        const handle = await asSystem(() => ownedSystemService(name));
-        this.entry(pid);
-        return handle;
-      },
-      systemProvider: async authority => {
-        this.entry(pid);
-        const provider = systemProviders.get(authority);
-        return provider?.systemRealm ? asSystem(async () => exportBinder(await provider.binder())) : null;
-      },
-      notificationForeground: async request => {
-        const caller = this.entry(pid);
-        if (request.kind === "stop" || !request.data) return receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, request);
-        let received: ParcelData | undefined;
-        try {
-          received = await this.transferDescriptors(pid, PROCESS_PID, request.data, true);
-          this.entry(pid);
-          await receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, {...request,data:received});
-        } finally {
-          if (received) await this.discardDescriptors(PROCESS_PID, received, false);
-          await this.discardDescriptors(pid, request.data, true);
-        }
-      },
-      filePrepare: async pkg => {
-        const caller = this.entry(pid);
-        if (packages.get(pkg)?.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
-        await this.files.prepare(pkg); this.entry(pid);
-        await createAppData(pkg);
-      },
-      fileSetAttributes: async (path,change) => paths.fileSetAttributes(path,change),
-      fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
-      fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
-      fileRename: async (from,to) => paths.fileRename(from,to), fileRemove: async (path,directory) => paths.fileRemove(path,directory), fileCreate: async path => paths.fileCreate(path), fileFifo: async path => paths.fileFifo(path),
-      fileDescriptor: request => { this.entry(pid); return descriptors.fileDescriptor(request); },
-      webRenderer: async origin => { this.entry(pid); return webStorage.webRenderer(origin); },
-      webStorage: async (op, origin) => { this.entry(pid); return webStorage.webStorage(op,origin); },
-      preferenceRead: async (name, key) => preferences.preferenceRead(name, key),
-      preferenceKeys: async name => preferences.preferenceKeys(name),
-      preferenceChange: async (name, changes) => preferences.preferenceChange(name, changes),
-      preferenceFiles: async pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); },
-      permissionCheck: async (pkg, names) => { this.entry(pid); return permissions.permissionCheck(pkg, names); },
-      permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
-      accountList: async query => accounts().accountList(query),
-      accountRead: async key => accounts().accountRead(key),
-      accountExists: async key => accounts().accountExists(key),
-      accountCached: async (key, type) => accounts().accountCached(key, type),
-      accountChange: async change => accounts().accountChange(change),
-      ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
-      exitRecords: async pkg => {
-        const caller = this.entry(pid), owner = packages.get(pkg);
-        if (owner?.uid !== caller.uid && await permissionDenied("android.permission.DUMP", caller.pkg))
-          throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");
-        this.entry(pid);
-        return exitRecords(pkg);
-      },
-      packageDataChange: async (pkg, change, broadcasts, prompt) => {
-        const caller = this.entry(pid), own = change.kind === "clear" && change.fromApp && pkg === caller.pkg;
-        const permission = change.kind === "clear" ? "android.permission.CLEAR_APP_USER_DATA" : "android.permission.DELETE_PACKAGES";
-        if (!own && !prompt && await checkUidPermission(permission, caller.uid) !== 0)
-          throw rt.mkThrowable("java/lang/SecurityException", `uid ${caller.uid} does not hold ${permission}`);
-        return this.changePackageData(pkg, change, broadcasts, prompt);
-      },
-      storageWrite: (key, value) => {
-        const caller = this.entry(pid);
-        if (storageWrite(caller, key, value)) for (const other of this.entries.values())
-          if (other !== caller && !other.dead && storageAccess(key, other)) unawaited(this.request(other, endpoint => endpoint.storageChanged(key, value)));
-      },
-      processExited: record => {
-        const caller = this.entry(pid);
-        const canonical = recordRemoteExit({...record,pid:caller.pid,uid:caller.uid,pkg:caller.pkg,process:caller.process});
-        this.fail(pid,`Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`,deathOf(canonical),canonical);
-      },
-      // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
-      // would hold the launching main job while that same process is asked to pause.
-      activityLaunch: async (pkg, process, component, intent, request, callingClass) => { this.entry(pid); unawaited(this.activities.launch(pid,pkg,process,component,intent,request,callingClass)); },
-      activityFinish: async (id, code, data) => { this.entry(pid); unawaited(this.activities.finish(pid,id,code,data)); },
-      activityPresentation: async translucent => { this.entry(pid); this.activities.presentation(pid,translucent); },
-      displayOrientation: async landscape => this.activities.orientation(pid,landscape),
-      ...this.clipboard.calls(pid),
-      settingsGet: async (table, name) => { this.watchSettings(pid); return this.settings.get(table, name); },
-      settingsEntries: async table => { this.watchSettings(pid); return this.settings.entries(table); },
-      settingsPut: async (table, name, value) => { this.watchSettings(pid); return this.settings.put(table, name, value); },
-      settingsSsaid: async () => { this.watchSettings(pid); return this.settings.ssaidKey(); },
-      sqlite: request => {
-        const session = this.entry(pid).session;
-        return (session.sqlite ??= createSQLiteSession()).call(request);
-      },
-      transact: request => this.transact(pid, request),
-      service: (pkg, process, request) => this.service(pid, pkg, process, request),
-      contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
-      broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
-    }, () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, async (method,value) => {
-      if (method === "transact") await this.discardDescriptors(pid,(value as TransactionReply).data,false);
-      if (method === "clipboardGet" && value) await this.discardDescriptors(pid,value as ParcelData,false);
-    });
-    callers.add(stop);
-    return { port: port2, close: stop };
-  }
+  brokerPort(pid: number): MessagePort { return serveBrokerPort(this, pid).port; }
   ready(pid: number, endpoint: ProcessEndpoint): void {
     if (this.entry(pid).session.endpoint) return;
     const { port1, port2 } = new MessageChannel();
@@ -634,7 +420,7 @@ export class ProcessBroker {
       if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.accountsChanged()));
     });
   }
-  private watchSettings(pid: number): void {
+  watchSettings(pid: number): void {
     const entry = this.entry(pid);
     entry.session.settings ??= this.settings.watch((table, name) => {
       if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
@@ -759,6 +545,8 @@ export class ProcessBroker {
     return [...layers, root];
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
+  /** every process registered, dead ones included */
+  processes(): IterableIterator<Entry> { return this.entries.values(); }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
    *  its other processes); other signals are ART's to handle in the target and are not modelled */
   signal(callerPid: number, pid: number, signal: number): void {
@@ -832,10 +620,10 @@ export class ProcessBroker {
   }
   unstageDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,true); }
   discardDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,false); }
-  private async discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
+  async discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
     await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? this.fileDescriptors.discard(pid,object.descriptor,staged) : undefined));
   }
-  private async transferDescriptors(from: number, to: number, data: ParcelData, broker = false): Promise<ParcelData> {
+  async transferDescriptors(from: number, to: number, data: ParcelData, broker = false): Promise<ParcelData> {
     this.entry(from);if (!broker) this.entry(to);this.fileDescriptors.ensureReceiver(to);
     const transferred: ParcelData = {bytes:data.bytes.slice(),objects:[]};
     try {
@@ -898,12 +686,14 @@ export class ProcessBroker {
     }
     return result;
   }
-  private entry(pid: number): Entry {
+  /** the live process `pid`; a dead one's callers see DeadObjectException */
+  entry(pid: number): Entry {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + pid);
     return entry;
   }
-  private request<T>(entry: Entry, call: (endpoint: ProcessEndpoint) => Promise<T>): Promise<T> {
+  /** a request to `entry` once its endpoint is ready, which fails when it dies */
+  request<T>(entry: Entry, call: (endpoint: ProcessEndpoint) => Promise<T>): Promise<T> {
     return this.whileAlive(entry, () => entry.ready.then((endpoint) => {
       if (entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + entry.pid);
       return call(endpoint);

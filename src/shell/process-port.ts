@@ -30,10 +30,12 @@ export function processError(error: ProcessFailure): Error {
 }
 const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
 
+/** what releases a method's result that never reached its caller */
+type Undelivered<C extends Contract> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => unknown };
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
  *  this endpoint while the request that caused it is suspended. */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
-  onUndelivered?: (method: string, value: unknown) => void | Promise<void>): () => void {
+  undelivered: Undelivered<C> = {}): () => void {
   const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
   let closed = false;
   const close = (error?: ProcessFailure) => {
@@ -53,9 +55,10 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       const value = await invoke.apply(endpoint, data.args);
       note(Ev.Served, at);
       if (data.kind === "call") {
-        if (closed) await onUndelivered?.(data.method,value);
+        const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
+        if (closed) await release?.(value);
         else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
-        catch (error) { await onUndelivered?.(data.method,value);throw error; }
+        catch (error) { await release?.(value); throw error; }
       }
     } catch (error) {
       if (data.kind === "notify") close(processFailure(error));
