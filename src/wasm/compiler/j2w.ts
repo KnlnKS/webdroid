@@ -96,8 +96,12 @@ const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", 
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
+/** the linker state a Compiler reads and records into */
+export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "plan" | "claims" | "allocated" | "longLoops"
+  | "idOf" | "slotOf" | "vslot" | "selectorId" | "ensureSlot" | "ensureBody" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
+  | "needsSymbolicSite" | "guestShared" | "sharedHelpers">;
 export class Compiler implements Base {
-  w: World;
+  w: LinkEnv;
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
@@ -144,7 +148,7 @@ export class Compiler implements Base {
   /** the helpers a first-tier unit shares with others (shareHelpers): those it imports, and those it exports for later units */
   private sharing?: { imports: Map<string, number>; out: [string, FunctionType][] };
   private baseTypes: number;
-  constructor(w: World) {
+  constructor(w: LinkEnv) {
     this.w = w;
     const mb = this.mb;
     Object.assign(this, declareBase(mb));

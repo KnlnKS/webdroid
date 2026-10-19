@@ -5,7 +5,7 @@
 //  - Every call between modules is `call_indirect slot` after storing the slot in rt.callee, so a compiled method needs no relinking. A stub
 //    calls host.link(callee), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
-import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
+import { symbolicInstruction, symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
 import { compileSymbolicSite } from "../compiler/symbolic.ts";
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type FunctionType } from "../compiler/wasmbin.ts";
 import { CALLEE, Code, OP } from "../compiler/code.ts";
@@ -384,6 +384,10 @@ export class World {
     return (this.fromJs ??= this.hostFn("str:from", ["L"], "L", (cx, c) => { c.lget(0).externConvertAny(); cx.str.fromHost(c); }))(s);
   }
   /** how `m` is implemented without its bytecode, if it is */
+  /** whether `ins` must link at run time: `m`'s loader links by name and the class the instruction names has no ready definition it initiated */
+  needsSymbolicSite(m: MethodInfo, ins: PreparedInstruction): boolean {
+    return !this.prog.linksStatically(this.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(this, m, ins);
+  }
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.madeUp.get(mid(m)) ?? intrinsicFor(this.opts.intrinsics, this.natives, m); }
   /** the bodies of the methods of classes made at run time (addClass), by method id */
   private madeUp = new Map<string, Intrinsic>();
@@ -933,7 +937,7 @@ export class World {
       if (!c.codeOff || this.intrinsic(c)) continue;
       for (const ins of this.entryCalls(c)) {
         if (out.length >= BATCH) break;
-        if (needsSymbolicSite(this, c, ins)) continue;
+        if (this.needsSymbolicSite(c, ins)) continue;
         const mr = c.dex.method(ins.b), t = this.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
         if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) continue;
         const at = this.slotOf(t), ts = this.slotAt(at);
@@ -1601,7 +1605,7 @@ export class World {
     const dex = m.dex;
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
-      if (needsSymbolicSite(this, m, ins)) continue;
+      if (this.needsSymbolicSite(m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
       const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.cha.targets(decl, mr.name, desc);
