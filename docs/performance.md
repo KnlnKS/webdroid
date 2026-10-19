@@ -57,7 +57,7 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
   builds it replaces, including the bundled app builds, so regenerate those afterwards.
 - **The dev server serves source fresh.** Do not edit served code while an e2e or `lat` run is in progress; an e2e
   run that reports "0 steps" just after an edit is the bundle rebuilding. Server-side code (`server.ts`,
-  `scripts/wasm/aot-*.ts`) loads once, so restart the server after editing it.
+  `scripts/aot-*.ts`) loads once, so restart the server after editing it.
 - **Counters are not frame rates.** Shell ticks, guest instructions, EGL swaps, decoded frames and browser
   presentations measure different work, and an idle or wedged app can advance ticks without presenting. Check that
   rendering works and `wd.ticks` advance before trusting any rate. Keep CPU profiles apart from gated runs, and
