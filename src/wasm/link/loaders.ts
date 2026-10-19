@@ -9,7 +9,7 @@ import type { Loader } from "../compiler/program.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
 import type { World } from "./world.ts";
 import { prepareDefinition, resolvedMirror } from "./resolution.ts";
-import { emitRestored, emitSettled } from "./sched.ts";
+import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 /** after host.classByName set local `id`: the Class it named (null for 0), or the settled answer of a lookup that parked */
 export function emitClassAnswer(cx: Compiler, c: Code, id: number): void {

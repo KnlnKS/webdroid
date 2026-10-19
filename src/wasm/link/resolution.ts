@@ -7,7 +7,7 @@ import type { MethodInfo } from "../compiler/program.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { descToName } from "../../jvm/abi.ts";
 import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles.ts";
-import { THROWERS } from "./exc.ts";
+import { THROWERS } from "../compiler/exc.ts";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
   const next = (at: number): void | Promise<void> => {

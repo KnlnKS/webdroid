@@ -4,7 +4,7 @@
 import type { DexFile } from "../../jvm/dex.ts";
 import { descToName } from "../../jvm/abi.ts";
 import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
-import type { Thrower } from "../link/exc.ts";
+import type { Thrower } from "./exc.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;

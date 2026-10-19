@@ -19,7 +19,7 @@ import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe.ts";
 import { hostReflect, RInfo } from "./reflect.ts";
 import { hostMembers, MInfo } from "./members.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
-import { emitRestored } from "./sched.ts";
+import { emitRestored } from "../compiler/hostcalls.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];

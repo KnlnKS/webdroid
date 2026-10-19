@@ -11,7 +11,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "../link/world.ts";
-import { TRANSFER_BASE, TRANSFER_BYTES } from "../link/exc.ts";
+import { TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/exc.ts";
 import type { Strand } from "../link/sched.ts";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy.ts";

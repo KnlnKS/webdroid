@@ -13,9 +13,9 @@ import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "../link/mhandles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
-import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc.ts";
+import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
 import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo.ts";
-import { emitRestored, FUEL } from "../link/sched.ts";
+import { emitRestored, FUEL } from "./hostcalls.ts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer.ts";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */

@@ -10,7 +10,7 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { Program, ACC, javaName, declaredMethods, declaredMethod, type JClass } from "../../src/wasm/compiler/program.ts";
-import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/link/exc.ts";
+import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/exc.ts";
 import { mid, methodOf } from "../../src/wasm/compiler/ids.ts";
 import { appArchives } from "../../src/jvm/natives/jdex.ts";
 import { openDexes } from "../../src/wasm/host/boot.ts";
@@ -31,7 +31,7 @@ import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler.ts"
 import type { CompileRequest, CompileResponse } from "../../src/wasm/host/compile-serve.ts";
 import { typeFailure, symbolicImplFor } from "../../src/wasm/compiler/linkage.ts";
 import type { Code } from "../../src/wasm/compiler/code.ts";
-import { St } from "../../src/wasm/link/monitor.ts";
+import { St } from "../../src/wasm/compiler/hostcalls.ts";
 import { canAccess } from "../../src/wasm/link/classes.ts";
 import { HOSTED } from "../../src/wasm/link/hostapi.ts";
 import { wasmEntry } from "../../src/wasm/host/entry.ts";

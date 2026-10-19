@@ -11,9 +11,10 @@ import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { emitRestored, emitSettled, type Strand } from "./sched.ts";
+import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
 import type { Kind } from "../compiler/program.ts";
+import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";

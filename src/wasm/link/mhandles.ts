@@ -16,12 +16,13 @@ import type { MC } from "../compiler/method.ts";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { canAccess, constClass, descOf, typeName } from "./classes.ts";
 import { failed, prettyType, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage.ts";
-import { emitRestored, emitSettled, type Strand } from "./sched.ts";
+import { type Strand } from "./sched.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { emitVarHandleAccess } from "../compiler/poly.ts";
 import { invokeVarHandleView } from "./vhandleviews.ts";
 import { invokeCustom } from "./callsites.ts";
 import { mid } from "../compiler/ids.ts";
+import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** leaves the element array of the Object[] (anyref) on the stack */

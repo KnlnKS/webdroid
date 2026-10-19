@@ -5,7 +5,7 @@
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
-import { Block, emitBlock } from "./sched.ts";
+import { Block, emitBlock } from "../compiler/hostcalls.ts";
 
 const STRUCT = "android/system/StructAddrinfo", INET = "java/net/InetAddress", GAI = "android/system/GaiException";
 /** the answer of a lookup that cannot finish synchronously */

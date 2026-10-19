@@ -5,8 +5,9 @@ import { rt } from "../compiler/rtfns.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { canAccess } from "./classes.ts";
 import { causedThrowable, resolveType } from "./resolution.ts";
-import { emitSave, type Strand } from "./sched.ts";
+import { type Strand } from "./sched.ts";
 import type { World } from "./world.ts";
+import { emitSave } from "../compiler/hostcalls.ts";
 
 type Declaration = { cls: string; key: string; flags: number };
 type Pair = [Declaration, Declaration];

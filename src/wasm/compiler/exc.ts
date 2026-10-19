@@ -1,10 +1,10 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
-import { T } from "../compiler/wasmbin.ts";
-import { Code, OP } from "../compiler/code.ts";
-import type { Kind } from "../compiler/program.ts";
-import type { Compiler, FnTrace } from "../compiler/j2w.ts";
+import { T } from "./wasmbin.ts";
+import { Code, OP } from "./code.ts";
+import type { Kind } from "./program.ts";
+import type { Compiler, FnTrace } from "./j2w.ts";
 import { oomMessage } from "../../jvm/abi.ts";
-import { prettyType } from "../compiler/linkage.ts";
+import { prettyType } from "./linkage.ts";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
