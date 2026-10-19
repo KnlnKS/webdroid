@@ -5,6 +5,8 @@ export const H = { ID: 0, DEPTH: 1, DISPLAY: 2, MAXD: 12, EXTRA: 14, IMT: 15, IM
  *  value is tested against it: depth + 1 for a class within the display, ELEM_IFACE for an interface or a class beyond it, ELEM_OTHER otherwise */
 export const ELEM = H.DISPLAY + 2, ELEM_KIND = H.DISPLAY + 3, ELEM_IFACE = -2, ELEM_OTHER = -1;
 export type ElemKind = "i8" | "i16" | "i32" | "i64" | "ref";
+/** every element kind, in the order a runtime type test tries an array against them */
+export const ELEM_KINDS: readonly ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const OF_SIZE: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" };
 /** element storage kind of an array descriptor like "[I" */
 export const elemKindOf = (desc: string): ElemKind => { const p = PRIMS[desc[1]]; return p ? OF_SIZE[p.size] : "ref"; };

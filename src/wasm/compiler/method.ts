@@ -4,7 +4,7 @@ import { Code, OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
 import type { Compiler } from "./j2w.ts";
-import { H, elemKindOf, type ElemKind } from "./consts.ts";
+import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "../../jvm/structure.ts";
@@ -588,14 +588,13 @@ export class MC {
     const cx = this.cx, c = this.code;
     // arrays of all kinds: dispatch on the wrapper type (the verifier gives no static element type here)
     this.nonNull(reg); c.lset(this.tmpL);
-    const kinds: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
-    for (let i = 0; i < kinds.length; i++) {
-      const k = kinds[i];
-      if (i < kinds.length - 1) c.lget(this.tmpL).refTest(cx.tArr[k]).if_(T.i32);
+    for (let i = 0; i < ELEM_KINDS.length; i++) {
+      const k = ELEM_KINDS[i];
+      if (i < ELEM_KINDS.length - 1) c.lget(this.tmpL).refTest(cx.tArr[k]).if_(T.i32);
       c.lget(this.tmpL); cx.arrayData(c, k).arrayLen();
-      if (i < kinds.length - 1) c.else_();
+      if (i < ELEM_KINDS.length - 1) c.else_();
     }
-    for (let i = 0; i < kinds.length - 1; i++) c.end();
+    for (let i = 0; i < ELEM_KINDS.length - 1; i++) c.end();
   }
   /** the local of each element kind that holds the data array of the array being accessed */
   dataLocal = new Map<ElemKind, number>();

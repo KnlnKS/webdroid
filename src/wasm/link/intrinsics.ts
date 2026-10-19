@@ -5,7 +5,7 @@ import { emitRefCopy, classIntrinsics } from "./classes.ts";
 
 import { unsafeIntrinsics } from "./unsafe.ts";
 import { reflectIntrinsics } from "./reflect.ts";
-import { H, elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { H, ELEM_KINDS, elemKindOf } from "../compiler/consts.ts";
 import { PRIMS } from "../../jvm/abi.ts";
 import { stringIntrinsics } from "./strings.ts";
 import { charIntrinsics } from "./chars.ts";
@@ -77,10 +77,9 @@ def("java/lang/Math.sqrt(D)D", f64Op(0x9f));
 // System.arraycopy(Object src, int sp, Object dst, int dp, int n): an element kind's arrays copy as one array.copy; a pair of arrays of
 // different classes (int[] to float[], or not both arrays) is an ArrayStoreException, a bad range the production AIOOBE message
 def("java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V", (cx, m, c) => {
-  const kinds: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
   c.lget(2).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  for (const k of kinds) {
+  for (const k of ELEM_KINDS) {
     const t = cx.tArr[k], d = cx.tData[k];
     c.lget(0).refTest(t).if_();
     c.lget(2).refTest(t).raw(OP.i32_eqz).if_(); cx.callThrower(c, "ase"); c.end();

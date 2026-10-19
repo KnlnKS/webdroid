@@ -8,7 +8,7 @@ import { failed } from "../compiler/linkage.ts";
 import { PRIMS, demangle, mangleField } from "../../jvm/abi.ts";
 import { rt, JObj } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
-import type { ElemKind } from "../compiler/consts.ts";
+import { ELEM_KINDS } from "../compiler/consts.ts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "../link/world.ts";
 import { TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/exc.ts";
@@ -23,7 +23,6 @@ type Fn = (...a: any[]) => any;
 type Caller = { cls: string; key: string; call: Fn; rk: Kind | "V" };
 /** the host's copy of a primitive array */
 type HostView = ArrayBufferView & { length: number; BYTES_PER_ELEMENT: number };
-const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const REF = Symbol("java reference");
 const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Float64Array(1), i64 = new BigInt64Array(f64.buffer);
 
@@ -71,7 +70,7 @@ export class Bridge implements HostBridge {
     if (this.ops) return this.ops;
     const w = this.w;
     const alen = w.hostFn("b:alen", ["L"], "I", (cx, c) => {
-      for (const k of KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
+      for (const k of ELEM_KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
       c.i32(-1);
     });
     // acopy(array, pointer, toMemory, from, count): elements [from, from + count) of a primitive array to or from linear memory

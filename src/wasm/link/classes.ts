@@ -9,7 +9,7 @@
 // host for the slot of a generated function for that class.
 import { OP } from "../compiler/code.ts";
 import { HT, T, refNull } from "../compiler/wasmbin.ts";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_KINDS } from "../compiler/consts.ts";
 import { ACC, descOf, javaName as stripLoader, typeName, type JClass } from "../compiler/program.ts";
 import { PRIMS } from "../../jvm/abi.ts";
 import { canAccess } from "../compiler/linkage.ts";
@@ -30,7 +30,6 @@ const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
  *  [ART Primitive::Type, log2 size, Java name] */
 export const PRIM = Object.fromEntries([...Object.entries(PRIMS).map(([d, p]) => [d, Math.log2(p.size), p.name] as const), ["V", 0, "void"] as const]
   .map(([d, log, name], i): [string, [number, number, string]] => ["#" + d, [i + 1, log, name]]));
-const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const isPrim = (n: string) => n in PRIM;
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
@@ -194,7 +193,7 @@ rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
 }, true);
 // aclone(obj): a copy of an array with the same class, null for anything else
 rt("aclone", ["L"], "L", (cx, c) => {
-  for (const k of KINDS) {
+  for (const k of ELEM_KINDS) {
     const t = cx.tArr[k], d = cx.tData[k], a = c.newLocal(refNull(t)), src = c.newLocal(refNull(d)), dst = c.newLocal(refNull(d)), n = c.newLocal(T.i32);
     c.lget(0).refTest(t).if_();
     c.lget(0).refCast(t).lset(a).lget(a).structGet(t, 2).lset(src).lget(src).refAsNonNull().arrayLen().lset(n).lget(n).arrayNewDefault(d).lset(dst);
