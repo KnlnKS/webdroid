@@ -2,8 +2,9 @@ import { expect, test } from "vite-plus/test";
 import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
-// compiler <- link <- host: the compiler and the linker run in a page, a worker and node, so only host/ may reach the runtime, the natives and
-// the services; and only src/jvm/tier.ts, by a dynamic import, may reach src/wasm, so a page loads the tier while the rest of its code starts.
+// compiler <- link <- host: the compiler sees the linker only through types (j2w.ts LinkEnv); the compiler and the linker run in a page, a worker
+// and node, so only host/ may reach the runtime, the natives and the services; and only src/jvm/tier.ts, by a dynamic import, may reach src/wasm,
+// so a page loads the tier while the rest of its code starts.
 const SHARED_FRONT_END = new Set(["abi.ts", "dex.ts", "opcodes.ts", "prepared.ts", "structure.ts"]);
 
 test("src/wasm keeps its layers", () => {
@@ -13,7 +14,7 @@ test("src/wasm keeps its layers", () => {
     if (file.endsWith(".test.ts") || file.endsWith(".d.ts")) continue;
     const from = resolve(root, file), layer = file.startsWith("wasm/") ? file.split("/")[1] : "js";
     const text = readFileSync(from, "utf8");
-    for (const [, spec] of text.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|^import\s+)"([^"]+)"/gm)) {
+    for (const [, typeOnly, spec] of text.matchAll(/(?:^(?:import|export)(\s+type\b)?[^;"]*?\bfrom\s+|\bimport\s*\(\s*|^import\s+)"([^"]+)"/gm)) {
       const bad = (why: string) => violations.push(`${relative(root, from)} imports ${spec}: ${why}`);
       if (spec.startsWith("node:")) { if (layer === "compiler" || layer === "link") bad("a pure layer"); continue; }
       if (!spec.startsWith(".")) continue;
@@ -22,6 +23,7 @@ test("src/wasm keeps its layers", () => {
       if (to.startsWith("wasm/")) {
         const target = to.split("/")[1];
         if (target === "host" && layer !== "host") bad(`${layer} may not import host`);
+        if (target === "link" && layer === "compiler" && !typeOnly) bad("the compiler imports link only as types");
         continue;
       }
       if (layer !== "host" && !(to.startsWith("jvm/") && SHARED_FRONT_END.has(to.split("/")[1]))) bad(`${layer} may import only the shared front end outside src/wasm`);

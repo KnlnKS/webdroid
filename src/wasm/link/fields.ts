@@ -2,27 +2,20 @@
 // (class id << 12 | index in the class's fields, classes.ts mkField); the host hands out a generated accessor slot per field and operation
 // (unsafe.ts), for static fields as well, so the natives only choose the accessor by the field's type letter. Primitive reads and writes widen
 // as the language does (a getLong of an int field, a setInt of a long field is not allowed), and a receiver, access or final check precedes them.
-import { OP } from "./code.ts";
-import { T } from "./wasmbin.ts";
-import { ACC } from "./program.ts";
-import { Info, fieldId, vtId, classMethod } from "../link/classes.ts";
-import { UInfo } from "../link/unsafe.ts";
-import { rt } from "./rtfns.ts";
-import type { Code } from "./code.ts";
-import type { Compiler, Intrinsic } from "./j2w.ts";
+import { OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { ACC, kindOf } from "../compiler/program.ts";
+import { fieldId } from "./classes.ts";
+import { rt } from "../compiler/rtfns.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { Info, UInfo } from "../compiler/info.ts";
+import { BOX, WIDEN } from "../compiler/primitives.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
-/** the field letters a value of each type may be assigned to, which is also what a get of each may be read as */
-export const WIDEN: Record<string, string> = { Z: "Z", B: "BSIJFD", C: "CIJFD", S: "SIJFD", I: "IJFD", J: "JFD", F: "FD", D: "D" };
-const LETTERS = Object.keys(WIDEN);
-export const BOX: Record<string, [string, string, string]> = {
-  Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
-  S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
-  F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
-};
+const LETTERS = Object.keys(PRIMS);
 const code = (l: string) => l.charCodeAt(0);
-/** the wasm kind a field letter is held as: int-like and float bits as I, long and double bits as J */
-const kindOfLetter = (l: string): "I" | "J" => (l === "J" || l === "D" ? "J" : "I");
 
 /** locals for the field id on the stack (or already in local `given`), its class id, index, flags and, unless `flagsOnly`, type letter */
 function describe(cx: Compiler, c: Code, given?: number, flagsOnly = false) {
@@ -53,8 +46,8 @@ rt("fprep", ["L", "L", "I"], "I", (cx, c) => {
   cx.info(c, Info.EnsureSlot, () => c.lget(cid)); c.callIndirect(cx.sig([], "V"));
   c.else_();
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(cid); cx.callRt(c, "classOf"); c.lget(1); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
-  c.raw(OP.i32_eqz).if_().lget(cid).lget(1); vtId(cx, c); cx.callThrower(c, "recv"); c.end();
+  c.lget(cid); cx.callRt(c, "classOf"); c.lget(1); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
+  c.raw(OP.i32_eqz).if_().lget(cid).lget(1); cx.vtId(c); cx.callThrower(c, "recv"); c.end();
   c.end();
   c.lget(0).refCast(ao).structGet(ao, cx.fieldIndex(ACCESSIBLE, { owner: ACCESSIBLE, name: "override", desc: "Z" })).lset(override);
   // ART's VerifyAccess passes a public member before it looks for the caller
@@ -75,7 +68,7 @@ rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
   const { id, cid, flags, letter } = describe(cx, c);
   for (const l of LETTERS) {
     c.lget(letter).i32(code(l)).raw(OP.i32_eq).if_();
-    const k = kindOfLetter(l), slot = accessor(cx, c, id, flags, false, k === "J" ? 1 : 0), raw = c.newLocal(k === "J" ? T.i64 : T.i32);
+    const k = kindOf(l), slot = accessor(cx, c, id, flags, false, k === "J" ? 1 : 0), raw = c.newLocal(cx.vtOf(k));
     c.lget(1).lget(slot).callIndirect(cx.sig(["L"], k)).lset(raw);
     // the value as a signed integer (i64) or a double, whichever the letter is
     const asInt = () => { c.lget(raw); if (k === "I" && l !== "F") c.raw(OP.i64_extend_i32_s); else if (l === "F") c.raw(OP.i64_extend_i32_u); };
@@ -95,9 +88,9 @@ rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
 // fbox(letter, bits) -> the wrapper object of a primitive: valueOf of its class
 rt("fbox", ["I", "J"], "L", (cx, c) => {
   for (const l of LETTERS) {
-    const cls = BOX[l][0], vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
+    const cls = PRIMS[l].box, vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
     c.lget(0).i32(code(l)).raw(OP.i32_eq).if_();
-    if (!vo) cx.gap(c, `${cls}.valueOf`); else { cx.emitEnsure(c, cls); c.lget(1); if (kindOfLetter(l) === "I") c.raw(OP.i32_wrap_i64); cx.callMethod(c, vo); c.ret(); }
+    if (!vo) cx.gap(c, `${cls}.valueOf`); else { cx.emitEnsure(c, cls); c.lget(1); if (kindOf(l) === "I") c.raw(OP.i32_wrap_i64); cx.callMethod(c, vo); c.ret(); }
     c.end();
   }
   c.anyNull();
@@ -119,7 +112,7 @@ rt("fstore", ["I", "L", "J", "I"], "V", (cx, c) => {
   const { cid, flags, letter } = describe(cx, c, 0);
   for (const target of LETTERS) {
     c.lget(letter).i32(code(target)).raw(OP.i32_eq).if_();
-    const k = kindOfLetter(target), slot = accessor(cx, c, 0, flags, true, k === "J" ? 1 : 0);
+    const k = kindOf(target), slot = accessor(cx, c, 0, flags, true, k === "J" ? 1 : 0);
     for (const v of LETTERS.filter((x) => WIDEN[x].includes(target))) {
       c.lget(3).i32(code(v)).raw(OP.i32_eq).if_();
       c.lget(1);
@@ -143,8 +136,8 @@ rt("fset", ["L", "L", "L"], "V", (cx, c) => {
   c.lget(letter).i32(code("L")).raw(OP.i32_eq).lget(letter).i32(code("[")).raw(OP.i32_eq).raw(OP.i32_or).if_();
   // a reference: null, or an instance of the field's type
   c.lget(2).refIsNull().raw(OP.i32_eqz).if_();
-  c.lget(ty); cx.callRt(c, "classOf"); c.lget(2); classMethod(cx, c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
-  c.raw(OP.i32_eqz).if_().lget(ty).lget(2).refAsNonNull(); vtId(cx, c); cx.callThrower(c, "ftm"); c.end().end();
+  c.lget(ty); cx.callRt(c, "classOf"); c.lget(2); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
+  c.raw(OP.i32_eqz).if_().lget(ty).lget(2).refAsNonNull(); cx.vtId(c); cx.callThrower(c, "ftm"); c.end().end();
   const ref = accessor(cx, c, id, flags, true, 2);
   c.lget(1).lget(2).lget(ref).callIndirect(cx.sig(["L", "L"], "V")).ret().end();
   // a primitive: the wrapper's class says which type it holds
@@ -154,20 +147,20 @@ rt("fset", ["L", "L", "L"], "V", (cx, c) => {
     c.lget(2).i32(cx.idOf(cls)).i32(cx.prog.chain(cls).length - 1).call(cx.helper("iof")).if_();
     if (!m) cx.gap(c, `${cls}.${name}`); else {
       c.lget(id).lget(1).lget(2); cx.callMethod(c, m);
-      if (l === "F") c.raw(OP.i64_extend_i32_u); else if (kindOfLetter(l) === "I") c.raw(OP.i64_extend_i32_s);
+      if (l === "F") c.raw(OP.i64_extend_i32_u); else if (kindOf(l) === "I") c.raw(OP.i64_extend_i32_s);
       c.i32(code(l)); cx.callRt(c, "fstore"); c.ret();
     }
     c.end();
   }
-  c.lget(ty).lget(2).refAsNonNull(); vtId(cx, c); cx.callThrower(c, "ftm");
+  c.lget(ty).lget(2).refAsNonNull(); cx.vtId(c); cx.callThrower(c, "ftm");
 });
 
 export const fieldIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => fieldIntrinsics.set(`${FIELD}.${key}`, (cx, m, c) => f(cx, c));
 def("get(Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => { c.lget(0).lget(1); cx.callRt(c, "fget"); });
 def("set(Ljava/lang/Object;Ljava/lang/Object;)V", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "fset"); });
-for (const [name, l] of [["Boolean", "Z"], ["Byte", "B"], ["Char", "C"], ["Short", "S"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Double", "D"]] as const) {
-  const k = kindOfLetter(l);
+for (const [l, { title: name }] of Object.entries(PRIMS)) {
+  const k = kindOf(l);
   def(`get${name}(Ljava/lang/Object;)${l}`, (cx, c) => { c.lget(0).lget(1).i32(code(l)); cx.callRt(c, "fgetp"); if (k === "I") c.raw(OP.i32_wrap_i64); });
   // the value in local 2, as the bits fstore takes: sign-extended for int-like, zero-extended for float
   def(`set${name}(Ljava/lang/Object;${l})V`, (cx, c) => {

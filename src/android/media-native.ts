@@ -59,12 +59,11 @@ export function postNativeEvent(to: JObj | [string, JObj], live: (() => boolean)
 
 /** At most `length` bytes of a descriptor from `offset`, or null when it is not a readable file or
  *  the range is empty or starts outside it */
-export function fdSlice(fd: number, offset: bigint, length: bigint): FileSource | null {
-  const file = javaFdSource(fd);
+export const fdSlice = (fd: number, offset: bigint, length: bigint): FileSource | null | Promise<FileSource | null> => after(javaFdSource(fd), file => {
   if (!file || offset < 0n || length <= 0n || offset >= BigInt(file.size)) return null;
   const start = Number(offset);
   return new SliceFile(file, start, Math.min(Number(length), file.size - start));
-}
+});
 
 /** A Java MediaDataSource as a source. The player and the retriever read it from the media server
  *  through IDataSource, so each read reaches readAt on one of this process's binder threads. */

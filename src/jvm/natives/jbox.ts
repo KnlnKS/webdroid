@@ -1,16 +1,12 @@
 // java.lang's boxes run from libcore. TS makes and reads them through these helpers, over each
 // class's own `value` field.
-import { mangleField } from "../abi.ts";
+import { PRIMS, mangleField } from "../abi.ts";
 import { classNameOf } from "./jentry.ts";
 
 type Obj = Record<string, any>;
 export type BoxDesc = "I" | "J" | "F" | "D" | "Z" | "C" | "B" | "S";
-const CLASS: Record<BoxDesc, string> = {
-  I: "java/lang/Integer", J: "java/lang/Long", F: "java/lang/Float", D: "java/lang/Double",
-  Z: "java/lang/Boolean", C: "java/lang/Character", B: "java/lang/Byte", S: "java/lang/Short",
-};
-const DESC = new Map(Object.entries(CLASS).map(([d, c]) => [c, d as BoxDesc]));
-const VALUE = Object.fromEntries(Object.entries(CLASS).map(([d, c]) => [d, mangleField(c, "value")])) as Record<BoxDesc, string>;
+const DESC = new Map(Object.entries(PRIMS).map(([d, p]) => [p.box, d as BoxDesc]));
+const VALUE = Object.fromEntries(Object.entries(PRIMS).map(([d, p]) => [d, mangleField(p.box, "value")])) as Record<BoxDesc, string>;
 
 /** the primitive descriptor of a box, null for anything else */
 export function boxDesc(o: unknown): BoxDesc | null {

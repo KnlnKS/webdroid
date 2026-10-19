@@ -1,17 +1,17 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
-import { T } from "../compiler/wasmbin.ts";
-import { Code, OP } from "../compiler/code.ts";
-import type { Kind } from "../compiler/program.ts";
-import type { Compiler, FnTrace } from "../compiler/j2w.ts";
+import { T } from "./wasmbin.ts";
+import { Code, OP } from "./code.ts";
+import type { Kind } from "./program.ts";
+import type { Compiler, FnTrace } from "./j2w.ts";
 import { oomMessage } from "../../jvm/abi.ts";
-import { prettyType } from "../compiler/linkage.ts";
+import { prettyType } from "./linkage.ts";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
   try { return new Error(); } finally { Error.stackTraceLimit = prior; }
 }
-/** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
+/** calls and loop iterations a method runs as first-tier code before it is recompiled (Tiering.upgrade) */
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
@@ -128,6 +128,8 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
 }
 
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
+/** what an outlined loop's function name adds to its method's (outline.ts): a stack frame names only the function, and the loop's frames are its method's */
+export const CHUNK_MARK = "#loop";
 /** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
 const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
 /** the names of the Wasm functions on a V8 `Error.stack`, innermost first */
@@ -140,7 +142,7 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
     if (out.length >= count) break;
     const m = FRAME.exec(line);
     const name = m?.[1], exact = name ? traces.get(name) : undefined;
-    const loop = exact ? -1 : name?.lastIndexOf("#loop") ?? -1;
+    const loop = exact ? -1 : name?.lastIndexOf(CHUNK_MARK) ?? -1;
     const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
     if (!t?.m) continue;                                  // host code, throwers and stubs are not Java frames
     const id = t.m.cls + "." + t.m.key;

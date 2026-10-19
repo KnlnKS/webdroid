@@ -3,12 +3,6 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { stableFrame } from "./settle.ts";
 export const E2E_DIR = new URL("..", import.meta.url).pathname;
-export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
-export function webdroidUrl(): URL {
-  const url = new URL(BASE_URL);
-  if (process.env.WEBDROID_BYTECODE) url.searchParams.set("bytecode", process.env.WEBDROID_BYTECODE);
-  return url;
-}
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const readJson = async (path: string | URL) => JSON.parse(await readFile(path, "utf8"));
 

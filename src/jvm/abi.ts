@@ -103,13 +103,20 @@ export function descToName(desc: string): string {
   return desc[0] === "L" ? desc.slice(1, -1) : desc;
 }
 
-/** primitive descriptor ↔ Java type name */
-const PRIM_NAME: Record<string, string> = { I: "int", J: "long", F: "float", D: "double", Z: "boolean", B: "byte", C: "char", S: "short", V: "void" };
-export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entries(PRIM_NAME).map(([d, n]) => [n, d]));
-
-/** the one mapping of Java's element types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64) */
-export const PRIM_ARRAYS = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
-export type PrimElem = keyof typeof PRIM_ARRAYS;
+/** the TypedArray holding a primitive array's elements */
+export type PrimArray = ArrayBufferView & { length: number };
+type PrimArrayType = { new (n: number): PrimArray; new (b: ArrayBuffer, o: number, n: number): PrimArray; from(items: ArrayLike<number> | ArrayLike<bigint>): PrimArray };
+const prim = (name: string, box: string, size: number, array: PrimArrayType) => ({ name, title: name[0].toUpperCase() + name.slice(1), box: "java/lang/" + box, size, array });
+/** the primitive types by descriptor letter, in ART's Primitive::Type order (boolean is 1, double 8; void, without values, is 9): the Java
+ *  name, that name as per-type method names carry it (Unsafe.getInt, JNI's NewCharArray), the wrapper class, an array element's bytes and
+ *  the TypedArray of an array's elements */
+export const PRIMS: Record<string, ReturnType<typeof prim>> = {
+  Z: prim("boolean", "Boolean", 1, Uint8Array), B: prim("byte", "Byte", 1, Int8Array), C: prim("char", "Character", 2, Uint16Array),
+  S: prim("short", "Short", 2, Int16Array), I: prim("int", "Integer", 4, Int32Array), J: prim("long", "Long", 8, BigInt64Array),
+  F: prim("float", "Float", 4, Float32Array), D: prim("double", "Double", 8, Float64Array),
+};
+/** Java type name → primitive descriptor, void included */
+export const PRIM_DESC: Record<string, string> = { ...Object.fromEntries(Object.entries(PRIMS).map(([d, p]) => [p.name, d])), void: "V" };
 
 /** tag a JS array as a Java `elem[]` for compiled code (in place, returns the same array) */
 export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {

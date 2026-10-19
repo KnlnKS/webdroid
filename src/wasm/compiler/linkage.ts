@@ -2,9 +2,9 @@
 // common_throws.cc): NoClassDefFoundError, NoSuchFieldError, NoSuchMethodError and IncompatibleClassChangeError, with ART's messages. These are
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex.ts";
-import { descToName } from "../../jvm/abi.ts";
+import { PRIMS, descToName } from "../../jvm/abi.ts";
 import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
-import type { Thrower } from "../link/exc.ts";
+import type { Thrower } from "./exc.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;
@@ -14,9 +14,8 @@ export interface LinkFailure {
 }
 
 const dotted = (n: string) => javaName(n).replace(/\//g, ".");
-const PRIMS: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double", V: "void" };
 /** a descriptor as ART's PrettyDescriptor prints it */
-export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]);
+export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]?.name ?? "void");
 const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);
 /** ART appends where the referring class was declared */
 const declared = (prog: Program, cls: string, extra?: DexFile) => ` (declaration of '${dotted(cls)}' appears in ${prog.get(cls)?.dex?.name ?? extra?.name ?? "?"})`;
@@ -68,6 +67,15 @@ export function resolveSymbolicMethod(prog: Program, cls: string, name: string, 
 /** Package-private slots retain their declaring runtime package even when binary prototypes match. */
 export const dispatchMethodKey = (key: string): string => key.slice(key.indexOf("\0") + 1);
 export const dispatchSlotKey = (m: MethodInfo): string => (m.flags & (ACC.PUBLIC | ACC.PROTECTED) ? "" : m.cls + "\0") + javaName(m.key);
+/** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
+ *  the caller's own, in the caller's package, or protected and inherited */
+export function canAccess(prog: Program, caller: string, decl: JClass, flags: number): boolean {
+  const samePackage = sameRuntimePackage(prog, caller, decl.name);
+  if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
+  if (flags & ACC.PUBLIC || caller === decl.name) return true;
+  if (flags & ACC.PRIVATE) return false;
+  return samePackage || !!(flags & ACC.PROTECTED) && prog.isSubclass(caller, decl.name);
+}
 export const overridesMethod = (prog: Program, cls: string, m: MethodInfo): boolean => !(m.flags & ACC.PRIVATE) && (!!(m.flags & (ACC.PUBLIC | ACC.PROTECTED)) || sameRuntimePackage(prog, cls, m.cls));
 
 /** Select an override of this declaration, rather than a same-named inaccessible member. */

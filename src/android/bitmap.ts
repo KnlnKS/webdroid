@@ -11,7 +11,7 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { awaited, rt, type JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, declaredField, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
@@ -379,13 +379,14 @@ function copyBitmap(src: NativeBitmap, config: number): NativeBitmap {
 const wrap = (b: NativeBitmap, mutable: number | boolean) => { b.immutable = !mutable; return javaBitmap(b); };
 
 rt.registerJnis(BITMAP, {
-  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": (colors: Int32Array | null, off: number, stride: number, w: number, h: number, config: number, mutable: number, cs: bigint) => {
+  // the Java Bitmap's constructor can wait, and a native that takes an array cannot be parked
+  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": waits((colors: Int32Array | null, off: number, stride: number, w: number, h: number, config: number, mutable: number, cs: bigint) => {
     if (colors && colors.length < Math.abs(stride) * h) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
     const b = new NativeBitmap(w, h, creatable(config));
     if (config !== ALPHA_8) b.space = spaceOf(cs);
     if (colors) setPixels(b, colors, off, stride, 0, 0, w, h);
     return wrap(b, mutable);
-  },
+  }),
   // HARDWARE is our raster, as a GPU buffer is on a device: immutable, drawn without a readback
   "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bitmapAt(h), config), mutable),
   "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bitmapAt(h), ARGB_8888), 0),
@@ -435,11 +436,11 @@ rt.registerJnis(BITMAP, {
   },
   "nativeSetPixels(J[IIIIIII)V": (h: bigint, colors: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) =>
     setPixels(bitmapAt(h), colors, off, stride, x, y, w, ht),
-  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => writeRemainingBytes(buffer,memoryOf(bitmapAt(h))),
-  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => {
+  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": waits((h: bigint, buffer: JBuffer) => writeRemainingBytes(buffer,memoryOf(bitmapAt(h)))),
+  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": waits((h: bigint, buffer: JBuffer) => {
     const b = bitmapAt(h);
     return after(readBufferBytes(buffer,position(buffer) << elementShift(buffer),byteSize(b)),bytes => setMemory(b,bytes.slice()));
-  },
+  }),
   "nativeGenerationId(J)I": (h: bigint) => bitmapAt(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {
@@ -458,8 +459,8 @@ rt.registerJnis(BITMAP, {
     b.immutable = !mutable;
     return javaBitmap(b, density);
   },
-  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true),
+  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": waits((h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
+    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true)),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bitmapAt(h).hasAlpha,

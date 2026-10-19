@@ -5,12 +5,12 @@
 // instruction would, boxes the result and wraps what the method throws in InvocationTargetException.
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
-import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program.ts";
+import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
 import { H } from "../compiler/consts.ts";
-import { emitString, idOfClass, classMethod, emitNameEq, typeName, vtId } from "./classes.ts";
-import { UInfo } from "./unsafe.ts";
-import { WIDEN, BOX } from "../compiler/fields.ts";
+import { emitString, idOfClass, emitNameEq } from "./classes.ts";
+import { UInfo, RInfo } from "../compiler/info.ts";
+import { WIDEN, BOX } from "../compiler/primitives.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
@@ -20,8 +20,6 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
-export type RInfo = (typeof RInfo)[keyof typeof RInfo];
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
 function members(jc: JClass | undefined): string[] {
@@ -80,7 +78,7 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
 }
 
 export function methodAt(w: World, slot: number): MethodInfo {
-  const entry = w.slotAt(slot);
+  const entry = w.slots.at(slot);
   if (entry?.k !== "method") throw new Error(`invalid executable slot ${slot}`);
   return entry.m;
 }
@@ -88,7 +86,7 @@ export function methodAt(w: World, slot: number): MethodInfo {
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
  *  lets it through, and calls the method itself rather than the receiver's override when it invokes a super or direct method. */
 function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct: boolean): void {
-  const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref), recv = c.newLocal(T.anyref);
+  const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref);
   if (wrap) {
     // ART checks the number of arguments, the receiver and each argument's type before anything runs
     const given = c.newLocal(T.i32);
@@ -99,7 +97,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
   if (!ctor && !m.isStatic) {
     c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-    if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
+    if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
     const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
@@ -108,22 +106,33 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     else if (wrap && p !== "Ljava/lang/Object;") {
       const a = c.newLocal(T.anyref);
       c.lset(a).lget(a).refIsNull().raw(OP.i32_eqz).if_().lget(a); cx.emitInstanceOf(c, descToName(p)); c.raw(OP.i32_eqz).if_();
-      c.i32(i).i32(ty).lget(a); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
+      c.i32(i).i32(ty).lget(a); cx.vtId(c); cx.callThrower(c, "iarg"); c.end().end();
       c.lget(a);
     }
     return c.lset(v), v;
   });
   if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-  if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
-  else if (!m.isStatic) { c.lget(0).lset(recv); c.lget(recv); }
-  else cx.emitEnsure(c, m.cls);
+  if (ctor) cx.construct(c, m, () => { for (const v of values) c.lget(v); });
+  else callBoxed(cx, c, m, direct, values);
+  if (!wrap) return;
+  c.br(2).end().unreachable().end();
+  // what the method threw, wrapped
+  const ite = cx.prog.resolve(ITE, "<init>", "(Ljava/lang/Throwable;)V");
+  c.lset(e); cx.emitNew(c, ITE); c.lset(w);
+  if (ite) { c.lget(w).lget(e); cx.callMethod(c, ite); }
+  c.lget(w).throw_(cx.tag).end();
+}
+
+/** calls method `m` as the invoke instruction would, on the receiver in local 0, and boxes what it answers */
+function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values: number[]): void {
+  if (m.isStatic) cx.emitEnsure(c, m.cls); else c.lget(0);
   for (const v of values) c.lget(v);
-  const prog = cx.prog, decl = prog.get(m.cls)!;
-  if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
+  const decl = cx.prog.get(m.cls)!;
+  if (m.isStatic || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
-    c.lget(recv).call(cx.helper("vtab"));
-    if (!decl.isInterface) c.i32(cx.w.vslot(m.cls, m.key)).arrayGet(cx.tVT);
+    c.lget(0).call(cx.helper("vtab"));
+    if (!decl.isInterface) c.i32(cx.w.dispatch.vslot(m.cls, m.key)).arrayGet(cx.tVT);
     else {
       const sel = cx.w.selectorId(m.key), s = sel % H.IMT_N, vt = c.newLocal(refNull(cx.tVT));
       c.lset(vt).lget(vt).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
@@ -131,18 +140,10 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     }
     c.callIndirect(sig);
   }
-  if (ctor) c.lget(recv);
-  else if (m.ret === "V") c.anyNull();
+  if (m.ret === "V") c.anyNull();
   else if (BOX[m.ret]) {
-    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
+    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); cx.callNamed(c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
   }
-  if (!wrap) return;
-  c.br(2).end().unreachable().end();
-  // what the method threw, wrapped
-  const ite = prog.resolve(ITE, "<init>", "(Ljava/lang/Throwable;)V");
-  c.lset(e); cx.emitNew(c, ITE); c.lset(w);
-  if (ite) { c.lget(w).lget(e); cx.callMethod(c, ite); }
-  c.lget(w).throw_(cx.tag).end();
 }
 
 const execField = (cx: Compiler, cls: string, name: string, d: string) => cx.fieldIndex(cls, { owner: EXEC, name, desc: d });
@@ -172,7 +173,7 @@ rt("mnameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, RInfo.Meth
 rt("findMethod", ["I", "L", "L", "I"], "I", (cx, c) => {
   const nc = c.newLocal(T.i32), j = c.newLocal(T.i32), k = c.newLocal(T.i32), plen = c.newLocal(T.i32), len = c.newLocal(T.i32), i = c.newLocal(T.i32);
   const pdata = c.newLocal(refNull(cx.tData.ref));
-  c.lget(1).refIsNull().raw(OP.i32_eqz).if_().lget(1); classMethod(cx, c, "java/lang/String", "length", "()I"); c.lset(len).end();
+  c.lget(1).refIsNull().raw(OP.i32_eqz).if_().lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len).end();
   c.lget(2).refIsNull().raw(OP.i32_eqz).if_().lget(2).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(pdata).lget(pdata).refAsNonNull().arrayLen().lset(plen).end();
   info(cx, c, RInfo.MethodsNamed, 0, () => { c.lget(3).if_(T.i32); c.i32(INIT_HASH).else_().lget(1).call(cx.helper("shash")).end(); }); c.lset(nc);
   c.block().loop().lget(j).lget(nc).raw(OP.i32_ge_s).brIf(1);
@@ -281,6 +282,6 @@ rt("argp", ["L", "I", "I", "I"], "J", (cx, c) => {
     }
     c.end();
   }
-  c.lget(2).lget(3).lget(0); vtId(cx, c); cx.callThrower(c, "iarg");
+  c.lget(2).lget(3).lget(0); cx.vtId(c); cx.callThrower(c, "iarg");
   c.i64(0n);
 });

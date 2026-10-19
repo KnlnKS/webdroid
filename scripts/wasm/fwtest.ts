@@ -9,16 +9,16 @@ BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 // imported after the policy is set: rt.register consults it, so the specs never land
 const { rt } = await import("../../src/jvm/runtime.ts");
 const { world } = await import("./lib.ts");
-const { mountPlatform, natives, startProcess } = await import("./harness.ts");
+const { mountPlatform, natives, nativeSource, startProcess } = await import("./harness.ts");
 const { PLATFORM_PATHS, ROOT } = await import("./paths.ts");
 
 await mountPlatform(ROOT);
-const w = world(PLATFORM_PATHS, { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+const w = world(PLATFORM_PATHS, { natives });
 const gaps = new Set<string>();
 w.onGap = (gap) => gaps.add(gap);
 const hosted = new Set<string>();
 /** the classes the host implements that have been registered since: the exercises' modules register more as they load, each when it does */
-const addHostClasses = () => { for (const spec of natives.source!.hostSpecs!()) if (!hosted.has(spec.name)) { hosted.add(spec.name); w.addHostClass(spec); } };
+const addHostClasses = () => { for (const spec of nativeSource.hostSpecs()) if (!hosted.has(spec.name)) { hosted.add(spec.name); w.addHostClass(spec); } };
 addHostClasses();
 const register = rt.register.bind(rt);
 rt.register = (spec) => { const r = register(spec); addHostClasses(); return r; };

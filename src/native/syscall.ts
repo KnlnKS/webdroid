@@ -12,8 +12,7 @@ import { exitGroup, installDebuggerdHandlers } from "./crash.ts";
 import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals.ts";
 import { writeSiginfo } from "./sigframe.ts";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, kernelResult, readTs } from "./libc.ts";
-import { FS_SYSCALLS, fsInit, faccessatPath, getdents64 } from "./fs.ts";
-import { processAllocateFd } from "./process-fd.ts";
+import { FS_SYSCALLS, fsInit, faccessatPath, getdents64, javaAllocateFd } from "./fs.ts";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread.ts";
 import { NET_SYSCALLS } from "./socket/syscalls.ts";
 import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll.ts";
@@ -66,7 +65,7 @@ const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
 const A64: Record<number, HostFn> = {
   47: (cpu, a) => {                                                              // fallocate: mode 0 grows the file
     const fd = a.i(), mode = a.i(), off = Number(a.l()), len = Number(a.l());
-    return mode ? fail(cpu, E.NOTSUP) : kernelResult(cpu, processAllocateFd(fd, off, len));
+    return mode ? fail(cpu, E.NOTSUP) : kernelResult(cpu, javaAllocateFd(fd, off, len));
   },
   48: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), 0),                 // faccessat has no flags
   61: (cpu, a) => getdents64(cpu, a.i(), a.p(), a.u()),

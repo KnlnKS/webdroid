@@ -14,6 +14,7 @@ import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 /** the build is opened the way the app opens it: the index and the modules a start loads are compiled before the World runs. A page fetches them (and a module it lacks is a miss);
  *  node reads them, and reads any other module when it is wanted. An installed app (g1app.ts) brings its saved build and the list of platform modules its launches load. */
@@ -69,7 +70,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   const { dexes, prog } = workloadProgram(cfg), key = aotDir!.split("/").pop()!, persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
   const code = await prepareApp({ dexes, aot: fakeAot(`/aot/${key}/`, key), persist, roots: { launch: [] },
-    spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return spawnCompileWorker(undefined, "/wasm-compile-worker.js"); } });
+    spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return spawnCompileWorker(undefined, WORKER_SCRIPTS.compile.url); } });
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;

@@ -3,22 +3,22 @@
 // class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = class id << 12 | index in its fields.
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { ACC, javaName, type JClass } from "../compiler/program.ts";
+import { ACC, javaName, type JClass, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { idOfClass, fieldId, typeName, PRIM } from "./classes.ts";
+import { idOfClass, fieldId, PRIM } from "./classes.ts";
+
 import { rt } from "../compiler/rtfns.ts";
 import { executableSlot, methodAt } from "./reflect.ts";
 import type { EncAnnotation } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { MInfo } from "../compiler/info.ts";
 
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 
-export const MInfo = { ExecCount: 300, ExecAt: 301, ClassAnn: 302, ExecAnn: 303, FieldAnn: 304, IsRecord: 305, DeclaringClass: 306, EnclosingClass: 307, EnclosingIndex: 308, CompareParams: 309, ThrowsCount: 310, ThrowsAt: 311, EnclosingOwner: 312, IsAnonymous: 313 } as const;
-export type MInfo = (typeof MInfo)[keyof typeof MInfo];
 const TextKind = { SimpleName: 0 } as const;
 
 const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);

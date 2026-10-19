@@ -1,14 +1,11 @@
 // The classes the host implements (B2), as the cases of the hostclass suite use them: TS classes registered as specs for classes no dex defines (wdtest/*) beside the
 // registered specs of the platform's own boundary (java/net/HttpURLConnection), the Java fixture Hc that uses them, and the calls host code makes on both. The suite runs
 // the cases on a World, where the host object and the Java object are an object each; the lines must be java/hc/expected.txt.
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime.ts";
 import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry.ts";
-import { androidPlatform, androidTool } from "../android-sdk.ts";
 import { JAVA } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
+import { androidFixture, javac, tempDir } from "./tools.ts";
 
 /** how a host method that waits enters Java again: the harness gives the World's */
 export const enter: { call: (cls: string, name: string, desc: string) => Promise<unknown> } = { call: async (cls, name, desc) => scall(cls, name, desc) };
@@ -61,13 +58,9 @@ rt.register({ name: "wdtest/Maker", ctor: class extends JObj {}, methods: { "sta
 
 /** the fixture Hc and the classes it declares, as a dex; the classes the host implements are compiled against, not dexed */
 export function hostDex(): string {
-  const out = mkdtempSync(join(tmpdir(), "wasm-hostclass-")), sh = shellIn(out), api = `${androidPlatform(35)}/android.jar`, dir = join(JAVA, "hc");
-  const stubs = join(out, "stubs"), classes = join(out, "classes");
-  mkdirSync(stubs); mkdirSync(classes);
-  sh(["javac", "--release", "11", "-cp", api, "-d", stubs, join(dir, "stubs/wdtest/Counter.java"), join(dir, "stubs/wdtest/HostList.java"), join(dir, "stubs/wdtest/Maker.java")]);
-  sh(["javac", "--release", "11", "-cp", `${api}:${stubs}`, "-d", classes, join(dir, "Hc.java")]);
-  sh([androidTool("d8"), "--min-api", "26", "--classpath", stubs, "--output", out, ...filesIn(classes, /\.class$/)]);
-  return join(out, "classes.dex");
+  const dir = join(JAVA, "hc"), stubs = tempDir();
+  javac(stubs, ["Counter", "HostList", "Maker"].map((c) => join(dir, `stubs/wdtest/${c}.java`)), { release: 11, android: true });
+  return join(androidFixture({ sources: [join(dir, "Hc.java")], classpath: [stubs] }), "classes.dex");
 }
 
 const OBJ = "Ljava/lang/Object;", STR = "Ljava/lang/String;";

@@ -3,7 +3,7 @@
 // A name they lack is NULL from dlsym, as on a device without it.
 
 import { mem, anchor } from "./mem.ts";
-import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, type HostFn, type ArgReader } from "./host.ts";
+import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
 import { deref } from "./jni.ts";
 import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface.ts";
 import { activateEglCurrent } from "./egl-current.ts";
@@ -362,8 +362,7 @@ export function ndkInit(): void {
       if (!n) return 0;
       const dst = anchor(buf);
       const value = s.data ? s.data.subarray(s.pos, s.pos + n) : s.source.read(s.pos, n);
-      const done = (bytes: Uint8Array) => { mem.write(dst(), bytes); s.pos += bytes.length; return bytes.length; };
-      return value instanceof Promise ? value.then(done) : done(value);
+      return complete(value, bytes => { mem.write(dst(), bytes); s.pos += bytes.length; return bytes.length; });
     },
     AAsset_seek: (_c, a) => { const s = A(a); return s ? seek(s, a.i(), a.i()) : -1; },
     AAsset_seek64: (_c, a) => { const s = A(a); return BigInt(s ? seek(s, Number(a.l()), a.i()) : -1); },

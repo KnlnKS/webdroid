@@ -3,10 +3,7 @@
 // bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`pnpm wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
 import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
-import { guestMemory } from "../../src/wasm/host/guest.ts";
-import { hostLoop } from "../../src/wasm/host/boot.ts";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { APP_VERSION, VERSION, packModule } from "../../src/wasm/link/aot.ts";
@@ -25,22 +22,20 @@ import { fetchBundle } from "../../src/wasm/host/bundle.ts";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { current, fakeAot, loadDexes } from "./lib.ts";
+import { worldOptions } from "../../src/wasm/host/boot.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { checker, filesIn, fixture } from "./tools.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;
 if (!AOT) { console.log("persist: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
-const out = mkdtempSync(join(tmpdir(), "j2w-persist-")), sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^Pst(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Pst2(\$\w+)?\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")], classes: /^Pst(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Pst2(\$\w+)?\.class$/) });
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
 await mountPlatform(ROOT);
 
-const suite = checker(), { check, fail } = suite;
+const suite = checker("persist"), { check, fail } = suite;
 const until = async (what: string, done: () => boolean, ms = 60000) => {
   const t0 = performance.now();
   while (!done()) { if (performance.now() - t0 > ms) { fail(`${what}: timed out`); return false; } await new Promise((r) => setTimeout(r, 2)); }
@@ -51,7 +46,7 @@ const platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, loop: hostLoop, guest: guestMemory, aot: aotStore, ...opts }));
+const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { ...worldOptions(), aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => addHostClasses(world(dexes, opts));
 
@@ -82,11 +77,11 @@ if (combinedAt >= 0) {
     const expected = await control.entryAsync("Pst", name, desc)(...args);
     check(`CLI combined image ${name}`, await image.entryAsync("Pst", name, desc)(...args), expected);
   }
-  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.blockOf(image.slotOf(method)));
+  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.slots.blockOf(image.slotOf(method)));
   check("CLI combined image executes its app code module", module !== undefined && module >= 0 && image.aot!.loaded.includes(`c${module}.wasm`), true);
-  const resolutions = image.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
+  const resolutions = image.symbolic.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
   check("CLI combined image warm result", await image.entryAsync("Pst", "hot", "(I)I")(10), expected);
-  check("CLI combined image warm resolutions", image.symbolicResolutions, resolutions);
+  check("CLI combined image warm resolutions", image.symbolic.symbolicResolutions, resolutions);
 }
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
@@ -149,7 +144,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
   const producer = world(app, { compileOnly: true });
-  const name = producer.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
   if (name) {
     const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], infos: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
@@ -162,7 +157,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // A partial final group can discover dependencies that discover another group.
 {
   const w = world(app, { compileOnly: true });
-  const padding = 64 - w.synths().length % 64;
+  const padding = 64 - w.slots.synths().length % 64;
   for (let i = 0; i < padding; i++) w.synthSlot(`pst:padding:${i}`, { params: [], ret: "V", body: () => {} });
   const leaf = { params: [], ret: "V" as const, body: () => {} };
   w.synthSlot("pst:parent", { ...leaf, body: (cx, c) => {
@@ -188,7 +183,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   check("it follows the page's numbering", uc.sync(page.numbers.since(page.base), true), true);
   check("and then numbers the same", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!);
-  const job = page.upgradeJob(slot)!, from = page.numbers.marks();
+  const job = page.tiers.upgradeJob(slot)!, from = page.numbers.marks();
   check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
   if (job.prepared?.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
@@ -209,27 +204,27 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     check("the unit carries the selector it numbered", unit.numbering.selectors.join(), "pst.extra()V");
     check("it was numbered from the page's state", sameMarks(unit.numbering.from, from), true);
     page.selectorId("pst.other()V");        // the page numbered something meanwhile
-    check("a unit that numbered something is not taken after the page did", page.adoptUnit(slot, job, unit, page.epoch), false);
+    check("a unit that numbered something is not taken after the page did", page.tiers.adoptUnit(slot, job, unit, page.epoch), false);
     check("and the page's numbering is untouched", page.numbers.selKeys.at(-1), "pst.other()V");
     // the worker forgets its numbering and follows the page: the next unit is made over the page's state
     check("the worker takes the page's numbering after dropping its own", uc.sync(page.numbers.since(from), false), true);
     check("it forgot the selector it numbered", worker.numbers.selectors.has("pst.extra()V"), false);
     check("and has the page's", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
-    const next = page.upgradeJob(slot)!, again = uc.upgrade(next);
+    const next = page.tiers.upgradeJob(slot)!, again = uc.upgrade(next);
     if (typeof again !== "string") {
-      check("a worker unit without a stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
-      check("a worker unit with the previous stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
+      check("a worker unit without a stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
+      check("a worker unit with the previous stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
     }
-    check("a unit made then is taken", typeof again !== "string" && page.adoptUnit(slot, next, again, page.epoch), true);
+    check("a unit made then is taken", typeof again !== "string" && page.tiers.adoptUnit(slot, next, again, page.epoch), true);
   }
 }
 {
   const page = world(app), worker = world(app, { compileOnly: true }), uc = new UnitCompiler(worker);
   page.entry("Pst", "hot", "(I)I")(10);
   uc.sync(page.numbers.since(page.base), true);
-  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.upgradeJob(slot)!, unit = uc.upgrade(job);
+  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.tiers.upgradeJob(slot)!, unit = uc.upgrade(job);
   page.addDexes([]);
-  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.adoptUnit(slot, job, unit, page.epoch - 1), false);
+  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.tiers.adoptUnit(slot, job, unit, page.epoch - 1), false);
 }
 
 // ---- second-tier units from the worker
@@ -293,7 +288,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const w = hosted(app, { compiler: client, holdUpgrades: () => true });
   const first = w.prog.newLoader(w.prog.root, null), second = w.prog.newLoader(w.prog.boot, null);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), first);
-  w.bindLibraries(second, [w.prog.root], []);
+  w.namespaces.bindLibraries(second, [w.prog.root], []);
   client.start(w, BASE, undefined);
   const key = (id: number) => `Pst2@${id}`;
   check("initial namespaced DEX executes", await w.entryAsync(key(first.id), "sub", "()I")(), 500);
@@ -304,13 +299,13 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   initializing.resolve();
   await until("namespaced worker starts", () => client.ready || !!client.retired);
   const third = w.prog.newLoader(w.prog.boot, null);
-  w.bindLibraries(third, [], [w.prog.root]);
+  w.namespaces.bindLibraries(third, [], [w.prog.root]);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), third);
   for (const loader of [second, third]) {
     const call = w.entryAsync(key(loader.id), "sub", "()I");
     check("namespaced source result", await call(), 500);
     if (loader === second) {
-      w.bindLibraries(second, [], [w.prog.root]);
+      w.namespaces.bindLibraries(second, [], [w.prog.root]);
       await until("a linked namespace change reaches the worker", () => received.includes("namespaces"));
       check("source result after library rebinding", await call(), 500);
     }
@@ -395,9 +390,9 @@ if (saved) {
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
   later.addDexes(late);
   check("a falsified decision of the app build is undone", later.entry("Pst2", "sub", "()I")(), 500);
-  const resolutions = later.symbolicResolutions;
+  const resolutions = later.symbolic.symbolicResolutions;
   check("and the others hold", later.entry("Pst", "chain", "()I")(), 6);
-  check("late dex preserves resolved symbolic identities", later.symbolicResolutions, resolutions);
+  check("late dex preserves resolved symbolic identities", later.symbolic.symbolicResolutions, resolutions);
   // the dex is in the Program from the start, behind the app's: the build still attaches, and the decision does not hold
   const together = world([...app, ...late], { app: { index, store } });
   check("the build attaches with later dex files in the Program", together.appAttached, true);
@@ -493,6 +488,8 @@ if (saved) {
   fs.files.set("a/x", blob(5));
   check("a damaged entry is not loaded", await p.load("a"), undefined);
   check("and is removed", [...fs.files.keys()].some((k) => k.startsWith("a/")), false);
+  await Promise.all([p.save("e", [["x", blob(20)]]), p.save("f", [["x", blob(20)]])]);
+  check("overlapping saves keep both entries", [await p.load("e") !== undefined, await p.load("f") !== undefined].join(), "true,true");
   check("replacing an entry leaves one", (await p.save("c", [["z", blob(10)]]), [...fs.files.keys()].filter((k) => k.startsWith("c/")).join()), "c/z");
   const prefix = { from: { names: 1, tail: 2, selectors: 3, gaps: 0, links: 0 }, names: ["A$$host", "B"], tail: [["B", 4]] as [string, number][], selectors: ["m()V"], gaps: [], links: [] };
   check("no prefix is kept before one is saved", await p.prefix("platform"), undefined);
@@ -502,5 +499,4 @@ if (saved) {
   check("the prefix leaves the bounded entries alone", [await p.load("c") !== undefined, (await p.save("d", [["x", blob(100)]]), await p.prefix("platform") !== undefined)].join(), "true,true");
 }
 for (const p of ports) p.terminate();
-console.log(suite.failed ? `${suite.failed} failures` : "persist: all pass");
-process.exit(suite.failed ? 1 : 0);
+suite.done();

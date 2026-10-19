@@ -194,7 +194,7 @@ export class Runtime {
   /** the handle-table owner hook (src/android/handles.ts) */
   claimHandle?: (owner: object, h: bigint) => void;
   /** java.lang.Class object for a class name (set by the Wasm tier's host) */
-  classFor: (name: string) => any = (name) => ({ $classFor: name });
+  classFor: (name: string) => any = (name) => { throw new Error(`no World has the Class of ${name}`); };
 
   /** normalize a thrown JS value to a Java throwable */
   jx(e: unknown): any {
@@ -314,3 +314,7 @@ export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */
 type Driven<T> = unknown extends T ? unknown : T | Promise<T>;
+/** Marks native `fn`, which answers a Promise for some calls though it is neither `driven` nor async (it hands on an `after`
+ *  or `awaited` result): the Wasm tier imports it as Suspending rather than parking the strand that called it. */
+export const waits = <F extends Function>(fn: F): F => Object.assign(fn, { $waits: true });
+export const isWaiting = (fn: Function): boolean => (fn as { $waits?: boolean }).$waits === true;

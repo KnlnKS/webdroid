@@ -5,9 +5,10 @@ import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { device, formatScreen } from "../../src/shell/config.ts";
 import { probeScript } from "../../tests/e2e/lib/probe.ts";
+import { CONTEXT_OPTS, launchBrowser } from "../browser.ts";
 
 export type WebdroidSession = {
   origin: string;
@@ -95,8 +96,8 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
   const errors: string[] = [];
   try {
     await waitForServer(origin, devServer);
-    browser = await chromium.launch({ headless: true, args: ["--use-gl=angle", "--use-angle=swiftshader"] });
-    const context = await browser.newContext({ viewport: { width: 1400, height: 1500 }, locale: "en-US", timezoneId: "UTC" });
+    browser = await launchBrowser();
+    const context = await browser.newContext(CONTEXT_OPTS);
     // the e2e probe's page half, on the wall clock: it keeps the mirrored frames a screenshot composites
     await context.addInitScript({ content: probeScript({ fixedMs: null, storage: [], shots: false }) });
     const page = await context.newPage();

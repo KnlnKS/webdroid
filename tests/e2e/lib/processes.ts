@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
-import type { WorkerTerminal } from "../../../src/shell/processes.ts";
+import type { WorkerTerminal } from "../../../src/shell/worker-diagnostics.ts";
 
 export type ProcessDiagnostics = {
   status: "ok";
@@ -20,6 +20,21 @@ export type ProcessDiagnostics = {
   | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
+/** the log lines that are errors: the page's console.error, uncaught errors and unhandled rejections (a Worker's
+ *  console.error, its logcat, carries no prefix) */
+export const ERROR_LINE = /^(error|window\.error|unhandledrejection):/;
+/** the page realm's diagnostics, evaluated in the page: `errorLine` is ERROR_LINE's source */
+export function pageDiagnostics(errorLine: string) {
+  const wd = globalThis.wd, error = new RegExp(errorLine);
+  return wd ? { status: "ok" as const, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
+    missingAt: Object.fromEntries(wd.rt.missingAt ?? []),
+    placeholders: [...wd.rt.placeholders],
+    placeholderAt: Object.fromEntries(wd.rt.placeholderAt),
+    native: wd.nativeRequirements(),
+    errors: wd.logs?.filter((line: string) => error.test(line)) ?? null,
+    perf: wd.perf ? { ...wd.perf } : null,
+    queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth } : null } : { status: "unavailable" as const };
+}
 /** whether a process's diagnostics were read, or it ended as the broker expected (an exit is no failure) */
 export const diagnosed = (diagnostics: ProcessDiagnostics): boolean => diagnostics.status === "ok" || diagnostics.status === "exited";
 type WorkerSnapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
@@ -55,7 +70,7 @@ function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
     return { status: "failure", message: `Worker ${worker.pid}: diagnostic identity mismatch` };
   return { status: "ok", pkg: worker.pkg, ticks: snapshot.ticks, missing: snapshot.missing, missingAt: snapshot.missingAt,
     placeholders: snapshot.placeholders, placeholderAt: snapshot.placeholderAt, native: snapshot.nativeRequired,
-    errors: snapshot.logs.filter(line => /^(error:|window.error:|unhandledrejection:)/.test(line)), perf: snapshot.perf,
+    errors: snapshot.logs.filter(line => ERROR_LINE.test(line)), perf: snapshot.perf,
     queue: { queued: snapshot.main.queued, depth: snapshot.main.depth } };
 }
 
@@ -63,17 +78,7 @@ function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
 export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
   const origin = new URL(page.url()).origin, frame = page.mainFrame();
   const root = (async () => {
-    const read = () => frame.evaluate(() => {
-      const wd = globalThis.wd;
-      return wd ? { status: "ok" as const, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
-        missingAt: Object.fromEntries(wd.rt.missingAt ?? []),
-        placeholders: [...wd.rt.placeholders],
-        placeholderAt: Object.fromEntries(wd.rt.placeholderAt),
-        native: wd.nativeRequirements(),
-        errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
-        perf: wd.perf ? { ...wd.perf } : null,
-        queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth } : null } : { status: "unavailable" as const };
-    });
+    const read = () => frame.evaluate(pageDiagnostics, ERROR_LINE.source);
     const diagnostics = await bounded((async () => {
       let result = await read();
       if (result.status === "unavailable") {

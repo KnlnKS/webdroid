@@ -15,10 +15,11 @@ import { NODE_FLAGS } from "../node.ts";
 import { fileResponse, serve } from "../serve.ts";
 import type { G1Config, G1Result } from "./g1run.ts";
 import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { bundleFor, cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
-import { sourceKey } from "./aot-key.ts";
+import { androidFixture, bundleFor, cutWorkloads } from "./tools.ts";
+import { sourceKey } from "../aot-key.ts";
 import { createHash } from "node:crypto";
 import { geo, med, sampleError } from "./g1report.ts";
+import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 const here = import.meta.dirname;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
@@ -40,7 +41,6 @@ if (![reps, runs].every(n => Number.isInteger(n) && n > 0) || engines.some(e => 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
 const out = G1_DIR, sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
 mkdirSync(out, { recursive: true });
-const sh = shellIn(out);
 const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
   const { names: own, source } = cutWorkloads(readFileSync(file, "utf8"));
   for (const n of own) { names.push(n); classOf.set(n, cls); }
@@ -50,7 +50,7 @@ const dex = join(out, "classes.dex");
 if (only.some(name => !names.includes(name))) throw new Error(`unknown workload: ${only.filter(name => !names.includes(name)).join(", ")}`);
 if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file).mtimeMs)) {
   for (const c of cut) writeFileSync(join(out, `${c.cls}.java`), c.text);
-  dexAndroid(sh, out, cut.map((c) => `${c.cls}.java`));
+  androidFixture({ out, sources: cut.map((c) => join(out, `${c.cls}.java`)) });
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
 
@@ -66,7 +66,7 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
   return result;
 };
 async function chromeRun() {
-  const { chromium } = await import("playwright");
+  const { launchBrowser } = await import("../browser.ts");
   const script = await bundleFor("browser", join(here, "g1run.ts"));
   const aotDir = process.env.WEBDROID_AOT;
   const preload = [dex, ...PLATFORM_PATHS];
@@ -83,11 +83,11 @@ async function chromeRun() {
     if (p === "/g1.js") return new Response(script, { headers: { "content-type": "text/javascript", ...iso } });
     if (installedDir && p === "/app/files.json") return Response.json(readdirSync(installedDir), { headers: iso });
     if (installedDir && p.startsWith("/app/")) return fileResponse(join(installedDir, p.split("/").pop()!), req, iso);
-    if (worker && p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
+    if (worker && p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file ? fileResponse(file, req, iso) : new Response("", { status: 404 });
   } });
-  const browser = await chromium.launch({ channel: "chrome", headless: true, args: [`--js-flags=--expose-gc ${v8Flags}`] });
+  const browser = await launchBrowser(`--expose-gc ${v8Flags}`);
   const version = browser.version();
   return { version, run: async (cfg: G1Config): Promise<G1Result> => {
     const page = await (await browser.newContext()).newPage();

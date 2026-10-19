@@ -3,8 +3,7 @@ import { appHost } from "../android/apphost.ts";
 import { rt } from "../jvm/runtime.ts";
 import { realmWd } from "./realmwd.ts";
 import { processExited } from "../process-exit.ts";
-import { dispatchTouches, pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
-import type { TouchPointer } from "./pointer-queue.ts";
+import { pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
 import { yieldStats, timedParks } from "../jvm/yield.ts";
 import { webViewInfo } from "../android/webframes.ts";
 import { mainDbg, onMain } from "../android/mainloop.ts";
@@ -17,6 +16,7 @@ import { processPresentation } from "./process-endpoint.ts";
 import { nativeRequirements } from "./diagnostics.ts";
 import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
+import { tierStatus } from "../jvm/tier.ts";
 
 /** Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => string) {
@@ -37,15 +37,15 @@ export function workerControl(logs: string[], phase: () => string) {
       marks: performance.getEntriesByType("mark").filter(e=>e.name.startsWith("wd:")).map(e=>[e.name.slice(3),performance.timeOrigin+e.startTime] as const), missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
     /** whether the app's Wasm code was attached from persisted code, or once `save` settles it, saved */
     codeReadiness: async (save: boolean) => {
-      const wasm = globalThis.__wdWasm;
+      const wasm = tierStatus();
       if (!wasm) return null;
       if (save) await wasm.appSettle?.();
       return { saved: !!wasm.appSaved, source: wasm.appSource ?? null, attached: !!wasm.appAttached, rejected: wasm.appRejected ?? null,
         kept: !!wasm.appBuilds?.some(build => build.kept), persisted: save ? !!await wasm.appPersisted?.() : null };
     },
     /** where the Wasm tier's on-demand compiling stands, and what it compiled since such a mark (World.demandSince) */
-    demandMark: async () => globalThis.__wdWasm?.demandMark?.() ?? null,
-    demandSince: async (mark: number[]) => globalThis.__wdWasm?.demandSince?.(mark) ?? null,
+    demandMark: async () => tierStatus()?.demandMark?.() ?? null,
+    demandSince: async (mark: number[]) => tierStatus()?.demandSince?.(mark) ?? null,
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,
     tap: local.tap,
@@ -53,7 +53,6 @@ export function workerControl(logs: string[], phase: () => string) {
     type: async (text: string) => { await imeInput(text, text.length, text.length, false, imeState().generation); },
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),
-    pointer: async (action: number, pointers: TouchPointer[]) => { await dispatchTouches(action, pointers); },
     back: async () => { await pressBack(); },
     testFrame: local.testFrame,
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */

@@ -1,19 +1,20 @@
 // ART interpreter_common.cc DoResolveCallSite: cache successes, allow bootstrap races, and use the first published candidate.
-import { WIDEN, BOX } from "../compiler/fields.ts";
+import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import type { Program } from "../compiler/program.ts";
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
-import { constClass, typeName } from "./classes.ts";
-import { box, chain, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles.ts";
-import type { DexFile, EncVal } from "../../jvm/dex.ts";
+import { chain, handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
+import { MethodHandleType, type DexFile, type EncVal } from "../../jvm/dex.ts";
 import type { Compiler } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
+import { typeName } from "../compiler/program.ts";
+import { InvokeMode, emitHandleValue, emitTypeValue, emitInvokeImport, resolveHandleMember } from "../compiler/handles.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
@@ -55,7 +56,7 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
     case 0x17: cx.str.literal(c, value as string); return true;
     case 0x18: {
       const desc = dex.type((value as { idx: number }).idx), failure = typeFailure(cx.prog, desc);
-      if (failure) { cx.linkError(c, failure); return false; } constClass(cx, c, typeName(desc)); return true;
+      if (failure) { cx.linkError(c, failure); return false; } cx.constClass(c, typeName(desc)); return true;
     }
     case 0x15: return emitTypeValue(cx, c, dex, (value as { idx: number }).idx);
     case 0x16: return emitHandleValue(cx, c, referrer, (value as { idx: number }).idx);
@@ -92,21 +93,21 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
   const fail = (message: string): never => { throw w.exception(w.makeThrowable("java/lang/BootstrapMethodError", message)); };
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
-  if (values[0].type !== 0x16 || first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
+  if (first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
   return chain(resolveHandleReference(w, referrer, first.idx, parent), () => {
-    const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w, referrer, first.idx);
-    const target = "method" in member && h.type === 4 ? member.method : undefined;
+    const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w.prog, referrer, first.idx);
+    const target = "method" in member && h.type === MethodHandleType.InvokeStatic ? member.method : undefined;
     const invalid = target ? bootstrapFailure(w.prog, target, values) : undefined;
     const emit = () => handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
       const handle = c.newLocal(T.anyref), args = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref);
       if (!emitHandleValue(cx, c, referrer, first.idx)) return; c.lset(handle);
-      if (h.type !== 4) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
+      if (h.type !== MethodHandleType.InvokeStatic) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
       if (invalid) { cx.throwNew(c, invalid.cls, invalid.message); return; }
       if (target && target.flags & 0x80) {
-        c.lget(handle); constClass(cx, c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
+        c.lget(handle); cx.constClass(c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
       }
       cx.emitNewArray(c, "[Ljava/lang/Object;", () => c.i32(values.length)); c.lset(args);
-      cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); constClass(cx, c, referrer.cls); c.i32(15);
+      cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); cx.constClass(c, referrer.cls); c.i32(15);
       cx.callMethod(c, cx.prog.resolve(LOOKUP, "<init>", "(Ljava/lang/Class;I)V")!);
       c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(0).lget(lookup).arraySet(cx.tData.ref);
       const params = [`L${LOOKUP};`];
@@ -115,7 +116,7 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
         c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i);
         if (!argument(cx, c, referrer, type, value)) return; c.arraySet(cx.tData.ref); params.push(scalarType[type]);
       }
-      emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, 0);
+      emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, InvokeMode.Invoke);
     }, parent)() as object | Promise<object>;
     return !target || invalid ? emit() : chain(resolveBootstrapArguments(w, referrer, index, parent), emit);
   });
@@ -124,9 +125,8 @@ function wrap(w: World, e: unknown, index: number, parent: Strand): never | Prom
   const throwable = w.throwable(w.boundary(e));
   if (!throwable || w.prog.isSubclass(w.classNameOf(throwable), "java/lang/Error")) throw e;
   return chain(handleThunk(w, `custom:bootstrapError:${index}`, ["L"], "L", (cx, c, arg) => {
-    const cls = "java/lang/BootstrapMethodError", local = c.newLocal(T.anyref);
-    cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, `Exception from call site #${index} bootstrap method`); arg(0);
-    cx.callMethod(c, cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")!); c.lget(local);
+    const ctor = cx.prog.resolve("java/lang/BootstrapMethodError", "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")!;
+    cx.construct(c, ctor, () => { cx.str.literal(c, `Exception from call site #${index} bootstrap method`); arg(0); });
   }, parent)(throwable) as object | Promise<object>, wrapped => { throw w.exception(wrapped); });
 }
 export function invokeCustom(w: World, site: string, args: object, parent: Strand): object | null | Promise<object | null> {
@@ -135,7 +135,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
   const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
   const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
-  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), 1, parent);
+  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), InvokeMode.Exact, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
   const validate = (candidate: object | null): object | Promise<object> => {
     const sig = signature();

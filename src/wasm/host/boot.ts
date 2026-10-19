@@ -3,10 +3,11 @@
 import { mark, perf } from "../../perf.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "../link/aotstore.ts";
-import { rt, fieldNames } from "../../jvm/runtime.ts";
-import { useEntry, type Entry } from "../../jvm/natives/jentry.ts";
+import { rt } from "../../jvm/runtime.ts";
+import type { Entry } from "../../jvm/natives/jentry.ts";
+import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import { appArchives } from "../../jvm/natives/jdex.ts";
-import type { TierBackend } from "../../jvm/tier.ts";
+import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex.ts";
 import { centralDir, entryBytes } from "../../jvm/natives/jzip.ts";
 import { vfs } from "../../shell/vfs.ts";
@@ -24,8 +25,7 @@ import { endWaits } from "../link/module.ts";
 import { hostNet } from "./inet.ts";
 import { guestMemory } from "./guest.ts";
 import { wasmJni } from "./jni.ts";
-import { useJniVm } from "../../native/jnivm.ts";
-import { wasmBox } from "../../jvm/natives/jbox.ts";
+import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
 import { hostSpec, natives, nativeSource } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
@@ -33,7 +33,8 @@ import { declareWaiting } from "./suspend.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
 import { openPersist } from "./persist.ts";
-import { COMPILE_WORKER_URL, spawnCompileWorker, type CompileClient } from "./compiler.ts";
+import { spawnCompileWorker, type CompileClient } from "./compiler.ts";
+import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { onProcessExit, processExited } from "../../process-exit.ts";
 import type { WarmAnswer } from "./warm-worker.ts";
 
@@ -43,7 +44,7 @@ const TAB_HEAP = 2048 * 1024 * 1024;
 type Asked = Pick<AppCodeRequest, "roots" | "shown" | "status">;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
+export type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
 declare global {
   var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -54,7 +55,7 @@ declare global {
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
 const START_MS = 15_000;
-/** a slice of idle time spent compiling ahead (World.ahead): an input that arrives meanwhile waits no longer than this */
+/** a slice of idle time spent compiling ahead (AheadCompiler.compile): an input that arrives meanwhile waits no longer than this */
 const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
 let aheading = false;
 
@@ -65,21 +66,23 @@ export const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
+/** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */
+export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { holdUpgrades: () => starting, answering: () => answeringFor() > 0, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { ...worldOptions(), holdUpgrades: () => starting, answering: () => answeringFor() > 0, heapLimit: TAB_HEAP, note: note as (ev: number, arg?: number) => void, ...extra });
   bindWorld(w);
-  globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.demandMark(), demandSince: (mark) => w.demandSince(mark) };
+  globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.ahead.demandMark(), demandSince: (mark) => w.ahead.demandSince(mark) };
   w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
   // the frames of Java code: a method the host implements is not one
-  rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
+  rt.javaFrames = () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   rt.userClassLoader = () => {
-    for (const f of w.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
+    for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
     return null;
   };
-  for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
+  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
   rt.registered = (spec) => w.addHostClass(hostSpec(spec));
   return w;
 }
@@ -104,8 +107,8 @@ export async function bootWasmTier(): Promise<TierBackend> {
   const install = (made: World) => {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
-    mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.ranBuildSlots().platform });
+    useWorld(made); mark("worldMade");
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
     return made;
   };
   if (typeof location === "undefined") {
@@ -114,24 +117,24 @@ export async function bootWasmTier(): Promise<TierBackend> {
       else {
         const p = new Program([]);
         p.add([dex], isPlatform ? p.boot : p.root); p.addExterns(externs);
-        useWorld(install(createWorld(p, { dexes })));
+        install(createWorld(p, { dexes }));
       }
-    } };
+    }, ready: Promise.resolve(), beginAppCode() {}, appCode: async () => {}, launched() {}, ahead: async () => {}, status: () => globalThis.__wdWasm };
   }
   // The hooks come first and the build is fetched after them: Java is not run before the tier is ready (the zygote waits for the app's code), and the page fetches the build while it
   // downloads the package
   const opening = Promise.all([openAot(), fetchPlatformJars()]);
   // What a process numbers before its app's code arrives depends on timing (whether a build module has arrived, or its methods are compiled on demand), and a saved app build continues
   // exactly that numbering: a process numbers what earlier ones did first, in their order, and adds what it numbers besides. A device's first process takes what the
-  // profiled launches numbered (scripts/wasm/aot-profile.ts), so its app's build can begin before the zygote has run.
+  // profiled launches numbered (scripts/wasm/aot-profile.ts; null when they disagree or none ran), so its app's build can begin before the zygote has run.
   const persisting = openPersist();
   const remembered = Promise.all([opening, persisting]).then(async ([[aot], persist]) =>
-    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering)).catch(() => undefined);
+    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering | null)).catch(() => null);
   let seen: Numbering | undefined;
   /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
   let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
   const prepare = async (app: Asked, dexes: DexFile[], prefix: Numbering) =>
-    prepareApp({ ...app, dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist: await persisting, spawn: () => spawnCompileWorker(compileHost, COMPILE_WORKER_URL), prefix, signal: lifetime.signal,
+    prepareApp({ ...app, dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist: await persisting, spawn: () => spawnCompileWorker(compileHost, WORKER_SCRIPTS.compile.url), prefix, signal: lifetime.signal,
       warm: warmPort && warming() ? (request, transfer) => warmPort!.postMessage(request, transfer ?? []) : undefined });
   // a process that never presents a frame, such as a service's, is launched when the start window ends
   const launched = () => { clearTimeout(startWindow); starting = false; if (world) code?.watch(world); };
@@ -144,23 +147,18 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (seen) w.adopt(seen);
     return install(w);
   };
-  let entry: Entry | undefined;
-  const lazyEntry = (name: keyof Entry) => (...args: unknown[]) => ((entry ??= wasmEntry(current()))[name] as (...a: unknown[]) => unknown)(...args);
-  useEntry(Object.fromEntries(ENTRY_NAMES.map((n) => [n, lazyEntry(n)])) as unknown as Entry);
-  useJniVm(lazy(() => wasmJni(current())));
-  let names: ReturnType<typeof fieldNamesOf> | undefined;
-  fieldNames.find = (cls, name) => (names ??= fieldNamesOf(current()))(cls, name);
-  hook(current);
+  usePending(current);
   const [aot, jars] = await opening;
   store = aot;
-  seen = await remembered;
+  seen = await remembered ?? undefined;
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   mark("platformReady");
   return {
     threads,
-    ready: store?.ready,
+    ready: store?.ready ?? Promise.resolve(),
+    status: () => globalThis.__wdWasm,
     loadDex(dex, isPlatform) {
-      if (isPlatform) return;
+      if (isPlatform) throw new Error("a page's platform classes are its build's");
       appDexes.push(dex);
       world?.addDexes([dex]);
     },
@@ -173,7 +171,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and not
       // while the app may still be answering an input
       const quiet = () => idle() && !yieldStats.pending() && sinceInput() > AHEAD_AFTER_INPUT_MS;
-      try { while (quiet() && world.ahead(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
+      try { while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
       catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
     },
     beginAppCode(dexes, roots, shown, status) {
@@ -210,24 +208,35 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
   };
 }
-const lazy = <T extends object>(make: () => T): T => { let v: T | undefined; return new Proxy({} as T, { get: (_, k) => ((v ??= make()) as Record<PropertyKey, unknown>)[k] }); };
+/** `make()`'s value, made when a member is first read; `install` puts it where later reads find it without this */
+const lazy = <T extends object>(make: () => T, install?: (v: T) => void): T => {
+  let v: T | undefined;
+  return new Proxy({} as T, { get: (_, k) => { if (!v) { v = make(); install?.(v); } return (v as Record<PropertyKey, unknown>)[k]; } });
+};
 let using: World | undefined;
 /** makes `w` the realm's Java: what jentry, JNI and the runtime's natives reach (JNI once it is first used: a World without the platform has none) */
 export function useWorld(w: World): World {
   if (using === w) return w;
   using = w;
-  useEntry(wasmEntry(w)); useJniVm(lazy(() => wasmJni(w))); fieldNames.find = fieldNamesOf(w);
-  hook(() => w);
+  useJavaHost({ ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w) });
   return w;
 }
-/** the runtime's ways to make Java objects, in the World `world()` answers */
-function hook(world: () => World): void {
-  rt.mkThrowable = hostThrowable;
-  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world(), cls); };
-  rt.classFor = (cls) => world().bridge.toHost(classRef(world(), cls));
-  wasmBox.make = (desc, v) => world().bridge.toHost(boxRef(world(), desc, v));
+/** the realm's Java until its World is made: whatever first reaches Java makes it (`world`), and useWorld installs it in place of this */
+function usePending(world: () => World): void {
+  useJavaHost({
+    ...objectsIn(world),
+    entry: new Proxy({} as Entry, { get: (_, name) => (...args: unknown[]) => (wasmEntry(world())[name as keyof Entry] as Function)(...args) }),
+    jni: lazy(() => { world(); return vm; }),
+    fieldName: (cls, name) => fieldNamesOf(world())(cls, name),
+  });
 }
-const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "linkClass", "initClass", "iof", "classNameOf", "callOn", "after"] as const satisfies readonly (keyof Entry)[];
+/** the Java objects the runtime makes, in the World `world()` answers */
+const objectsIn = (world: () => World): Pick<JavaHost, "throwable" | "make" | "classFor" | "box"> => ({
+  throwable: hostThrowable,
+  make: (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world(), cls); },
+  classFor: (cls) => world().bridge.toHost(classRef(world(), cls)),
+  box: (desc, v) => world().bridge.toHost(boxRef(world(), desc, v)),
+});
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
  *  after its bytes have arrived */
@@ -252,21 +261,19 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
 let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined, warmPort: MessagePort | undefined;
 /** a process Worker's store takes its modules from the page's (`serveAot`), the page's compile host starts its compile workers, and the page's warm Worker
  *  compiles the build code its launch is about to run (`serveWarm`) */
-export function usePagePorts(aot: MessagePort, compile: MessagePort, warm: MessagePort): void {
+export function useTierPorts({ aot, compile, warm }: TierPorts): void {
   aotPort = aot; compileHost = compile; warmPort = warm;
   warm.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
 }
 export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
 const countWarm = ({ warmed, skipped }: WarmAnswer) => { perf.wasmWarmed += warmed; perf.wasmWarmSkipped += skipped; };
-/** where the server and the production build serve warm-worker.ts */
-const WARM_WORKER_URL = "/wasm-warm-worker.js";
 let warmer: Worker | null | undefined;
 /** whether the page runs a warm Worker: where V8 compiles a function on its first call and shares the code between Workers, and the machine has cores to spare */
 const warming = (): boolean => navigator.hardwareConcurrency >= 4 && /Chrome\//.test(navigator.userAgent);
 /** Gives a process Worker's port to the page's warm Worker, made with the first. Until processes ask, it warms what launches of the platform build ran. */
 export function serveWarm(port: MessagePort): void {
   if (warmer === undefined) {
-    warmer = warming() ? new Worker(WARM_WORKER_URL, { type: "module" }) : null;
+    warmer = warming() ? new Worker(WORKER_SCRIPTS.warm.url, { type: "module" }) : null;
     if (warmer) {
       warmer.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
       void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base }); });

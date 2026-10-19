@@ -1,4 +1,4 @@
-// Primitive arrays between Wasm GC arrays and linear memory: element sizes, the typed arrays a host function sees, and the generated copy loop.
+// Primitive arrays between Wasm GC arrays and linear memory: element sizes and the generated copy loop.
 import { Code, OP } from "./code.ts";
 import { T } from "./wasmbin.ts";
 import type { Compiler } from "./j2w.ts";
@@ -6,9 +6,6 @@ import type { ElemKind } from "./consts.ts";
 
 /** bytes per element, by storage kind */
 export const SIZE: Record<ElemKind, number> = { i8: 1, i16: 2, i32: 4, i64: 8, ref: 4 };
-export type View = ArrayBufferView & { length: number };
-/** the typed array the production natives take for a primitive array class */
-export const VIEWS: Record<string, { new (b: ArrayBuffer, o: number, n: number): View; new (n: number): View; from(items: ArrayLike<number> | ArrayLike<bigint>): View }> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 
 /** copy(data, pointer, from, count): elements [from, from + count) of the array to (`toMem`) or from linear memory, where element i is at
  *  pointer + i * size. Eight bytes at a time through two 32-bit words, element by element for the tail and for 64-bit elements. */

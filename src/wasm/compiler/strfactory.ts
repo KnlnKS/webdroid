@@ -1,11 +1,11 @@
-// The String constructors that turn bytes into chars, for either representation of String: the compact form StringLatin1 builds, the
+// The String constructors that turn bytes into chars: the compact form StringLatin1 builds, the
 // deprecated hibyte forms, and the charset forms. ASCII (any byte below 0x80, the same chars in UTF-8, US-ASCII and ISO-8859-1) is
 // widened here; anything else, and every argument the constructors reject, is the production implementation (natives.ts).
-import { Code, OP } from "../compiler/code.ts";
-import { T, ref } from "../compiler/wasmbin.ts";
-import { kindOf } from "../compiler/program.ts";
+import { Code, OP } from "./code.ts";
+import { T, ref } from "./wasmbin.ts";
+import { kindOf } from "./program.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
-import type { Compiler } from "../compiler/j2w.ts";
+import type { Compiler } from "./j2w.ts";
 import type { StructStrings } from "./strings.ts";
 
 const CHARSET = "java/nio/charset/Charset";

@@ -1,5 +1,5 @@
-// The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (World.upgradeJob) goes to the worker, one job at a time, and
-// its unit is installed when it arrives, if the World can still take it (World.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
+// The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (Tiering.upgradeJob) goes to the worker, one job at a time, and
+// its unit is installed when it arrives, if the World can still take it (Tiering.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
 import { note, Ev } from "../../timeline.ts";
 import { answeringFor } from "../../jvm/yield.ts";
@@ -19,12 +19,10 @@ import type { WarmAnswer } from "./warm-worker.ts";
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
 /** jobs waiting for the worker; a hot method that finds the queue full asks again after another budget */
 const MAX_QUEUE = 16, MAX_FAILURES = 3;
-/** a merge (World.mergeJob) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
+/** a merge (Tiering.mergeJob) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
  *  faster than collections shrink it, in the address space the page's compile workers share (compilehost.ts) */
 const MERGE_REST = 2;
 
-/** where the server and the production build serve compile-worker.ts */
-export const COMPILE_WORKER_URL = "/wasm-compile-worker.js";
 /** what starts a compile worker: the ports of its protocol, of its fetches and of its end (it posts a failure's message, and is terminated when sent anything) */
 export interface CompileWorkerRequest { port: MessagePort; fetcher: MessagePort; ctl: MessagePort }
 /** A compile worker. The page's compile host starts it in a process of its own (compilehost.ts) when `host` is that host's port; a realm without one starts
@@ -176,10 +174,10 @@ export class CompileClient implements CompileService {
     if (this.state !== "ready" || this.holding()) return;
     const w = this.w!;
     while (!this.busy && this.queue.length) {
-      const slot = this.queue.shift()!, job = w.upgradeJob(slot);
-      if (job) this.send(slot, job); else w.release(slot);
+      const slot = this.queue.shift()!, job = w.tiers.upgradeJob(slot);
+      if (job) this.send(slot, job); else w.tiers.release(slot);
     }
-    if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.mergeJob(); if (job) this.send(-1, job); }
+    if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.tiers.mergeJob(); if (job) this.send(-1, job); }
   }
   private send(slot: number, job: UpgradeJob): void {
     const w = this.w!, from = w.numbers.marks(), id = this.nextId++;
@@ -203,8 +201,8 @@ export class CompileClient implements CompileService {
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
     if (m.type === "failed") {
       if (busy.job.refresh !== undefined) {
-        if (!this.queue.includes(busy.slot)) w.release(busy.slot);
-        w.failedRefresh(busy.slot, busy.job.refresh);
+        if (!this.queue.includes(busy.slot)) w.tiers.release(busy.slot);
+        w.tiers.failedRefresh(busy.slot, busy.job.refresh);
       }
       // the method stays on its first-tier code and does not ask again; a worker that keeps failing has lost track of the numbering
       if (++this.stats.failed > MAX_FAILURES) this.retire(m.message); else this.pump();
@@ -213,7 +211,7 @@ export class CompileClient implements CompileService {
     if (m.type !== "unit") return;
     this.stats.workerMs += m.ms;
     const n = m.result.numbering, numbered = n.names.length + n.tail.length + n.selectors.length + n.gaps.length + n.links.length > 0;
-    const t0 = performance.now(), taken = w.adoptUnit(busy.slot, busy.job, m.result, busy.epoch);
+    const t0 = performance.now(), taken = w.tiers.adoptUnit(busy.slot, busy.job, m.result, busy.epoch);
     this.stats.adoptMs += performance.now() - t0;
     if (taken) {
       this.stats.adopted++;
@@ -246,7 +244,7 @@ export class CompileClient implements CompileService {
     if (this.state === "retired") return;
     this.state = "retired"; this.retired = reason;
     if (this.held) { clearTimeout(this.held.timer); this.held = undefined; }
-    for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.release(slot);
+    for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.tiers.release(slot);
     this.queue = []; this.busy = undefined;
     this.waiting = []; this.w = undefined; this.setup = undefined;
     if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }

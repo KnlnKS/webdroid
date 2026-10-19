@@ -71,6 +71,7 @@ export interface HostBridge {
   toJava(v: unknown, desc: string): unknown;
   arrayLength(a: object): number;
   element(a: object, i: number): unknown;
+  setElement(a: object, i: number, v: unknown): void;
   readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array>;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
   /** sets `s`, the scope of the call in progress, aside while its strand waits (`end` leaves it open), until `resume` takes it up again */
@@ -115,18 +116,18 @@ export interface NativeBinder {
   bridge(w: World): HostBridge;
 }
 
-/** answers `host.net` for libcore's getaddrinfo (inet.ts): an address count or minus an EAI code for a lookup, a byte of a found address */
+/** answers `host.net` for libcore's getaddrinfo (inet.ts): the addresses of `node`, minus an EAI code, or ASYNC while the relay looks it up */
 export interface HostNet {
-  (w: World, op: number, node: string, a: number, b: number): number;
+  (w: World, node: string, family: number, flags: number): number[][] | number;
   /** settles the lookup the last Resolve answered ASYNC for, after which the same Resolve answers it */
   wait?(w: World): Promise<void>;
 }
 
-/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `World.adoptUnit`; it may defer a job, or decline, and then the World compiles inline. */
+/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `Tiering.adoptUnit`; it may defer a job, or decline, and then the World compiles inline. */
 export interface CompileService {
-  /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); "later" while it has too many waiting, false if it cannot */
+  /** takes the second-tier compile of the method in `slot` (`Tiering.upgradeJob` describes it); "later" while it has too many waiting, false if it cannot */
   submit(w: World, slot: number): boolean | "later";
-  /** the World has first-tier units to merge (World.mergeJob), which the service takes when no second-tier job waits */
+  /** the World has first-tier units to merge (Tiering.mergeJob), which the service takes when no second-tier job waits */
   merge(w: World): void;
   /** dex files were added to a defining namespace, or (null) something the service cannot follow was: it stops serving */
   added(dexes: DexFile[] | null, loader?: Loader): void;

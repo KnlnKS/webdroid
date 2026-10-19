@@ -1,5 +1,5 @@
-// The Wasm backend's tests and tools, each in a node process of its own: pnpm wasm <test|tool> [args], or `all` for the tests marked so. They need javac,
-// d8 and java (and the Android SDK for the fixtures built against android.jar) on PATH.
+// The Wasm backend's tests and tools, each in a node process of its own: pnpm wasm <test|tool> [args], or `all` for the tests marked so. They need javac
+// and java on PATH and the Android SDK (its d8 dexes every fixture, tools.ts).
 // Tests (in `all` unless noted):
 //   diff         every static method of the W, S and N fixtures as Wasm and on the JDK
 //   classdiff    class initialisation and the class model against the JDK
@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeWhole } from "../generated.ts";
 import { nodeCommand } from "../node.ts";
-import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
+import { AOT_ROOT, type AotManifest } from "../aot-key.ts";
 
 /** the tests `all` runs, in this order */
 const ALL = ["diff", "classdiff", "customdiff", "linkdiff", "loaders", "entry", "hostclass", "lazytest", "fuzz", "jbench", "threads", "nested", "conform-quick", "sweep", "aottest", "persist"];

@@ -3,22 +3,18 @@
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
 import { mem, wrote, anchor } from "./mem.ts";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort } from "./host.ts";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
 import { E } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, utf8, logLine, scanSink } from "./libc.ts";
+import { fail, utf8, logLine, scanSink, kernelResult, readTs } from "./libc.ts";
 import { format, scan } from "./printf.ts";
 import { KLAYOUT } from "./syscall.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdWrite, fdDup2, javaCloseFd, javaLseekFd, javaPreadFd,
+  javaTruncateFd, javaAllocateFd, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess, javaChangeFdAttributes,
+  modifiedTime, AT_FDCWD, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
-import { processAllocateFd } from "./process-fd.ts";
-
-function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
-  return value instanceof Promise ? value.then(done) : done(value);
-}
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -37,7 +33,7 @@ function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number | Pr
     if (count === 100) return fail(cpu,E.EXIST);
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
-    const pending = dir ? mkdirPath(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    const pending = dir ? mkdirProcess(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
     return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
   };
   return attempt(0);
@@ -66,13 +62,13 @@ function newFile(fd: number, flags: number): number {
 }
 function fileFd(fp: number): number { return files.get(fp) ?? mem.ld16s(fp + FILE.file); }
 function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number | Promise<number> {
-  return complete(fdSeek(cpu,fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence),result => {
+  return complete(kernelResult(cpu,javaLseekFd(fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence)),result => {
     if(result<0)return -1;
     pushback.delete(fp);mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_EOF);return 0;
   });
 }
 function fileTell(cpu: Cpu, fp: number): number | Promise<number> {
-  return complete(fdSeek(cpu,fileFd(fp),0,1),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
+  return complete(kernelResult(cpu,javaLseekFd(fileFd(fp),0,1)),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
 }
 function setFlag(fp: number, f: number): void { mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) | f); }
 function modeFlags(mode: string): { o: number; f: number } {
@@ -93,13 +89,10 @@ function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
     if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
     return mem.u8[byte];
   };
-  const read = fdRead(cpu, fd, byte, 1);
-  return read instanceof Promise ? read.then(done) : done(read);
+  return complete(fdRead(cpu, fd, byte, 1), done);
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
-  const r = fdWrite(cpu, fileFd(fp), p, n);
-  const done = (written: number) => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; };
-  return r instanceof Promise ? r.then(done) : done(r);
+  return complete(fdWrite(cpu, fileFd(fp), p, n), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
 }
 function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   const b = utf8(s);
@@ -107,8 +100,7 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   mem.u8.set(b, tmp);
   const r = fwriteBytes(cpu, fp, tmp, b.length);
   mem.free(tmp);
-  const done = (written: number) => written < b.length ? -1 : b.length;
-  return r instanceof Promise ? r.then(done) : done(r);
+  return complete(r, written => written < b.length ? -1 : b.length);
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(cpu: Cpu, path: string): number | Promise<number> {
@@ -118,8 +110,7 @@ function openDir(cpu: Cpu, path: string): number | Promise<number> {
     dirs.set(h, { entries, i: 0, dirent: mem.malloc(DIRENT_SIZE) });
     return h;
   };
-  const entries = listProcess(path);
-  return entries instanceof Promise ? entries.then(open) : open(entries);
+  return complete(listProcess(path), open);
 }
 function nextDirent(d: { entries: string[]; i: number }, de: number): number {
   const name = d.entries[d.i++];
@@ -232,21 +223,22 @@ export function stdioInit(): void {
     mkdtemp: (cpu, a) => { const p = a.p(), destination = anchor(p); return complete(fdTemp(cpu,p,0,true),n => n < 0 ? 0 : destination()); },
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
-    lseek64: (cpu, a) => complete(fdSeek(cpu,a.i(),Number(a.l()),a.i()),n => BigInt(n)),
-    stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
+    lseek64: (cpu, a) => complete(kernelResult(cpu,javaLseekFd(a.i(),Number(a.l()),a.i())),n => BigInt(n)),
+    stat: (cpu, a) => statProcess(cpu, a.str(), a.p()),
+    access: (cpu, a) => faccessatPath(cpu, AT_FDCWD, a.str(), a.i(), 0),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
-    chmod: () => 0, chown: () => 0,
-    unlink: (cpu, a) => removePath(cpu, a.str(), false),
+    chmod: (cpu, a) => changeProcess(cpu, a.str(), { mode: a.i() }),
+    chown: (cpu, a) => changeProcess(cpu, a.str(), { uid: a.i(), gid: a.i() }),
+    unlink: (cpu, a) => removeProcess(cpu, a.str(), false),
     mkfifo: (cpu, a) => mknodProcess(cpu, a.str(), 0x1000 | a.i()),
-    remove: (cpu, a) => removePath(cpu, a.str()),
-    rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
-    mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
-    rmdir: (cpu, a) => removePath(cpu, a.str(), true),
-    ftruncate64: (cpu, a) => truncateFd(cpu, a.i(), Number(a.l())),
+    remove: (cpu, a) => removeProcess(cpu, a.str()),
+    rename: (cpu, a) => renameProcess(cpu, a.str(), a.str()),
+    mkdir: (cpu, a) => mkdirProcess(cpu, a.str()),
+    rmdir: (cpu, a) => removeProcess(cpu, a.str(), true),
+    ftruncate64: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), Number(a.l()))),
     // they report the error number itself
-    posix_fallocate: (_c, a) => complete(processAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
-    posix_fallocate64: (_c, a) => complete(processAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
+    posix_fallocate: (_c, a) => complete(javaAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
+    posix_fallocate64: (_c, a) => complete(javaAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
     sync: () => {},
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
@@ -260,7 +252,7 @@ export function stdioInit(): void {
     },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
     __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
-    futimens: () => 0,
+    futimens: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), modifiedTime(a.p()))),
     pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
     fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
     statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
@@ -271,7 +263,9 @@ export function stdioInit(): void {
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
-    utimes: () => 0, utime: () => 0,
+    // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
+    utimes: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
+    utime: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
 
     opendir: (cpu, a) => openDir(cpu, a.str()),
     fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(cpu, f.path); },
@@ -334,12 +328,12 @@ export function stdioInit(): void {
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return openFd(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
     freopen: (cpu, a) => {
       const path=a.str(),mode=a.str(),fp=a.p(),{o,f}=modeFlags(mode);pushback.delete(fp);
-      return complete(fdClose(cpu,fileFd(fp)),()=>complete(fdOpen(cpu,path,o),fd => {
+      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(fdOpen(cpu,path,o),fd => {
         if(fd<0)return 0;files.set(fp,fd);mem.st16(fp+FILE.file,fd);mem.st16(fp+FILE.flags,f);return fp;
       }));
     },
     tmpfile: (cpu) => { return complete(fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
-    fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
+    fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = kernelResult(cpu, javaCloseFd(fd)); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (cpu, a) => { const fp = a.p(); return !fp || openFd(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {
       const p = a.p(), sz = a.u(), n = a.u(), fp = a.p();
@@ -352,10 +346,9 @@ export function stdioInit(): void {
       if (!pending?.length) pushback.delete(fp);
       if (used === total) return n;
       const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
-      const r = fdRead(cpu, fileFd(fp), p + used, total - used);
-      return r instanceof Promise ? r.then(fin) : fin(r);
+      return complete(fdRead(cpu, fileFd(fp), p + used, total - used), fin);
     },
-    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return r instanceof Promise ? r.then(written => Math.floor(written / sz)) : Math.floor(r / sz); },
+    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; return complete(fwriteBytes(cpu, fp, p, total), written => Math.floor(written / sz)); },
     fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
     ftell: (cpu, a) => fileTell(cpu, a.p()),
     rewind: (cpu, a) => { const fp = a.p(); return complete(fileSeek(cpu,fp,0,0),()=>{mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_ERR);}); },
@@ -391,36 +384,36 @@ export function stdioInit(): void {
       mem.st8(buf + i, 0);
       return ARG0;
     },
-    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; const r=fwriteBytes(cpu,fp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
-    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; const r=fwriteBytes(cpu,stdoutFp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
-    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); const r=fwriteStr(cpu,fp,s);return r instanceof Promise ? r.then(n => n<0 ? -1 : 0) : r<0 ? -1 : 0; },
+    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return complete(fwriteBytes(cpu, fp, scratch, 1), n => n === 1 ? c : -1); },
+    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; return complete(fwriteBytes(cpu, stdoutFp, scratch, 1), n => n === 1 ? c : -1); },
+    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); return complete(fwriteStr(cpu, fp, s), n => n < 0 ? -1 : 0); },
     puts: (cpu, a) => fwriteStr(cpu, stdoutFp, a.str() + "\n"),
     fprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, a)); },
     vfprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, vaList(a.p()))); },
     printf: (cpu, a) => { const f = a.str(); return fwriteStr(cpu, stdoutFp, format(f, a)); },
     vprintf: (cpu, a) => { const f = a.str(); return fwriteStr(cpu, stdoutFp, format(f, vaList(a.p()))); },
-    fscanf: (cpu, a) => {
-      const fp = a.p(), f = a.str();
-      const fd = fileFd(fp), fo = openFd(fd);
-      if (!fo) return -1;
+    fscanf: (_c, a) => {
+      const fp = a.p(), f = a.str(), fd = fileFd(fp), sink = scanSink(a);
+      if (!openFd(fd)) return -1;
       // scan the rest of the file as text, then advance by how much the conversions consumed
-      const pending = pushback.get(fp);
-      let data = fo.content.data.subarray(fo.pos, Math.min(fo.content.len, fo.pos + 65536));
-      if (pending?.length) {
-        const combined = new Uint8Array(pending.length + data.length);
-        for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];
-        combined.set(data, pending.length);
-        data = combined;
-      }
-      const text = codec.dec.decode(data);
-      let consumed = 0;
-      const sink = scanSink(a);
-      const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));
-      const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
-      if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
-      fo.pos += bytes - used;
-      if (r < 0) setFlag(fp, F_EOF);
-      return r;
+      const window = new Uint8Array(65536);
+      return complete(javaLseekFd(fd, 0, 1), position => complete(position < 0 ? 0 : javaPreadFd(fd, window, position), n => {
+        const pending = pushback.get(fp);
+        let data = window.subarray(0, Math.max(0, n));
+        if (pending?.length) {
+          const combined = new Uint8Array(pending.length + data.length);
+          for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];
+          combined.set(data, pending.length);
+          data = combined;
+        }
+        const text = codec.dec.decode(data);
+        let consumed = 0;
+        const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));
+        const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
+        if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
+        if (r < 0) setFlag(fp, F_EOF);
+        return position < 0 || bytes === used ? r : complete(javaLseekFd(fd, position + bytes - used, 0), () => r);
+      }));
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };

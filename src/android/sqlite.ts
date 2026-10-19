@@ -331,24 +331,35 @@ export type SQLiteRequest = { family: SQLiteFamily; method: string; args: SQLite
 export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: ProcessFailure };
 export const sqliteTransport = { call: null as ((request: SQLiteRequest) => Promise<SQLiteReply>) | null };
 type NativeCall = (...args: never[]) => SQLiteValue | Promise<SQLiteValue>;
-const sqliteNatives = new Map<SQLiteFamily, Record<string, NativeCall>>();
+type Handle = "connection" | "statement" | "window";
+/** what a native does to the handles a session keeps: opens a connection, prepares a statement, or ends either */
+type Lifecycle = "open" | "prepare" | "close" | "finalize";
+type Native = { call: NativeCall; arity: number; handles: Handle[]; lifecycle?: Lifecycle };
+const sqliteNatives = new Map<SQLiteFamily, Map<string, Native>>();
 
-/** Keep the owning native implementations available to the canonical service. The client
- *  wrappers are suspending entries even for operations that are synchronous inside sql.js. */
-function registerSQLite(family: SQLiteFamily, cls: string, table: Record<string, NativeCall>) {
-  sqliteNatives.set(family, table);
-  rt.registerJnis(cls, Object.fromEntries(Object.entries(table).map(([method, native]) => [method,
-    driven(function* (...args: SQLiteValue[]) {
-      args = args.slice(0, parseMethodDesc(method.slice(method.indexOf("("))).params.length);
-      if (!sqliteTransport.call) return yield* awaited(native(...args as never[]));
-      const window = method.startsWith("nativeExecuteForCursorWindow(") ? deref<NativeWindow>(args[2] as bigint) : null;
+/** Keep the owning native implementations available to the canonical service: a native's leading long arguments are
+ *  the handles `handles` names in order, and `lifecycle` names those that make or end one. The client wrappers are
+ *  suspending entries even for operations that are synchronous inside sql.js. */
+function registerSQLite(family: SQLiteFamily, cls: string, handles: Handle[], lifecycle: Record<string, Lifecycle>, table: Record<string, NativeCall>) {
+  const natives = new Map(Object.entries(table).map(([method, call]) => {
+    const params = parseMethodDesc(method.slice(method.indexOf("("))).params, longs = params.findIndex(p => p !== "J");
+    return [method, { call, arity: params.length, handles: handles.slice(0, longs < 0 ? params.length : longs), lifecycle: lifecycle[method] }];
+  }));
+  sqliteNatives.set(family, natives);
+  rt.registerJnis(cls, Object.fromEntries([...natives].map(([method, { call, arity, handles }]) => {
+    const at = handles.indexOf("window");
+    return [method, driven(function* (...args: SQLiteValue[]) {
+      args = args.slice(0, arity);
+      if (!sqliteTransport.call) return yield* awaited(call(...args as never[]));
+      const window = at < 0 ? null : deref<NativeWindow>(args[at] as bigint);
       const reply = yield* awaited(sqliteTransport.call({ family, method,
-        args: window ? args.map((value, i) => i === 2 ? 0n : value) : args,
+        args: window ? args.map((value, i) => i === at ? 0n : value) : args,
         ...(window ? { window: { name: window.name, size: window.size, readOnly: window.readOnly } } : {}) }));
       if (window && !window.readOnly && reply.window) Object.assign(window, reply.window);
       if (reply.error) throw reply.error.javaClass ? rt.mkThrowable(reply.error.javaClass, reply.error.message) : processError(reply.error);
       return reply.value;
-    })])));
+    })];
+  })));
 }
 
 let nextSQLiteToken = 1n;
@@ -369,49 +380,41 @@ export function createSQLiteSession() {
   };
   const run = async (request: SQLiteRequest): Promise<SQLiteReply> => {
     if (closed) throw dead();
-    const { family, method } = request, native = sqliteNatives.get(family)?.[method];
-    if (!native || !Object.hasOwn(sqliteNatives.get(family)!, method)) throw invalid();
-    const args = [...request.args], open = method.startsWith("nativeOpen("),
-      prepareStatement = method.startsWith("nativePrepare(") || method.startsWith("nativePrepareStatement("),
-      finalize = method.startsWith("nativeFinalizeStatement(") || (family === "statement" && method === "nativeClose(J)V");
-    let connection = 0n, statement = 0n;
-    if (family === "statement") {
-      statement = args[0] as bigint;
-      const owned = statements.get(statement);
-      if (!owned || (!finalize && !connections.has(owned.connection))) throw invalid();
-      connection = owned.connection; args[0] = owned.pointer;
-    } else if (family === "connection" || (family === "platform" && !open)) {
-      connection = args[0] as bigint;
-      const h = connections.get(connection);
-      if (h === undefined && !finalize) throw invalid();
-      args[0] = h ?? 0n;
-      if (method.includes("(JJ")) {
-        statement = args[1] as bigint;
-        const owned = statements.get(statement);
-        if (!owned || owned.connection !== connection) throw invalid();
-        args[1] = owned.pointer;
+    const native = sqliteNatives.get(request.family)?.get(request.method);
+    if (!native) throw invalid();
+    const args = [...request.args], { lifecycle } = native, finalize = lifecycle === "finalize";
+    let connection: bigint | undefined, statement = 0n, window: NativeWindow | undefined, windowHandle: bigint | undefined;
+    // a statement may be finalized after its connection closed
+    native.handles.forEach((kind, i) => {
+      const token = args[i] as bigint;
+      if (kind === "connection") {
+        const h = connections.get(connection = token);
+        if (h === undefined && !finalize) throw invalid();
+        args[i] = h ?? 0n;
+      } else if (kind === "statement") {
+        const owned = statements.get(statement = token);
+        if (!owned || (connection === undefined ? !finalize && !connections.has(owned.connection) : owned.connection !== connection)) throw invalid();
+        connection = owned.connection; args[i] = owned.pointer;
+      } else {
+        if (!request.window) throw invalid();
+        window = new NativeWindow(request.window.name, request.window.size, request.window.readOnly);
+        args[i] = windowHandle = handle(window);
       }
-    }
-    let window: NativeWindow | undefined, windowHandle: bigint | undefined;
-    if (method.startsWith("nativeExecuteForCursorWindow(")) {
-      if (!request.window) throw invalid();
-      window = new NativeWindow(request.window.name, request.window.size, request.window.readOnly);
-      args[2] = windowHandle = handle(window);
-    }
+    });
     const windowData = (): WindowData => ({ rows: window!.rows, cols: window!.cols, used: window!.used, types: window!.types, values: window!.values });
     // Validation is complete. Ownership ends at finalize dispatch, even if it throws afterward.
     if (finalize) statements.delete(statement);
     try {
-      const result = native(...args as never[]);
+      const result = native.call(...args as never[]);
       let value = result instanceof Promise ? await result : result;
-      if (open) {
+      if (lifecycle === "open") {
         if (closed) { closeConnection(value as bigint); throw dead(); }
         const token = nextSQLiteToken++;
         connections.set(token, value as bigint); value = token;
-      } else if (prepareStatement && value !== 0n) {
+      } else if (lifecycle === "prepare" && value !== 0n) {
         const token = nextSQLiteToken++;
-        statements.set(token, { pointer: value as bigint, connection }); value = token;
-      } else if (!finalize && method === "nativeClose(J)V") connections.delete(connection);
+        statements.set(token, { pointer: value as bigint, connection: connection! }); value = token;
+      } else if (lifecycle === "close") connections.delete(connection!);
       if (closed) throw dead();
       return { value, ...(window ? { window: windowData() } : {}) };
     } catch (error) {
@@ -448,7 +451,10 @@ export function createSQLiteSession() {
 }
 
 const OPEN_READONLY = 1, CREATE_IF_NECESSARY = 0x10000000;
-registerSQLite("platform", "android/database/sqlite/SQLiteConnection", {
+registerSQLite("platform", "android/database/sqlite/SQLiteConnection", ["connection", "statement", "window"], {
+  "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": "open", "nativeClose(J)V": "close",
+  "nativePrepareStatement(JLjava/lang/String;)J": "prepare", "nativeFinalizeStatement(JJ)V": "finalize",
+}, {
   "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": async (path: string, flags: number) => handle(await openConnection(path,
     (flags & OPEN_READONLY) !== 0 && !(flags & CREATE_IF_NECESSARY), (flags & CREATE_IF_NECESSARY) !== 0, sqliteException)),
   "nativeClose(J)V": closeConnection,
@@ -506,18 +512,19 @@ function column(s: bigint, i: number, row = true): number {
   return p;
 }
 rt.claimNativeLib("sqliteJni");
-registerSQLite("driver", "androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", {
+registerSQLite("driver", "androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", [], { "nativeOpen(Ljava/lang/String;I)J": "open" }, {
   "nativeThreadSafeMode()I": () => 0,
   "nativeOpen(Ljava/lang/String;I)J": async (name: string, flags: number) =>
     handle(await openConnection(name || ":memory:", (flags & 3) === 1, (flags & 6) === 6, androidx)),
 });
-registerSQLite("connection", "androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", {
+registerSQLite("connection", "androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", ["connection"],
+  { "nativePrepare(JLjava/lang/String;)J": "prepare", "nativeClose(J)V": "close" }, {
   "nativePrepare(JLjava/lang/String;)J": (h: bigint, sql: string) => prepare(conn(h), sql),
   "nativeClose(J)V": closeConnection,
   "nativeInTransaction(J)Z": (h: bigint) => +!C._sqlite3_get_autocommit(conn(h).ptr),
   "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V": () => { throw androidx(1, "not authorized"); },
 });
-registerSQLite("statement", "androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
+registerSQLite("statement", "androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", ["statement"], { "nativeClose(J)V": "finalize" }, {
   ...Object.fromEntries(BINDERS.map(([, name, desc, bind]) =>
     [`nativeBind${name}(JI${desc})V`, (s: bigint, i: number, v: never) => check(owner(s), bind(st(s), i, v))])),
   "nativeClearBindings(J)V": (s: bigint) => check(owner(s), C._sqlite3_clear_bindings(st(s))),

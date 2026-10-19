@@ -1,16 +1,14 @@
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
-import { OP, type Code } from "./code.ts";
-import { Compiler } from "./j2w.ts";
+import type { Code } from "./code.ts";
+import { Compiler, type LinkEnv } from "./j2w.ts";
 import { MC } from "./method.ts";
 import type { Kind, MethodInfo } from "./program.ts";
 import type { SymbolicSite } from "./sites.ts";
 import { T } from "./wasmbin.ts";
-import type { World } from "../link/world.ts";
 
 // A resolved symbolic site's operation: no method IR or copied callees, its inputs are the caller's bits, and virtual calls go through the receiver's current slot.
 class SymbolicMC extends MC {
   private inputs: SymbolicSite[4];
-  override symbolic = false;
   outputLocal = -1;
   constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; }
   override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {
@@ -19,8 +17,6 @@ class SymbolicMC extends MC {
   override consumeResult(): void {}
   protected override copyReference(reg: number): void { this.get("L", reg); this.set("L"); }
   override set(_kind: Kind): void { this.code.lset(this.outputLocal); }
-  override setF32(): void { this.code.raw(OP.i32_reinterpret_f32); this.set("I"); }
-  override setF64(): void { this.code.raw(OP.i64_reinterpret_f64); this.set("J"); }
   override finishResult(_ins: PreparedInstruction, kind: Kind | "V"): void { if (kind !== "V") this.set(kind); }
   override useWeb(reg: number): number { return reg; }
   override get(kind: Kind, reg: number): void {
@@ -32,7 +28,7 @@ class SymbolicMC extends MC {
 }
 
 /** the unit of one symbolic site's operation, once its references resolve; it restores the frame depth on normal and exceptional exits */
-export function compileSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: Kind | "V") {
+export function compileSymbolicSite(w: LinkEnv, m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: Kind | "V") {
   const cx = new Compiler(w);
   // These helpers have no Java frame; stable names let engines reuse identical module code.
   const built = cx.buildSynthetic("symbolic:operation", inputs.map(i => i[1]), (c: Code) => {

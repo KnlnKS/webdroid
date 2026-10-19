@@ -2,6 +2,7 @@
 // any page script runs; `installProbe` is serialised into it, so it must stay self-contained and
 // reach the runtime only through `globalThis.wd`.
 import { stableFrame } from "./settle.ts";
+import { ERROR_LINE } from "./processes.ts";
 import { environmentScript, performAction } from "./actions.ts";
 import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types.ts";
 
@@ -478,7 +479,7 @@ function installProbe(cfg: ProbeConfig): void {
       newMissing: fresh("missing", [...wd.rt.missing, ...snapshot?.missing ?? []]),
       newPlaceholders: fresh("placeholders", [...wd.rt.placeholders, ...snapshot?.placeholders ?? []]),
       nativeRequired: fresh("native", [...wd.nativeRequirements(), ...snapshot?.nativeRequired ?? []]),
-      newErrors: fresh("errors", [...wd.logs as string[], ...workerErrors].filter((l) => /^(error:|window.error:|unhandledrejection:)/.test(l))),
+      newErrors: fresh("errors", [...wd.logs as string[], ...workerErrors].filter((l) => ERROR_LINE.test(l))),
       web: [...wd.web() as StepResult["web"], ...snapshot?.web ?? []].map(({ url, title, loaded }) => ({ url, title, loaded })),
       uiTree,
       frames,
@@ -492,4 +493,4 @@ function installProbe(cfg: ProbeConfig): void {
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */
 export const probeScript = (cfg: ProbeConfig): string =>
-  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; const PHASE_BOUND_MS=${PHASE_BOUND_MS}; ${waitBudget.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;
+  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; const PHASE_BOUND_MS=${PHASE_BOUND_MS}; const ERROR_LINE=${ERROR_LINE}; ${waitBudget.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;

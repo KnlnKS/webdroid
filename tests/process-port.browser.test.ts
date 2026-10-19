@@ -3,8 +3,8 @@ import { chromium } from "playwright";
 import { serveModules } from "./browser.ts";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const server = await serveModules(["src/perf.ts", "src/shell/process-life.ts", "src/shell/aot-profile.ts", "src/shell/ime-port.ts", "src/shell/location-access.ts",
-    "src/shell/worker-control-methods.ts", "src/shell/process-port.ts", "tests/fixtures/browser/process-bootstrap.ts"]);
+  const server = await serveModules(["src/perf.ts", "src/shell/process-port.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts",
+    "tests/fixtures/browser/fixture-calls.ts"]);
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage(), errors: string[] = [];
@@ -26,16 +26,10 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     });
     expect(counterReceipt).toEqual({ absent: true, readonly: true, pid: 17, initial: 0, first: 0, second: 7, resets: [0, 0, 1], reset: 0, ordered: true });
     const profileOwnership = await page.evaluate(async () => {
-      const source = `import {existingAotProfile} from ${JSON.stringify(location.origin+"/aot-profile.js")};
-        const absent=await existingAotProfile(), untouched=globalThis.__wdAot===undefined;
-        const linked=['LExample;'],called=['LCalled;'];
-        const owner={key:'build-key',wanted:new Set(['c1.wasm']),worlds:new Set([()=>({linked,called})]),ready:new Promise(()=>{})};
-        globalThis.__wdAot=Promise.resolve(owner);
-        const copied=await existingAotProfile();copied.wanted.push('foreign');copied.worlds[0].linked.push('foreign');
-        self.postMessage({absent,untouched,copiedKey:copied.key,fresh:await existingAotProfile()});`;
-      const url=URL.createObjectURL(new Blob([source],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+      const { fixtureWorker } = await import(location.origin + "/fixture-calls.js") as typeof import("./fixtures/browser/fixture-calls.ts");
+      const worker = fixtureWorker("aot");
       try { return await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(new Error(e.message));}); }
-      finally {worker.terminate();URL.revokeObjectURL(url);}
+      finally {worker.terminate();}
     });
     expect(profileOwnership).toEqual({absent:null,untouched:true,copiedKey:"build-key",
       fresh:{key:"build-key",wanted:["c1.wasm"],worlds:[{linked:["LExample;"],called:["LCalled;"]}]}});
@@ -47,35 +41,14 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     const result = await page.evaluate(async () => {
       const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port.ts");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
-      const code = `import {processProxy, serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
-        self.onmessage = ({data}) => {
-          const callback = processProxy(data.callback); let clips = 0;
-          serveProcess(data.endpoint, {
-            activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
-            broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
-            processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{clips++;},
-            transact:async(request,caller)=>{
-              if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data};}
-              if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
-              if(request.code===3)throw {$javaClass:'java/lang/SecurityException',msg:'denied'};
-              if(request.code===4)return {handled:1,data:()=>{}};
-              if(request.code===6){function originatingHostFailure(){throw new TypeError('undefined.hasTransform');}originatingHostFailure();}
-              self.postMessage('entered'); return new Promise(()=>{});
-            }
-          });
-        };`;
-      const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-      const worker = new Worker(url, { type: "module" });
+      const { fixtureWorker, stubEndpoint } = await import(location.origin + "/fixture-calls.js") as typeof import("./fixtures/browser/fixture-calls.ts");
+      const worker = fixtureWorker("parcel");
       const proxy = processProxy(endpointPorts.port1, fault => fault.javaClass ? Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }) : processError(fault));
       const empty = { bytes: new Uint8Array(0), objects: [] };
-      const stopCallbacks = serveProcess(callbacks.port1, {
-        activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged: async () => {},
-        transact: async () => {
-          await proxy.endpoint.clipboardChanged();
-          return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
-        },
-      });
+      const stopCallbacks = serveProcess(callbacks.port1, stubEndpoint({ transact: async () => {
+        await proxy.endpoint.clipboardChanged();
+        return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
+      } }));
       try {
         worker.postMessage({ endpoint: endpointPorts.port2, callback: callbacks.port2 }, [endpointPorts.port2, callbacks.port2]);
         const source = Uint8Array.of(1, 2), caller = { pid: 10, uid: 12000 };
@@ -93,7 +66,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
         const death = await pending, later = await call(1).catch(error => error.javaClass);
         return { source: Array.from(source), copied: { handled: copied.handled, bytes: Array.from(copied.data.bytes), objects: copied.data.objects },
           callback: Array.from(callback.data.bytes), failure, cloneError, hostError, death, later };
-      } finally { proxy.close(); stopCallbacks(); worker.terminate(); URL.revokeObjectURL(url); }
+      } finally { proxy.close(); stopCallbacks(); worker.terminate(); }
     });
     expect(result).toEqual({ source: [1, 2], copied: { handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
       callback: [21, 1], failure: { javaClass: "java/lang/SecurityException", message: "denied" }, cloneError: "DataCloneError",
@@ -110,8 +83,8 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return cookieOwnership();
     });
-    expect(cookies).toEqual({ session: {value:true}, persisted: {value:true}, read: "session=one; saved=two", isolatedRead: "",
-      document: ["saved=two"], accept: {value:false}, denied: {value:false}, removed: {value:true}, afterSession: "saved=two",
+    expect(cookies).toEqual({ session: true, persisted: true, read: "session=one; saved=two", isolatedRead: "",
+      document: ["saved=two"], accept: false, denied: false, removed: true, afterSession: "saved=two",
       saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
     const clipboard = await page.evaluate(async () => {
       const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");

@@ -4,7 +4,7 @@ import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "
 import { Code, OP } from "./code.ts";
 import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
-import { H, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
+import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import type { PreparedMethod } from "../../jvm/prepared.ts";
 import type { Typing } from "./infer.ts";
@@ -12,16 +12,17 @@ import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
 import { rtfns, type Synth } from "./rtfns.ts";
 import type { LinkFailure } from "./linkage.ts";
-import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched.ts";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "../link/exc.ts";
-import { StructStrings, stringCtor } from "../link/strings.ts";
-import { emitStoreCheck } from "../link/classes.ts";
+import { Block, Sync, FUEL, emitBlock, emitSync } from "./hostcalls.ts";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
+import { STRING, StructStrings } from "./strings.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
+/** a String constructor is never called: each call site makes the String with its factory (Compiler.construct) */
+const stringCtor: Intrinsic = (_cx, _m, c) => { c.unreachable(); };
 /** how `m` is implemented without its bytecode: an intrinsic, a String constructor (a call site makes the string), or a host import */
 export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: NativeBinder, m: MethodInfo): Intrinsic | undefined {
-  return intrinsics.get(mid(m)) ?? (m.isCtor && m.cls === "java/lang/String" ? stringCtor : natives.stub(m));
+  return intrinsics.get(mid(m)) ?? (m.isCtor && m.cls === STRING ? stringCtor : natives.stub(m));
 }
 
 /** the types every module declares identically; Wasm canonicalises them across modules */
@@ -56,9 +57,10 @@ const HOST_IMPORTS = {
   heapCheck: { params: [], results: [T.i32] },
   excMessage: { params: [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], results: [T.externref] },
   capture: { params: [T.externref], results: [] },
-  stFrames: { params: [T.externref], results: [T.i32] },
-  stString: { params: [T.i32, T.i32], results: [T.externref] },
-  stLine: { params: [T.i32], results: [T.i32] },
+  stFrames: { params: [T.externref], results: [T.externref] },
+  stString: { params: [T.externref, T.i32, T.i32], results: [T.externref] },
+  stLine: { params: [T.externref, T.i32], results: [T.i32] },
+  len: { params: [T.externref], results: [T.i32] },
   info: { params: [T.i32, T.i32, T.i32], results: [T.i32] },
   stackClass: { params: [T.i32], results: [T.i32] },
   classByName: { params: [T.externref, T.externref, T.i32], results: [T.i32] },
@@ -71,7 +73,8 @@ const HOST_IMPORTS = {
   long: { params: [T.i32], results: [] },
   mhInvoke: { params: [T.externref, T.externref, T.externref, T.i32], results: [T.externref] },
   text: { params: [T.i32, T.i32], results: [T.externref] },
-  net: { params: [T.i32, T.externref, T.i32, T.i32], results: [T.i32] },
+  net: { params: [T.externref, T.i32, T.i32], results: [T.externref] },
+  netByte: { params: [T.externref, T.i32, T.i32], results: [T.i32] },
   proxy: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
   obj: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.externref] },
   annotation: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.externref] },
@@ -82,9 +85,11 @@ const HOST_IMPORTS = {
   sync: { params: [T.i32, T.externref, T.f64], results: [T.i32] },
   block: { params: [T.i32, T.externref, T.f64, T.i32], results: [T.i32] },
 } satisfies Record<string, FunctionType>;
-const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as (keyof typeof HOST_IMPORTS)[];
+/** what compiled code imports as "host" (link/hostimports.ts) */
+export type HostImport = keyof typeof HOST_IMPORTS;
+const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as HostImport[];
 /** each host import's function index: every module imports them first, in this order */
-const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => [name, i])) as Record<keyof typeof HOST_IMPORTS, number>;
+const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => [name, i])) as Record<HostImport, number>;
 /** the host imports that can run Java code */
 const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", "proxy", "obj", "dexOpen", "dexOpenMemory", "classByName", "net", "sync", "block",
   "catchBlock", "catchBlockWait"] as const).map((name) => HOST_IMPORT_INDEX[name]));
@@ -93,8 +98,30 @@ const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", 
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
+/** the linker state a Compiler reads and records into */
+export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
+  | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
+  | "needsSymbolicSite" | "guestShared" | "units">;
+/** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
+export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
+/** how Compiler.buildUnit compiles its methods */
+export interface UnitOptions {
+  /** compiled beside the methods for the unit's own calls and not exported; what they assume about the class hierarchy counts against the first method */
+  copies?: MethodInfo[];
+  /** the second tier: its methods do not count */
+  hot?: boolean;
+  /** the methods go straight into their table slots when the module is instantiated and call each other through them, as precompiled code ("build",
+   *  aot.ts) or code merged from first-tier units ("merge"), which unlike precompiled code relies on the classes loaded now */
+  install?: "build" | "merge";
+  /** classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
+  ensures?: string[];
+  plan?: CallPlan;
+  /** the number a hot or merged unit's function names carry, apart from earlier units of the same methods */
+  seq?: number;
+}
+const NO_PLAN: CallPlan = new Map();
 export class Compiler implements Base {
-  w: World;
+  w: LinkEnv;
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
@@ -107,6 +134,7 @@ export class Compiler implements Base {
   /** the names and descriptors of `fn`'s methods: a virtual call of any other can have no target in the module */
   private keys = new Set<string>();
   private direct = true;
+  private plan = NO_PLAN;
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
@@ -115,7 +143,7 @@ export class Compiler implements Base {
   linkErrors: string[] = [];
   /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
   absent: [string, MethodInfo | undefined][] = [];
-  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
+  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see Tiering.upgrade) */
   counting = true;
   /** the classes this module allocates */
   allocs = new Set<string>();
@@ -141,7 +169,7 @@ export class Compiler implements Base {
   /** the helpers a first-tier unit shares with others (shareHelpers): those it imports, and those it exports for later units */
   private sharing?: { imports: Map<string, number>; out: [string, FunctionType][] };
   private baseTypes: number;
-  constructor(w: World) {
+  constructor(w: LinkEnv) {
     this.w = w;
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
@@ -151,7 +179,7 @@ export class Compiler implements Base {
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
     this.str = new StructStrings(this);
-    this.classStruct.set("java/lang/String", this.tStr);
+    this.classStruct.set(STRING, this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
     for (const name of HOST_IMPORT_NAMES) mb.importFunc("host", name, HOST_IMPORTS[name]);
     this.str.importBuiltins();
@@ -187,10 +215,10 @@ export class Compiler implements Base {
     return f;
   }
   /** Shares the helpers that are the same in every module with other first-tier units: each costs the engine about as much in every module as the
-   *  unit's own code. A helper an earlier unit exports is imported (World.sharedHelpers); one none does is defined here and exported */
+   *  unit's own code. A helper an earlier unit exports is imported (Units.sharedHelpers); one none does is defined here and exported */
   shareHelpers(): void {
     const imports = new Map<string, number>();
-    for (const [key, sig] of this.w.sharedHelpers) imports.set(key, this.mb.importFunc("h", key, sig));
+    for (const [key, sig] of this.w.units.sharedHelpers) imports.set(key, this.mb.importFunc("h", key, sig));
     this.sharing = { imports, out: [] };
   }
   get sharedOut(): readonly [string, FunctionType][] { return this.sharing?.out ?? []; }
@@ -308,9 +336,9 @@ export class Compiler implements Base {
     if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
-  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
+  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see Planner.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
-    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
+    return (this.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
   }
   /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
   emitCount(c: Code, m: MethodInfo, iterations?: number): void {
@@ -424,10 +452,37 @@ export class Compiler implements Base {
       return f;
     }, GENERIC_LOCALS.has(key) ? type : undefined);
   }
+  /** push the Class of `name` */
+  constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
+  /** call the method of `cls` that `name` and `desc` resolve to */
+  callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
+  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+  /** the element array of the array object on the stack */
+  arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
+  vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
+  /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
+  emitStoreCheck(c: Code, arr: number, value: () => void): void {
+    // Object[] takes anything; a value of exactly the component class (nearly every store into a typed array) needs no call
+    const comp = c.scratch();
+    c.lget(arr).refCast(this.tArr.ref).structGet(this.tArr.ref, 0).i32(ELEM).arrayGet(this.tVT).ltee(comp).i32(this.idOf("java/lang/Object")).raw(OP.i32_ne).if_();
+    value(); c.refIsNull().raw(OP.i32_eqz).if_();
+    value(); this.vtId(c).lget(comp).raw(OP.i32_ne).if_().lget(arr); value(); this.callRt(c, "astore"); c.end();
+    c.end().end();
+  }
+  /** push a new object of constructor `ctor`'s class, initialized by it with the arguments `args` pushes; a String is made by its factory, as at an invoke-direct */
+  construct(c: Code, ctor: MethodInfo, args: () => void = () => {}): void {
+    if (ctor.cls === STRING) {
+      const make = this.str.factory(ctor.desc);
+      if (make === undefined) this.gap(c, `String.<init>${ctor.desc}`); else { args(); c.call(make); }
+      return;
+    }
+    const o = c.newLocal(T.anyref);
+    this.emitEnsure(c, ctor.cls); this.emitNew(c, ctor.cls); c.ltee(o); args(); this.callMethod(c, ctor); c.lget(o);
+  }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
-    if (cls === "java/lang/String") { this.str.literal(c, ""); return; }
+    if (cls === STRING) { this.str.literal(c, ""); return; }
     this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);
@@ -574,7 +629,7 @@ export class Compiler implements Base {
           const c = new Code(3), data = c.newLocal(ref(this.tData[k]));
           c.lget(0).refCast(this.tArr[k]).structGet(this.tArr[k], 2).lset(data);
           c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); this.callThrower(c, "aioobe"); c.end();
-          if (k === "ref") emitStoreCheck(this, c, 0, () => c.lget(2));
+          if (k === "ref") this.emitStoreCheck(c, 0, () => c.lget(2));
           return c.lget(data).lget(1).lget(2).arraySet(this.tData[k]).finish();
         }];
       }
@@ -643,19 +698,14 @@ export class Compiler implements Base {
   }
 
   // ---------- units
-  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
-   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
-   *  unit is the second tier: its methods do not count. With `install` the methods go straight into their table slots when the module is
-   *  instantiated, and call each other through them, as precompiled code (true, aot.ts) or code merged from first-tier units ("merge"), which
-   *  unlike precompiled code relies on the classes loaded now. `ensures`: classes whose ensure() the unit also defines, exported as the methods
-   *  are (World.ensureBody) */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install: boolean | "merge" = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
+  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>" unless the unit installs them */
+  buildUnit(methods: MethodInfo[], { copies = [], hot = false, install, ensures = [], plan = NO_PLAN, seq = 0 }: UnitOptions = {}): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
-    this.counting = !hot;
+    this.counting = !hot; this.plan = plan;
     this.natives.declare(this, all);
     declareSymbolicSites(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
-    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
+    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${seq}` : mid(m));
     all.forEach((m, i) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))); this.keys.add(m.key); });
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
     this.direct = !install; this.head = methods[0];
@@ -675,7 +725,7 @@ export class Compiler implements Base {
     }
     const inits = ensures.map((cls) => {
       const name = "$ensure:" + cls, f = mb.reserveFunc(this.sig([], "V"), name), code = new Code(0);
-      w.ensureBody(this, cls, code);
+      w.classModules.ensureBody(this, cls, code);
       mb.setBody(f, code.finish()); mb.export("m" + w.ensureSlot(cls), "func", f);
       return { name, f, code };
     });
@@ -712,7 +762,8 @@ export class Compiler implements Base {
     }
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
-  outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
+  /** the functions of outlined loops (outline.ts), with the function of the method each is part of */
+  outlines: { name: string; f: number; code: Code; m: MethodInfo; owner: string }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
     const roots = fns.length;
     fns = fns.concat(this.outlines);
@@ -726,12 +777,9 @@ export class Compiler implements Base {
       for (let i = 0; i < n; i++) { offsets[i] = start + code.marks[2 * i]; pcs[i] = code.marks[2 * i + 1]; }
       return { name, m, offsets, pcs };
     });
-    // AOT traces are keyed by Java slot. Chunk offsets join their owner's trace (method.ts names a chunk `${owner}#loop<label>`) without changing that format.
+    // AOT traces are keyed by Java slot: an outlined loop's offsets join its method's trace without changing that format
     const chunks = new Map<string, FnTrace[]>();
-    for (const t of traces.slice(roots)) {
-      const at = t.name.lastIndexOf("#loop"), owner = t.name.slice(0, at);
-      if (at > 0) (chunks.get(owner) ?? chunks.set(owner, []).get(owner)!).push(t);
-    }
+    this.outlines.forEach(({ owner }, i) => (chunks.get(owner) ?? chunks.set(owner, []).get(owner)!).push(traces[roots + i]));
     for (let i = 0; i < roots; i++) {
       const root = traces[i], parts = chunks.get(root.name);
       if (!parts) continue;

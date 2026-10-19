@@ -8,26 +8,25 @@ import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { useWorld } from "../../src/wasm/host/boot.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { Block, emitBlock } from "../../src/wasm/link/sched.ts";
-import { St } from "../../src/wasm/link/monitor.ts";
+import { Block, emitBlock, St } from "../../src/wasm/compiler/hostcalls.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 
-const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => PLATFORM_PATHS[i]);
+const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "core-icu4j");
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 
-const w = addHostClasses(world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) })), gaps: string[] = [];
+const w = addHostClasses(world([dex, ...jars], { natives })), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);
 
-const suite = checker(), { fail } = suite;
+const suite = checker("hostclass"), { fail } = suite;
 for (const failure of unlike(expected, wasm)) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
@@ -47,7 +46,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
   const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;
   addHostClasses(worker);
   worker.link("java/net/HttpURLConnection");
-  worker.repairLinked();
+  worker.classModules.repairLinked();
   const method = worker.prog.get("Hc")!.byKey.get("http()Ljava/lang/String;")!;
   compileModule(new Compiler(worker).buildUnit([method]).bytes);
   if (worker.stats.instances !== instances) fail("a compile-only World instantiated host vtable repairs");
@@ -59,8 +58,8 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
   const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
   for (const cls of ["java/lang/StringBuilder", "java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor"]) {
-    const slots = w.vslots(cls);
-    if (new Set(slots).size !== slots.length || slots.join("\n") !== worlds[0].vslots(cls).join("\n")) fail(`flat/shared dispatch layout differs for ${cls}`);
+    const slots = w.dispatch.vslots(cls);
+    if (new Set(slots).size !== slots.length || slots.join("\n") !== worlds[0].dispatch.vslots(cls).join("\n")) fail(`flat/shared dispatch layout differs for ${cls}`);
   }
   for (const x of [worlds[0], worlds[1], worlds[0]]) {
     useWorld(x);
@@ -142,8 +141,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   const callback = w.callFn("callback:context", [], "I", (_cx, c) => { c.i32(42); });
   const lock = w.hostFn("callback:lock", [], "L", (cx, c) => cx.emitNew(c, "java/lang/Object"))() as object;
   const owner = w.sched.strand();
-  w.rtImports().sid.value = owner.id;
-  w.sched.onThread?.(owner.thread, false);
+  w.sched.become(owner);
   const caller = rt.cur;
   w.sched.idle(); resumeAs(caller);
   try {
@@ -169,5 +167,4 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-console.log(suite.failed ? `${suite.failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
-process.exit(suite.failed ? 1 : 0);
+suite.done(`${expected.length} cases answer as recorded on a World with host classes`);

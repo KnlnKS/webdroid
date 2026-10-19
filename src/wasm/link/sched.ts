@@ -1,81 +1,28 @@
 // Threads. A Java thread is a strand: a JSPI stack (a `promising` entry) that runs until it blocks. The blocking operations are Suspending
 // imports (`host.block`), so a strand that waits costs nothing and the one that resumes is whichever promise the waker resolved. The globals
 // `sid` (strand id) and `thr` (the Thread) name the running strand; compiled code keeps them in locals across a blocking call and sets them
-// again after it, because who ran in between is not up to the strand (emitBlock).
+// again after it, because who ran in between is not up to the strand (compiler/hostcalls.ts emits those calls).
 //
-// This file has both halves: the runtime functions and intrinsics compiled code uses (Thread, Object.wait/notify, park, monitors, class
+// This file has the runtime functions and intrinsics compiled code uses (Thread, Object.wait/notify, park, monitors, class
 // initialization waits, the fuel yield) and the Sched that answers `host.sync` and `host.block`.
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { OP } from "../compiler/code.ts";
-import { HT, T, type VT } from "../compiler/wasmbin.ts";
-import { Monitors, St, type Header } from "./monitor.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { Monitors, type Header } from "./monitor.ts";
+import { Block, ROOT, St, Sync, emitBlock, emitSync, sidOf, thrOf } from "../compiler/hostcalls.ts";
 import { promising, suspending, waitsEnded } from "./module.ts";
 import type { World } from "./world.ts";
 
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
 export const SYSTEM_LOADER = "java/lang/ClassLoader$SystemClassLoader";
 const MILLION = 0x412e848000000000n;
-/** loop iterations of one activation between two chances for another strand to run (a power of two) */
-export const FUEL = 4096;
-/** the strand id of host code that enters Java outside any strand */
-export const ROOT = 1;
-
-/** operations that answer at once (`host.sync`) */
-export const Sync = { Try: 1, Exit: 2, Notify: 3, NotifyAll: 4, Unpark: 5, Interrupt: 6, Interrupted: 7, IsInterrupted: 8, Holds: 9, Create: 10, Status: 11, InitDone: 12, Bind: 13, Plain: 14, Resume: 15, IsMain: 16, ContextDeferred: 17, ContextSet: 18, SystemLoaderReady: 19, CanSuspend: 20, Rename: 21, Ended: 22 } as const;
-export type Sync = (typeof Sync)[keyof typeof Sync];
-/** operations that may wait (`host.block`, Suspending) */
-export const Block = { Enter: 1, Wait: 2, Sleep: 3, Park: 4, Yield: 5, Init: 6, Net: 7 } as const;
-export type Block = (typeof Block)[keyof typeof Block];
-
-const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
-const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
 const threadField = (cx: Compiler, name: string, desc: string) => cx.fieldIndex(THREAD, { owner: THREAD, name, desc });
 /** stores the long `value` in the Thread on the stack's nativePeer, which Thread.isAlive reads */
 const setPeer = (cx: Compiler, c: Code, value: bigint) => { const st = cx.structFor(THREAD); c.refCast(st).i64(value).structSet(st, threadField(cx, "nativePeer", "J")); };
 /** with a Thread (cast) and a ClassLoader on the stack: the loader becomes the thread's context loader */
 const setContextLoader = (cx: Compiler, c: Code) => c.structSet(cx.structFor(THREAD), threadField(cx, "contextClassLoader", `L${LOADER};`));
-/** pushes the object (or null) and the number (or 0) of a host call */
-const operands = (c: Code, obj: (() => void) | null, a: (() => void) | null) => { if (obj) { obj(); c.externConvertAny(); } else c.refNull(HT.extern); if (a) a(); else c.f64const(0n); };
-/** host.sync(op, obj, a): the status */
-export function emitSync(cx: Compiler, c: Code, op: Sync, obj: (() => void) | null = null, a: (() => void) | null = null): void {
-  c.i32(op); operands(c, obj, a); c.call(cx.imp.sync);
-}
-/** host.block(op, obj, a, b): the status. The strand's identity is kept in locals across the call, since other strands run while it waits. Host code at the
- *  top level has no stack of its own to suspend (the engine would refuse): there the status says so, without the call */
-export function emitBlock(cx: Compiler, c: Code, op: Block, obj: (() => void) | null = null, a: (() => void) | null = null, b: (() => void) | null = null): void {
-  c.gget(sidOf(cx)).i32(ROOT).raw(OP.i32_eq).if_(T.i32);
-  emitSync(cx, c, Sync.Plain); c.drop().i32(St.Nbs);
-  c.else_();
-  const restore = emitSave(cx, c);
-  emitRestored(cx, c, [], [T.i32], () => {
-    c.i32(op); operands(c, obj, a); if (b) b(); else c.i32(0); c.call(cx.imp.block);
-  }, restore);
-  c.end();
-}
-/** keeps who the strand is (its id, its Thread and how deep its stack is) in locals; the function sets the globals again, after a call that other strands ran in */
-export function emitSave(cx: Compiler, c: Code): () => void {
-  const sid = sidOf(cx), thr = thrOf(cx), depth = cx.global("rt", "depth", T.i32, true), s = c.newLocal(T.i32), t = c.newLocal(T.anyref), d = c.newLocal(T.i32);
-  c.gget(sid).lset(s).gget(thr).lset(t).gget(depth).lset(d);
-  return () => { c.lget(s).gset(sid).lget(t).gset(thr).lget(d).gset(depth); emitSync(cx, c, Sync.Resume); c.drop(); };
-}
-/** after a host import that answers an externref, or parks the strand (Sched.parkNative) and answers nothing: the answer, settled if it parked, as an anyref */
-export function emitSettled(cx: Compiler, c: Code): void {
-  const wait = cx.global("rt", "wait", T.i32, true);
-  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
-  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
-  c.end().anyConvertExtern();
-}
-/** JS Promise reactions can idle another strand before the engine resumes this catch. */
-export function emitRestored(cx: Compiler, c: Code, params: VT[], results: VT[], call: () => void, restore = emitSave(cx, c)): void {
-  const run = cx.mb.addFuncType(params, results), thrown = cx.mb.addFuncType(params, [T.exnref]);
-  c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
-  call();
-  c.end().br(1).end();
-  restore(); c.throwRef(); c.end();
-  restore();
-}
 /** milliseconds and nanoseconds in locals `ms` (i64) and `ns` (i32), as one number of milliseconds */
 const millis = (c: Code, ms: number, ns: number) => c.lget(ms).raw(OP.f64_convert_i64_s).lget(ns).raw(OP.f64_convert_i32_s).f64const(MILLION).raw(OP.f64_div, OP.f64_add);
 
@@ -221,8 +168,21 @@ export class ThreadRec {
   alive = true;
   /** the strand native code's monitors are held by (JNI MonitorEnter): the thread's, which does not end with a call */
   root: Strand | null = null;
+  /** the host's own thread for this one (host/entry.ts) */
+  host: unknown = null;
   constructor(obj: object | null) { this.obj = obj; }
 }
+
+/** what the host hears of Java threads (host/entry.ts) */
+export interface ThreadHooks {
+  /** the thread whose code runs changed; `idle`: no strand runs, the host's top level does */
+  switched(t: ThreadRec, idle: boolean): void;
+  /** a Java thread's body has run and it has exited */
+  ended(t: ThreadRec): void;
+  /** a Java thread started, or was renamed while it runs (Thread.setNativeName): its native name is its Thread's name again, as ART sets it */
+  named(t: ThreadRec): void;
+}
+const NO_HOOKS: ThreadHooks = { switched() {}, ended() {}, named() {} };
 
 /** entries a strand may make before it waits; the engine's stacks run out at about 1,400 */
 const NESTED_LIMIT = 200;
@@ -235,6 +195,8 @@ export class Strand {
   parent: Strand | null = null;
   /** how many stacks the entries made from this strand's natives have taken since this strand last waited */
   nested = 0;
+  /** the host's own strand for this one (host/entry.ts) */
+  host: unknown = null;
   constructor(id: number, thread: ThreadRec, root: boolean, sched: Sched) { this.id = id; this.thread = thread; this.root = root; this.sched = sched; }
   /** whether code on this strand runs on a stack of its own, which may suspend (host code at the top level runs on the caller's) */
   get canSuspend(): boolean { return !this.root; }
@@ -257,12 +219,7 @@ export class Sched {
   blockedPlain = 0;
   /** calls of Suspending imports that switched stacks */
   suspensions = 0;
-  /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
-  onThread: ((t: ThreadRec, idle: boolean) => void) | null = null;
-  /** a Java thread's body has run and it has exited */
-  onThreadEnd: ((t: ThreadRec) => void) | null = null;
-  /** a Java thread started, or was renamed while it runs (Thread.setNativeName): its native name is its Thread's name again, as ART sets it */
-  onNamed: ((t: ThreadRec) => void) | null = null;
+  hooks: ThreadHooks = NO_HOOKS;
   /** the threads Thread.start made that have not ended */
   readonly started = new Set<ThreadRec>();
   /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
@@ -279,17 +236,13 @@ export class Sched {
   admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
     const s = this.current();
     if (s.root || this.w.inSynchronousJava()) return run();
-    const { sid, thr, depth } = this.g, saved = [sid.value, thr.value, depth.value] as const;
+    const thr = this.g.thr.value, depth = this.g.depth.value;
     const delivery = prepare?.(), due = this.loop.due();
     if (!delivery && !due) return run();
     const pending = due ? Promise.all([delivery, this.loop.yield(s.thread === this.main)]) : delivery!;
     this.suspensions++; s.nested = 0;
     this.idle();
-    const restore = () => {
-      sid.value = saved[0]; thr.value = saved[1]; depth.value = saved[2];
-      this.running = s; this.onThread?.(s.thread, false);
-    };
-    return pending.then(() => { restore(); run(); }, error => { restore(); throw error; });
+    return pending.then(() => { this.become(s, depth, thr); run(); }, error => { this.become(s, depth, thr); throw error; });
   }
   /** the Promise a native answered where it could not wait, which the call site settles next (natives.ts park) */
   pending: Promise<unknown> | null = null;
@@ -338,7 +291,11 @@ export class Sched {
   /** a thread the host made: it runs Java as a thread of its own, whose Thread object is made when it first asks for it */
   hostThread(): ThreadRec { return new ThreadRec(null); }
   /** who runs when no strand does: the host's top level, on the main thread */
-  idle(): void { this.g.sid.value = ROOT; this.g.thr.value = this.main.obj; this.g.depth.value = 0; this.running = null; this.onThread?.(this.main, true); }
+  idle(): void { const g = this.g; g.sid.value = ROOT; g.thr.value = this.main.obj; g.depth.value = 0; this.running = null; this.hooks.switched(this.main, true); }
+  /** `s` runs, at call depth `depth`; its Thread global is `thr`, which is its thread's object unless it is making that object (curThread) */
+  become(s: Strand, depth: unknown = 0, thr: unknown = s.thread.obj): void {
+    const g = this.g; g.sid.value = s.id; g.thr.value = thr; g.depth.value = depth; this.running = s; this.hooks.switched(s.thread, false);
+  }
   /** wraps `fn` as a Suspending import. What `fn` does before it first waits is on the calling strand; when it returns the stack switches away,
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
@@ -346,17 +303,14 @@ export class Sched {
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); }
-      catch (e) {
-        // No stack switch occurred: Wasm may catch the import's throw on this strand.
-        this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth;
-        this.running = s; this.onThread?.(s.thread, false); throw e;
-      }
+      // No stack switch occurred: Wasm may catch the import's throw on this strand.
+      catch (e) { this.become(s, depth); throw e; }
       this.idle();
       if (!(r instanceof Promise)) return r;
       // an import that answers at once keeps its engine stacks: the quota clears only when it suspends
       s.nested = 0; this.suspensions++;
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
-      return r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; });
+      return r.then(undefined, (e) => { this.become(s, depth); throw e; });
     }) as unknown as (...a: A) => R;
   }
   /** a new strand of `thread` (the main thread's when none), for a call into Java from the native `parent` runs, if any */
@@ -391,13 +345,13 @@ export class Sched {
     const caller = this.current();
     if (!caller.root) caller.nested++;
     const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running] as const;
-    sid.value = s.id; thr.value = s.thread.obj; depth.value = 0; this.running = s; this.onThread?.(s.thread, false);
+    this.become(s);
     try {
       const p = this.promising(f)(...args) as Promise<unknown>, idle = () => this.idle();
       // a stack that ends after a resume leaves the globals as its own
       p.then(idle, idle);
       return p;
-    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; this.onThread?.(this.current().thread, this.current().root); }
+    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; const c = this.current(); this.hooks.switched(c.thread, c.root); }
   }
 
   // ---------- host.sync
@@ -430,9 +384,9 @@ export class Sched {
       case Sync.Status: return this.status(obj!, a !== 0);
       case Sync.Plain: this.blockedPlain++; return 0;
       case Sync.CanSuspend: return +(!s.root && !this.w.inSynchronousJava());
-      case Sync.Resume: this.onThread?.(s.thread, false); return 0;
+      case Sync.Resume: this.hooks.switched(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
-      case Sync.Rename: { const r = this.rec(obj!); if (r) this.onNamed?.(r); return 0; }
+      case Sync.Rename: { const r = this.rec(obj!); if (r) this.hooks.named(r); return 0; }
       case Sync.Ended: return +waitsEnded();
     }
   }
@@ -477,7 +431,7 @@ export class Sched {
   /** Thread.nativeCreate: the thread's body is a strand of its own, which starts when its creator next waits or ends */
   private create(obj: object): number {
     const th = this.rec(obj, true)!;
-    th.alive = true; this.started.add(th); this.onNamed?.(th);
+    th.alive = true; this.started.add(th); this.hooks.named(th);
     const s = this.strand(th);
     queueMicrotask(() => void this.run(s, obj));
     return 0;
@@ -512,7 +466,7 @@ export class Sched {
       }));
       try { await s.call(done, obj); } catch (e) { console.error("[wasm thread exit]", e); }
       s.end();
-      this.onThreadEnd?.(s.thread);
+      this.hooks.ended(s.thread);
     }
   }
 

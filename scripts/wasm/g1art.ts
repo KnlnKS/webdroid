@@ -2,19 +2,18 @@
 // reference device (booted, adb reachable) and timed per call as g1run times them, each run a fresh process. With --ref (a `g1 --json` report)
 // each row shows how many times slower the Wasm tier is than ART, first call and steady state.
 //   pnpm ts scripts/wasm/g1art.ts [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { adb } from "../adb.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { androidFixture, cutWorkloads, tempDir } from "./tools.ts";
 import { geo, med } from "./g1report.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "3"), refPath = flag("--ref", ""), engine = flag("--engine", "chrome");
 const only = process.argv.slice(2).filter((a, i, all) => !a.startsWith("--") && !all[i - 1]?.startsWith("--"));
 
-const dir = mkdtempSync(join(tmpdir(), "g1art-")), classOf = new Map<string, string>();
+const dir = tempDir(), classOf = new Map<string, string>();
 for (const [cls, file] of [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]]) {
   const { names, source } = cutWorkloads(readFileSync(file, "utf8"));
   for (const n of names) classOf.set(n, cls);
@@ -33,7 +32,7 @@ writeFileSync(join(dir, "G1Art.java"), `public class G1Art {
   }
 }
 `);
-dexAndroid(shellIn(dir), dir, ["Bench.java", "G1.java", "G1Art.java"]);
+androidFixture({ out: dir, sources: ["Bench", "G1", "G1Art"].map((c) => join(dir, c + ".java")) });
 const remote = "/data/local/tmp/webdroid-g1art.dex";
 adb("push", join(dir, "classes.dex"), remote);
 

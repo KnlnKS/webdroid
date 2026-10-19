@@ -3,25 +3,24 @@
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
 import { mem, guestAt, anchor } from "./mem.ts";
-import { type HostFn, PTR, ldp, stLong, ARG0 } from "./host.ts";
+import { type HostFn, PTR, ldp, ldLong, stLong, ARG0, complete } from "./host.ts";
 import { E } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc.ts";
+import { fail, kernelResult, utf8, logLine, offArg, randomBytes, readTs } from "./libc.ts";
 import { KLAYOUT } from "./syscall.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
-import { remoteFilePath } from "../shell/file-path.ts";
+import { filePaths, changeFileAttributes, type AttributeChange, type PathReply } from "../shell/file-path.ts";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
-import { readAt, readFully, writable, type FileSource } from "../shell/lazyfile.ts";
+import { BytesFile, readAt, readFully, writable, type FileSource } from "../shell/lazyfile.ts";
 import { concat, utf8 as codec } from "../jvm/abi.ts";
 import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd.ts";
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers.ts";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
-import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe.ts";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, holdFifo, remoteFifo, type Pipe } from "./pipe.ts";
 import type { Socket, Received } from "./socket/core.ts";
 import type { Epoll } from "./poll.ts";
-import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
-  processSeekFd, processSyncFd, processTruncateFd, processFcntlFd, processFdStat, processIoctlIntFd, type RemoteDescriptor } from "./process-fd.ts";
+import { processOpenFd, type RemoteDescriptor } from "./process-fd.ts";
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
@@ -30,6 +29,8 @@ export const S_IFMT = 0xf000, S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x10
 const S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
 /** stat(2)'s answer: st_mode with the file type, st_size (a directory's one block), st_mtime in milliseconds and the owner */
 export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
+/** fstat(2)'s answer, with the path the open file has now */
+export type FdStat = FileStat & { path: string | null };
 /** the type of a file this realm names */
 export const pathType = (p: string): number => vfs.isDir(p) ? S_IFDIR : isFifo(p) ? S_IFIFO : S_IFREG;
 /** the stat of a file this realm holds, of `size` bytes unless it is a directory */
@@ -45,6 +46,7 @@ export interface OpenFile {
   proc?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   socket?: Socket;
+  /** the open file's owner in another realm, which answers every operation on it */
   remote?: RemoteDescriptor;
   /** a remote directory's entries, listed when reading starts */
   entries?: string[];
@@ -53,12 +55,12 @@ export interface OpenFile {
 }
 type Fd = OpenFile;
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12;
-export const F_DUPFD_CLOEXEC = 0x406;
+export const F_DUPFD_CLOEXEC = 0x406, AT_FDCWD = -100;
 const EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
-export function makeFifo(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function makeFifo(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (!taken) nameFifo(p);
   return taken;
 }
@@ -168,21 +170,22 @@ export function watchFd(fd: number, wake: () => void): () => void {
 }
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
-  if (path.startsWith("/") || dirfd === -100) return path;
+  if (path.startsWith("/") || dirfd === AT_FDCWD) return path;
   const dir = fds.get(dirfd);
   if (!dir) return fail(cpu, E.BADF);
   return dir.dir ? dir.path + "/" + path : fail(cpu, E.NOTDIR);
 }
+// The path operations on this realm's own files, each answering -errno or 0 (file-path.ts dispatches them)
 /** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
-export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): number {
+export function renamePath(fromPath: string, toPath: string): number {
   const from = vfs.norm(fromPath), to = vfs.norm(toPath), parent = to.slice(0, to.lastIndexOf("/")) || "/";
-  if (from === to) return vfs.exists(from) ? 0 : fail(cpu, E.NOENT);
-  if (!vfs.isDir(parent)) return fail(cpu, vfs.exists(parent) ? E.NOTDIR : E.NOENT);
+  if (from === to) return vfs.exists(from) ? 0 : -E.NOENT;
+  if (!vfs.isDir(parent)) return -(vfs.exists(parent) ? E.NOTDIR : E.NOENT);
   if (vfs.isDir(from)) {
-    if (to === from || to.startsWith(from + "/")) return fail(cpu, E.INVAL);
+    if (to === from || to.startsWith(from + "/")) return -E.INVAL;
     if (vfs.exists(to)) {
-      if (!vfs.isDir(to)) return fail(cpu, E.NOTDIR);
-      if (vfs.list(to).length) return fail(cpu, E.NOTEMPTY);
+      if (!vfs.isDir(to)) return -E.NOTDIR;
+      if (vfs.list(to).length) return -E.NOTEMPTY;
       vfs.rmdir(to);
     }
     const prefix = from + "/";
@@ -198,48 +201,97 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
     return 0;
   }
   const source = vfs.source(from);
-  if (!source) return fail(cpu, E.NOENT);
-  if (vfs.isDir(to)) return fail(cpu, E.ISDIR);
+  if (!source) return -E.NOENT;
+  if (vfs.isDir(to)) return -E.ISDIR;
   vfs.rename(from, to);
   return 0;
 }
 const isRandomDevice = (path: string): boolean => path === "/dev/urandom" || path === "/dev/random";
-export function accessPath(cpu: Cpu | null, path: string, mode: number): number {
-  if (mode & ~7) return fail(cpu, E.INVAL);
+export function accessPath(path: string, mode: number): number {
+  if (mode & ~7) return -E.INVAL;
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : fail(cpu, E.NOENT);
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : -E.NOENT;
 }
-export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
-  const path = atPath(cpu, dirfd, name);
-  if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
-  return typeof path === "string" ? accessProcess(cpu, path, mode) : path;
+/** stat(2) of normalized `p`: a directory, a file (procfs included) or a random device */
+export function pathStat(p: string): PathReply<FileStat | null> {
+  const s = isRandomDevice(p) ? "" : procText(p);
+  if (s !== null) return { errno: 0, value: localStat(p, S_IFREG, utf8(s).length, Date.now()) };
+  const directory = vfs.isDir(p), file = directory ? null : vfs.stat(p);
+  return directory || file ? { errno: 0, value: localStat(p, pathType(p), file?.size ?? 0, vfs.mtime(p), null) } : { errno: E.NOENT, value: null };
 }
 /** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
-function newName(cpu: Cpu | null, p: string): number {
-  if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
+function newName(p: string): number {
+  if (vfs.exists(p) || vfs.isDir(p)) return -E.EXIST;
   const parent = p.slice(0, p.lastIndexOf("/")) || "/";
-  return parent !== "/" && !vfs.isDir(parent) ? fail(cpu, E.NOENT) : 0;
+  return parent !== "/" && !vfs.isDir(parent) ? -E.NOENT : 0;
 }
-export function mkdirPath(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function mkdirPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (taken) return taken;
   vfs.mkdir(p); return 0;
 }
 /** open(O_CREAT|O_EXCL) and close: an empty file where nothing was */
-export function createPath(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function createPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (taken) return taken;
   vfs.write(p, new Uint8Array(0)); return 0;
 }
 /** unlink(2) with `directory` false, rmdir(2) with true, and remove(3) when it is omitted */
-export function removePath(cpu: Cpu | null, path: string, directory?: boolean): number {
+export function removePath(path: string, directory?: boolean): number {
   const p = vfs.norm(path);
-  if (!vfs.isDir(p)) return directory ? fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : fail(cpu, E.NOENT);
-  if (directory === false) return fail(cpu, E.ISDIR);
-  if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY);
+  if (!vfs.isDir(p)) return directory ? -(vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : -E.NOENT;
+  if (directory === false) return -E.ISDIR;
+  if (vfs.list(p).length) return -E.NOTEMPTY;
   vfs.rmdir(p); return 0;
 }
-export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
+
+// The path syscalls, where each path lives
+export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
+  const path = atPath(cpu, dirfd, name);
+  if (flags & ~(0x100 | 0x200) || mode & ~7) return fail(cpu, E.INVAL);
+  return typeof path === "string" ? kernelResult(cpu, filePaths(path).fileAccess(path, mode)) : path;
+}
+export const mkdirProcess = (cpu: Cpu, path: string): number | Promise<number> => kernelResult(cpu, filePaths(path).fileMkdir(path));
+export const renameProcess = (cpu: Cpu, from: string, to: string): number | Promise<number> => kernelResult(cpu, filePaths(from, to).fileRename(from, to));
+export const removeProcess = (cpu: Cpu, path: string, directory?: boolean): number | Promise<number> => kernelResult(cpu, filePaths(path).fileRemove(path, directory));
+/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
+export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
+  const type = mode & 0xf000;
+  if (type === S_IFIFO) return kernelResult(cpu, filePaths(path).fileFifo(path));
+  if (type === 0 || type === S_IFREG) return kernelResult(cpu, filePaths(path).fileCreate(path));
+  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
+}
+export function statProcess(cpu: Cpu, path: string, buf: number): number | Promise<number> {
+  const p = vfs.norm(path), destination = anchor(buf);
+  return complete(filePaths(p).fileStat(p), ({ errno, value }) => {
+    if (!value) return fail(cpu, errno || E.NOENT);
+    fillStat(destination(), p, value);
+    return 0;
+  });
+}
+/** a directory's entries as readdir lists them, or a negative errno */
+export const listProcess = (path: string): string[] | number | Promise<string[] | number> =>
+  complete(filePaths(path).fileList(path), ({ errno, value }) => value ? [".", "..", ...value] : -(errno || E.NOENT));
+/** chmod, chown and utimes of a path */
+export const changeProcess = (cpu: Cpu, path: string, change: AttributeChange): number | Promise<number> =>
+  kernelResult(cpu, filePaths(path).fileSetAttributes(path, change));
+/** fchmod, fchown and futimens: a change to the file open on `fd`, which its owner (by `uid`) makes */
+export function javaChangeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (f?.remote) return f.remote.changeAttributes(change);
+  if (!f) return -E.BADF;
+  const path = f.dir ? f.path : f.content.path;
+  // a pipe, socket or other anonymous file keeps no attributes
+  return path === null ? -E.NOTSUP : changeFileAttributes(path, change, uid);
+}
+const UTIME_NOW = 0x3fffffff, UTIME_OMIT = 0x3ffffffe;
+/** the modification time utimensat's `times` (struct timespec[2]) sets: now without them, none when omitted */
+export function modifiedTime(times: number): AttributeChange {
+  if (!times) return { mtime: Date.now() };
+  const mtime = times + KLAYOUT.TS_SIZE, nsec = ldLong(mtime + KLAYOUT.TS_NSEC);
+  return nsec === UTIME_OMIT ? {} : { mtime: nsec === UTIME_NOW ? Date.now() : readTs(mtime) };
+}
+function openLocal(cpu: Cpu | null, path: string, flags: number): number {
   path = vfs.norm(path);
   const acc = flags & O_ACCMODE;
   if (isRandomDevice(path)) {
@@ -258,7 +310,7 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   }
   if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
   const existing = vfs.open(path), fifo = fifoOf(existing);
-  if (fifo) return openFifo(path, existing!, fifo, flags);
+  if (fifo) return holdFifo(fifo, 0) ? openFifo(path, existing!, fifo, flags) : fail(cpu, E.NXIO);
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
@@ -272,11 +324,21 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
 function put(f: Fd, cloexec = false, min = 0): number { const fd = allocateFd(min); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
 export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), content: { path: null, data: bytes, len: bytes.length }, synthetic: true });
-export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
-export const javaCloseFd = (fd: number): number => fdClose(null, fd);
+/** an open of a file this realm holds */
+export const javaOpenFd = (path: string, flags: number): number => openLocal(null, path, flags);
+/** open(2), on the backend that owns the path */
+export const fdOpen = (cpu: Cpu | null, path: string, flags: number): number | Promise<number> => kernelResult(cpu, processOpenFd(path, flags));
+/** close(2); the last close of a remote open file answers once its owner has closed it */
+export function javaCloseFd(fd: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote, closed = fdClose(null, fd);
+  return remote?.closing ?? closed;
+}
 export function javaOnLastClose(fd: number, hook: () => void): void { const f = fds.get(fd); if (f) f.onLastClose = hook; }
-export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
-export const javaDupFd = (fd: number): number => fdDup(null, fd);
+export function javaLseekFd(fd: number, off: number, whence: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote;
+  return remote ? remote.seek(off, whence) : fdSeek(null, fd, off, whence);
+}
+export const javaDupFd = (fd: number, cloexec = false): number => fdDup(null, fd, 0, cloexec);
 export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
 export const javaIsSocketFd = (fd: number): boolean => !!fds.get(fd)?.socket;
 /** the socket `fd` names, or EBADF, or ENOTSOCK for another open file */
@@ -316,9 +378,11 @@ const bytesOf = (r: Received | number): number => {
 /** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
 const regularContent = (f: Fd | undefined): VfsFile | null =>
   !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify || f.socket ? null : f.content;
-export function javaFdSource(fd: number): FileSource | null {
-  const f = fds.get(fd), content = regularContent(f);
-  if (!content || f?.remote) return null;
+export function javaFdSource(fd: number): FileSource | null | Promise<FileSource | null> {
+  const f = fds.get(fd);
+  if (f?.remote) return f.remote.source();
+  const content = regularContent(f);
+  if (!content) return null;
   return {
     get size() { return content.len; },
     read(offset, length) {
@@ -330,12 +394,19 @@ export function javaFdSource(fd: number): FileSource | null {
 }
 export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
   const f = fds.get(fd);
+  if (f?.remote) return f.remote.read(target);
   if (f?.socket) return readSocket(fd, target);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return f.dir ? -E.ISDIR : -E.BADF;
   if (f && !f.content.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
     const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
     vfs.sync(f.content);
     target.set(f.content.data.subarray(f.pos, f.pos + n)); f.pos += n;
+    return n;
+  }
+  // a source in memory answers at once: a read at the position, which no earlier read is queued ahead of
+  if (f?.content.source instanceof BytesFile && !f.readQueue) {
+    const n = javaPreadFd(fd, target, f.pos);
+    if (typeof n === "number" && n > 0) f.pos += n;
     return n;
   }
   const address = mem.va(mem.malloc(target.length));
@@ -349,7 +420,9 @@ export function javaReadFd(fd: number, target: Uint8Array): number | Promise<num
 /** libcore's syscalls over this table, each answering -errno on failure. The target of a read that
  *  returns a Promise is filled when it settles. */
 export function javaPreadFd(fd: number, target: Uint8Array, off: number): number | Promise<number> {
-  const f = fds.get(fd), error = positionalError(fd, f, off, false);
+  const f = fds.get(fd);
+  if (f?.remote) return f.remote.read(target, off);
+  const error = positionalError(fd, f, off, false);
   if (error) return -error;
   if (f!.random) { randomBytes(target); return target.length; }
   let value: Uint8Array | Promise<Uint8Array>;
@@ -358,26 +431,59 @@ export function javaPreadFd(fd: number, target: Uint8Array, off: number): number
   const done = (bytes: Uint8Array) => { target.set(bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => -E.IO) : done(value);
 }
-export const javaWriteFd = (fd: number, bytes: Uint8Array): number => writeBytes(null, fds.get(fd), bytes);
-export const javaPwriteFd = (fd: number, bytes: Uint8Array, off: number): number => pwriteBytes(null, fd, bytes, off);
-export const javaTruncateFd = (fd: number, length: number): number => truncateFd(null, fd, length);
-export const javaSyncFd = (fd: number): number => syncFd(null, fd);
-export const javaFcntlFd = (fd: number, cmd: number, arg: number): number => fdFcntl(null, fd, cmd, arg);
-/** ioctl(2) requests with an int result; FIONREAD is the one files answer */
-export function javaIoctlIntFd(fd: number, request: number): number {
-  return fds.has(fd) && request !== FIONREAD ? -E.NOTTY : fionread(fd);
+export function javaWriteFd(fd: number, bytes: Uint8Array): number | Promise<number> {
+  const f = fds.get(fd);
+  return f?.remote ? f.remote.write(bytes) : writeBytes(null, f, bytes);
 }
-export function javaFdStat(fd: number): FileStat & { path: string | null } | null {
+export function javaPwriteFd(fd: number, bytes: Uint8Array, off: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote;
+  return remote ? remote.write(bytes, off) : pwriteBytes(null, fd, bytes, off);
+}
+export function javaTruncateFd(fd: number, length: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote;
+  return remote ? remote.truncate(length) : truncateFd(null, fd, length);
+}
+export function javaSyncFd(fd: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote;
+  return remote ? remote.sync() : syncFd(null, fd);
+}
+/** fcntl(2): descriptor flags and duplicates belong to this table, while an open file's status flags
+ *  belong to it, so a remote one's are its owner's */
+export function javaFcntlFd(fd: number, cmd: number, arg: number): number | Promise<number> {
+  const remote = fds.get(fd)?.remote;
+  return remote && (cmd === F_GETFL || cmd === F_SETFL) ? remote.fcntl(cmd, arg) : fdFcntl(null, fd, cmd, arg);
+}
+/** ioctl(2) requests with an int result; FIONREAD is the one files answer */
+export function javaIoctlIntFd(fd: number, request: number): number | Promise<number> {
+  if (fds.has(fd) && request !== FIONREAD) return -E.NOTTY;
+  const remote = fds.get(fd)?.remote;
+  return remote ? remoteRest(remote).then(rest => rest ? rest.length : -E.BADF) : fionread(fd);
+}
+export function javaFdStat(fd: number): FdStat | null | Promise<FdStat | null> {
+  const remote = fds.get(fd)?.remote;
+  return remote ? remote.stat() : localFdStat(fd);
+}
+/** the stat of an open file this realm holds */
+export function localFdStat(fd: number): FdStat | null {
   const f = fds.get(fd);
   if (!f || f.remote) return null;
   const path = f.dir ? f.path : f.content.path, attributes = f.content.attributes ?? vfs.attributes(path,f.dir);
   return { mode: fdMode(f), size: f.dir ? 4096 : f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
 }
+/** where a remote open file's position is, and how much of it lies past there */
+const remoteRest = (remote: RemoteDescriptor) => Promise.all([remote.stat(), remote.seek(0, 1)])
+  .then(([stat, position]) => !stat || position < 0 ? null : { position, length: Math.max(0, stat.size - position) });
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
 export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
-  if (!f || f.remote || f.dir || (f.statusFlags & O_ACCMODE) === 1) return null;   // processFdBytes reads a remote one
+  if (f?.remote) {
+    const rest = await remoteRest(f.remote);
+    if (!rest) return null;
+    const bytes = new Uint8Array(rest.length), n = await f.remote.read(bytes, rest.position);
+    return n < 0 ? null : bytes.subarray(0, n);
+  }
+  if (!f || f.dir || (f.statusFlags & O_ACCMODE) === 1) return null;
   if (!f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll && !f.socket) {
     vfs.sync(f.content);
     try { return f.content.source ? await readFully(f.content.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
@@ -394,62 +500,18 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   } finally { mem.free(guestAt(target)); }
 }
 
-export const fdOpenProcess = (cpu: Cpu | null, path: string, flags: number): number | Promise<number> => kernelResult(cpu,processOpenFd(path,flags));
-export const fdCloseProcess = (cpu: Cpu | null, fd: number): number | Promise<number> => kernelResult(cpu,processCloseFd(fd));
-export const fdSeekProcess = (cpu: Cpu | null, fd: number, offset: number, whence: number): number | Promise<number> => kernelResult(cpu,processSeekFd(fd,offset,whence));
-export const truncateProcess = (cpu: Cpu | null, fd: number, length: number): number | Promise<number> => kernelResult(cpu,processTruncateFd(fd,length));
-export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<number> {
-  const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileMkdir(vfs.norm(path))) : mkdirPath(cpu,path);
-}
-export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
-  const calls = remoteFilePath(from) ?? remoteFilePath(to);
-  if (!calls) return renamePath(cpu,from,to);
-  const a = vfs.norm(from), b = vfs.norm(to);
-  return kernelResult(cpu,calls.fileRename(a,b).then(r => { if (!r) moveRemoteFifo(a,b); return r; }));
-}
-export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
-  const calls = remoteFilePath(path);
-  if (!calls) return removePath(cpu,path,directory);
-  const p = vfs.norm(path);
-  return kernelResult(cpu,calls.fileRemove(p,directory).then(r => { if (!r) moveRemoteFifo(p,null); return r; }));
-}
-/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
-export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
-  const type = mode & 0xf000, p = vfs.norm(path), calls = remoteFilePath(p);
-  if (type === S_IFIFO) return calls ? kernelResult(cpu,calls.fileFifo(p)) : makeFifo(cpu,p);
-  if (type === 0 || type === S_IFREG) return calls ? kernelResult(cpu,calls.fileCreate(p)) : createPath(cpu,p);
-  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
-}
-export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
-  if (mode & ~7) return fail(cpu,E.INVAL);
-  const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileAccess(vfs.norm(path),mode)) : accessPath(cpu,path,mode);
-}
-export function statProcess(cpu: Cpu, path: string, buf: number): number | Promise<number> {
-  const normalized = vfs.norm(path), calls = remoteFilePath(normalized);
-  if (!calls) return statPath(cpu,normalized,buf);
-  const destination = anchor(buf);
-  return calls.fileStat(normalized).then(reply => {
-    if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
-    const stat = reply.value;
-    fillStat(destination(),normalized,stat);
-    return 0;
+/** a read of a remote open file into guest memory at `p`, landing once its owner answers */
+function remoteRead(cpu: Cpu | null, remote: RemoteDescriptor, p: number, n: number, offset?: number): Promise<number> {
+  const target = new Uint8Array(n), destination = anchor(p);
+  return remote.read(target, offset).then(result => {
+    if (result < 0) return fail(cpu, -result);
+    if (result) mem.write(destination(), target.subarray(0, result));
+    return result;
   });
 }
-function remoteRead(cpu: Cpu | null, fd: number, p: number, n: number, offset?: number): number | Promise<number> {
-  const target = new Uint8Array(n), destination = anchor(p);
-  const done = (result: number) => {
-    if (result < 0) return fail(cpu,-result);
-    if (result) mem.write(destination(),target.subarray(0,result));
-    return result;
-  };
-  const value = offset === undefined ? processReadFd(fd,target) : processPreadFd(fd,target,offset);
-  return value instanceof Promise ? value.then(done) : done(value);
-}
 export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
-  if (fds.get(fd)?.remote) return kernelResult(cpu,processWriteFd(fd,mem.u8.subarray(p,p+n)));
-  return writeBytes(cpu, fds.get(fd), mem.u8.subarray(p, p + n));
+  const f = fds.get(fd), bytes = mem.u8.subarray(p, p + n);
+  return f?.remote ? kernelResult(cpu, f.remote.write(bytes)) : writeBytes(cpu, f, bytes);
 }
 /** write(2) of `bytes` to an open file, which copies what it keeps */
 function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): number {
@@ -524,7 +586,7 @@ export function contentAt(content: VfsFile, off: number, n: number): Uint8Array 
 export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  if (f.remote) return remoteRead(cpu,fd,p,n);
+  if (f.remote) return remoteRead(cpu, f.remote, p, n);
   if (f.socket) {
     const target = new Uint8Array(n), dst = anchor(p);
     const land = (r: number) => { if (r < 0) return fail(cpu, -r); mem.write(dst(), target.subarray(0, r)); return r; };
@@ -577,7 +639,7 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  return f.remote ? remoteRead(cpu, fd, dst, n, off) : fdReadAt(cpu, f, dst, n, off);
+  return f.remote ? remoteRead(cpu, f.remote, dst, n, off) : fdReadAt(cpu, f, dst, n, off);
 }
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
@@ -718,26 +780,17 @@ function inotifyRmWatch(cpu: Cpu | null, fd: number, wd: number): number {
 export function javaInotifyInit(): number { hookInotify(); return makeInotify(null, IN_CLOEXEC); }
 export const javaInotifyAddWatch = (fd: number, path: string, mask: number): number => inotifyAddWatch(null, fd, path, mask);
 export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
-export function statPath(cpu: Cpu, path: string, buf: number): number {
-  path = vfs.norm(path);
-  if (isRandomDevice(path)) { fillStat(buf, path, localStat(path, S_IFREG, 0, Date.now())); return 0; }
-  const s = procText(path);
-  if (s !== null) { fillStat(buf, path, localStat(path, S_IFREG, utf8(s).length, Date.now())); return 0; }
-  const dir = vfs.isDir(path), file = dir ? null : vfs.stat(path);
-  if (!dir && !file) return fail(cpu, E.NOENT);
-  fillStat(buf, path, localStat(path, pathType(path), file?.size ?? 0, Date.now()));
-  return 0;
-}
 function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
-  if (fds.get(fd)?.remote) {
+  const f = fds.get(fd);
+  if (f?.remote) {
     const destination = anchor(buf);
-    return Promise.resolve(processFdStat(fd)).then(stat => {
+    return f.remote.stat().then(stat => {
       if (!stat) return fail(cpu,E.BADF);
-      fillStat(destination(),stat.path ?? fds.get(fd)?.path ?? "",stat);
+      fillStat(destination(),stat.path ?? f.path,stat);
       return 0;
     });
   }
-  const f = fds.get(fd), stat = javaFdStat(fd);
+  const stat = localFdStat(fd);
   if (!f || !stat) return fail(cpu, E.BADF);
   fillStat(buf, f.path, { ...stat, mtime: Date.now() });
   return 0;
@@ -760,8 +813,9 @@ function positionalError(fd: number, f: Fd | undefined, off: number, write: bool
   return off < 0 ? E.INVAL : f.dir ? E.ISDIR : 0;
 }
 export function pread(cpu: Cpu, fd: number, p: number, n: number, off: number): number | Promise<number> {
-  if (fds.get(fd)?.remote) return remoteRead(cpu,fd,p,n,off);
-  const f = fds.get(fd), error = positionalError(fd, f, off, false);
+  const f = fds.get(fd);
+  if (f?.remote) return remoteRead(cpu, f.remote, p, n, off);
+  const error = positionalError(fd, f, off, false);
   return error ? fail(cpu, error) : fdReadAt(cpu, f!, p, n, off);
 }
 /** pwrite(2) leaves the offset alone, but an O_APPEND file still takes the bytes at its end, as Linux does */
@@ -775,7 +829,7 @@ function pwriteBytes(cpu: Cpu | null, fd: number, bytes: Uint8Array, off: number
   return r;
 }
 export const pwrite = (cpu: Cpu, fd: number, p: number, n: number, off: number): number | Promise<number> =>
-  fds.get(fd)?.remote ? kernelResult(cpu,processPwriteFd(fd,mem.u8.subarray(p,p+n),off)) : pwriteBytes(cpu, fd, mem.u8.subarray(p, p + n), off);
+  kernelResult(cpu, javaPwriteFd(fd, mem.u8.subarray(p, p + n), off));
 /** ftruncate(2): only a regular file open for writing */
 export function truncateFd(cpu: Cpu | null, fd: number, n: number): number {
   const f = fds.get(fd);
@@ -810,8 +864,9 @@ function syncFd(cpu: Cpu | null, fd: number): number {
   return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log || f.socket ? fail(cpu, E.INVAL) : 0;
 }
 /** fallocate's mode 0: grow the file to cover the range; 0 or a negative errno */
-export function javaAllocateFd(fd: number, offset: number, len: number): number {
+export function javaAllocateFd(fd: number, offset: number, len: number): number | Promise<number> {
   const f = fds.get(fd);
+  if (f?.remote) return f.remote.allocate(offset, len);
   if (!f || (f.statusFlags & O_ACCMODE) === 0) return -E.BADF;
   if (offset < 0 || len <= 0) return -E.INVAL;
   if (offset + len > f.content.len) vfs.resize(f.content, offset + len);
@@ -821,12 +876,6 @@ export function javaAllocateFd(fd: number, offset: number, len: number): number 
 const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
-/** a directory's entries as readdir lists them, or a negative errno */
-export function listProcess(path: string): string[] | number | Promise<string[] | number> {
-  const p = vfs.norm(path), calls = remoteFilePath(p);
-  if (calls) return calls.fileList(p).then(reply => reply.value ? [".", "..", ...reply.value] : -(reply.errno || E.NOENT));
-  return vfs.isDir(p) ? dirEntries(p) : -(vfs.exists(p) ? E.NOTDIR : E.NOENT);
-}
 /** getdents64: linux_dirent64 records from the fd's position on */
 export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number | Promise<number> {
   const f = fds.get(fd);
@@ -872,9 +921,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   openat: (cpu, a) => {
     const dirfd = a.i(), path = a.str(), flags = a.i();
     const resolved = atPath(cpu, dirfd, path);
-    return typeof resolved === "string" ? kernelResult(cpu,processOpenFd(resolved,flags)) : resolved;
+    return typeof resolved === "string" ? fdOpen(cpu, resolved, flags) : resolved;
   },
-  close: (cpu, a) => kernelResult(cpu,processCloseFd(a.i())),
+  close: (cpu, a) => kernelResult(cpu, javaCloseFd(a.i())),
   read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
   write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
   readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
@@ -887,9 +936,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   pwrite64: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), Number(a.l())),
   lseek: (cpu, a) => {
     const wide = PTR === 8, fd = a.i(), offset = wide ? Number(a.l()) : a.i(), whence = a.i();
-    const value = kernelResult(cpu,processSeekFd(fd,offset,whence));
-    const done = (result: number) => wide ? BigInt(result) : result;
-    return value instanceof Promise ? value.then(done) : done(value);
+    return complete(kernelResult(cpu, javaLseekFd(fd, offset, whence)), result => wide ? BigInt(result) : result);
   },
   fstat: (cpu, a) => statFd(cpu, a.i(), a.p()),
   fstatat: (cpu, a) => {
@@ -899,7 +946,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const path = atPath(cpu, fd, name);
     return typeof path === "string" ? statProcess(cpu, path, buf) : path;
   },
-  fchmod: () => 0, fchown: () => 0, umask: () => 0o22,
+  fchmod: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), { mode: a.i() })),
+  fchown: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), { uid: a.i(), gid: a.i() })),
+  umask: () => 0o22,
   renameat: (cpu, a) => {
     const from = atPath(cpu, a.i(), a.str());
     if (typeof from !== "string") return from;
@@ -908,12 +957,10 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   },
   mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirProcess(cpu, path) : path; },
   mknodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mknodProcess(cpu, path, a.i()) : path; },
-  ftruncate: (cpu, a) => kernelResult(cpu,processTruncateFd(a.i(),offArg(a))),
+  ftruncate: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), offArg(a))),
   truncate: (cpu, a) => {
-    const file = vfs.open(a.str()), n = offArg(a);
-    if (!file) return fail(cpu, E.NOENT);
-    if (file.source && !writable(file.source)) return fail(cpu, E.ACCES);
-    vfs.resize(file, n); return 0;
+    const path = a.str(), n = offArg(a);
+    return kernelResult(cpu, complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r))));
   },
   fcntl: (cpu, a) => {
     const fd = a.i(), cmd = a.i();
@@ -923,9 +970,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
       mem.st16(lock, 2);
       return 0;
     }
-    return kernelResult(cpu,processFcntlFd(fd,cmd,a.i()));
+    return kernelResult(cpu, javaFcntlFd(fd, cmd, a.i()));
   },
-  fsync: (cpu, a) => kernelResult(cpu,processSyncFd(a.i())), fdatasync: (cpu, a) => kernelResult(cpu,processSyncFd(a.i())),
+  fsync: (cpu, a) => kernelResult(cpu, javaSyncFd(a.i())), fdatasync: (cpu, a) => kernelResult(cpu, javaSyncFd(a.i())),
   syncfs: (cpu, a) => fds.has(a.i()) ? 0 : fail(cpu, E.BADF),
   dup: (cpu, a) => fdDup(cpu, a.i()),
   dup3: (cpu, a) => {
@@ -962,21 +1009,23 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   sendfile: (cpu) => fail(cpu, E.NOSYS),
   flock: () => 0,
   unlinkat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()), flags = a.i(); return typeof path === "string" ? removeProcess(cpu, path, !!(flags & 0x200)) : path; },
-  fchmodat: () => 0, utimensat: () => 0,
+  // no links to follow, so fchmodat's flags change nothing
+  fchmodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()), mode = a.i(); return typeof path === "string" ? changeProcess(cpu, path, { mode }) : path; },
+  utimensat: (cpu, a) => {
+    const dirfd = a.i(), name = a.p(), change = modifiedTime(a.p());
+    if (!name) return kernelResult(cpu, javaChangeFdAttributes(dirfd, change));
+    const path = atPath(cpu, dirfd, mem.cstr(name));
+    return typeof path === "string" ? changeProcess(cpu, path, change) : path;
+  },
   ioctl: (cpu, a) => {
     const fd = a.i(), request = a.i(), argument = a.p();
     if (request !== FIONREAD) return fail(cpu, fds.get(fd)?.socket ? E.NOTTY : E.NOSYS);
-    if (fds.get(fd)?.remote) {
-      const destination = anchor(argument);
-      return Promise.resolve(processIoctlIntFd(fd,request)).then(n => {
-        if(n < 0)return fail(cpu,-n);
-        mem.st32(destination(),n);return 0;
-      });
-    }
-    const n = fionread(fd);
-    if (n < 0) return fail(cpu, -n);
-    mem.st32(argument, n);
-    return 0;
+    const destination = anchor(argument);
+    return complete(javaIoctlIntFd(fd, request), n => {
+      if (n < 0) return fail(cpu, -n);
+      mem.st32(destination(), n);
+      return 0;
+    });
   },
   statfs: (_c, a) => { a.str(); return fillStatfs(a.p()); },
   fstatfs: (_c, a) => { a.i(); return fillStatfs(a.p()); },

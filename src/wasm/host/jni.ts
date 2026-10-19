@@ -1,9 +1,12 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import { newInstance, refOf, type Bridge } from "./bridge.ts";
-import { idOfClass, typeName } from "../link/classes.ts";
-import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program.ts";
+import { idOfClass } from "../link/classes.ts";
+
+import { ACC, javaName, type FieldInfo, type MethodInfo, typeName } from "../compiler/program.ts";
+import { elemKindOf } from "../compiler/consts.ts";
 import { failed, symbolicImplFor } from "../compiler/linkage.ts";
 import type { World } from "../link/world.ts";
 import type { Strand } from "../link/sched.ts";
@@ -11,9 +14,6 @@ import { ARRAY_SUPERS, classRef, onNestedStrand, runningThread } from "./entry.t
 import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm.ts";
 
 interface WasmField extends JniField { info: FieldInfo }
-/** the storage kind of a primitive array's elements */
-const ELEMENT = { Z: "i8", B: "i8", C: "i16", S: "i16", I: "i32", F: "i32", J: "i64", D: "i64" } as Record<string, string>;
-const PRIMITIVE = new Set(Object.keys(ELEMENT));
 const CLASS = "java/lang/Class", OBJECT = "java/lang/Object", STRING = "java/lang/String";
 
 export function wasmJni(w: World): JniVm {
@@ -29,7 +29,7 @@ export function wasmJni(w: World): JniVm {
   /** whether the class named `name`, a class or an array class, exists */
   const exists = (name: string): boolean => {
     const element = name.replace(/^\[+/, "");
-    if (name[0] === "[") return element.length === 1 ? PRIMITIVE.has(element) : element[0] === "L" && !!prog.get(element.slice(1, -1));
+    if (name[0] === "[") return element.length === 1 ? element in PRIMS : element[0] === "L" && !!prog.get(element.slice(1, -1));
     return !!prog.get(name);
   };
   const isSub = (a: string, b: string): boolean => {
@@ -58,7 +58,7 @@ export function wasmJni(w: World): JniVm {
   };
   const call = (o: object, name: string, desc: string, ...args: unknown[]): unknown => bridge.call(virtual(o, name, desc), o, args);
   const copy = (to: boolean, type: string) => {
-    const kind = ELEMENT[type];
+    const kind = elemKindOf("[" + type);
     return w.hostFn(`j:g${to ? "put" : "get"}_${kind}`, ["L", "I", "I", "I", "I"], "V", (cx, c) => { c.lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, `g${to ? "put" : "get"}_${kind}`); });
   };
   const bufferField = (name: string, desc: string) => prog.resolveField("java/nio/Buffer", name, desc)!;
@@ -92,7 +92,7 @@ export function wasmJni(w: World): JniVm {
     isInstance: (o, c) => isSub(w.classNameOf(o as object), c.name),
     init(c) {
       if (!prog.get(c.name) || !w.needsInit(c.name)) return null;
-      const done = nest((s) => w.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
+      const done = nest((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
       return done instanceof Promise ? done.then(() => {}) : null;
     },
 

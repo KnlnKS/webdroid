@@ -6,7 +6,6 @@
 // against (`pnpm gen-framework` checks the pairing). android.R and com.android.internal.R
 // come from framework.jar.
 
-import { yieldToLoop } from "../jvm/yield.ts";
 import { Arsc } from "./arsc.ts";
 import { DEVICE_OVERLAYS } from "./device-overlays.ts";
 import { centralDir, entryBytes } from "../jvm/natives/jzip.ts";
@@ -23,7 +22,7 @@ import { PackageRecord, packages } from "./packages.ts";
 import { apkCertificates } from "./packagearchive.ts";
 
 let pending: Promise<Arsc> | null = null;
-let pendingDex: Promise<void> | null = null;
+let mounted: Promise<void> | null = null;
 
 /** a jar's classes*.dex, in load order */
 export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
@@ -71,13 +70,9 @@ export function fetchPlatformJars(): Promise<Uint8Array[]> {
   return jars ??= platformJarBlobs().then((list) => Promise.all(list.map(async (blob) => new Uint8Array(await blob.arrayBuffer()))));
 }
 
-/** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.
- *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
-export function loadPlatformDex(): Promise<void> {
-  return pendingDex ??= fetchPlatformJars().then(async (bytes) => {
-    // a jar at a time, leaving turns for the realm's other work
-    for (let i = 0; i < bytes.length; i++) { loadPlatformJar(bytes[i], i); await yieldToLoop(); }
-  });
+/** the platform jars at their device paths, with their resources served: a page's platform classes are its tier's build (wasm/host/boot.ts) */
+export function mountPlatformJars(): Promise<void> {
+  return mounted ??= fetchPlatformJars().then((bytes) => bytes.forEach(mountPlatformJar));
 }
 
 export function loadFramework(): Promise<Arsc> {

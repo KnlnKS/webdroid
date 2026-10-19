@@ -2,18 +2,18 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { javaName, type JClass } from "../compiler/program.ts";
-import { idOfClass, fieldId, typeName } from "./classes.ts";
+import { javaName, kindOf, type JClass, type Kind, typeName } from "../compiler/program.ts";
+import { idOfClass, fieldId } from "./classes.ts";
+
 import { executableSlot, methodAt } from "./reflect.ts";
-import { BOX } from "../compiler/fields.ts";
-import { VIEWS } from "../compiler/copy.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { emitRestored, emitSettled, type Strand } from "./sched.ts";
+import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
-import type { Kind } from "../compiler/program.ts";
+import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";
@@ -61,21 +61,17 @@ function make(w: World) {
   const classOf = fn("an:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); });
   const mkExec = fn("an:mkExec", ["I", "I", "I"], "L", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "mkExec"); });
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
-  const aset = fn("an:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
   const box = (letter: string) => {
-    const [cls] = BOX[letter], bits = letter === "J" || letter === "D" ? "J" : "I";
-    return java("an:box:" + letter, [bits], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
+    const cls = PRIMS[letter].box;
+    return java("an:box:" + letter, [kindOf(letter)], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
   };
-  const call = (cls: string, name: string, desc: string, params: ("I" | "J" | "L")[], ret: "I" | "L" | "V") =>
+  const call = (cls: string, name: string, desc: string, params: Kind[], ret: "I" | "L" | "V") =>
     java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
   const enumConstant = (cls: string, name: string, desc: string) => java(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
-  const construct = (cls: string, desc: string, params: ("I" | "J" | "L")[]) =>
-    java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => {
-      const o = c.newLocal(cx.vtOf("L"));
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(o).lget(o); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, "<init>", desc)!); c.lget(o);
-    });
+  const construct = (cls: string, desc: string, params: Kind[]) =>
+    java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => cx.construct(c, cx.prog.resolve(cls, "<init>", desc)!, () => params.forEach((_, i) => arg(i))));
   return {
-    classOf, mkExec, newArray, aset, box,
+    classOf, mkExec, newArray, box,
     create: call(FACTORY, "createAnnotation", `(Ljava/lang/Class;[L${MEMBER};)Ljava/lang/annotation/Annotation;`, ["L", "L"], "L"),
     member: construct(MEMBER, `(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Class;Ljava/lang/reflect/Method;)V`, ["L", "L", "L", "L"]),
     typeNotPresent: construct("java/lang/TypeNotPresentException", "(Ljava/lang/String;Ljava/lang/Throwable;)V", ["L", "L"]),
@@ -86,9 +82,9 @@ function make(w: World) {
 }
 
 /** the Java array of `items` with element descriptor `elem` */
-function arrayOf(s: ReturnType<typeof make>, elem: string, items: unknown[]): object {
+function arrayOf(w: World, s: ReturnType<typeof make>, elem: string, items: unknown[]): object {
   const j = s.newArray("[" + elem)(items.length);
-  items.forEach((x, i) => s.aset(j, i, x));
+  items.forEach((x, i) => w.bridge.setElement(j, i, x));
   return j;
 }
 
@@ -103,10 +99,10 @@ function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: Enc
   if (desc[0] === "[") {
     const elem = desc.slice(1), items = v as EncVal[];
     // a primitive array is filled on the host and copied in
-    if (elem.length === 1) return w.bridge.toJava(VIEWS[elem].from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
+    if (elem.length === 1) return w.bridge.toJava(PRIMS[elem].array.from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
     const values: unknown[] = [];
     for (const x of items) values.push(yield* valueOf(w, s, strand, dex, x, elem));
-    return arrayOf(s, elem, values);
+    return arrayOf(w, s, elem, values);
   }
   if (v === null) return v;
   if (typeof v === "string") return w.javaString(v);
@@ -132,7 +128,7 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
     const v = yield* valueOf(w, s, strand, a.dex, value, m.ret);
     members.push(yield s.member(strand, w.javaString(name), v, s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0)));
   }
-  return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(s, `L${MEMBER};`, members));
+  return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(w, s, `L${MEMBER};`, members));
 }
 
 /** host.annotation(kind, a, b, arg): the objects ART's annotation natives answer; `arg` is the call's object argument, if it has one: the
@@ -172,7 +168,7 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
     if (!Array.isArray(names) || !Array.isArray(flags)) return null;
     const parameters: object[] = [];
     for (const [i, name] of names.entries()) parameters.push(yield s.parameter(strand, typeof name === "string" ? w.javaString(name) : null, Number(flags[i] ?? 0), arg, i));
-    return arrayOf(s, "Ljava/lang/reflect/Parameter;", parameters);
+    return arrayOf(w, s, "Ljava/lang/reflect/Parameter;", parameters);
   }
   if (kind === Ann.ExecutableParams) {
     if (!params) return null;
@@ -180,9 +176,9 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
     for (const p of params) {
       const annotations: object[] = [];
       for (const x of ofKind(p, RUNTIME)) annotations.push(yield* annotation(w, s, strand, x));
-      groups.push(arrayOf(s, "Ljava/lang/annotation/Annotation;", annotations));
+      groups.push(arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations));
     }
-    return arrayOf(s, "[Ljava/lang/annotation/Annotation;", groups);
+    return arrayOf(w, s, "[Ljava/lang/annotation/Annotation;", groups);
   }
   const runtime = ofKind(set, RUNTIME);
   if (arg) {
@@ -191,7 +187,7 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
   }
   const annotations: object[] = [];
   for (const x of runtime) annotations.push(yield* annotation(w, s, strand, x));
-  return arrayOf(s, "Ljava/lang/annotation/Annotation;", annotations);
+  return arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations);
 }
 
 export const annotationIntrinsics = new Map<string, Intrinsic>();

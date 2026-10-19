@@ -5,7 +5,10 @@ type Contract = Record<string, (...args: never[]) => unknown>;
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
   | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
-const methods = ["processDied", "locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "storageChanged", "accountsChanged", "packageRemoved", "kill"] as const;
+/** `names`, which must list every method of C; a proxy can only call the methods it names */
+export const methodsOf = <C extends Contract>() => <const L extends readonly (keyof C & string)[]>(
+  names: L & ([Exclude<keyof C, L[number]>] extends [never] ? unknown : { missing: Exclude<keyof C, L[number]> })): L => names;
+const methods = methodsOf<ProcessEndpoint>()(["processDied", "locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "storageChanged", "accountsChanged", "packageRemoved", "kill"]);
 
 export type ProcessFailure = { javaClass: string | null; name: string; message: string | null; stack?: string };
 
@@ -29,17 +32,26 @@ export function processError(error: ProcessFailure): Error {
   return result;
 }
 const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
+/** closes `port` once its peer is told, with `error` as the reason; a port a failed transfer
+ *  detached is only closed */
+export function closePort(port: MessagePort, error?: ProcessFailure): void {
+  try { port.postMessage({ kind: "close", error } satisfies Message); } catch { /* detached */ }
+  port.close();
+}
 
+/** per method, what acts on a call's result */
+type ByResult<C extends Contract, R> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => R };
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
- *  this endpoint while the request that caused it is suspended. */
+ *  this endpoint while the request that caused it is suspended. `undelivered` releases a result that never reached its caller;
+ *  `transfer` names what a result gives away. */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
-  onUndelivered?: (method: string, value: unknown) => void | Promise<void>): () => void {
+  undelivered: ByResult<C, unknown> = {}, transfer: ByResult<C, Transferable[]> = {}): () => void {
   const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
   let closed = false;
   const close = (error?: ProcessFailure) => {
     if (closed) return;
     closed = true;
-    try { port.postMessage({ kind: "close", error } satisfies Message); } finally { port.close(); onClose(); }
+    closePort(port, error); onClose();
   };
   port.onmessageerror = () => close(closedFailure);
   port.onmessage = async ({ data }: MessageEvent<Message>) => {
@@ -53,9 +65,11 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       const value = await invoke.apply(endpoint, data.args);
       note(Ev.Served, at);
       if (data.kind === "call") {
-        if (closed) await onUndelivered?.(data.method,value);
-        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
-        catch (error) { await onUndelivered?.(data.method,value);throw error; }
+        const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
+        const given = transfer[data.method] as ((value: unknown) => Transferable[]) | undefined;
+        if (closed) await release?.(value);
+        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? []); }
+        catch (error) { await release?.(value); throw error; }
       }
     } catch (error) {
       if (data.kind === "notify") close(processFailure(error));

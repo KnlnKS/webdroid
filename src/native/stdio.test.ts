@@ -5,7 +5,7 @@ import { Cpu, setA64 } from "./cpu.ts";
 import { lookupHost, stp } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
-import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, javaReadFd, renamePath } from "./fs.ts";
+import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, renamePath } from "./fs.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
 
@@ -179,7 +179,7 @@ test("open files and mappings retain their identity through rename and unlink", 
   const from = "/mapped-file-test", to = "/mapped-file-renamed";
   vfs.write(from, Uint8Array.of(1));
   const fd = javaOpenFd(from, 2), file = fdFile(fd)!;
-  expect(renamePath(null, from, to)).toBe(0);
+  expect(renamePath(from, to)).toBe(0);
   vfs.writeAt(file, 0, Uint8Array.of(2));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2));
   expect(vfs.read(from)).toBeNull();
@@ -199,11 +199,11 @@ test("descriptor bytes retain shared positions and read lazy files through short
     else vfs.write(path, bytes);
     const fd = javaOpenFd(path, 0), dup = javaDupFd(fd);
     try {
-      expect(javaSeekFd(fd, 1, 0)).toBe(1);
+      expect(javaLseekFd(fd, 1, 0)).toBe(1);
       expect(await javaFdBytes(dup)).toEqual(Uint8Array.of(2, 3, 4, 5));
-      expect(javaSeekFd(fd, 0, 1)).toBe(1);
+      expect(javaLseekFd(fd, 0, 1)).toBe(1);
       expect(await javaFdBytes(fd)).toEqual(Uint8Array.of(2, 3, 4, 5));
-      expect(javaSeekFd(fd, 9, 0)).toBe(9);
+      expect(javaLseekFd(fd, 9, 0)).toBe(9);
       expect(await javaFdBytes(fd)).toEqual(new Uint8Array(0));
     } finally { javaCloseFd(fd); javaCloseFd(dup); vfs.delete(path); }
     expect(await javaFdBytes(fd)).toBeNull();

@@ -7,18 +7,18 @@ import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { AOT_ROOT } from "./aot-key.ts";
+import { BASE_URL, CONTEXT_OPTS, launchOptions } from "../browser.ts";
+import { AOT_ROOT } from "../aot-key.ts";
 import { readProcesses } from "../../tests/e2e/lib/processes.ts";
 import type { AotProfile } from "../../src/shell/aot-profile.ts";
 
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
 const classes = process.argv.includes("--classes");
 const apks = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const SETTLE_MS = 10_000;
 /** the classes in the order of how many launches used them; Maps keep the order of first use among equals */
 const byUse = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([name]) => name);
 
-const { key } = await (await fetch(new URL("/aot/current.json", BASE))).json() as { key: string };
+const { key } = await (await fetch(new URL("/aot/current.json", BASE_URL))).json() as { key: string };
 const ordered = new Set<string>();
 const uses = { linked: new Map<string, number>(), called: new Map<string, number>() };
 /** the platform build slots the launches' realms ran: what the page's warm Worker has the engine compile ahead (src/wasm/host/warm-worker.ts) */
@@ -28,7 +28,7 @@ const prefixes = new Set<string>();
 const failures: string[] = [];
 for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon-v0.20.4.apk"]) {
   const profile = mkdtempSync(join(tmpdir(), "wdprof-"));
-  const context = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, args: ["--site-per-process", "--force-device-scale-factor=1", "--use-gl=angle", "--use-angle=swiftshader"] });
+  const context = await chromium.launchPersistentContext(profile, { ...launchOptions(), ...CONTEXT_OPTS });
   // every module is there to be asked for, so that a miss does not change what the launch goes on to want
   await context.route(/\/aot\/\w+\/startup\.json$/, (route) => route.fulfill({ json: readdirSync(join(AOT_ROOT, key)).filter((f) => /^[cd]\d+\.wasm$/.test(f)) }));
   if (classes) await context.route(/\/aot\/\w+\/c\d+\.wasm$/, (route) => route.abort());
@@ -39,7 +39,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       const page = lastPage = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
-      const url = new URL(BASE);
+      const url = new URL(BASE_URL);
       url.pathname = "/";
       url.searchParams.set("apk", apk);
       if (!url.searchParams.has("screen")) url.searchParams.set("screen", "1080x2160@480");
@@ -93,8 +93,8 @@ if (classes) {
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
   writeFileSync(join(AOT_ROOT, key, "warm.json"), JSON.stringify([...warm].sort((a, b) => a - b)));
   console.log(`${files.length} files in ${key}/startup.json, ${warm.size} slots in warm.json`);
-  if (prefixes.size === 1) writeFileSync(join(AOT_ROOT, key, "prefix.json"), [...prefixes][0]);
-  else { rmSync(join(AOT_ROOT, key, "prefix.json"), { force: true }); console.log(`${prefixes.size} different prefixes: no prefix.json`); }
+  writeFileSync(join(AOT_ROOT, key, "prefix.json"), prefixes.size === 1 ? [...prefixes][0] : "null");
+  if (prefixes.size !== 1) console.log(`${prefixes.size} different prefixes: prefix.json is null`);
 }
 
 /** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */

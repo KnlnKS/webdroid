@@ -1,25 +1,18 @@
 // The linker's own tests: CHA devirtualisation undone by a dex loaded later, the implicit exceptions with their messages, heap limits,
 // stack traces, StackOverflowError at the Java edge. Needs javac and d8. Run: pnpm wasm lazytest
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
-import { JAVA, PLATFORM_PATHS } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { JAVA, platformJars } from "./paths.ts";
+import { checker, filesIn, fixture } from "./tools.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 
-const jars = PLATFORM_PATHS.slice(0, 2);
-const out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
-const sh = shellIn(out);
-const src = ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`));
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...src]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^(Ex|Lz)(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Lz2(\$\w+)?\.class$/)]);
+const jars = platformJars("core-oj", "core-libart");
+const out = fixture({ sources: ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`)), classes: /^(Ex|Lz)(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Lz2(\$\w+)?\.class$/) });
 
-const suite = checker(), { check } = suite;
+const suite = checker("lazytest"), { check } = suite;
 
 // ---- CHA under open-world loading: the app's dexes join the hierarchy as they are added, another loader's classes once they are linked
 for (const own of [false, true]) {
@@ -61,11 +54,11 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   let first = call(40000);
   const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!), initial = w.table.get(slot);
   // the second tier waits until the program has been hot for a few ms
-  if (w.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
+  if (w.tiers.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
   const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
-  check("an upgraded method is not queued again", (call(40000), w.upgradeJob(slot)), undefined);
+  check("an upgraded method is not queued again", (call(40000), w.tiers.upgradeJob(slot)), undefined);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
   check("and the method is compiled afresh", call(1000), 11 * 1000);
@@ -103,7 +96,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 {
   const w = world([join(out, "classes.dex"), ...jars]), callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
   const backtrace = w.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;"), state = backtrace(callA(1) as object) as object;
-  const frames = w.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
+  const frames = w.stacks.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
   check("frames", frames.slice(0, 3).map((f) => `${f.cls}.${f.method}`).join(" "), "Ex.c Ex.b Ex.a");
   for (const f of frames.slice(0, 3)) {
     const m = w.prog.resolve("Ex", f.method, f.method === "a" ? "(I)Ljava/lang/Throwable;" : "(I)V")!;
@@ -116,7 +109,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   // the same after the three methods have run enough to be recompiled with each other copied in (the frames of a copy carry the same names)
   for (let i = 0; i < 6000 || (!w.stats.upgrades && i < 1e6); i++) callA(0); // the second tier waits until the program has been hot for a few ms
   check("methods were recompiled", w.stats.upgrades > 0, true);
-  check("frames after the second tier", where(w.stackTrace(backtrace(callA(1) as object) as object)), where(frames));
+  check("frames after the second tier", where(w.stacks.stackTrace(backtrace(callA(1) as object) as object)), where(frames));
   let top: unknown;
   try { top = w.entry("Ex", "top", "([Ljava/lang/StackTraceElement;)I")(w.entry("java/lang/Throwable", "nativeGetStackTrace", "(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;")(state)); }
   catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.numbers.gapList.join("; "); }
@@ -130,5 +123,4 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   const t = w.throwable(thrown);
   check("stack overflow becomes a StackOverflowError", t && w.classNameOf(t), "java/lang/StackOverflowError");
 }
-console.log(suite.failed ? `${suite.failed} failures` : "lazytest: all pass");
-process.exit(suite.failed ? 1 : 0);
+suite.done();

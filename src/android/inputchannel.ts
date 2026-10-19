@@ -2,11 +2,10 @@
 // window. The server end publishes an event; the client end's receiver gets it as a callback on its
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
-import { rt, type JObj } from "../jvm/runtime.ts";
+import { rt, getDeclared, type JObj } from "../jvm/runtime.ts";
 import { vcall, newObj } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel.ts";
-import { mangleField } from "../jvm/abi.ts";
 import type { NativeLooper } from "./mainloop.ts";
 import { note, Ev } from "../timeline.ts";
 
@@ -52,11 +51,10 @@ const channel = (h: bigint) => deref<NativeInputChannel>(h)?.end ?? null;
 const ref = (end: Channel) => handle({ end });
 /** the channel end behind a Java InputChannel */
 export const channelOf = (input: JObj): Channel => {
-  const end = channel((input as unknown as Record<string, bigint>)[mangleField("android/view/InputChannel", "mPtr")]);
+  const end = channel(getDeclared<bigint>(input, "android/view/InputChannel", "mPtr"));
   if (!end) throw rt.mkThrowable("java/lang/RuntimeException", "NativeInputChannel has no corresponding InputChannel");
   return end;
 };
-const PTR = mangleField("android/os/MessageQueue", "mPtr");
 
 rt.registerJnis("android/view/InputChannel", {
   "nativeOpenInputChannelPair(Ljava/lang/String;)[J": async (name: string) => {
@@ -90,9 +88,9 @@ rt.registerJnis("android/view/InputChannel", {
 const receiverOf = (h: bigint) => deref<{ channel: Channel }>(h);
 rt.registerJnis("android/view/InputEventReceiver", {
   "nativeInit(Ljava/lang/ref/WeakReference;Landroid/view/InputChannel;Landroid/os/MessageQueue;)J":
-    (weak: JObj, input: JObj, queue: Record<string, bigint>) => {
+    (weak: JObj, input: JObj, queue: JObj) => {
       const c = channelOf(input);
-      c.receiver = { looper: deref<NativeLooper>(queue[PTR]), receiver: vcall(weak, "get", "()Ljava/lang/Object;") };
+      c.receiver = { looper: deref<NativeLooper>(getDeclared<bigint>(queue, "android/os/MessageQueue", "mPtr")), receiver: vcall(weak, "get", "()Ljava/lang/Object;") };
       deliverFocus(c);
       return handle({ channel: c });
     },

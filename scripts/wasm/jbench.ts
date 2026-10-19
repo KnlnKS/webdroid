@@ -1,21 +1,19 @@
 // Each scripts/jbench workload, cut out of Bench.java as its own static method, runs lazily compiled over the AOSP boot dex and must answer as
 // scripts/jbench/expected.json records: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
 // Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: pnpm wasm jbench [workload ...] [-v]
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { cutWorkloads, dexAndroid, shellIn } from "./tools.ts";
+import { androidFixture, cutWorkloads, tempDir } from "./tools.ts";
 
-const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
+const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = tempDir();
 const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
-const sh = shellIn(out);
 
 const { names, source } = cutWorkloads(text);
 writeFileSync(join(out, "Bench.java"), source);
-dexAndroid(sh, out, ["Bench.java"]);
+androidFixture({ out, sources: [join(out, "Bench.java")] });
 
 const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_PATHS]);
 await mountPlatform(ROOT);

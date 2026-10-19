@@ -1,11 +1,11 @@
 // The java.lang.Character natives, as java_lang_Character.cpp answers them with ICU4C: the ASCII range of the predicates text loops call inline,
 // every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, which reads the ICU property data through its own
 // loaders. jicu.ts answers the natives this does not.
-import { OP, type Code } from "./code.ts";
-import { T } from "./wasmbin.ts";
-import type { Compiler, Intrinsic } from "./j2w.ts";
-import { mid } from "./ids.ts";
-import { f64bits } from "./consts.ts";
+import { OP, type Code } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { mid } from "../compiler/ids.ts";
+import { f64bits } from "../compiler/consts.ts";
 
 export const charIntrinsics = new Map<string, Intrinsic>();
 const UCHARACTER = "android/icu/lang/UCharacter";

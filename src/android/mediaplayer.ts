@@ -157,7 +157,7 @@ rt.registerJnis(MP, {
   "_setDataSource(Ljava/io/FileDescriptor;JJ)V": M((p, fd: JObj | null, offset: bigint, length: bigint) => {
     p.require(IDLE);
     if (fd === null) rt.npe();
-    return loadFrom(p, fdSlice(fdInt(fd), offset, length));
+    return after(fdSlice(fdInt(fd), offset, length), source => loadFrom(p, source));
   }),
   "_setDataSource(Landroid/media/MediaDataSource;)V": M((p, source: JObj) => {
     p.require(IDLE);

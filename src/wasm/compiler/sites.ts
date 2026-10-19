@@ -1,11 +1,9 @@
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { inferTyping, R, J, D, type Typing } from "./infer.ts";
+import { inferTyping, KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
-import { initiatedInstruction } from "../link/resolution.ts";
-import type { World } from "../link/world.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 
@@ -21,15 +19,11 @@ export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, in
   return JSON.stringify([m.cls, ins.op, operands, output, inputs.map(([reg, kind]) => [roles.get(reg), kind])]);
 }
 
-function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
+export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
   const n = ins.name, dex = m.dex;
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
   if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
   return /^(const-class|const-method-|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super|polymorphic))/.test(n);
-}
-
-export function needsSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruction): boolean {
-  return !w.prog.linksStatically(w.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
 }
 
 function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): { inputs: SymbolicSite[4]; output: SymbolicSite[5] } {
@@ -38,8 +32,7 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
     const web = typing.use(ins.pc, reg);
     if (web < 0 || seen.has(web)) continue;
     seen.add(web);
-    const k = typing.kind[web];
-    inputs.push([reg, k === R ? "L" : k === J || k === D ? "J" : "I"]);
+    inputs.push([reg, KINDS[typing.kind[web]].abi]);
   }
   const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
     : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)
@@ -49,7 +42,7 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   const cx = mc.cx;
-  if (!mc.symbolic || cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
+  if (cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
   const entry = cx.symbolicImports.get(`${mc.m.cls}:${mc.m.index}:${ins.pc}`);
   if (!entry) return false;
   // the operands declareSymbolicSites gave the site, which its linked operation takes
@@ -70,11 +63,11 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     let t = performance.now();
     const prepared = prepareMethod(item);
     phase.prepare += performance.now() - t; t = performance.now();
-    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions);
+    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared);
     phase.infer += performance.now() - t;
     cx.methodAnalyses.set(m, { prepared, typing });
     for (const ins of prepared.instructions) {
-      if (!typing.reached(ins.pc) || !needsSymbolicSite(cx.w, m, ins)) continue;
+      if (!typing.reached(ins.pc) || !cx.w.needsSymbolicSite(m, ins)) continue;
       const name = `${m.cls}:${m.index}:${ins.pc}`;
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);

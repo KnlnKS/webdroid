@@ -23,7 +23,7 @@ export function pixels(type: number, p: number): ArrayBufferView {
   const n = Math.floor((mem.u8.length - p) / K.BYTES_PER_ELEMENT);
   return p % K.BYTES_PER_ELEMENT ? new K(mem.u8.slice(p, p + Math.min(n, 1 << 26) * K.BYTES_PER_ELEMENT).buffer) : new K(mem.buf, p, n);
 }
-export function pixelByteSize(format: number, type: number): number {
+function pixelByteSize(format: number, type: number): number {
   const channels = format === 0x1908 || format === 0x8d99 ? 4 : format === 0x1907 || format === 0x8d98 ? 3
     : format === 0x190a || format === 0x8227 || format === 0x8228 ? 2
     : [0x1902, 0x1903, 0x1906, 0x1909, 0x8d94].includes(format) ? 1 : 0;
@@ -31,7 +31,7 @@ export function pixelByteSize(format: number, type: number): number {
     : [0x8368, 0x8c3b, 0x8c3e, 0x84fa].includes(type) ? 4 : type === 0x8dad ? 8 : 0;
   return packed || channels * pixelArray(type).BYTES_PER_ELEMENT;
 }
-export function pixelRows(width: number, height: number, bytes: number, alignment: number, rowLength: number, skipRows: number, skipPixels: number) {
+function pixelRows(width: number, height: number, bytes: number, alignment: number, rowLength: number, skipRows: number, skipPixels: number) {
   const stride = Math.ceil(rowLength * bytes / alignment) * alignment;
   const skip = skipRows * stride + skipPixels * bytes;
   return { stride, skip, extent: skip + (height - 1) * stride + width * bytes };

@@ -1,14 +1,15 @@
 import { javaName, type Loader } from "../compiler/program.ts";
 import { idOfClass } from "./classes.ts";
+
 import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders.ts";
-import { T } from "../compiler/wasmbin.ts";
 import type { Strand } from "./sched.ts";
 import type { World } from "./world.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles.ts";
-import { THROWERS } from "./exc.ts";
+import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, type SignatureType } from "./mhandles.ts";
+import { THROWERS } from "../compiler/exc.ts";
+import { resolveHandleMember } from "../compiler/handles.ts";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
   const next = (at: number): void | Promise<void> => {
@@ -25,7 +26,7 @@ export function resolveSignatureTypes(w: World, types: SignatureType[], owner: S
 export function resolveHandleReference(w: World, method: MethodInfo, index: number, owner: Strand): void | Promise<void> {
   const ready = resolveType(w, w.prog.loaderOf(method.cls), handleMemberOwner(method, index), owner);
   const signature = () => {
-    const member = resolveHandleMember(w, method, index);
+    const member = resolveHandleMember(w.prog, method, index);
     if ("thrower" in member || "errorClass" in member) {
       throw w.exception(w.makeThrowable("thrower" in member ? THROWERS[member.thrower].cls : member.errorClass, member.message));
     }
@@ -128,10 +129,7 @@ export function resolveForName(w: World, name: string, object: object | null, ow
     if (!cause) throw error;
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
     if (!ctor) throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)"));
-    const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => {
-      const value = c.newLocal(T.anyref);
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(value); arg(0); arg(1); cx.callMethod(c, ctor); c.lget(value);
-    }, owner)(w.javaString(name), cause);
+    const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => cx.construct(c, ctor, () => { arg(0); arg(1); }), owner)(w.javaString(name), cause);
     const fail = (value: unknown): never => { throw w.exception(value as object); };
     return value instanceof Promise ? value.then(fail) : fail(value);
   };
@@ -205,12 +203,12 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     // The boot namespace and the host's startup namespace have no Java loader peer yet.
     const key = w.prog.lookup(loader, name);
     if (!key) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", name));
-    w.initiateClass(loader, name, key);
+    w.namespaces.initiateClass(loader, name, key);
     return key;
   }
   const native = nativeClassLookup(w, loader, name);
   if (native) {
-    w.initiateClass(loader, name, native);
+    w.namespaces.initiateClass(loader, name, native);
     return prepareDefinition(w, native, owner);
   }
   const method = w.prog.implFor(w.classNameOf(object), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
@@ -226,7 +224,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     const winner = w.prog.initiatedBy(loader, name);
     if (winner) return prepareDefinition(w, winner, owner);
     if (javaName(key) !== name) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `${name} (wrong name: ${javaName(key)})`));
-    w.initiateClass(loader, name, key);
+    w.namespaces.initiateClass(loader, name, key);
     return prepareDefinition(w, key, owner);
   };
   const failed = (error: unknown): string | Promise<string> => {

@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "server.ts", "scripts", "tests", "vite.config.ts"]
+  "include": ["src", "server.ts", "socket-relays.ts", "scripts", "tests", "vite.config.ts"]
 }

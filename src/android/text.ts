@@ -1,5 +1,5 @@
 // android.text: AndroidCharacter's natives.
-import { rt, driven, type Gen } from "../jvm/runtime.ts";
+import { rt, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { isLead, isTrail } from "../jvm/natives/jstring.ts";
 import { uchar } from "../jvm/natives/jicu.ts";
@@ -26,18 +26,18 @@ const perCodePoint = driven(function* perCodePoint(src: Uint16Array, start: numb
   }
 });
 rt.registerJnis("android/text/AndroidCharacter", {
-  "getDirectionalities([C[BI)V": (src: Uint16Array | null, dest: Int8Array | null, count: number) => {
+  "getDirectionalities([C[BI)V": waits((src: Uint16Array | null, dest: Int8Array | null, count: number) => {
     if (!src || !dest) return rt.npe();
     checkRange(Math.min(src.length, dest.length), 0, count);
     return perCodePoint(src, 0, count, dest, directionality);
-  },
-  "getEastAsianWidths([CII[B)V": (src: Uint16Array | null, start: number, count: number, dest: Int8Array | null) => {
+  }),
+  "getEastAsianWidths([CII[B)V": waits((src: Uint16Array | null, start: number, count: number, dest: Int8Array | null) => {
     if (!src || !dest) return rt.npe();
     checkRange(src.length, start, count); checkRange(dest.length, 0, count);
     return perCodePoint(src, start, count, dest, eastAsianWidth);
-  },
-  "getEastAsianWidth(C)I": eastAsianWidth,
-  "getMirror(C)C": icuMirror,
+  }),
+  "getEastAsianWidth(C)I": waits(eastAsianWidth),
+  "getMirror(C)C": waits(icuMirror),
   "mirror([CII)Z": driven(function* (chars: Uint16Array | null, start: number, count: number): Gen {
     if (!chars) return rt.npe();
     checkRange(chars.length, start, count);

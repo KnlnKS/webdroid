@@ -1,20 +1,20 @@
 // The second tier compiled for another World: a compile worker holds a World over the same Program and the same numbering, built from a copy of the dex files, and compiles what
-// the World it works for asks (World.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
+// the World it works for asks (Tiering.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
-// would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (World.adoptUnit); otherwise the worker forgets what it numbered.
+// would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/ids.ts";
 import { unitHeader, type UnitHeader } from "./aot.ts";
 import type { Marks, Numbering } from "./numbers.ts";
 import type { World } from "./world.ts";
 
-/** the second-tier compile of a method, as World.upgradeJob describes it */
+/** the second-tier compile of a method, as Tiering.upgradeJob describes it */
 export interface UpgradeJob {
   /** the number its unit's function names carry */
   unit: number;
   /** A refresh may replace only this live hot-unit generation in the source World. */
   refresh?: number;
-  /** first-tier code of methods already linked, merged into one module (World.mergeJob) */
+  /** first-tier code of methods already linked, merged into one module (Tiering.mergeJob) */
   merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
@@ -65,13 +65,11 @@ export class UnitCompiler {
       const cls = w.prog.get(key);
       if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
     }
-    for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
-    w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
+    for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
-    w.stats.units = job.unit;
-    const cx = new Compiler(w);
+    const cx = new Compiler(w), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.beginTouch();
-    const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
+    const { bytes, traces } = cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan, seq: job.unit });
     const touch = w.endTouch();
     return { header: unitHeader(w, cx, touch), numbering: w.numbers.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };

@@ -8,6 +8,8 @@ import { T } from "../compiler/wasmbin.ts";
 import { rtfns } from "../compiler/rtfns.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { MethodInfo } from "../compiler/program.ts";
+import { elemKindOf } from "../compiler/consts.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import "./guest.ts";
 
 /** the guest's first mapped address (src/native/abi.ts LOW) */
@@ -49,12 +51,10 @@ for (const [peek, poke, bits] of SCALARS) {
   memoryIntrinsics.set(MEMORY + poke, (cx, m, c) => emitMemoryScalar(cx, c, m, false, bits));
 }
 
-// peek/poke<Kind>Array(address, array, index, count[, swap]): count elements between native memory and the array's elements from index
-const ARRAYS: [string, "i8" | "i16" | "i32" | "i64", boolean][] = [["Byte", "i8", false], ["Char", "i16", true], ["Short", "i16", true], ["Int", "i32", true],
-  ["Long", "i64", true], ["Float", "i32", true], ["Double", "i64", true]];
-const DESC: Record<string, string> = { Byte: "B", Char: "C", Short: "S", Int: "I", Long: "J", Float: "F", Double: "D" };
-for (const [kind, ek, swaps] of ARRAYS) for (const peek of [true, false]) {
-  const sig = `${peek ? "peek" : "poke"}${kind}Array(J[${DESC[kind]}II${swaps ? "Z" : ""})V`;
+// peek/poke<Kind>Array(address, array, index, count[, swap]): count elements between native memory and the array's elements from index;
+// a byte has no order to swap
+for (const [d, { title }] of Object.entries(PRIMS)) if (d !== "Z") for (const peek of [true, false]) {
+  const swaps = d !== "B", ek = elemKindOf("[" + d), sig = `${peek ? "peek" : "poke"}${title}Array(J[${d}II${swaps ? "Z" : ""})V`;
   memoryIntrinsics.set(MEMORY + sig, (cx, m, c) => {
     const ARR = 1, INDEX = 2, COUNT = 3, SWAP = 4, len = c.newLocal(T.i32), tArr = cx.tArr[ek];
     guest(c, 0).if_();

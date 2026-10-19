@@ -3,10 +3,8 @@
 // a count past 255 or the first wait inflates it; an inflated monitor with no owner, entrants, waiters or pending re-entries is deflated
 // when released. Waiting is cooperative: an entrant or a waiter is a promise the releasing or notifying strand resolves.
 import type { Strand, ThreadRec } from "./sched.ts";
+import { St } from "../compiler/hostcalls.ts";
 
-/** what a blocking or synchronizing operation answers; the compiled code turns it into the exception (sched.ts blockStatus) */
-export const St = { Ok: 0, Interrupted: 1, Imse: 2, Nbs: 3, Neg: 4, Nanos: 5, Proceed: 6, Block: 7 } as const;
-export type St = (typeof St)[keyof typeof St];
 const INFLATED = 0x80000000 | 0;
 const THIN_MAX = 255;
 

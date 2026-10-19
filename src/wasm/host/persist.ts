@@ -16,6 +16,8 @@ export interface FileBackend {
 const LIMITS = { entry: 256 << 20, total: 1024 << 20 };
 /** `clock` counts uses, so that the order of use does not depend on the time resolution */
 interface Meta { clock: number; entries: Record<string, { files: Record<string, number>; used: number }> }
+/** a load or save reads meta.json, changes it and writes it back: one at a time, across the realms that share the origin's store */
+const exclusive = async <T>(f: () => Promise<T>): Promise<T> => navigator.locks ? await navigator.locks.request(COMPILED_CODE_DIR, f) : f();
 
 export class Persist {
   private fs: FileBackend; private limits: typeof LIMITS;
@@ -27,7 +29,8 @@ export class Persist {
   private saveMeta(meta: Meta): Promise<void> { return this.fs.write("meta.json", new TextEncoder().encode(JSON.stringify(meta))); }
 
   /** the files saved under `key`, or undefined: not saved, evicted, or damaged (which removes it) */
-  async load(key: string): Promise<Map<string, Uint8Array> | undefined> {
+  load(key: string): Promise<Map<string, Uint8Array> | undefined> { return exclusive(() => this.loadEntry(key)); }
+  private async loadEntry(key: string): Promise<Map<string, Uint8Array> | undefined> {
     const meta = await this.meta(), entry = meta.entries[key];
     if (!entry) return undefined;
     const read = await Promise.all(Object.entries(entry.files).map(async ([name, size]) => [name, size, await this.fs.read(`${key}/${name}`).catch(() => undefined)] as const));
@@ -41,7 +44,8 @@ export class Persist {
     return files;
   }
   /** keeps `files` under `key`, making room by evicting the entries used least recently; false if they are too large to keep */
-  async save(key: string, files: [string, Uint8Array][]): Promise<boolean> {
+  save(key: string, files: [string, Uint8Array][]): Promise<boolean> { return exclusive(() => this.saveEntry(key, files)); }
+  private async saveEntry(key: string, files: [string, Uint8Array][]): Promise<boolean> {
     const size = files.reduce((n, [, b]) => n + b.length, 0);
     if (size > this.limits.entry) return false;
     const meta = await this.meta();

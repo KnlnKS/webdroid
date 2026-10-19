@@ -61,6 +61,10 @@ export interface Loader {
 const SUFFIX = /@(\d+);?$/;
 /** the name Java code sees for a class key (and for the key of an array class) */
 export const javaName = (key: string): string => (key.includes("@") ? key.replace(/@\d+(?=;|$)/g, "") : key);
+/** the class name of a type descriptor: primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C) */
+export const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d.length === 1 ? "#" + d : d;
+/** the descriptor of a class name, typeName's inverse */
+export const descOf = (name: string) => name[0] === "#" ? name[1] : name[0] === "[" ? name : `L${name};`;
 /** Runtime packages include the defining loader, not just the binary package name. */
 export function sameRuntimePackage(prog: Program, a: string, b: string): boolean {
   const pkg = (name: string) => { name = javaName(name); return name.slice(0, name.lastIndexOf("/") + 1); };

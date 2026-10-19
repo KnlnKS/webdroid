@@ -5,26 +5,24 @@
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
 //   pnpm wasm boot-probe          (after pnpm aot)
 import { join } from "node:path";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { fileResponse, serve } from "../serve.ts";
-import { aotFile, aotManifest } from "./aot-serve.ts";
+import { aotFile, aotManifest } from "../aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { bundleFor, filesIn, shellIn } from "./tools.ts";
+import { bundleFor, checker, fixture } from "./tools.ts";
+import { launchBrowser } from "../browser.ts";
+import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)
 const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
 const worker = await bundleFor("browser", join(ROOT, "src/wasm/host/compile-worker.ts"));
-const appDir = mkdtempSync(join(tmpdir(), "wasm-probe-app-")), sh = shellIn(appDir);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", appDir, join(JAVA, "Pst.java")]);
-sh(["d8", "--release", "--output", appDir, ...filesIn(appDir, /\.class$/)]);
+const appDir = fixture({ sources: [join(JAVA, "Pst.java")] });
 
 const server = await serve({ fetch(req) {
   const p = new URL(req.url).pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
   if (p === "/probe.js") return new Response(bundle, { headers: { "content-type": "text/javascript" } });
-  if (p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript" } });
+  if (p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript" } });
   if (p === "/app.dex") return fileResponse(join(appDir, "classes.dex"), req);
   if (p === "/aot/current.json") return aotManifest();
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);
@@ -32,8 +30,7 @@ const server = await serve({ fetch(req) {
   return p.startsWith("/vendor/aosp/") && !p.includes("..") ? fileResponse(join(ROOT, p), req) : new Response("", { status: 404 });
 } });
 
-const { chromium } = await import("playwright");
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("page error:", String(e).slice(0, 500)));
 await page.goto(server.url.href);
@@ -43,8 +40,7 @@ await page.evaluate(() => { const f = document.createElement("iframe"); f.src = 
 const frame = await run("probeFrame");
 await browser.close(); server.stop();
 
-let failed = false;
-const check = (what: string, ok: boolean) => { if (!ok) { failed = true; console.log("FAIL", what); } };
+const suite = checker("boot-probe"), check = (what: string, ok: boolean) => suite.check(what, ok, true);
 for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
   console.log(`${name}: ${r.error ? "ERROR " + r.error.slice(0, 600) : `attached ${r.attached}; ${r.loaded.length} modules loaded, ${r.missed.length} missed, ${r.failed.length} failed to fetch; ${r.syncRequests} synchronous requests`}`);
   if (!r.error) console.log(`  ahead (fetch + compile, off the main thread) ${r.aheadMs.toFixed(0)} ms; boot ${r.bootMs.toFixed(0)} ms = our compiler ${r.compileMs.toFixed(0)} (${r.methods} methods), Module ${r.moduleMs.toFixed(0)}, Instance ${r.instantiateMs.toFixed(0)}, build ${r.aotMs.toFixed(0)}`);
@@ -63,5 +59,4 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
 check("the first load has no saved build and makes one", !tab.error && !tab.app.hit && !tab.app.attached && tab.app.made?.kept === true);
 check("the second load finds it, attaches it and uses its modules", !frame.error && frame.app.hit && frame.app.attached && frame.app.modules > 0);
 check("and compiles fewer methods on demand", !frame.error && !tab.error && frame.app.compiledOnDemand < tab.app.compiledOnDemand);
-console.log(failed ? "boot-probe: FAILED" : "boot-probe: all pass");
-process.exit(failed ? 1 : 0);
+suite.done();

@@ -1,12 +1,12 @@
 import { descToName } from "../../jvm/abi.ts";
 import { ACC, declaredMethods, javaName, type MethodInfo } from "../compiler/program.ts";
-import { symbolicMethod } from "../compiler/linkage.ts";
+import { symbolicMethod, canAccess } from "../compiler/linkage.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { canAccess } from "./classes.ts";
 import { causedThrowable, resolveType } from "./resolution.ts";
-import { emitSave, type Strand } from "./sched.ts";
+import { type Strand } from "./sched.ts";
 import type { World } from "./world.ts";
+import { emitSave } from "../compiler/hostcalls.ts";
 
 type Declaration = { cls: string; key: string; flags: number };
 type Pair = [Declaration, Declaration];
@@ -17,7 +17,7 @@ function virtualMethods(w: World, cls: string, caller: string): Map<string, Decl
   for (const name of [...w.prog.chain(cls)].reverse()) {
     const c = w.prog.require(name);
     for (const [key, flags] of declaredMethods(c)) {
-      if (virtual(key, flags) && canAccess(caller, c, flags, w)) methods.set(javaName(key), { cls: name, key, flags });
+      if (virtual(key, flags) && canAccess(w.prog, caller, c, flags)) methods.set(javaName(key), { cls: name, key, flags });
     }
   }
   return methods;

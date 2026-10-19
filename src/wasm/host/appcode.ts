@@ -191,7 +191,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
 
   /** how much `world` built on demand that the saved build lacks and a build could hold: methods of the platform (its own Program's root), the app's loader and its libraries */
   function fresh(world: World): number {
-    world.noteAheadRuns();
+    world.ahead.noteRuns();
     const d = world.demand, prog = world.prog, libraries = libraryLoaders(prog);
     const buildable = (m: MethodInfo) => { const l = m.dex && prog.loaderOfDex(m.dex); return !!l && (l === prog.boot || l === prog.root || l === prog.base?.root || libraries.has(l)); };
     if (seen.world !== world) seen = { world, methods: 0, classes: 0, infos: 0 };
@@ -206,7 +206,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function rebuild(world: World): Promise<Built> {
     // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
-    const ran = !saved ? [] : world.ranBuildSlots().app.flatMap((s) => { const e = world.slotAt(s); return e?.k === "method" ? [mid(e.m)] : []; });
+    const ran = !saved ? [] : world.tiers.ranBuildSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
     const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
     const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);
@@ -224,7 +224,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   /** keeps the platform modules this launch loaded and the build code it ran for the next one */
   function recordLaunch(world: World): void {
-    const ran = world.ranBuildSlots();
+    const ran = world.tiers.ranBuildSlots();
     if (world.aot) record.add([...world.aot.loaded, ...world.aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
   }
   function watch(world: World): void {

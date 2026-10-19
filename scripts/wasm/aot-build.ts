@@ -1,7 +1,7 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
 //   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
-// Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
+// Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
 // and a page fetches and compiles what a start needs, so no module should be much larger than that.
@@ -14,14 +14,14 @@ import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import { hostNatives } from "../../src/wasm/host/hostnatives.ts";
-import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend.ts";
+import { SERVICES } from "../../src/wasm/host/suspend.ts";
 import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
 import { synthModules } from "../../src/wasm/link/apps.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
-import { AOT_ROOT, buildKey, sourceKey } from "./aot-key.ts";
+import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 import { PLATFORM_PATHS } from "./paths.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
@@ -35,7 +35,7 @@ const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(joi
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
-  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
@@ -127,11 +127,11 @@ const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k
 const empty = new Set<number>();
 const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
-  const methods = blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
+  const methods = blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
   const cx = new Compiler(w);
   w.beginTouch();
-  const built = cx.buildUnit(methods, [], false, true), touch = w.endTouch();
+  const built = cx.buildUnit(methods, { install: "build" }), touch = w.endTouch();
   const bad = check(built.bytes);
   if (bad) {
     const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
@@ -140,7 +140,7 @@ cGroups.forEach((blocks, k) => {
   const { bytes, traces } = built;
   nMethods += methods.length;
   const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
-    absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.blockBase[b] + m.index)) };
+    absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
@@ -151,9 +151,9 @@ const t1 = performance.now();
 // ---- class modules
 const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
-  const names = blocks.map((b) => w.blockClass[b]);
+  const names = blocks.map((b) => w.slots.blockClass[b]);
   w.beginTouch();
-  const bytes = w.classModule(names.map((n) => w.link(n)));
+  const bytes = w.classModules.classModule(names.map((n) => w.link(n)));
   const touch = w.endTouch();
   const header: DHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch) };
   const bad = check(bytes);
@@ -169,13 +169,13 @@ let extras: number, xbytes: Uint8Array, xtouch: Set<string>, synths: string[][],
 do {
   yBytes = 0;
   synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
-  nSynths = w.synths().length;
+  nSynths = w.slots.synths().length;
   const names = extraNames();
   extras = names.length;
   w.beginTouch();
-  xbytes = w.classModule(names.map((n) => w.link(n)));
+  xbytes = w.classModules.classModule(names.map((n) => w.link(n)));
   xtouch = w.endTouch();
-} while (extraNames().length !== extras || w.synths().length !== nSynths);
+} while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
 writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;
@@ -185,6 +185,9 @@ const index = aot.finish(synths);
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
 writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 writeFileSync(join(out, "apps.json"), "[]");
+// what profiled launches add (aot-profile.ts): until they run, no numbering prefix and no slots to warm
+writeFileSync(join(out, "prefix.json"), "null");
+writeFileSync(join(out, "warm.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);

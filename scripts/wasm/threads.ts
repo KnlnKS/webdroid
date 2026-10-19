@@ -1,11 +1,9 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
-// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH.
+// answers a Promise or waits under a JS frame. Needs javac and java on PATH.
 // Run: pnpm wasm threads [case,case,... | substrate]
-import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
@@ -16,21 +14,19 @@ import { rt } from "../../src/jvm/runtime.ts";
 import { perf } from "../../src/perf.ts";
 import { fnRunnable } from "../../src/android/mainloop.ts";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
-import { emitRestored } from "../../src/wasm/link/sched.ts";
+import { emitRestored } from "../../src/wasm/compiler/hostcalls.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { resumeAs } from "../../src/jvm/natives/jentry.ts";
-import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/link/exc.ts";
+import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/compiler/exc.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
-import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^Th.*\.class$/)]);
+import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
+import { checker, fixture } from "./tools.ts";
+
+const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -52,6 +48,8 @@ const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   }
   return pending;
 } } });
+/** host imports only this suite's generated code calls */
+const extra = w.host as Record<string, Function>;
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const ordered: (() => void)[] = [];
@@ -86,10 +84,10 @@ await mountPlatform(ROOT);
 await startProcess(w);
 const callbackEntry = wasmEntry(w);
 
-let bad = 0, checks = 0;
+const suite = checker("threads");
 const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000)): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms).unref())]);
 const show = async (f: () => unknown) => { try { return String(await timed(Promise.resolve(f()))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
-const expect = (what: string, got: unknown, want: unknown) => { checks++; if (String(got) !== String(want)) { bad++; console.log(`MISMATCH ${what}: want ${want}, got ${got}`); } };
+const expect = (what: string, got: unknown, want: unknown) => suite.check(what, String(got), String(want));
 
 // ---------- the Java cases against the JDK
 const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
@@ -139,8 +137,7 @@ for (const [i, [name, arg]] of CASES.entries()) {
   const wasm = await show(() => w.entryAsync("Th", name, "(I)I")(arg));
   if (process.env.J2W_V) console.log("  wasm", wasm);
   const norm = (v: string) => v.startsWith("java ") || v.startsWith("throw ") ? "throw" : v;
-  checks++;
-  if (norm(wasm) !== want) { bad++; console.log(`MISMATCH Th.${name}(${arg}): jdk=${want} wasm=${wasm}${gaps.length > gapsBefore ? " gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; ") : ""}`); }
+  if (!suite.check(`Th.${name}(${arg}) (${wasm})`, norm(wasm), want) && gaps.length > gapsBefore) console.log("  gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; "));
 }
 
 // ---------- the substrate, directly
@@ -151,7 +148,7 @@ if (substrate) {
       ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
-    heap.host.heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
+    (heap.host as Record<string, Function>).heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
     const allocate = heap.hostFn("substrate:heap:" + mode, [], "V", (cx, c) => {
       if (mode === "bridge") c.call(bridge);
       else { cx.emitNewArray(c, "[B", () => c.i32(ALLOC_WINDOW)); c.drop(); }
@@ -173,8 +170,8 @@ if (substrate) {
       const deferred = mode !== "immediate";
       const error = new Error("suspending import failure");
       let fail = 0, prepare = 0, caught = 0;
-      w.host.importThrowPrepare = () => { globals.depth.value = 23; };
-      w.host.importThrow = w.sched.suspending(() => {
+      extra.importThrowPrepare = () => { globals.depth.value = 23; };
+      extra.importThrow = w.sched.suspending(() => {
         if (!deferred) throw error;
         const p = Promise.reject(error);
         if (mode === "interposed") {
@@ -186,7 +183,7 @@ if (substrate) {
         }
         return p;
       });
-      w.host.importThrowCaught = () => {
+      extra.importThrowCaught = () => {
         expect(`${mode} import catch retains strand`, w.sched.current().id, importStrand.id);
         expect(`${mode} import catch retains Thread`, globals.thr.value === importStrand.thread.obj, true);
         expect(`${mode} import catch retains depth`, globals.depth.value, 23);
@@ -208,7 +205,7 @@ if (substrate) {
     }
   } finally {
     importStrand.end();
-    delete w.host.importThrowPrepare; delete w.host.importThrow; delete w.host.importThrowCaught;
+    delete extra.importThrowPrepare; delete extra.importThrow; delete extra.importThrowCaught;
   }
   const lookupStrand = w.sched.strand(w.sched.hostThread()), lookupGlobals = w.rtImports();
   const oldLookup = w.host.classByName, oldWait = w.host.annotationWait, oldSuspending = w.sched.suspending;
@@ -231,8 +228,8 @@ if (substrate) {
     w.host.annotationWait = w.sched.settle();
     w.sched.suspending = oldSuspending;
     w.host.classByName = () => { w.sched.parkNative(Promise.reject(lookupError)); return 0; };
-    w.host.lookupPrepare = () => { lookupGlobals.depth.value = 23; };
-    w.host.lookupCaught = () => {
+    extra.lookupPrepare = () => { lookupGlobals.depth.value = 23; };
+    extra.lookupCaught = () => {
       expect("classForName rejected wait retains strand", w.sched.current().id, lookupStrand.id);
       expect("classForName rejected wait retains Thread", lookupGlobals.thr.value === lookupStrand.thread.obj, true);
       expect("classForName rejected wait retains depth", lookupGlobals.depth.value, 23);
@@ -253,7 +250,7 @@ if (substrate) {
   } finally {
     lookupStrand.end();
     w.host.classByName = oldLookup; w.host.annotationWait = oldWait; w.sched.suspending = oldSuspending;
-    delete w.host.lookupPrepare; delete w.host.lookupCaught;
+    delete extra.lookupPrepare; delete extra.lookupCaught;
   }
   // the cases' common-pool workers stay parked across the probe
   const parked = w.sched.strands.filter(Boolean).length;
@@ -262,7 +259,7 @@ if (substrate) {
     idleBeforeResume = true;
     try { expect("admitted Wasm restores ownership after another completion idles", await show(() => w.entryAsync("Th", "linkAdmissionIdentity", "(I)I")(0)), 1); }
     finally { idleBeforeResume = false; }
-    w.addHostClass(nativeSource.hostSpecs!().find(spec => spec.name === "webdroid/FnRunnable")!);
+    w.addHostClass(nativeSource.hostSpecs().find(spec => spec.name === "webdroid/FnRunnable")!);
     let runnableResult = 0;
     const runnable = fnRunnable(() => Promise.resolve(callbackEntry.scall("Th", "inner", "(I)I", 5)).then(value => { runnableResult = value as number; }));
     expect("host Runnable waits for its conditional Java callback", await show(() => callbackEntry.vcall(runnable, "run", "()V")), "undefined");
@@ -358,5 +355,4 @@ if (substrate) {
   // a plain entry that does not block is unchanged, between strands
   expect("plain entry after strands", await show(() => w.entry("Th", "reentrant", "(I)I")(3)), 3);
 }
-console.log(`${checks - bad}/${checks} threads checks ok; strands ${w.sched.strands.filter(Boolean).length} live, ${w.stats.methods} methods compiled`);
-process.exit(bad ? 1 : 0);
+suite.done(`${suite.checks} checks ok; strands ${w.sched.strands.filter(Boolean).length} live, ${w.stats.methods} methods compiled`);

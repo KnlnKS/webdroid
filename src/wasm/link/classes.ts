@@ -9,30 +9,28 @@
 // host for the slot of a generated function for that class.
 import { OP } from "../compiler/code.ts";
 import { HT, T, refNull } from "../compiler/wasmbin.ts";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts.ts";
-import { ACC, sameRuntimePackage, javaName as stripLoader, type JClass } from "../compiler/program.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_KINDS } from "../compiler/consts.ts";
+import { ACC, descOf, javaName as stripLoader, typeName, type JClass } from "../compiler/program.ts";
+import { PRIMS } from "../../jvm/abi.ts";
+import { canAccess } from "../compiler/linkage.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe.ts";
-import { hostReflect, RInfo } from "./reflect.ts";
-import { hostMembers, MInfo } from "./members.ts";
+import { hostUnsafe, fieldCookie, byFieldId } from "./unsafe.ts";
+import { hostReflect } from "./reflect.ts";
+import { hostMembers } from "./members.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
-import { emitRestored } from "./sched.ts";
+import { emitRestored } from "../compiler/hostcalls.ts";
+import { UInfo, RInfo, MInfo, Info } from "../compiler/info.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
-/** primitive descriptor -> [ART Primitive::Type, log2 size, Java name] */
-const PRIMS: Record<string, [number, number, string]> = { Z: [1, 0, "boolean"], B: [2, 0, "byte"], C: [3, 1, "char"], S: [4, 1, "short"], I: [5, 2, "int"],
-  J: [6, 3, "long"], F: [7, 2, "float"], D: [8, 3, "double"], V: [9, 0, "void"] };
-/** primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C) */
-export const PRIM = Object.fromEntries(Object.entries(PRIMS).map(([k, v]) => ["#" + k, v]));
-const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
+/** primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C): by key,
+ *  [ART Primitive::Type, log2 size, Java name] */
+export const PRIM = Object.fromEntries([...Object.entries(PRIMS).map(([d, p]) => [d, Math.log2(p.size), p.name] as const), ["V", 0, "void"] as const]
+  .map(([d, log, name], i): [string, [number, number, string]] => ["#" + d, [i + 1, log, name]]));
 const isPrim = (n: string) => n in PRIM;
-export const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d.length === 1 ? "#" + d : d;
-/** the descriptor of a class name, typeName's inverse */
-export const descOf = (name: string) => name[0] === "#" ? name[1] : name[0] === "[" ? name : `L${name};`;
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
@@ -41,8 +39,6 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-export const Info = { Flags: 0, Primitive: 1, Super: 2, Component: 3, NIfaces: 4, Iface: 5, Inner: 6, NameLen: 7, NameChar: 8, NFields: 9, FieldNameLen: 10, FieldNameChar: 11, FieldType: 12, FieldFlags: 13, AllocSlot: 14, CloneSlot: 15, ArraySlot: 16, ArrayOf: 17, EnsureSlot: 18, FieldDesc: 19, CanAccess: 20, HasClinit: 21, FieldOffset: 22 } as const;
-export type Info = (typeof Info)[keyof typeof Info];
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -53,15 +49,6 @@ function interfaces(w: World, name: string): string[] {
     m.set(name, l = [...out]);
   }
   return l;
-}
-/** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
- *  the caller's own, in the caller's package, or protected and inherited */
-export function canAccess(caller: string, decl: JClass, flags: number, w: World): boolean {
-  const samePackage = sameRuntimePackage(w.prog, caller, decl.name);
-  if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
-  if (flags & ACC.PUBLIC || caller === decl.name) return true;
-  if (flags & ACC.PRIVATE) return false;
-  return samePackage || !!(flags & ACC.PROTECTED) && w.prog.isSubclass(caller, decl.name);
 }
 /** a `hostInfo` call that made a synthetic function, by names: the class ids it was given are the World's own */
 export type InfoRecord = [kind: number, cls: string, index: number, b: number];
@@ -96,14 +83,11 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldType: return w.idOf(typeName(fields[b].desc));
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
-    case Info.CanAccess: { const decl = w.prog.get(w.nameOf(b >>> 12))!; return +canAccess(w.nameOf(a), decl, decl.fields[b & 0xfff].flags, w); }
+    case Info.CanAccess: { const decl = w.prog.get(w.nameOf(b >>> 12))!; return +canAccess(w.prog, w.nameOf(a), decl, decl.fields[b & 0xfff].flags); }
     case Info.AllocSlot: {
       const ctor = jc?.byKey.get("<init>()V");
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
-      return w.synthSlot("new:" + name, { params: [], ret: "L", body: (cx, c) => {
-        const o = c.newLocal(cx.vtOf("L"));
-        cx.emitEnsure(c, name); cx.emitNew(c, name); c.lset(o).lget(o); cx.callMethod(c, ctor); c.lget(o);
-      } });
+      return w.synthSlot("new:" + name, { params: [], ret: "L", body: (cx, c) => cx.construct(c, ctor) });
     }
     case Info.CloneSlot: {
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT) return 0;
@@ -124,27 +108,14 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
 }
 
 // ---------- the pieces compiled code calls
-export const constClass = (cx: Compiler, c: Code, name: string): void => { c.i32(cx.idOf(name)); cx.callRt(c, "classOf"); };
-/** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
-export function emitStoreCheck(cx: Compiler, c: Code, arr: number, value: () => void): void {
-  // Object[] takes anything; a value of exactly the component class (nearly every store into a typed array) needs no call
-  const comp = c.scratch();
-  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 0).i32(ELEM).arrayGet(cx.tVT).ltee(comp).i32(cx.idOf("java/lang/Object")).raw(OP.i32_ne).if_();
-  value(); c.refIsNull().raw(OP.i32_eqz).if_();
-  value(); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).lget(comp).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
-  c.end().end();
-}
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */
 export function emitRefCopy(cx: Compiler, c: Code): void {
-  const id = (l: number) => { c.lget(l); return vtId(cx, c); };
+  const id = (l: number) => { c.lget(l); return cx.vtId(c); };
   id(0); id(2); c.raw(OP.i32_ne); id(2).i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_ne).raw(OP.i32_and);
   c.if_().lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, "acopy"); c.ret().end();
 }
 
 const isAssignableFrom = (cx: Compiler, c: Code) => cx.callMethod(c, cx.prog.resolve(CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z")!);
-export const classMethod = (cx: Compiler, c: Code, cls: string, name: string, desc: string) => cx.callMethod(c, cx.prog.resolve(cls, name, desc)!);
-/** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
-export const vtId = (cx: Compiler, c: Code) => c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT);
 const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { owner: CLASS, name, desc: d });
 
 // classOf(id): the cached Class object; the table grows to hold the id
@@ -184,7 +155,7 @@ rt("instArr", ["L", "I"], "I", (cx, c) => {
   const s = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_().i32(0).ret().end();
   c.lget(0).refTest(cx.tArr.ref).raw(OP.i32_eqz).if_().i32(0).ret().end();
-  c.lget(0).refAsNonNull(); vtId(cx, c); c.lset(s);
+  c.lget(0).refAsNonNull(); cx.vtId(c); c.lset(s);
   c.lget(s).lget(1).raw(OP.i32_eq).lget(1).i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_eq).raw(OP.i32_or).if_().i32(1).ret().end();
   c.lget(1); cx.callRt(c, "classOf"); c.lget(s); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
 }, true);
@@ -222,7 +193,7 @@ rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
 }, true);
 // aclone(obj): a copy of an array with the same class, null for anything else
 rt("aclone", ["L"], "L", (cx, c) => {
-  for (const k of KINDS) {
+  for (const k of ELEM_KINDS) {
     const t = cx.tArr[k], d = cx.tData[k], a = c.newLocal(refNull(t)), src = c.newLocal(refNull(d)), dst = c.newLocal(refNull(d)), n = c.newLocal(T.i32);
     c.lget(0).refTest(t).if_();
     c.lget(0).refCast(t).lset(a).lget(a).structGet(t, 2).lset(src).lget(src).refAsNonNull().arrayLen().lset(n).lget(n).arrayNewDefault(d).lset(dst);
@@ -234,9 +205,9 @@ rt("aclone", ["L"], "L", (cx, c) => {
 
 // cnfe(name): ClassNotFoundException with the requested name as its message
 rt("cnfe", ["L"], "V", (cx, c) => {
-  const cls = "java/lang/ClassNotFoundException", ctor = cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;)V"), exn = c.newLocal(T.anyref);
+  const ctor = cx.prog.resolve("java/lang/ClassNotFoundException", "<init>", "(Ljava/lang/String;)V");
   if (!ctor) { cx.gap(c, "ClassNotFoundException.<init>(String)"); return; }
-  cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(exn).lget(exn).lget(0); cx.callMethod(c, ctor); c.lget(exn).throw_(cx.tag);
+  cx.construct(c, ctor, () => c.lget(0)); c.throw_(cx.tag);
 });
 
 // ---------- class initialization (the state machine is World.ensureBody)
@@ -283,7 +254,7 @@ rt("declFields", ["I", "I"], "L", (cx, c) => {
 export function emitNameEq(cx: Compiler, c: Code, nameChar: number): void {
   const j = c.newLocal(T.i32);
   c.block().loop().lget(j).lget(3).raw(OP.i32_ge_s).brIf(1);
-  c.lget(2).lget(j); classMethod(cx, c, "java/lang/String", "charAt", "(I)C");
+  c.lget(2).lget(j); cx.callNamed(c, "java/lang/String", "charAt", "(I)C");
   cx.info(c, nameChar, () => c.lget(0), () => c.lget(1).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or));
   c.raw(OP.i32_ne).if_().i32(0).ret().end();
   c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().i32(1);
@@ -304,8 +275,8 @@ export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: num
   c.block().loop().lget(j).lget(n).raw(OP.i32_ge_s).brIf(1);
   c.lget(data).refAsNonNull().lget(j); char(j); c.arraySet(cx.tData.i16).lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end();
   // ART interns the names of classes and members, which Method.equals compares by identity
-  c.lget(w); classMethod(cx, c, "java/lang/StringFactory", "newStringFromChars", "([C)Ljava/lang/String;");
-  classMethod(cx, c, "java/lang/String", "intern", "()Ljava/lang/String;");
+  c.lget(w); cx.callNamed(c, "java/lang/StringFactory", "newStringFromChars", "([C)Ljava/lang/String;");
+  cx.callNamed(c, "java/lang/String", "intern", "()Ljava/lang/String;");
 }
 
 // ART allocates ClassExt lazily in the Class object's extData field, without
@@ -319,7 +290,7 @@ def("java/lang/Class.ensureExtDataPresent()Ldalvik/system/ClassExt;", (cx, c) =>
   c.end().lget(ext);
 });
 
-def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); vtId(cx, c); cx.callRt(c, "classOf"); });
+def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); cx.vtId(c); cx.callRt(c, "classOf"); });
 
 def("java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;Z)Z", (cx, c) => { cx.info(c, Info.HasClinit, () => { c.lget(0); idOfClass(cx, c); }, () => c.lget(1)); });
 def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
@@ -366,8 +337,8 @@ def("java/lang/Class.getInnerClassFlags(I)I", (cx, c) => {
 def("java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const len = c.newLocal(T.i32), ch = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0); classMethod(cx, c, "java/lang/String", "length", "()I"); c.lset(len);
-  c.lget(0).i32(0); classMethod(cx, c, "java/lang/String", "charAt", "(I)C"); c.lset(ch);
+  c.lget(0); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len);
+  c.lget(0).i32(0); cx.callNamed(c, "java/lang/String", "charAt", "(I)C"); c.lset(ch);
   for (const [desc, [, , name]] of Object.entries(PRIM)) {
     c.lget(len).i32(name.length).raw(OP.i32_eq).lget(ch).i32(name.charCodeAt(0)).raw(OP.i32_eq).raw(OP.i32_and).if_().i32(cx.idOf(desc)); cx.callRt(c, "classOf"); c.ret().end();
   }
@@ -410,7 +381,7 @@ def("java/lang/reflect/Array.createMultiArray(Ljava/lang/Class;[I)Ljava/lang/Obj
 def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {
   const s = c.newLocal(T.i32), copy = c.newLocal(cx.vtOf("L"));
   c.lget(0); cx.callRt(c, "aclone"); c.ltee(copy).refIsNull().raw(OP.i32_eqz).if_().lget(copy).ret().end();
-  cx.info(c, Info.CloneSlot, () => { c.lget(0); vtId(cx, c); }); c.ltee(s).raw(OP.i32_eqz).if_(); cx.gap(c, "Object.internalClone: abstract class"); c.end();
+  cx.info(c, Info.CloneSlot, () => { c.lget(0); cx.vtId(c); }); c.ltee(s).raw(OP.i32_eqz).if_(); cx.gap(c, "Object.internalClone: abstract class"); c.end();
   c.lget(0).lget(s).callIndirect(cx.sig(["L"], "L"));
 });
 
@@ -419,7 +390,7 @@ def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Fiel
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
   c.lget(0); idOfClass(cx, c); c.lset(id);
   cx.info(c, Info.NFields, () => c.lget(id)); c.lset(n);
-  c.lget(1); classMethod(cx, c, "java/lang/String", "length", "()I"); c.lset(len);
+  c.lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len);
   c.block().loop().lget(k).lget(n).raw(OP.i32_ge_s).brIf(1);
   cx.info(c, Info.FieldNameLen, () => c.lget(id), () => c.lget(k)); c.lget(len).raw(OP.i32_eq).if_();
   c.lget(id).lget(k).lget(1).lget(len); cx.callRt(c, "nameEq"); c.if_().lget(id).lget(k); cx.callRt(c, "mkField"); c.ret().end().end();

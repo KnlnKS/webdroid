@@ -5,7 +5,7 @@
 // themselves: V8 compiles calls of those differently), and one table and memory for every module of the warming World.
 import { MATH_ARITY } from "../compiler/consts.ts";
 import { uleb } from "../compiler/wasmbin.ts";
-import { COUNT_SLOTS, WARM_AT } from "./exc.ts";
+import { COUNT_SLOTS, WARM_AT } from "../compiler/exc.ts";
 
 const K = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, refNull: 0x63, ref: 0x64 } as const;
 /** a method is called with zeros and nulls */

@@ -11,6 +11,7 @@ import { SUITES } from "../conform/suites.ts";
 import { consume } from "../args.ts";
 import { nodeCommand, run } from "../node.ts";
 import { arrayProviderFailures, classSetupFailures } from "./conform-coverage.ts";
+import { checker } from "./tools.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -67,7 +68,7 @@ function grouped(lines: string[]): string[] {
   return [...groups.values()].slice(0, 40).map((g) => `${g.n > 1 ? `x${g.n} ` : ""}${g.first}`);
 }
 const pins: Pins = existsSync(PINS_PATH) ? JSON.parse(readFileSync(PINS_PATH, "utf8")) : {};
-let failed = false;
+const outcome = checker("conform");
 const totals = { pass: 0, tests: 0, baseline: 0 };
 for (const [suiteName, classMatch] of plan) {
   const { suite, classes, dexDir } = await prepare(suiteName), runner = suite.testng ? "NgRunner" : "ConformRunner";
@@ -112,11 +113,10 @@ for (const [suiteName, classMatch] of plan) {
   console.log(`${suiteName}: ${pass}/${tests}, baseline ${before}; ${regressions.length} regressions, ${rules.reduce((n, r) => n + r.hits, 0)} pinned failures, ` +
     `${stale.length} stale pins (${((performance.now() - started) / 1000).toFixed(0)}s wall, ${seconds.toFixed(0)}s in classes)`);
   console.log(`  executions: ${executions.pass + executions.fail}, ${executions.pass} pass, ${executions.fail} fail, ${executions.skipped} skipped (comparison above uses unique test names)`);
-  for (const r of grouped(regressions)) console.log(`  regressed ${r}`);
-  for (const r of stale) console.log(`  stale pin ${r.class} ${r.test}`);
-  failed ||= regressions.length > 0 || stale.length > 0;
+  for (const r of grouped(regressions)) outcome.fail(`regressed ${r}`);
+  for (const r of stale) outcome.fail(`stale pin ${r.class} ${r.test}`);
   if (update && !classMatch && !testFilter) writeFileSync(baselinePath, JSON.stringify(Object.fromEntries([...results].sort(([a], [b]) => a < b ? -1 : 1).map(([cls, r]) =>
     [cls, [...r].filter(([, o]) => o.ok).map(([name]) => hash(name)).sort()]))) + "\n");
 }
 if (plan.length > 1) console.log(`total: ${totals.pass}/${totals.tests}, baseline ${totals.baseline}`);
-process.exit(failed ? 1 : 0);
+outcome.done("no regressions");

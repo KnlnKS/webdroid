@@ -1,6 +1,6 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // core native code shares (src/native/socket/): a descriptor from either side is the same socket.
-import { awaited, rt, type JObj, getDeclared, setDeclared, driven } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, getDeclared, setDeclared, driven, waits } from "../jvm/runtime.ts";
 import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { jarray, u8 } from "../jvm/abi.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
@@ -106,7 +106,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     sys("dup2", fd);
     return mkFd(fd);
   },
-  [`connect(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => after(endpoint(address, port), (ep) => connect(d, inet(ep))),
+  [`connect(${FD}${INET}I)V`]: waits((d: JObj | null, address: JObj | null, port: number) => after(endpoint(address, port), (ep) => connect(d, inet(ep)))),
   [`connect(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => after(socketAddress("connect", address), (addr) => connect(d, addr)),
   [`bind(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => after(endpoint(address, port), (ep) => bind(d, inet(ep))),
   [`bind(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => after(socketAddress("bind", address), (addr) => bind(d, addr)),
@@ -117,7 +117,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`shutdown(${FD}I)V`]: (d: JObj | null, how: number) => { sys("shutdown", socket("shutdown", d).shutdown(how)); },
   [`getsockname(${FD})${SOCKADDR}`]: (d: JObj | null) => socketAddressOf("getsockname", d, false),
   [`getpeername(${FD})${SOCKADDR}`]: (d: JObj | null) => socketAddressOf("getpeername", d, true),
-  "poll([Landroid/system/StructPollfd;I)I": (fds: JObj[] | null, timeout: number) => {
+  "poll([Landroid/system/StructPollfd;I)I": waits((fds: JObj[] | null, timeout: number) => {
     if (fds === null) return rt.npe();
     const P = "android/system/StructPollfd";
     const entries: PollEntry[] = fds.map((p) => ({ fd: p === null ? -1 : fdInt(getDeclared(p, P, "fd") as JObj | null), events: getDeclared(p, P, "events") as number, revents: 0 }));
@@ -125,7 +125,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       fds.forEach((p, i) => { if (p !== null) setDeclared(p, P, { revents: entries[i].revents }); });
       return n;
     });
-  },
+  }),
   [`getsockoptInt(${FD}II)I`]: (d: JObj | null, level: number, name: number) => intOption("getsockopt", d, level, name),
   [`setsockoptInt(${FD}III)V`]: (d: JObj | null, level: number, name: number, value: number) => setIntOption("setsockopt", d, level, name, value),
   [`getsockoptByte(${FD}II)I`]: (d: JObj | null, level: number, name: number) => intOption("getsockopt", d, level, name) & 255,
@@ -179,7 +179,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     address === null ? sendto(d, buffer, offset, count, null) : after(endpoint(address, port), (ep) => sendto(d, buffer, offset, count, inet(ep))),
   [`sendtoBytes(${FD}Ljava/lang/Object;III${SOCKADDR})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null) =>
     address === null ? sendto(d, buffer, offset, count, null) : after(socketAddress("sendto", address), (to) => sendto(d, buffer, offset, count, to)),
-  [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
+  [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
     const s = socket("recvfrom", d);
     let from: SocketAddress | null = null;
     const take = (r: Received | number) => {
@@ -193,7 +193,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return r instanceof Promise ? r.then((v) => closedUnder("recvfrom", take(v))) : take(r);
     });
     return after(n, (received) => after(fillSocketAddress(source, from), () => received));
-  },
+  }),
   "android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;": (node: string | null, hints: JObj | null) => {
     if (node === null || hints === null) return rt.npe();
     const A = "android/system/StructAddrinfo";
@@ -244,7 +244,7 @@ const readFailure = (e: number) => e === E.CONNRESET || e === E.PIPE
   ? thrown("sun/net/ConnectionResetException", "(Ljava/lang/String;)V", "Connection reset")
   : Promise.reject(e === E.BADF ? socketClosed() : rt.mkThrowable("java/net/SocketException", ERRSTR[e] ?? "Read failed"));
 const readDone = (n: number) => n >= 0 ? n : readFailure(-n);
-rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, (d: JObj | null, b: Int8Array, off: number, len: number, timeout: number) => {
+rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, waits((d: JObj | null, b: Int8Array, off: number, len: number, timeout: number) => {
   const fd = fdInt(d);
   if (fd < 0) throw socketClosed();
   const target = new Uint8Array(b.buffer, b.byteOffset + off, len);
@@ -256,7 +256,7 @@ rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, (d: JOb
     if (!ready) throw rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out");
     return after(readSocket(fd, target, MSG_DONTWAIT), readDone);
   });
-});
+}));
 rt.registerJni("java/net/SocketOutputStream", `socketWrite0(${FD}[BII)V`, (d: JObj | null, b: Int8Array, off: number, len: number) => {
   const fd = fdInt(d);
   if (fd < 0) throw socketClosed();

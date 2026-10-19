@@ -1,12 +1,12 @@
-// The platform build's two routes, for the dev server and for scripts/wasm/boot-probe.ts:
+// The platform build's two routes, for the dev server and for wasm/boot-probe.ts:
 //   /aot/current.json    the build `pnpm aot` made last, if it was made from these sources (a stale one would run code the compiler no longer produces)
 //   /aot/<key>/<file>    a file of that build, which never changes under its key
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brotliCompressSync, constants } from "node:zlib";
-import { fileResponse } from "../serve.ts";
+import { fileResponse } from "./serve.ts";
 import { AOT_ROOT, sourceKey, sourcePaths, type AotManifest } from "./aot-key.ts";
-import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { PLATFORM_PATHS, ROOT } from "./wasm/paths.ts";
 
 let current: { stamp: string; source: string } | undefined;
 /** the key of the sources now, recomputed when a file has changed */

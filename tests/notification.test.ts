@@ -14,7 +14,7 @@ import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { javaOpenFd, javaReadFd, openFd } from "../src/native/fs.ts";
 import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
-import { descriptorTransport } from "../src/native/process-fd.ts";
+import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { bootApp, packageRecord } from "./java.ts";
 
@@ -199,7 +199,7 @@ test("stored notification descriptors share offsets and release on replacement, 
 test("foreground broker retains transferred rights after sender death and rejects partial replacement rights", async () => {
   const original = notificationStore, descriptors = {...descriptorTransport}, foreground = notificationTransport.foreground;
   const store = new NotificationStore(); useNotificationStore(store);
-  const broker = new ProcessBroker(); broker.connect(pkg, pkg + ":fd", 7701);
+  const broker = new ProcessBroker(); broker.register(pkg, pkg + ":fd", 7701);
   const client = callProxy<BrokerCalls>(broker.brokerPort(7701), brokerMethods);
   const path = "/data/data/" + pkg + "/foreground-fd.bin";
   vfs.write(path, Uint8Array.of(7, 8));
@@ -208,8 +208,7 @@ test("foreground broker retains transferred rights after sender death and reject
   let recipient: JObj | undefined;
   try {
     descriptorTransport.calls = () => client.endpoint;
-    descriptorTransport.stageLocal = fd => broker.stageDescriptor(7701, fd);
-    descriptorTransport.unstageLocal = token => broker.unstageDescriptor(7701, token);
+    descriptorTransport.local = broker.descriptorRights(7701);
     notificationTransport.foreground = client.endpoint.notificationForeground;
     grantPermissions(["android.permission.POST_NOTIFICATIONS"]);
     await vcall(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("brokerfd", "Broker FD", 3));
@@ -219,7 +218,7 @@ test("foreground broker retains transferred rights after sender death and reject
     expect(file.references).toBe(2);
     const previous = store.posted[0];
     expect(previous.pid).toBe(7701);
-    const broken = await parcelledWithRights(n);
+    const broken = await parcelledWithRights(n, processRights);
     broken.objects.push([999, {descriptor: -1}]);
     expect(await client.endpoint.notificationForeground({kind:"start",id:100,data:broken}).then(() => "", error => error.message)).toContain("Invalid Binder descriptor right");
     expect(store.posted[0]).toBe(previous);

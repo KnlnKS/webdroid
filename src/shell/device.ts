@@ -9,7 +9,7 @@ import { inflateTree } from "../jvm/natives/jzip.ts";
 import type { Install } from "./install.ts";
 import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jvmruntime.ts";
 import { Arsc } from "../android/arsc.ts";
-import { loadFramework, loadPlatformDex } from "../android/framework.ts";
+import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { zygoteInit } from "../android/delegates.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
@@ -20,8 +20,7 @@ import { appHost, setAppHost } from "../android/apphost.ts";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources.ts";
 import { registerApk, registerSplit } from "../android/assetmanager.ts";
 import { setManifest } from "../android/pm.ts";
-import { getPrefs, createAppData } from "../android/sharedprefs.ts";
-import { filePathTransport } from "./file-path.ts";
+import { getPrefs } from "../android/sharedprefs.ts";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os.ts";
 import { packageUid, packages, usesSdk } from "../android/packages.ts";
 import { onMain, postMain } from "../android/mainloop.ts";
@@ -117,7 +116,7 @@ let zygote: Promise<void> | null = null;
  *  path indexed. It needs no app, so a page starts it while the app downloads. `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
 export function startZygote(host?: Promise<unknown>): Promise<void> {
   return zygote ??= (async () => {
-    await Promise.all([loadFramework(), loadPlatformDex()]);
+    await Promise.all([loadFramework(), mountPlatformJars()]);
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await Promise.all([processBitness, host, tierReady()]);
@@ -175,9 +174,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
+  // a process's files live with the broker, whose prepare creates its app data
   await vfs.prepare(pkg);
-  // a Worker's files live with the broker, whose prepare created its app data
-  if (!filePathTransport.calls) await createAppData(pkg);
 
   mark("dataReady"); onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);

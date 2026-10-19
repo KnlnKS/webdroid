@@ -2,7 +2,7 @@
 // (values, bundles, parcelables, exceptions) runs from AOSP bytecode. AOSP's wire layout (4-byte
 // cells, UTF-16 strings, 24-byte flat objects) so dataSize/dataPosition agree with a device. What
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
-import { JObj, rt, declaredField } from "../jvm/runtime.ts";
+import { JObj, rt, getDeclared } from "../jvm/runtime.ts";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
 import { scall, iof } from "../jvm/natives/jentry.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
@@ -47,9 +47,8 @@ export class OwnedFd {
   get fd(): number { return this.lease ? this.lease.fd : this.number; }
 }
 
-let ptrField = "";
 /** the native parcel behind a Java Parcel */
-export const nativeParcel = (p: JObj): NativeParcel => deref<NativeParcel>((p as unknown as Record<string, bigint>)[ptrField ||= declaredField("android/os/Parcel", "mNativePtr")]);
+export const nativeParcel = (p: JObj): NativeParcel => deref<NativeParcel>(getDeclared<bigint>(p, "android/os/Parcel", "mNativePtr"));
 /** Parcel.obtain() */
 export const newParcel = (): Promise<JObj> => scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
 

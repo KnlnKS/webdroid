@@ -4,8 +4,8 @@ import type { BrokerCalls } from "./processes.ts";
 
 /** The Worker attached its clock and loaded natives before this bootstrap arrived. */
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {
-  let closeDisplay = () => {}, closeIme = () => {}, closeWeb = () => {};
-  const release = () => { closeWeb(); closeIme(); closeDisplay(); guestClockControl.dispose(); };
+  let closeDisplay = () => {}, closeInput = () => {}, closeWeb = () => {};
+  const release = () => { closeWeb(); closeInput(); closeDisplay(); guestClockControl.dispose(); };
   try {
     const { setProcessIdentity, setProcessName } = await import("../android/os.ts");
     setProcessIdentity(data.pid, data.uid);
@@ -22,7 +22,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     const [{ sendMedia }, { useAudioOut }, { useMediaElements }] = await Promise.all([import("./media-port.ts"), import("../android/audio-output.ts"), import("../android/mediaplayer.ts")]);
     const media = sendMedia(data.media);
     useAudioOut(media.audio); useMediaElements(media.createElement);
-    closeIme = await (await import("./ime-port.ts")).serveIme(data.ime);
+    closeInput = await (await import("./input-port.ts")).serveInput(data.input, data.ime);
     const surfaces = (await import("./web-surface-port.ts")).sendWebSurfaces(data.web);
     const {useWebSurfaces} = await import("../android/webframes.ts");
     useWebSurfaces(surfaces.create);
@@ -40,13 +40,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
 
 /** Publish only after package/JVM boot; transfer the peer port to the page's readyPort owner. */
 export async function serveWorkerEndpoint(port: MessagePort): Promise<() => void> {
-  try {
-    const { createProcessEndpoint } = await import("./process-endpoint.ts");
-    const { serveProcess } = await import("./process-port.ts");
-    return serveProcess(port, createProcessEndpoint());
-  } catch (error) {
-    try { port.postMessage({kind:"close"}); } catch { /* startup may have detached the unpublished port */ }
-    port.close();
-    throw error;
-  }
+  const { closePort, serveProcess } = await import("./process-port.ts");
+  try { return serveProcess(port, (await import("./process-endpoint.ts")).createProcessEndpoint()); }
+  catch (error) { closePort(port); throw error; }
 }

@@ -4,7 +4,7 @@
 // holds is owned by it and freed when the NativeRef is collected. TLS stays at the relay (jnet.ts),
 // so the SSL natives are not implemented.
 
-import { rt, declaredField, type JObj } from "../runtime.ts";
+import { rt, declaredField, waits, type JObj } from "../runtime.ts";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles.ts";
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest.ts";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers.ts";
@@ -102,11 +102,11 @@ const liveHash = (ref: JObj): Deferred => {
 const digestUpdate = (ref: JObj, b: Int8Array, off: number, len: number) => { liveHash(ref).update(region(b, off, len)); };
 for (const n of ["EVP_DigestUpdate", "EVP_DigestSignUpdate", "EVP_DigestVerifyUpdate"])
   nc(`${n}(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V`, digestUpdate);
-nc("EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I", (ref: JObj, out: Int8Array, off: number) => {
+nc("EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I", waits((ref: JObj, out: Int8Array, off: number) => {
   const c = ptr<MdCtx>(ref), h = liveHash(ref), dst = region(out, off, h.size);
   c.hash = null; c.md = null;
   return after(h.final(), (d) => { dst.set(d); return d.length; });
-});
+}));
 nc("EVP_MD_CTX_copy_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)I", (dst: JObj, src: JObj) => {
   const d = ptr<MdCtx>(dst), s = ptr<MdCtx>(src);
   d.md = s.md; d.hash = s.hash?.clone() ?? null;
@@ -331,10 +331,10 @@ function aeadBuf(seal: boolean, h: bigint, key: Int8Array, tagLen: number, out: 
     return after(writeRemainingBytes(out,r), () => r.length);
   });
 }
-nc("EVP_AEAD_CTX_seal_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I", (h: bigint, key: Int8Array, tagLen: number, out: JBuffer, nonce: Int8Array, input: JBuffer, aad: Int8Array | null) =>
-  aeadBuf(true, h, key, tagLen, out, nonce, input, aad));
-nc("EVP_AEAD_CTX_open_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I", (h: bigint, key: Int8Array, tagLen: number, out: JBuffer, nonce: Int8Array, input: JBuffer, aad: Int8Array | null) =>
-  aeadBuf(false, h, key, tagLen, out, nonce, input, aad));
+nc("EVP_AEAD_CTX_seal_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I", waits((h: bigint, key: Int8Array, tagLen: number, out: JBuffer, nonce: Int8Array, input: JBuffer, aad: Int8Array | null) =>
+  aeadBuf(true, h, key, tagLen, out, nonce, input, aad)));
+nc("EVP_AEAD_CTX_open_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I", waits((h: bigint, key: Int8Array, tagLen: number, out: JBuffer, nonce: Int8Array, input: JBuffer, aad: Int8Array | null) =>
+  aeadBuf(false, h, key, tagLen, out, nonce, input, aad)));
 nc("chacha20_encrypt_decrypt([BI[BII[B[BI)V", (input: Int8Array, inOff: number, out: Int8Array, outOff: number, len: number, key: Int8Array, nonce: Int8Array, counter: number) => {
   const data = region(input, inOff, len).slice();
   chacha20(u8(key), u8(nonce), counter, data);

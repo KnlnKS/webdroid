@@ -1,24 +1,10 @@
 // Natives the Wasm tier answers itself, under the AOSP bytecode of the classes that declare them (libcore's class loaders).
 import { jarray } from "../../jvm/abi.ts";
 import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath.ts";
-import { readBytes, FD, type IoBuffer } from "../../android/os.ts";
-import { fdInt } from "../../jvm/natives/jio.ts";
-import { fdFile, javaPreadFd, javaSeekFd } from "../../native/fs.ts";
-import { processReadFd } from "../../native/process-fd.ts";
 import { handle } from "../../android/handles.ts";
-import { BytesFile } from "../../shell/lazyfile.ts";
 import { vcall } from "../../jvm/natives/jentry.ts";
 import { awaited, driven, type Gen } from "../../jvm/runtime.ts";
 import type { HostFn } from "../link/hostapi.ts";
-
-/** a read of a file held in memory: production queues every read of a file that has a source behind a Promise, so here it is a positional
- *  read at the file's position, which such a source answers at once */
-function readResident(fd: number, target: Uint8Array): number | Promise<number> {
-  if (!(fdFile(fd)?.source instanceof BytesFile)) return processReadFd(fd, target);
-  const at = javaSeekFd(fd, 0, 1), n = javaPreadFd(fd, target, at);
-  if (typeof n === "number" && n > 0) javaSeekFd(fd, at + n, 0);
-  return n;
-}
 
 /** archives the host adds to the boot class path after the platform's, for the resources of classes it runs on it (conformance suites) */
 export const extraBootEntries: string[] = [];
@@ -44,6 +30,4 @@ export const hostNatives = new Map<string, HostFn>([
   ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true })],
   // the archives of the boot class path, which BootClassLoader looks resources up in
   ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS, ...extraBootEntries], "Ljava/lang/String;")],
-  [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
-    readBytes("read", buffer, offset, count, (target) => readResident(fdInt(d as never), target))],
 ]);
