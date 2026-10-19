@@ -188,8 +188,8 @@ export class ActivityStack {
     this.shownPids = visible;
     const layers = this.layers = [...visible].reverse();
     for (const entry of this.port.entries()) {
-      const surface = entry.canvas;
-      if (!surface) continue;
+      const surface = entry.host?.canvas;
+      if (!surface || entry.dead) continue;
       surface.hidden = !visible.has(entry.pid);
       surface.style.zIndex = String(layers.indexOf(entry.pid) + 1);
       surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";

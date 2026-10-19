@@ -21,7 +21,7 @@ import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceSt
 import { ActivityStack } from "./activitystack.ts";
 import type { FileSource } from "./lazyfile.ts";
 import { vfs } from "./vfs.ts";
-import { device, formatScreen, naturalLandscape } from "./config.ts";
+import { device, naturalLandscape } from "./config.ts";
 import type { Sender } from "../android/server/broadcastqueue.ts";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm.ts";
 import { checkPermission, PermissionStore, type PermissionCalls } from "../android/permissions.ts";
@@ -40,23 +40,17 @@ import type { FilePathCalls } from "./file-path.ts";
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
 import type { WorkerControl } from "./worker-control.ts";
 import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
-import { spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client.ts";
+import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
-import { is64BitPackage } from "../jvm/natives/jvmruntime.ts";
 import { serveFile } from "./remote-file.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
-import { receiveWebSurfaces } from "./web-surface-port.ts";
-import { receiveMedia } from "./media-port.ts";
 import { hostUiMethods, type HostUi } from "./host-ui.ts";
 import { storageEntries } from "./device-storage.ts";
-import { receiveIme } from "./ime-port.ts";
-import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsCalls, SettingsTable } from "./settings.ts";
 import { serveProcess, processProxy, processError, methodsOf } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
-import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -132,7 +126,9 @@ type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
   {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
+export type Entry = { pkg: string; process: string; uid: number; pid: number;
+  /** the page's side of the Worker it runs in; the page's own process has none */
+  host: ProcessHost | null;
   translucent: boolean;
   /** a Worker's display orientation: the screen it started on, then each turn it reports; the
    *  page's process has none, as its display is the page's own */
@@ -145,8 +141,8 @@ export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?
   session: ProcessSession };
 /** what the broker holds for a live process, which its death releases */
 export class ProcessSession {
-  /** what its bootstrap exported: its archives, broker port and the page's ends of its surfaces */
-  bootstrap: (() => void)[] = [];
+  /** what its bootstrap exported: its archives and broker port */
+  readonly bootstrap: (() => void)[] = [];
   /** the endpoint it serves, once it is ready */
   endpoint: (() => void) | null = null;
   /** the command ports it holds */
@@ -161,7 +157,7 @@ export class ProcessSession {
     this.sqlite?.close(); this.settings?.(); this.accounts?.(); this.endpoint?.();
     for (const close of [...this.callers, ...this.bootstrap]) close();
     this.sqlite = this.settings = this.accounts = this.endpoint = null;
-    this.bootstrap = []; this.callers.clear(); this.locations.clear();
+    this.bootstrap.length = 0; this.callers.clear(); this.locations.clear();
   }
 }
 /** p, or late()'s result once `ms` pass first */
@@ -251,8 +247,9 @@ export class ProcessBroker {
   readonly notifications = notificationStore;
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
-  private nextPid = 1001;
   private booted = false;
+  readonly hosts = new ProcessHosts({ bootstrap: pid => this.bootstrap(pid), ready: (pid, port) => this.readyPort(pid, port),
+    failed: (pid, message) => this.fail(pid, message, NOT_CRASHED) });
   readonly fileDescriptors = new FileDescriptors();
   readonly clipboard = new Clipboard(this.fileDescriptors, {
     uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
@@ -290,60 +287,38 @@ export class ProcessBroker {
     await this.broadcast(null, data, targets, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
-  /** `pid`: the page's own process; any other runs in a Worker */
-  connect(pkg: string, process: string, pid?: number): Entry {
-    const key = pkg + "/" + process, previous = this.byName.get(key);
-    if (previous && !previous.dead) return previous;
-    const owner = packages.get(pkg);
-    if (!owner) throw new Error("Package not installed: " + pkg);
+  /** the live process of `pkg` that runs `process`, or a new one in a Worker; `launcher`: the home
+   *  screen starts it */
+  connect(pkg: string, process: string, launcher: Entry["launcher"] = null): Entry {
+    const live = this.byName.get(pkg + "/" + process);
+    if (live && !live.dead) return live;
+    const host = this.hosts.create(installed(pkg));
+    return this.register(pkg, process, host.pid, host, launcher);
+  }
+  /** a new process, which runs in `host`'s Worker, or is handed its endpoint by ready() or readyPort() */
+  register(pkg: string, process: string, pid: number, host: ProcessHost | null = null, launcher: Entry["launcher"] = null): Entry {
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const worker = pid === undefined, wide = !worker || is64BitPackage(packedArchives.get(owner.path)?.names() ?? Object.keys(owner.res.zip));
-    let spare = worker ? this.spare : undefined;
-    if (spare) {
-      this.spare = undefined;
-      if (spare.url !== new URL(this.workerUrl(spare.pid, wide), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
-    }
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, translucent: false, dead: false, launcher: null, watchers: new Set(), pending: new Set(), session: new ProcessSession(),
+    const entry: Entry = { pkg, process, uid: installed(pkg).uid, pid, host, translucent: false, dead: false, launcher, watchers: new Set(), pending: new Set(), session: new ProcessSession(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
+    if (host) entry.landscape = device.width > device.height;
     void entry.ready.catch(() => {});
-    this.entries.set(entry.pid, entry); this.byName.set(key, entry);
-    if (worker) {
-      entry.presented = Promise.withResolvers();
-      entry.landscape = device.width > device.height;
-      const canvas = document.createElement("canvas"); entry.canvas = canvas;
-      canvas.dataset.pid = String(entry.pid); canvas.dataset.pkg = pkg;
-      canvas.hidden = true;
-      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1;touch-action:none";
-      (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
-      try {
-        spare ??= spawnProcessWorker(this.workerUrl(entry.pid, wide), entry.pid);
-        entry.workerDiagnostic = {url:spare.url};
-        entry.worker = startProcessWorker(spare, canvas,
-          () => this.bootstrap(entry.pid), port => this.readyPort(entry.pid, port),
-          message => this.fail(entry.pid, message, NOT_CRASHED), () => entry.ime?.focus());
-      } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
-    }
-    this.counterEvent(entry, "created");
+    this.entries.set(pid, entry); this.byName.set(pkg + "/" + process, entry);
     this.services.processStarted(pkg, process);
+    host?.start();
     return entry;
   }
-  private spare: SpareWorker | undefined;
-  /** a Worker for the next process, loading its runtime and running the 64-bit zygote while the page boots, as the zygote's unspecialized app processes do */
-  prestartWorker(): void { if (!this.spare) { const pid = this.nextPid++; this.spare = spawnProcessWorker(this.workerUrl(pid, true), pid); } }
-  /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
-  private workerUrl(pid: number, wide: boolean): string {
-    const params = new URLSearchParams(location.search);
-    params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
-    if (!wide) params.set("abi", "32");
-    return WORKER_SCRIPTS.process.url + "?" + params;
+  /** the page's own process, which serves its endpoint once its Java has booted */
+  registerSystemServer(): Entry {
+    const entry = this.register("android", "system_server", PROCESS_PID);
+    this.counterEvent(entry, "created");
+    return entry;
   }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
-    const entry = this.connect(pkg, pkg);
+    const entry = this.connect(pkg, pkg, { assetKey });
     // the launch took the spare: the processes the app starts next (Google Play services, providers) start from a new one
-    this.prestartWorker();
-    entry.launcher = { assetKey };
+    this.hosts.prestart();
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid));
     return { pid: entry.pid, shown };
   }
@@ -352,7 +327,8 @@ export class ProcessBroker {
     if (!packages.has(pkg)) throw new Error("Package not installed: " + pkg);
     this.packageSplits.set(pkg, [...sources]);
   }
-  async bootstrap(pid: number): Promise<ProcessBootstrap> {
+  /** what the Worker of `pid` starts from: every package's archive, its broker port and its surfaces */
+  private async bootstrap(pid: number): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     this.watchSettings(pid);
     this.watchAccounts(pid);
@@ -372,25 +348,13 @@ export class ProcessBroker {
       this.entry(pid);
       const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
-      const broker = serveBrokerPort(this, pid), canvas = entry.canvas!;
+      const broker = serveBrokerPort(this, pid);
       ports.push(broker.close);
-      const media = new MessageChannel(), display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel();
-      ports.push(receiveMedia(media.port1));
-      const frames = receiveFrames(display.port1, canvas, () => entry.presented?.resolve());
-      if (this.mirroring) frames.mirror(this.mirroring);
-      ports.push(() => { frames.close(); if (entry.display === frames) entry.display = undefined; });
-      const ime = receiveIme(input.port1, canvas);
-      ports.push(() => { ime.close(); if (entry.ime === ime) entry.ime = undefined; });
-      ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, broker: broker.port,
-        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry),
+        registry: snapshots, launcher: entry.launcher, broker: broker.port, ...entry.host!.surfaces(), storage: storageEntries(entry),
         rotation: this.activities.rotation };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
-      entry.ime = ime; entry.display = frames;
-      // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
-      for (const close of entry.session.bootstrap) close();
-      entry.session.bootstrap = ports;
+      entry.session.bootstrap.push(...ports);
       return data;
     } catch (error) { for (const close of ports) close(); throw error; }
   }
@@ -433,12 +397,9 @@ export class ProcessBroker {
     if (!entry || entry.dead) return;
     this.counterEvent(entry, "retired");
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
-    const error = rt.mkThrowable("android/os/DeadObjectException", message);
-    if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {
-      url:entry.worker?.url ?? entry.workerDiagnostic!.url,error:message,
-      terminal:{cause:message,record:record && copyExitRecord(record),expected:!!record && !death.crashed &&
-        (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED)},
-    };
+    const error = rt.mkThrowable("android/os/DeadObjectException", message), host = entry.host;
+    if (host) host.ended = { error: message, terminal: { cause: message, record: record && copyExitRecord(record), expected: !!record && !death.crashed &&
+      (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED) } };
     entry.dead = true; entry.reject(error);
     entry.session.dispose();
     this.fileDescriptors.close(pid);
@@ -446,22 +407,21 @@ export class ProcessBroker {
     entry.pending.clear();
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
-    entry.presented?.resolve();
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     this.workerReads.delete(pid); this.workerLiveness.delete(pid);
-    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
+    entry.watchers.clear(); host?.close(); this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
   workerAotProfiles() {
     return Promise.all([...this.entries.values()].flatMap(entry => {
-      const worker = entry.worker, url = worker?.url ?? entry.workerDiagnostic?.url;
-      if (!url) return [];
+      const host = entry.host;
+      if (!host) return [];
       return [(async () => {
-        const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
+        const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url:host.url};
         try {
-          if (!worker || entry.dead) throw new Error("Worker has exited");
-          const result = await within(worker.control.aotProfile(), 5000, () => { throw new Error("Worker AOT profile timeout"); });
+          if (entry.dead) throw new Error("Worker has exited");
+          const result = await within(host.control.aotProfile(), 5000, () => { throw new Error("Worker AOT profile timeout"); });
           if (entry.dead || result.dead) throw new Error("Worker has exited");
           if (result.phase !== "ready") throw new Error("Worker is not ready: " + result.phase);
           if (result.identity.pid !== entry.pid || result.identity.pkg !== entry.pkg || result.identity.process !== entry.process)
@@ -475,12 +435,11 @@ export class ProcessBroker {
   }
   workerSnapshots(entries = [...this.entries.values()]): Promise<WorkerDiagnosticRow[]> {
     return Promise.all(entries.flatMap<Promise<WorkerDiagnosticRow>>(entry => {
-      const worker = entry.worker;
-      const url = worker?.url ?? entry.workerDiagnostic?.url;
-      if (!url) return [];
-      const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
-      if (!worker) return [Promise.resolve(this.terminalWorker(entry,identity))];
-      const read = shared(this.workerReads, entry.pid, () => worker.control.snapshot());
+      const host = entry.host;
+      if (!host) return [];
+      const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url:host.url};
+      if (entry.dead) return [Promise.resolve(this.terminalWorker(entry,identity))];
+      const read = shared(this.workerReads, entry.pid, () => host.control.snapshot());
       return [(async () => {
         try {
           const snapshot = await within(read, 5000, () => { throw new Error("Worker diagnostic timeout"); });
@@ -496,51 +455,45 @@ export class ProcessBroker {
     }));
   }
   private terminalWorker(entry: Entry, identity: WorkerIdentity): WorkerDiagnosticRow {
-    const owned = entry.workerDiagnostic?.terminal;
+    const ended = entry.host?.ended, owned = ended?.terminal;
     const terminal = owned && {...owned,record:owned.record && copyExitRecord(owned.record)};
     return terminal?.expected ? {...identity,terminal} :
-      {...identity,terminal,error:entry.workerDiagnostic?.error ?? "Worker owner unavailable"};
+      {...identity,terminal,error:ended?.error ?? "Worker owner unavailable"};
   }
   private workerLiveness = new Map<number, Promise<boolean>>();
   private async workerAlive(entry: Entry, ms: number): Promise<boolean> {
-    const worker = entry.worker;
-    if (!worker || entry.dead) return false;
+    const host = entry.host;
+    if (!host || entry.dead) return false;
     try {
-      return await within(shared(this.workerLiveness, entry.pid, () => worker.control.alive()), ms, () => false) && !entry.dead && entry.worker === worker;
+      return await within(shared(this.workerLiveness, entry.pid, () => host.control.alive()), ms, () => false) && !entry.dead;
     } catch { return false; }
   }
   /** A control reply is not evidence that the Java main queue can dispatch a job. */
   async visibleWorkersAlive(ms: number): Promise<boolean | null> {
-    const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
+    const entries = this.activities.shownEntries().filter(entry => entry.host && !entry.dead);
     return entries.length ? (await Promise.all(entries.map(entry => this.workerAlive(entry, ms)))).every(Boolean) : null;
   }
   async visibleWorkerProcesses(ms: number) {
-    const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
+    const entries = this.activities.shownEntries().filter(entry => entry.host && !entry.dead);
     const [rows, alive] = await Promise.all([this.workerSnapshots(entries), Promise.all(entries.map(entry => this.workerAlive(entry, ms)))]);
     return rows.map((row, i) => ({...row, alive: alive[i]}));
   }
   async foregroundWorkerSnapshot() {
     const entry = this.entries.get(this.activities.foreground);
-    if (!entry?.worker && !entry?.workerDiagnostic) return null;
+    if (!entry?.host) return null;
     return (await this.workerSnapshots([entry]))[0] ?? null;
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
-  starting(): boolean { return [...this.entries.values()].some(e => e.worker && !e.dead && !e.session.endpoint); }
+  starting(): boolean { return [...this.entries.values()].some(e => e.host && !e.dead && !e.session.endpoint); }
   /** settles once the process has presented a frame, or has died */
-  presented(pid: number): Promise<void> { return this.entries.get(pid)?.presented?.promise ?? Promise.resolve(); }
-  foregroundWorker(): Entry["worker"] {
+  presented(pid: number): Promise<void> { return this.entries.get(pid)?.host?.presented.promise ?? Promise.resolve(); }
+  foregroundHost(): ProcessHost | null {
     const entry = this.entries.get(this.activities.foreground);
-    return entry && !entry.dead ? entry.worker : undefined;
-  }
-  private mirroring: Mirror = false;
-  /** whether process Workers send the page a copy of each frame they show, or crops of its regions */
-  mirrorFrames(on: Mirror): void {
-    this.mirroring = on;
-    for (const entry of this.entries.values()) entry.display?.mirror(on);
+    return entry && !entry.dead ? entry.host : null;
   }
   displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
     const layers = this.activities.shownEntries().flatMap(entry => {
-      const canvas = entry.canvas;
+      const canvas = entry.host?.canvas;
       return canvas && !canvas.hidden ? [canvas] : [];
     });
     return [...layers, root];
@@ -709,6 +662,11 @@ export class ProcessBroker {
   }
 }
 
+function installed(pkg: string) {
+  const owner = packages.get(pkg);
+  if (!owner) throw new Error("Package not installed: " + pkg);
+  return owner;
+}
 /** a removed package leaves this process's package manager, with the archive it would register again from */
 export function forgetRemoved(pkg: string): void {
   packages.delete(pkg);

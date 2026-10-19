@@ -321,9 +321,9 @@ describe("pending-intents", () => {
     const broker = new ProcessBroker(), owner = packages.get(PKG)!;
     const foreign = await packageRecord("org.webdroid.test.pendingforeign");
     packages.set(foreign.pkg, foreign);
-    broker.connect(PKG, PKG + ":owner", 7701);
-    broker.connect(PKG, PKG + ":sibling", 7702);
-    broker.connect(foreign.pkg, foreign.pkg, 7703);
+    broker.register(PKG, PKG + ":owner", 7701);
+    broker.register(PKG, PKG + ":sibling", 7702);
+    broker.register(foreign.pkg, foreign.pkg, 7703);
     const clients = [7701,7702,7703].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods,
       [], error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass})));
     const [creator,sibling,other] = clients.map(client => client.endpoint);
@@ -373,7 +373,7 @@ describe("pending-intents", () => {
       const delivery = new Promise(resolve => receiveAlarm = resolve);
       await creator.alarmSchedule(id,2,uptimeMillis()+50,0);
       broker.fail(7701,"normal caller fixture death",NOT_CRASHED);
-      broker.connect(PKG,PKG + ":owner",7704);
+      broker.register(PKG,PKG + ":owner",7704);
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});

@@ -65,7 +65,7 @@ void loadFramework();
 void platformJarBlobs();
 void loadTier().then(() => mark("tierLoaded"), () => {});
 // the next app's process loads its runtime while the page waits for a package to open, as a device's zygote waits forked
-processBroker().prestartWorker();
+processBroker().hosts.prestart();
 
 if (process.env.NODE_ENV !== "production") {
   mountDiagnostics(document.querySelector<HTMLElement>("#side")!);
@@ -159,8 +159,8 @@ async function boot(file: string, local?: File) {
 const local = realmWd();
 // a system window, then the process on top, takes the tap, as they take the browser's own pointer events
 const tap = (x: number, y: number): Promise<void> => {
-  const worker = processBroker().activities.shownEntries().at(-1)?.worker;
-  return worker && !hasTouchWindow(x, y) ? worker.control.tap(x, y) : local.tap(x, y);
+  const host = processBroker().activities.shownEntries().at(-1)?.host;
+  return host && !hasTouchWindow(x, y) ? host.control.tap(x, y) : local.tap(x, y);
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
@@ -180,17 +180,17 @@ const wd = {
   workerAotProfiles: () => processBroker().workerAotProfiles(),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
-  mirrorFrames: (on: Mirror) => processBroker().mirrorFrames(on),
+  mirrorFrames: (on: Mirror) => processBroker().hosts.mirror(on),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
   processStarting: () => processBroker().starting(),
   /** the foreground process's frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
-  foregroundTimeline: async (from: number) => (await processBroker().foregroundWorker()?.control.timeline(from)) ?? [],
+  foregroundTimeline: async (from: number) => (await processBroker().foregroundHost()?.control.timeline(from)) ?? [],
   /** the page's own events since `from` (ms since the epoch), as foregroundTimeline */
   pageTimeline: (from: number) => timelineSince(from - performance.timeOrigin),
   /** where the foreground process's on-demand compiling stands, and what it compiled since such a mark, each method with whether its class was linked by then */
-  foregroundDemandMark: async () => (await processBroker().foregroundWorker()?.control.demandMark()) ?? null,
-  foregroundDemandSince: async (mark: number[]) => (await processBroker().foregroundWorker()?.control.demandSince(mark)) ?? null,
-  foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundWorker()?.control.codeReadiness(save)) ?? null,
+  foregroundDemandMark: async () => (await processBroker().foregroundHost()?.control.demandMark()) ?? null,
+  foregroundDemandSince: async (mark: number[]) => (await processBroker().foregroundHost()?.control.demandSince(mark)) ?? null,
+  foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundHost()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotate(orientation === "landscape"),
@@ -199,7 +199,7 @@ const wd = {
   // the shown processes' windows bottom to top, then the system windows above them
   uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
     const nodes = [];
-    for (const entry of processBroker().activities.shownEntries()) if (entry.worker) nodes.push(...await entry.worker.control.uiTree());
+    for (const entry of processBroker().activities.shownEntries()) if (entry.host) nodes.push(...await entry.host.control.uiTree());
     return [...nodes, ...await local.uiTree()];
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
@@ -223,8 +223,8 @@ const wd = {
     return `tapped ${s} @ ${hit.x},${hit.y}`;
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
-    const worker = processBroker().foregroundWorker();
-    if (worker && !hasTouchWindow(x1, y1)) await worker.control.swipe(x1, y1, x2, y2, ms);
+    const host = processBroker().foregroundHost();
+    if (host && !hasTouchWindow(x1, y1)) await host.control.swipe(x1, y1, x2, y2, ms);
     else await swipe(x1, y1, x2, y2, ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
@@ -252,19 +252,19 @@ const wd = {
   clearData: async (pkg: string) => (await onMain(() => clearUserData(pkg, false, false, null))).done,
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
-    const worker = processBroker().foregroundWorker();
-    if (worker && !hasFocusedWindow()) await worker.control.type(s);
+    const host = processBroker().foregroundHost();
+    if (host && !hasFocusedWindow()) await host.control.type(s);
     else { kbd.value = s; await imeInput(s); }
     return "typed " + s;
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
+  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundHost()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop.ts").then((m) => m.looperDump()),
   threads: wasmThreads,
   redraw,
   testFrame: async () => {
     await local.testFrame();
-    for (const entry of processBroker().activities.shownEntries()) if (entry.worker) await entry.worker.control.testFrame();
+    for (const entry of processBroker().activities.shownEntries()) if (entry.host) await entry.host.control.testFrame();
   },
 };
 (globalThis as any).wd = wd;

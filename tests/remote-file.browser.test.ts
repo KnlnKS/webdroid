@@ -55,8 +55,8 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       const { bootstrapOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return bootstrapOwnership();
     });
-    expect(ownership).toEqual({ eagerReads: 0, superseded: "Archive source closed", failed: true, discarded: ["Archive source closed", "Archive source closed"],
-      imeOwners:{replaced:true,retained:true,deadClosed:true,peerSurvives:true},retained: [10], ended: "Archive source closed", isolated: [10], callersClosed: true,displaysClosed:4 });
+    expect(ownership).toEqual({ eagerReads: 0, failed: "DataCloneError: handoff failed", discarded: ["Archive source closed", "Archive source closed"],
+      imeOwners:{deadClosed:true,peerSurvives:true},retained: [10], ended: "Archive source closed", isolated: [10], callersClosed: true,displaysClosed:3 });
     const clock = await page.evaluate(async () => {
       const { clockBootstrapOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return clockBootstrapOwnership();

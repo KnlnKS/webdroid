@@ -1,6 +1,6 @@
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
 import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
-import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-worker-client.ts";
+import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-host.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.

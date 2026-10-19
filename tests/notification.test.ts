@@ -199,7 +199,7 @@ test("stored notification descriptors share offsets and release on replacement, 
 test("foreground broker retains transferred rights after sender death and rejects partial replacement rights", async () => {
   const original = notificationStore, descriptors = {...descriptorTransport}, foreground = notificationTransport.foreground;
   const store = new NotificationStore(); useNotificationStore(store);
-  const broker = new ProcessBroker(); broker.connect(pkg, pkg + ":fd", 7701);
+  const broker = new ProcessBroker(); broker.register(pkg, pkg + ":fd", 7701);
   const client = callProxy<BrokerCalls>(broker.brokerPort(7701), brokerMethods);
   const path = "/data/data/" + pkg + "/foreground-fd.bin";
   vfs.write(path, Uint8Array.of(7, 8));

@@ -26,7 +26,7 @@ export function bootSystemOwner(): Promise<void> {
     await Promise.all([loadFramework(), loadPlatformDex()]);
     // app processes start meanwhile: their calls to system services wait for its endpoint
     const broker = processBroker();
-    broker.connect("android", "system_server", PROCESS_PID);
+    broker.registerSystemServer();
     await loadAppCode();
     hostWindowManager();
     setSystemDisplayTarget();

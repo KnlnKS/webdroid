@@ -7,12 +7,16 @@ import { attachWorkerBootstrap, serveWorkerEndpoint } from "../../../src/shell/w
 import { exitProcess } from "../../../src/process-exit.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
 import { existingAotProfile } from "../../../src/shell/aot-profile.ts";
-import type { BrokerCalls, ProcessBootstrap } from "../../../src/shell/processes.ts";
+import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
+import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
+import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
+import type { BrokerCalls } from "../../../src/shell/processes.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 
 const post = (message: unknown, transfer: Transferable[] = []) => self.postMessage(message, { transfer });
 const brokerCalls = ({ broker, methods }: BrokerInit) => callProxy<BrokerCalls>(broker, methods).endpoint;
+type Start = Extract<ProcessWorkerMessage, { kind: "start" }>;
 function originatingHostFailure(): never { throw new TypeError("undefined.hasTransform"); }
 
 /** each role's handler of the messages the page posts it */
@@ -96,11 +100,13 @@ const roles: Record<string, () => (data: never) => void> = {
     };
   },
   /** a process booted from the page's bootstrap, on a guest clock the page drives when it sends one */
-  clock: () => (data: { clock: Parameters<typeof attachGuestClockPort>[0] } | { finish: number } | ProcessBootstrap) => {
+  clock: () => (data: { clock: ClockBootstrap } | { finish: number } | Start) => {
     if ("clock" in data) attachGuestClockPort(data.clock);
     else if ("finish" in data) exitProcess({ code: data.finish });
     else void clockProcess(data);
   },
+  /** a process Worker that posts back the bootstrap it is started with */
+  echo: () => ({ bootstrap }: Start) => post({ bootstrap }, bootstrapTransfers(bootstrap)),
   /** a process whose first owner's DOWN holds its input queue until the page releases it */
   pointer: () => ({ port }: { port: MessagePort }) => {
     let release = () => {};
@@ -203,15 +209,14 @@ const roles: Record<string, () => (data: never) => void> = {
   },
 };
 
-async function clockProcess(data: ProcessBootstrap) {
+async function clockProcess({ bootstrap: data, endpoint }: Start) {
   const broker = await attachWorkerBootstrap(data);
   const { appCrashed } = await import("../../../src/android/server/appexitinfo.ts");
   const fatal = { exceptionClassName: "fixture.FatalException", exceptionMessage: "fatal fixture", throwFileName: "Fixture.java", throwLineNumber: 17,
     stackTrace: "fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)" };
   // The broker keeps the report it was sent, not this realm's object.
   if (data.pid === 8201) { appCrashed(fatal, false); fatal.exceptionMessage = "changed local report"; }
-  const endpoint = new MessageChannel();
-  await serveWorkerEndpoint(endpoint.port1);
+  await serveWorkerEndpoint(endpoint);
   const { PROCESS_PID, PROCESS_UID, PROCESS_NAME } = await import("../../../src/android/os.ts");
   const source = data.registry.find(record => record.pkg === data.pkg)!.source;
   if (!("port" in source)) throw new Error("expected lazy archive port");
@@ -221,8 +226,9 @@ async function clockProcess(data: ProcessBootstrap) {
     queueMicrotask(() => setGuestTimeout(() => post({ tick: "nested", now: uptimeMillis() }), 0));
     setGuestTimeout(() => post({ tick: "dead" }), 5);
   }, 10);
-  post({ ready: true, display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [PROCESS_PID, PROCESS_UID, PROCESS_NAME],
-    commands: { cookies: await broker.cookieHas(), clipboard: await broker.clipboardGet() }, endpoint: endpoint.port2 }, [endpoint.port2]);
+  const commands = { cookies: await broker.cookieHas(), clipboard: await broker.clipboardGet() };
+  post({ kind: "ready" } satisfies ProcessWorkerStatus);
+  post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [PROCESS_PID, PROCESS_UID, PROCESS_NAME], commands } });
 }
 
 const handle = roles[new URLSearchParams(location.search).get("role")!]!();

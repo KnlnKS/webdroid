@@ -1,17 +1,17 @@
-import { processBroker, brokerMethods, type BrokerCalls, type ProcessBroker } from "../../../src/shell/processes.ts";
+import { processBroker, brokerMethods, type BrokerCalls, type ProcessBroker, type ProcessBootstrap } from "../../../src/shell/processes.ts";
 import { packages, PackageRecord } from "../../../src/android/packages.ts";
 import { Resources } from "../../../src/android/res.ts";
 import { TV } from "../../../src/android/axml.ts";
 import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
-import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
 import { callProxy } from "../../../src/shell/process-port.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { receiveIme } from "../../../src/shell/ime-port.ts";
-import { workerControlMethods } from "../../../src/shell/process-worker-client.ts";
+import { workerControlMethods, type ProcessHost } from "../../../src/shell/process-host.ts";
+import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 
@@ -39,6 +39,16 @@ function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: Clien
   }));
   return { ask, worker };
 }
+/** a process of `pkg` in a fixture Worker playing `role`, which the broker starts as it starts its own */
+function hosted(broker: ProcessBroker, pkg: string, process: string, pid: number, role: string) {
+  const worker = fixtureWorker(role), host = broker.hosts.adopt({ pid, url: fixtureUrl(role), worker, release() {} }, pkg);
+  return { worker, entry: broker.register(pkg, process, pid, host) };
+}
+/** what `worker` first posts under `key` */
+const posted = <T>(worker: Worker, key: string) => new Promise<T>((resolve, reject) => {
+  worker.addEventListener("message", ({ data }) => { if (data && typeof data === "object" && key in data) resolve(data[key]); });
+  worker.addEventListener("error", event => reject(new Error(event.message)));
+});
 
 export async function bootstrapOwnership() {
   const displays: Promise<void>[] = [];
@@ -55,57 +65,54 @@ export async function bootstrapOwnership() {
     } });
   }
   const broker = processBroker(), callers: ReturnType<typeof callProxy<BrokerCalls>>[] = [];
-  const watchClock = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
+  const watchClock = (data: ProcessBootstrap) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
     if (!data.display) throw new Error("expected display capability");
     displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
     sendFrames(data.display, data.screen);
   };
-  const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001),ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);
-  // each bootstrap hands its process the canvas it presents to
-  const bootstrap = (owner: typeof ownerOne) => { owner.canvas=document.createElement("canvas"); return broker.bootstrap(owner.pid); };
-  const file = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
+  // each process's Worker posts back the bootstrap it is started with
+  const start = (pkg: string, process: string, pid: number) => {
+    const { worker, entry } = hosted(broker, pkg, process, pid, "echo");
+    return { entry, data: posted<ProcessBootstrap>(worker, "bootstrap") };
+  };
+  const file = (data: ProcessBootstrap) => {
     watchClock(data);
     const source = data.registry[0].source;
     if (!("port" in source)) throw new Error("expected lazy archive port");
     return new RemoteFile(source);
   };
-  const first = file(await bootstrap(ownerOne)), other = file(await bootstrap(ownerTwo));
-  const firstIme=ownerOne.ime!,otherIme=ownerTwo.ime!;
+  const one = start("test.archive.one", "test.archive.one", 7001), two = start("test.archive.two", "test.archive.two", 7002);
+  const first = file(await one.data), other = file(await two.data);
+  const firstIme = one.entry.host!.ime!, otherIme = two.entry.host!.ime!;
   const eagerReads = reads;
-  const replacement = file(await bootstrap(ownerOne));
-  const replacementIme=ownerOne.ime!;
-  const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
-  const superseded = await first.read(0, 1).catch(error => error.message);
-  // A failed handoff must dispose its new exports while retaining the published owner set.
+  // A failed handoff disposes the exports it made, and its process dies.
   const clone = globalThis.structuredClone;
   const unpublished: RemoteFile[] = [];
-  let failed = false;
+  let failed: unknown;
   try {
     globalThis.structuredClone = value => {
-      const data = value as Awaited<ReturnType<typeof broker.bootstrap>>;
+      const data = value as ProcessBootstrap;
       watchClock(data);
       for (const record of data.registry) if ("port" in record.source) unpublished.push(new RemoteFile(record.source));
       throw new DOMException("handoff failed", "DataCloneError");
     };
-    await bootstrap(ownerOne);
-  } catch (error) { failed = error instanceof DOMException && error.name === "DataCloneError"; }
-  finally { globalThis.structuredClone = clone; }
+    failed = await start("test.archive.one", "test.archive.one:handoff", 7003).entry.ready.then(() => null, error => error.msg);
+  } finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
-  const retained = Array.from(await replacement.read(0, 1));
-  const imeRetained=ownerOne.ime===replacementIme && replacementIme.input.isConnected;
-  const pending = replacement.read(7, 1).catch(error => error.message);
+  const retained = Array.from(await first.read(0, 1));
+  const pending = first.read(7, 1).catch(error => error.message);
   await waiting;
   broker.fail(7001, "fixture process exit", NOT_CRASHED);
   const ended = await pending;
-  const imeDeadClosed=!replacementIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
+  const imeDeadClosed=!firstIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all(displays);
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
+  return { imeOwners:{deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
 }
 
 export async function endpointOwnership() {
@@ -114,7 +121,7 @@ export async function endpointOwnership() {
   const entries = names.map((pkg, i) => {
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
     packages.set(pkg, new PackageRecord(root, new Resources(null, {}), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
-    return broker.connect(pkg, pkg, 8001 + i);
+    return broker.register(pkg, pkg, 8001 + i);
   });
   let entered!: () => void, killed = false, removed = false;
   const waiting = new Promise<void>(resolve => entered = resolve);
@@ -160,7 +167,7 @@ export async function endpointOwnership() {
     .catch(error => error.msg);
   await waiting;
   const lifeRead = await other.service({...request,intent:{bytes:Uint8Array.of(47),objects:[]}});
-  const victim=broker.connect(names[1],names[1]+":signal",8003);
+  const victim=broker.register(names[1],names[1]+":signal",8003);
   broker.ready(victim.pid,{...endpoint(victim.pid),kill:()=>broker.fail(victim.pid,"fixture signal delivered",NOT_CRASHED)});
   await other.service({...request,intent:{bytes:Uint8Array.of(49),objects:[]}});
   const signalOwn = !broker.alive(8003), signalForeign = broker.alive(8001);
@@ -192,7 +199,7 @@ export async function cookieOwnership() {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
     packages.set(name, new PackageRecord(root, new Resources(null, {}), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
   }
-  for (const [i, name] of [pkg, pkg, isolated].entries()) broker.connect(name, name + ":" + i, 8101 + i);
+  for (const [i, name] of [pkg, pkg, isolated].entries()) broker.register(name, name + ":" + i, 8101 + i);
   const peers = [8102, 8103].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods));
   const jar = await broker.cookies(pkg), otherJar = await broker.cookies(isolated);
   jar.remove(); otherJar.remove();
@@ -241,20 +248,15 @@ export async function clockBootstrapOwnership() {
   const path = `/data/app/${pkg}/base.apk`;
   packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
-  const entry = broker.connect(pkg, pkg, pid);entry.canvas=document.createElement("canvas");
-  const clock = createGuestClockPort(pid);
+  const clock = createGuestClockPort(pid), start = guestClockControl.now(), wall = wallMillis();
+  const { worker, entry } = hosted(broker, pkg, pkg, pid, "clock"), workers = [worker];
+  // the clock comes before the start the broker sends once it has the bootstrap
+  worker.postMessage({clock:clock.data}, [clock.data.port!]);
   broker.watch(pid, clock.close);
-  const data = await broker.bootstrap(pid), start = guestClockControl.now(), wall = wallMillis();
-  const url = fixtureUrl("clock"), worker = new Worker(url, {type:"module"}), workers=[worker];
-  entry.workerDiagnostic={url};
   const ticks: {tick:string;now:number;wall?:number}[] = [];
+  worker.addEventListener("message", ({data}) => { if (data.tick) ticks.push(data); });
   try {
-    const ready = await new Promise<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
-      worker.onerror = event => reject(new Error(event.message));
-      worker.onmessage = ({data}) => { if(data.ready) {broker.readyPort(pid,data.endpoint);resolve(data);} else ticks.push(data); };
-      worker.postMessage({clock:clock.data}, [clock.data.port!]);
-      worker.postMessage(data, bootstrapTransfers(data));
-    });
+    const ready = await posted<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>(worker, "report");
     let brokerTimer = 0;
     setSystemTimeout(()=>brokerTimer++,20);
     const incoming = await entry.ready;
@@ -264,7 +266,7 @@ export async function clockBootstrapOwnership() {
     const previous = {pid:8199,uid:15000,process:pkg,pkg,reason:4,status:0,importance:400,timestamp:wall,
       description:"crash",state:null,tombstone:null,dialog:false};
     recordRemoteExit(previous);
-    const survivor = broker.connect(pkg,pkg+":reader",8202);
+    const survivor = broker.register(pkg,pkg+":reader",8202);
     const reader = callProxy<BrokerCalls>(broker.brokerPort(survivor.pid),brokerMethods);
     const died = new Promise<void>(resolve=>broker.watch(pid,()=>resolve()));
     incoming.kill(9,{reason:4,description:"crash"});
@@ -282,14 +284,8 @@ export async function clockBootstrapOwnership() {
     crash.copied=(await broker.workerSnapshots()).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
     const terminals=[];
     for(const [i,status] of [0,7,null].entries()) {
-      const nextPid=8203+i,next=broker.connect(pkg,pkg+":"+nextPid,nextPid);
-      next.workerDiagnostic={url};next.canvas=document.createElement("canvas");
-      const nextData=await broker.bootstrap(nextPid),peer=new Worker(url,{type:"module"});workers.push(peer);
-      await new Promise<void>((resolve,reject)=>{
-        peer.onerror=event=>reject(new Error(event.message));
-        peer.onmessage=({data})=>{if(data.ready){broker.readyPort(nextPid,data.endpoint);resolve();}};
-        peer.postMessage(nextData,bootstrapTransfers(nextData));
-      });
+      const nextPid=8203+i,{worker:peer}=hosted(broker,pkg,pkg+":"+nextPid,nextPid,"clock");workers.push(peer);
+      await posted(peer,"report");
       const ended=new Promise<void>(resolve=>broker.watch(nextPid,()=>resolve()));
       if(status===null)await broker.forceStop(pkg);else peer.postMessage({finish:status});
       await ended;
@@ -317,7 +313,7 @@ export async function clipboardOwnership() {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
   }
-  const entries = [pkg,pkg,foreign].map((name,i)=>broker.connect(name,name+":"+i,8301+i));
+  const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.activities.setForeground(8301);
   let peerChanges = 0, peerChanged!: () => void;
   broker.ready(8302,stubEndpoint({clipboardChanged:async()=>{peerChanges++;peerChanged?.();}})); broker.ready(8303,stubEndpoint());
@@ -441,7 +437,7 @@ export async function storedClipboardRights() {
   const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
   vfs.mkdir("/data/data");
-  for(const pid of pids)broker.connect(pkg,pkg+":"+pid,pid);
+  for(const pid of pids)broker.register(pkg,pkg+":"+pid,pid);
   broker.activities.setForeground(8402);
   const reader=callProxy<BrokerCalls>(broker.brokerPort(8402),brokerMethods),{ask,worker}=brokerWorker(broker,8401);
   const imported:number[]=[];
@@ -517,9 +513,10 @@ export async function workerDiagnosticOwnership() {
   const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
   try {
     for(const [i,mode] of ['ready','reject','hang','packages','queueHang'].entries()) {
-      const entry=broker.connect(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
-      const client=callProxy(channel.port1,workerControlMethods);clients.push(client);
-      Object.assign(entry,{worker:{url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close}});
+      const entry=broker.register(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
+      const client=callProxy<WorkerControl>(channel.port1,workerControlMethods);clients.push(client);
+      // a host whose control the fixture Worker serves as `mode` says
+      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
     const first=await broker.workerSnapshots(),second=await broker.workerSnapshots();
@@ -531,7 +528,7 @@ export async function workerDiagnosticOwnership() {
     broker.activities.setForeground(8401);
     const live=await broker.visibleWorkersAlive(1000);
     const count=await new Promise<{hungCalls:number;aliveCalls:number}>(resolve=>{worker.onmessage=({data})=>resolve(data);worker.postMessage({count:true});});
-    const hanging=broker.connect(pkg,pkg+":2",8403);
+    const hanging=broker.entry(8403);
     const held=broker.workerSnapshots([hanging]);
     const publish=callProxy<BrokerCalls>(broker.brokerPort(hanging.pid),brokerMethods);clients.push(publish);
     const died=new Promise<void>(resolve=>broker.watch(hanging.pid,()=>resolve()));
@@ -564,7 +561,7 @@ export async function locationOwnership() {
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,17000+i,async()=>[]));
   }
   broker.permissions.grant(pkg,["android.permission.ACCESS_FINE_LOCATION"]);
-  const entry = broker.connect(pkg,pkg,8501), denied = broker.connect(other,other,8502), peer = broker.connect(pkg,pkg+":peer",8503);
+  const entry = broker.register(pkg,pkg,8501), denied = broker.register(other,other,8502), peer = broker.register(pkg,pkg+":peer",8503);
   const oldGeo = Object.getOwnPropertyDescriptor(navigator,"geolocation");
   let watched: PositionCallback | undefined, cleared = 0;
   Object.defineProperty(navigator,"geolocation",{configurable:true,value:{
