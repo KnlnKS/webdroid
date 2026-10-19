@@ -13,7 +13,7 @@ import { systemResource } from "./resnative.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseBinderParcel, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseRights, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
@@ -21,6 +21,7 @@ import type { DataClear } from "../shell/packagedata.ts";
 import { packages } from "./packages.ts";
 import { FileDescriptors } from "../shell/file-descriptors.ts";
 import { StoredParcel } from "../shell/stored-parcel.ts";
+import { processRights } from "../native/process-fd.ts";
 import { PROCESS_PID } from "./os.ts";
 import { appHost } from "./apphost.ts";
 import { coverTop, foreground } from "./server/atm.ts";
@@ -61,20 +62,18 @@ export class NotificationStore {
   async capture(notification: JObj): Promise<StoredParcel> {
     this.kernel.ensureReceiver(PROCESS_PID);
     const kernel = this.kernel;
-    const data = await parcelledWithRights(notification, { stage: fd => kernel.stageLocal(PROCESS_PID, fd), discard: token => kernel.discard(PROCESS_PID, token, true) });
+    const data = await parcelledWithRights(notification, kernel.rights(PROCESS_PID));
     return StoredParcel.retain(kernel, PROCESS_PID, data);
   }
   readStored(data: StoredParcel): Promise<JObj> {
     const scope = parcelScope();
     if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    return data.readLocal(PROCESS_PID, (data, take, discard) => unparcelledScoped(N, data, scope, take, discard));
+    return data.readLocal(PROCESS_PID, (data, rights) => unparcelledScoped(N, data, scope, rights));
   }
   decode(data: ParcelData): JObj | Promise<JObj> {
     const scope = parcelScope();
     if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    const kernel = this.kernel;
-    return unparcelledScoped(N, data, scope, token => kernel.takeLocal(PROCESS_PID, token),
-      async data => { await Promise.all(data.objects.map(([,o]) => o && "descriptor" in o ? kernel.discard(PROCESS_PID, o.descriptor, false) : undefined)); });
+    return unparcelledScoped(N, data, scope, this.kernel.rights(PROCESS_PID));
   }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
@@ -613,9 +612,9 @@ export function receiveForegroundNotification(pkg: string, caller: Caller, reque
 }
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
   if (notificationTransport.foreground) {
-    const data = notification && (yield* awaited(parcelledWithRights(notification)));
+    const data = notification && (yield* awaited(parcelledWithRights(notification, processRights)));
     try { yield* awaited(notificationTransport.foreground({ kind: "start", id, data })); }
-    finally { if (data) yield* awaited(releaseBinderParcel(data)); }
+    finally { if (data) yield* awaited(releaseRights(data, processRights, true)); }
     return;
   }
   yield* awaited(withParcelScope(() => rt.drive(startForeground(appHost?.pkg, id, notification))));

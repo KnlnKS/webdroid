@@ -1,5 +1,5 @@
-import type { ParcelData } from "../android/binder.ts";
-import type { FileDescriptors, RetainedDescriptor } from "./file-descriptors.ts";
+import { releaseRights, type ParcelData } from "../android/binder.ts";
+import type { DescriptorRights, FileDescriptors, RetainedDescriptor } from "./file-descriptors.ts";
 
 export class StoredParcelError extends Error {}
 
@@ -28,7 +28,7 @@ export class StoredParcel {
       }
       return stored;
     } catch (error) {await stored.close();throw error;}
-    finally {await Promise.all(data.objects.map(([,object])=>object && "descriptor" in object ? kernel.discard(pid,object.descriptor,true) : undefined));}
+    finally {await releaseRights(data,kernel.rights(pid),true);}
   }
   async replay(pid:number): Promise<ParcelData> {
     if (this.closed) throw new Error("Stored Parcel has been released");
@@ -46,16 +46,15 @@ export class StoredParcel {
       if (this.closed) throw new Error("Stored Parcel has been released");
       return data;
     } catch (error) {
-      await Promise.all(data.objects.map(([,object])=>object && "descriptor" in object ? this.kernel.discard(pid,object.descriptor,false) : undefined));
+      await releaseRights(data,this.kernel.rights(pid),false);
       throw error;
     }
   }
-  async readLocal<T>(pid: number, read: (data: ParcelData, take: (token: number) => number,
-    discard: (data: ParcelData) => Promise<void>) => T | Promise<T>): Promise<T> {
-    const data = await this.replay(pid);
-    const discard = async (value: ParcelData) => { await Promise.all(value.objects.map(([,o]) => o && "descriptor" in o ? this.kernel.discard(pid, o.descriptor, false) : undefined)); };
-    try { return await read(data, token => this.kernel.takeLocal(pid, token), discard); }
-    finally { await discard(data); }
+  /** `read` of a replay to `pid`, whose rights it may take; the rest are discarded */
+  async readLocal<T>(pid: number, read: (data: ParcelData, rights: DescriptorRights) => T | Promise<T>): Promise<T> {
+    const data = await this.replay(pid), rights = this.kernel.rights(pid);
+    try { return await read(data, rights); }
+    finally { await releaseRights(data, rights, false); }
   }
   close(): Promise<void> {
     if(this.closing)return this.closing;

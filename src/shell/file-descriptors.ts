@@ -36,6 +36,13 @@ type Operations = {
 export type DescriptorKind = keyof Operations;
 export type DescriptorRequest<K extends DescriptorKind = DescriptorKind> = { kind: K } & Operations[K][0];
 export type DescriptorReply<K extends DescriptorKind> = number | Operations[K][1];
+/** What a realm does with a Parcel's descriptor rights: stages one of its descriptors for another process, takes a right
+ *  sent to it as a descriptor of its own, and discards one it staged (`staged`) or received and will not take. */
+export type DescriptorRights = {
+  stage(fd: number): number | Promise<number> | null;
+  take(token: number): number | Promise<number>;
+  discard(token: number, staged: boolean): Promise<number>;
+};
 export type DescriptorCalls = { fileDescriptor<K extends DescriptorKind>(request: DescriptorRequest<K>): Promise<DescriptorReply<K>> };
 type Handlers = { [K in DescriptorKind]: (session: Session, request: DescriptorRequest<K>) => DescriptorReply<K> | Promise<DescriptorReply<K>> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -260,6 +267,10 @@ export class FileDescriptors {
     });
   }
 
+  /** process `pid`'s rights, which this kernel holds for it */
+  rights(pid: number): DescriptorRights {
+    return { stage: fd => this.stageLocal(pid, fd), take: token => this.takeLocal(pid, token), discard: (token, staged) => this.discard(pid, token, staged) };
+  }
   stageLocal(pid: number, fd: number): number {
     const session = this.sessions.get(pid);
     return !session || session.dead ? -E.BADF : this.stageIn(session, fd);

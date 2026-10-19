@@ -24,7 +24,7 @@ import { BytesFile } from "../src/shell/lazyfile.ts";
 import { scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
-import { descriptorTransport, isRemoteFd, stageBinderFd, takeBinderFd } from "../src/native/process-fd.ts";
+import { descriptorTransport, isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
 import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path.ts";
 
@@ -148,7 +148,7 @@ describe("file-descriptor", () => {
       descriptorTransport.calls=()=>proxies[0].endpoint;
       const fd=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",path,2,0);
       const pfd=await newObj("android/os/ParcelFileDescriptor","(Ljava/io/FileDescriptor;)V",fd);
-      try {stored=await StoredParcel.retain(kernel,1001,await parcelledWithRights(pfd));}
+      try {stored=await StoredParcel.retain(kernel,1001,await parcelledWithRights(pfd,processRights));}
       finally {await vcall(pfd,"close","()V");}
       kernel.close(1001);descriptorTransport.calls=()=>proxies[1].endpoint;
       for(let i=0;i<2;i++) {
@@ -188,7 +188,7 @@ describe("file-descriptor", () => {
       const lazy = await copyParcelable("android/os/Bundle", bundle, scope);
       const decoded = await vcall(lazy, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
       duplicate = await vcall(decoded, "dup", "()Landroid/os/ParcelFileDescriptor;");
-      const rights = { stage: (n: number) => kernel.stageLocal(1001, n), discard: (n: number) => kernel.discard(1001, n, true) };
+      const rights = kernel.rights(1001);
       stored = await StoredParcel.retain(kernel, 1001, await parcelledWithRights(lazy, rights));
       scope.close(); scope.close();
       expect(file.references).toBe(2);
@@ -197,7 +197,7 @@ describe("file-descriptor", () => {
       expect(file.references).toBe(1);
       const recipientScope = new FdScope();
       try {
-        const replayed = await stored.readLocal(1002, (data, take, discard) => unparcelledScoped("android/os/Bundle", data, recipientScope, take, discard));
+        const replayed = await stored.readLocal(1002, (data, rights) => unparcelledScoped("android/os/Bundle", data, recipientScope, rights));
         recipient = await vcall(replayed, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
         recipientScope.transfer();
       } finally { recipientScope.close(); }
@@ -227,15 +227,14 @@ describe("file-descriptor", () => {
       const bundle = await newObj("android/os/Bundle", "()V");
       for (const key of ["a", "b"]) await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", key, pfd);
       let stages = 0;
-      const rights = { stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.stageLocal(1001, n); },
-        discard: (n: number) => kernel.discard(1001, n, true) };
+      const rights = { ...kernel.rights(1001), stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.stageLocal(1001, n); } };
       await expect(Promise.resolve(parcelledWithRights(bundle, rights))).rejects.toThrow("stage failure");
       expect(file.references).toBe(1);
       const data = await parcelledWithRights(bundle, { ...rights, stage: (n: number) => kernel.stageLocal(1001, n) });
       data.bytes[4] = 0; // Corrupt Bundle's magic so its real CREATOR rejects the imported rights.
       stored = await StoredParcel.retain(kernel, 1001, data);
       let failed = false;
-      try { await stored.readLocal(1002, (data, take, discard) => unparcelledScoped("android/os/Bundle", data, scope, take, discard)); }
+      try { await stored.readLocal(1002, (data, rights) => unparcelledScoped("android/os/Bundle", data, scope, rights)); }
       catch { failed = true; }
       expect(failed).toBe(true);
       scope.close(); await stored.close();
@@ -762,13 +761,13 @@ describe("shared-memory", () => {
       await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4096,0x12345678);
       const fd = fdInt(await vcall(first,"getFileDescriptor","()Ljava/io/FileDescriptor;"));
       // the descriptor leaves with the stores its mappings hold
-      const staged = await stageBinderFd(fd), held = new Uint8Array(4);
+      const staged = await processRights.stage(fd), held = new Uint8Array(4);
       expect(await javaPreadFd(fd,held,4096)).toBe(4);
       expect(new DataView(held.buffer).getInt32(0)).toBe(0x12345678);
       const token = await owner.receive(1001,staged!,1002);
       descriptorTransport.calls = () => ports[1].proxy.endpoint;
       descriptorTransport.importCalls = descriptorTransport.calls;
-      second = await newObj("android/os/SharedMemory","(Ljava/io/FileDescriptor;)V",await mkFd(await takeBinderFd(token)));
+      second = await newObj("android/os/SharedMemory","(Ljava/io/FileDescriptor;)V",await mkFd(await processRights.take(token)));
       expect(await vcall(second,"getSize","()I")).toBe(8192);
       expect(await vcall(second,"setProtect","(I)Z",1)).toBe(1);
       expect(await vcall(first,"setProtect","(I)Z",3)).toBe(0);

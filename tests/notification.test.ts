@@ -14,7 +14,7 @@ import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { javaOpenFd, javaReadFd, openFd } from "../src/native/fs.ts";
 import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
-import { descriptorTransport } from "../src/native/process-fd.ts";
+import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { bootApp, packageRecord } from "./java.ts";
 
@@ -219,7 +219,7 @@ test("foreground broker retains transferred rights after sender death and reject
     expect(file.references).toBe(2);
     const previous = store.posted[0];
     expect(previous.pid).toBe(7701);
-    const broken = await parcelledWithRights(n);
+    const broken = await parcelledWithRights(n, processRights);
     broken.objects.push([999, {descriptor: -1}]);
     expect(await client.endpoint.notificationForeground({kind:"start",id:100,data:broken}).then(() => "", error => error.message)).toContain("Invalid Binder descriptor right");
     expect(store.posted[0]).toBe(previous);

@@ -4,7 +4,7 @@ import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaF
 import type { FileSource } from "../shell/lazyfile.ts";
 import { isMutablePath, type AttributeChange } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
-import type { DescriptorCalls } from "../shell/file-descriptors.ts";
+import type { DescriptorCalls, DescriptorRights } from "../shell/file-descriptors.ts";
 import { settleRemoteMaps } from "./mappings.ts";
 
 /** Bound lazily after the process is registered; the page's kernel never installs this. */
@@ -86,32 +86,32 @@ function installRemote(token: number, calls: () => DescriptorCalls, path: string
   };
   return installFile(file,cloexec);
 }
-export function stageBinderFd(fd: number): number | Promise<number> | null {
-  const remote = openFd(fd)?.remote;
-  if (!remote) return descriptorTransport.stageLocal?.(fd) ?? null;
-  // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
-  const settled = settleRemoteMaps(), stage = () => remote.calls().fileDescriptor({kind:"stage",fd:remote.token});
-  return settled ? settled.then(stage) : stage();
-}
-export function unstageBinderFd(token: number): Promise<number> {
-  const calls = descriptorTransport.calls ?? descriptorTransport.importCalls;
-  return descriptorTransport.unstageLocal?.(token) ?? (calls ? calls().fileDescriptor({kind:"unstage",fd:token}) : Promise.resolve(-E.BADF));
-}
-export function discardBinderFd(token: number): Promise<number> {
-  const calls = descriptorTransport.importCalls ?? descriptorTransport.calls;
-  return descriptorTransport.discardLocal?.(token) ?? (calls ? calls().fileDescriptor({kind:"close",fd:token}) : Promise.resolve(-E.BADF));
-}
-export async function takeBinderFd(token: number): Promise<number> {
-  if (descriptorTransport.takeLocal) return descriptorTransport.takeLocal(token);
-  const calls = descriptorTransport.importCalls ?? descriptorTransport.calls;
-  if (!calls) return -E.BADF;
-  const stat = await calls().fileDescriptor({kind:"stat",fd:token});
-  if (typeof stat === "number") return stat;
-  const flags = await calls().fileDescriptor({kind:"fcntl",fd:token,command:3,arg:0});
-  if (flags < 0) { await calls().fileDescriptor({kind:"close",fd:token}); return flags; }
-  const taken = await calls().fileDescriptor({kind:"take",fd:token});
-  return taken < 0 ? taken : installRemote(token,calls,stat.path ?? "",flags,(stat.mode & S_IFMT) === S_IFDIR,true);
-}
+const kernelCalls = () => descriptorTransport.calls ?? descriptorTransport.importCalls;
+/** this realm's descriptor rights, which the page's kernel holds: the page's own locally, a process's through requests */
+export const processRights: DescriptorRights = {
+  stage(fd) {
+    const remote = openFd(fd)?.remote;
+    if (!remote) return descriptorTransport.stageLocal?.(fd) ?? null;
+    // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
+    const settled = settleRemoteMaps(), stage = () => remote.calls().fileDescriptor({kind:"stage",fd:remote.token});
+    return settled ? settled.then(stage) : stage();
+  },
+  async take(token) {
+    if (descriptorTransport.takeLocal) return descriptorTransport.takeLocal(token);
+    const calls = kernelCalls();
+    if (!calls) return -E.BADF;
+    const stat = await calls().fileDescriptor({kind:"stat",fd:token});
+    if (typeof stat === "number") return stat;
+    const flags = await calls().fileDescriptor({kind:"fcntl",fd:token,command:3,arg:0});
+    if (flags < 0) { await calls().fileDescriptor({kind:"close",fd:token}); return flags; }
+    const taken = await calls().fileDescriptor({kind:"take",fd:token});
+    return taken < 0 ? taken : installRemote(token,calls,stat.path ?? "",flags,(stat.mode & S_IFMT) === S_IFDIR,true);
+  },
+  discard(token, staged) {
+    const local = staged ? descriptorTransport.unstageLocal : descriptorTransport.discardLocal, calls = kernelCalls();
+    return local?.(token) ?? (calls ? calls().fileDescriptor({kind:staged ? "unstage" : "close",fd:token}) : Promise.resolve(-E.BADF));
+  },
+};
 
 export function processOpenFd(path: string, flags: number): number | Promise<number> {
   const normalized = vfs.norm(path), calls = isMutablePath(normalized) ? descriptorTransport.calls : undefined;
