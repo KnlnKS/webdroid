@@ -63,7 +63,10 @@ export type EncVal = number | bigint | string | boolean | null | EncVal[] |
   { kind: "annotation"; anno: EncAnnotation };
 
 /** method_handle_item: what the handle points at, and which field/method id */
-interface MethodHandleRef { type: number; idx: number; }
+/** method_handle_item.method_handle_type: the field accessors (idx a field_id), then the invoke kinds (idx a method_id) */
+export const MethodHandleType = { StaticPut: 0, StaticGet: 1, InstancePut: 2, InstanceGet: 3, InvokeStatic: 4, InvokeInstance: 5, InvokeConstructor: 6, InvokeDirect: 7, InvokeInterface: 8 } as const;
+export type MethodHandleType = (typeof MethodHandleType)[keyof typeof MethodHandleType];
+interface MethodHandleRef { type: MethodHandleType; idx: number; }
 const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 class Reader {
@@ -554,7 +557,7 @@ export class DexFile {
     const sec = this.section(0x0008);
     if (!sec || i >= sec.size) throw new Error(`method_handle ${i} out of range in ${this.name}`);
     const off = sec.off + i * 8;
-    return { type: this.view.getUint16(off, true), idx: this.view.getUint16(off + 4, true) };
+    return { type: this.view.getUint16(off, true) as MethodHandleType, idx: this.view.getUint16(off + 4, true) };
   }
 
   /** call_site_item: [bootstrap handle, name, method type, ...bootstrap args] */

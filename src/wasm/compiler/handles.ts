@@ -10,7 +10,7 @@ import type { Compiler } from "./j2w.ts";
 import type { MC } from "./method.ts";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "./linkage.ts";
-import type { DexFile } from "../../jvm/dex.ts";
+import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
 import { mid } from "./ids.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
 
@@ -64,24 +64,24 @@ export function resolveHandleMember(prog: Program, referrer: MethodInfo, index: 
   const dex = referrer.dex, h = dex.methodHandle(index);
   const access = (owner: string, flags: number, member: string): HandleFailure | undefined =>
     canAccess(prog, referrer.cls, prog.require(owner), flags) ? undefined : { errorClass: "java/lang/IllegalAccessError", message: `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}` };
-  if (h.type <= 3) {
-    const r = resolveFieldRef(prog, dex, h.idx, h.type <= 1, referrer.cls);
+  if (h.type <= MethodHandleType.InstanceGet) {
+    const r = resolveFieldRef(prog, dex, h.idx, h.type <= MethodHandleType.StaticGet, referrer.cls);
     if (failed(r)) return r;
     const f = r.f, denied = access(f.owner, f.flags, f.name);
     if (denied) return denied;
-    if ((h.type === 0 || h.type === 2) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
+    if ((h.type === MethodHandleType.StaticPut || h.type === MethodHandleType.InstancePut) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
     return { field: f };
   }
   const mr = dex.method(h.idx), cls = dex.typeName(mr.cls), desc = dex.methodDesc(h.idx);
-  let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
-  if (h.type === 7) {
+  let invoke = h.type === MethodHandleType.InvokeStatic ? "invoke-static" : h.type === MethodHandleType.InvokeInterface ? "invoke-interface" : h.type === MethodHandleType.InvokeConstructor ? "invoke-direct" : "invoke-virtual";
+  if (h.type === MethodHandleType.InvokeDirect) {
     const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
     if (failed(target)) return target;
     invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
   }
   const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
   if (failed(m)) return m;
-  if (h.type === 6 && (m.cls !== cls || !m.isCtor)) return { thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` };
+  if (h.type === MethodHandleType.InvokeConstructor && (m.cls !== cls || !m.isCtor)) return { thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` };
   const denied = access(m.cls, m.flags, m.name);
   if (denied) return denied;
   if (m.name === "<clinit>") return { errorClass: "java/lang/ClassFormatError", message: "Method handles can't target class initializer method" };
@@ -95,14 +95,14 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
   if ("errorClass" in member) { cx.throwNew(c, member.errorClass, member.message); return false; }
   let kind: number, art: bigint, ret: string, params: string[];
   if ("field" in member) {
-    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, f = member.field;
+    const stat = h.type <= MethodHandleType.StaticGet, put = h.type === MethodHandleType.StaticPut || h.type === MethodHandleType.InstancePut, f = member.field;
     kind = stat ? put ? K.SPUT : K.SGET : put ? K.IPUT : K.IGET;
     art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
   } else {
     const { method: m, cls, invoke } = member, desc = dex.methodDesc(h.idx);
     const sig = parseMethodDesc(desc);
-    if (h.type === 6) {
+    if (h.type === MethodHandleType.InvokeConstructor) {
       if (!emitType(cx, c, sig.ret, sig.params, false)) return false;
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
       c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");

@@ -6,7 +6,7 @@ import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
 import { chain, handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
-import type { DexFile, EncVal } from "../../jvm/dex.ts";
+import { MethodHandleType, type DexFile, type EncVal } from "../../jvm/dex.ts";
 import type { Compiler } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
@@ -93,15 +93,15 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
   const fail = (message: string): never => { throw w.exception(w.makeThrowable("java/lang/BootstrapMethodError", message)); };
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
-  if (values[0].type !== 0x16 || first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
+  if (first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
   return chain(resolveHandleReference(w, referrer, first.idx, parent), () => {
     const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w.prog, referrer, first.idx);
-    const target = "method" in member && h.type === 4 ? member.method : undefined;
+    const target = "method" in member && h.type === MethodHandleType.InvokeStatic ? member.method : undefined;
     const invalid = target ? bootstrapFailure(w.prog, target, values) : undefined;
     const emit = () => handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
       const handle = c.newLocal(T.anyref), args = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref);
       if (!emitHandleValue(cx, c, referrer, first.idx)) return; c.lset(handle);
-      if (h.type !== 4) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
+      if (h.type !== MethodHandleType.InvokeStatic) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
       if (invalid) { cx.throwNew(c, invalid.cls, invalid.message); return; }
       if (target && target.flags & 0x80) {
         c.lget(handle); cx.constClass(c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);

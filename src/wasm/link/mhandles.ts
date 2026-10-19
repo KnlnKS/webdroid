@@ -19,6 +19,7 @@ import { emitVarHandleAccess } from "../compiler/poly.ts";
 import { invokeVarHandleView } from "./vhandleviews.ts";
 import { invokeCustom } from "./callsites.ts";
 import { RInfo } from "../compiler/info.ts";
+import { MethodHandleType } from "../../jvm/dex.ts";
 
 /** what a handle invocation answers: the boxed result, or the Promise of it when the call waited */
 type Answer = object | null | Promise<object | null>;
@@ -34,14 +35,14 @@ export function methodTypeSignatureTypes(referrer: MethodInfo, index: number): S
 
 export function handleMemberOwner(referrer: MethodInfo, index: number): string {
   const dex = referrer.dex, handle = dex.methodHandle(index);
-  const member = handle.type <= 3 ? dex.field(handle.idx) : dex.method(handle.idx);
+  const member = handle.type <= MethodHandleType.InstanceGet ? dex.field(handle.idx) : dex.method(handle.idx);
   return dex.rawTypeName(member.cls);
 }
 
 /** Invoke after member/access checks. Field type resolution belongs to its declaration's loader. */
 export function handleSignatureTypes(referrer: MethodInfo, index: number, field?: FieldInfo): SignatureType[] {
   const dex = referrer.dex, handle = dex.methodHandle(index);
-  if (handle.type <= 3) {
+  if (handle.type <= MethodHandleType.InstanceGet) {
     if (!field) throw new Error("Resolved field required for method handle signature");
     return [{ owner: field.owner, descriptor: javaName(field.desc) }];
   }
