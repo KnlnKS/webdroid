@@ -168,8 +168,8 @@ const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastD
 const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 /** whether this process's windows are on screen, which its display loop follows */
-export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
-function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; processPresentation.changed(visible); }
+export const processPresentation = { visible: true };
+function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
 function remoteError(error: unknown): never {
   const failure = processFailure(error);
   if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);

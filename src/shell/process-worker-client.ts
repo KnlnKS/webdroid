@@ -8,6 +8,15 @@ import { serveAot, serveCompileWorkers, serveWarm } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
 import { displayRate } from "./display-rate.ts";
 import { device } from "./config.ts";
+import type { ClockBootstrap } from "./clock-port.ts";
+
+/** what the page posts a process Worker (process-worker.ts): its prestart once spawned, the display's
+ *  rate once measured, and its one start */
+export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: MessagePort }
+  | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
+/** what a process Worker posts the page once its start succeeds or fails */
+export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
+const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */
@@ -19,9 +28,10 @@ export function spawnProcessWorker(url: string, pid: number): SpareWorker {
   serveWarm(warm.port1);
   const spare: SpareWorker = { pid, url: new URL(url, location.href).href, worker, release: () => { clock.close(); aot.port1.close(); compile.port1.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
-  worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2, compile: compile.port2, warm: warm.port2 }, [aot.port2, jars.port2, compile.port2, warm.port2, ...clock.data.port ? [clock.data.port] : []]);
+  post(worker, { kind: "prestart", clock: clock.data, aot: aot.port2, jars: jars.port2, compile: compile.port2, warm: warm.port2 },
+    [aot.port2, jars.port2, compile.port2, warm.port2, ...clock.data.port ? [clock.data.port] : []]);
   // the zygote it runs reads the display's rate
-  void displayRate().then(() => worker.postMessage({ rate: device.refreshRate }));
+  void displayRate().then(() => post(worker, { kind: "rate", rate: device.refreshRate }));
   return spare;
 }
 
@@ -48,14 +58,14 @@ export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement
   window.addEventListener("pagehide", pagehide, {once:true});
   worker.onerror = event => { if (!closed) failed(event.message); };
   worker.onmessageerror = () => { if (!closed) failed("Invalid process Worker message"); };
-  worker.onmessage = ({data}: MessageEvent<{kind:string;error?:ProcessFailure;logs?:string[]}>) => {
+  worker.onmessage = ({data}: MessageEvent<ProcessWorkerStatus>) => {
     if (closed) return;
     if (data.kind === "ready" && !published) {
       try { ready(endpoint.port2); published = true; }
       catch (error) { failed(String(error)); }
     } else if (data.kind === "failed") {
-      for (const log of data.logs ?? []) console.error("[process Worker]", log);
-      failed(data.error?.message ?? "Process Worker startup failed");
+      for (const log of data.logs) console.error("[process Worker]", log);
+      failed(data.error.message ?? "Process Worker startup failed");
     }
   };
   // launch() assigns the launcher after connect(), before this bootstrap reads the entry.
@@ -66,7 +76,7 @@ export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement
       const data = await bootstrap();
       if (closed) { closeProcessBootstrap(data); return; }
       try {
-        worker.postMessage({bootstrap:data,endpoint:endpoint.port1,control:control.port2},
+        post(worker, {kind:"start",bootstrap:data,endpoint:endpoint.port1,control:control.port2},
           [...bootstrapTransfers(data),endpoint.port1,control.port2]);
         transferred = true;
       } catch (error) { closeProcessBootstrap(data); throw error; }

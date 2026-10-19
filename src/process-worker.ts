@@ -1,11 +1,10 @@
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
-import { closeProcessBootstrap, type ProcessBootstrap } from "./shell/process-bootstrap-data.ts";
-import type { ClockBootstrap } from "./shell/clock-port.ts";
+import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
+import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-worker-client.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
 // Its URL carries the screen and native pins before any JVM import runs.
-type Start = { bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 const logs: string[] = [];
 const logError = console.error.bind(console);
 console.error = (...args: unknown[]) => { logError(...args); logs.push(args.map(String).join(" ")); };
@@ -14,11 +13,11 @@ globalThis.addEventListener("unhandledrejection", event => {
   logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
 });
 
-type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: MessagePort };
+const post = (status: ProcessWorkerStatus) => globalThis.postMessage(status);
 let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
-async function prepare({ clock, aot, jars, compile, warm }: Prestart) {
+async function prepare({ clock, aot, jars, compile, warm }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
@@ -37,18 +36,14 @@ async function prepare({ clock, aot, jars, compile, warm }: Prestart) {
 }
 
 let prepared: ReturnType<typeof prepare> | undefined, started = false;
-globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: number }>) => {
-  if ("clock" in data) { prepared ??= prepare(data); void prepared.catch(() => {}); return; }
-  if ("rate" in data) { rateKnown(data.rate); return; }
-  if (started || !prepared) {
-    closeProcessBootstrap(data.bootstrap); data.endpoint.close(); data.control.close();
-    return;
-  }
-  started = true;
+globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
+  if (data.kind === "prestart") { prepared ??= prepare(data); void prepared.catch(() => {}); return; }
+  if (data.kind === "rate") { rateKnown(data.rate); return; }
   let phase = "attaching", closeControl: (() => void) | undefined;
   try {
+    if (!prepared || started) throw new Error("Process Worker started without its prestart, or twice");
+    started = true;
     const p = await prepared;
-    p.config.device.refreshRate = data.bootstrap.refreshRate;
     await attachWorkerBootstrap(data.bootstrap);
     const { processPresentation } = await import("./shell/process-endpoint.ts");
     processPresentation.visible = false;
@@ -64,14 +59,14 @@ globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: 
       data.bootstrap.launcher ? null : data.bootstrap.process);
     await serveWorkerEndpoint(data.endpoint);
     phase = "ready";
-    globalThis.postMessage({ kind: "ready", pid: data.bootstrap.pid });
+    post({ kind: "ready" });
   } catch (error) {
     phase = "failed";
     console.error("[process Worker]", data.bootstrap.pid, error);
     data.endpoint.close();
     closeProcessBootstrap(data.bootstrap);
     const { processFailure } = await import("./shell/process-port.ts");
-    globalThis.postMessage({ kind: "failed", pid: data.bootstrap.pid, error: processFailure(error), logs: logs.slice() });
+    post({ kind: "failed", error: processFailure(error), logs: logs.slice() });
     // Keep copied diagnostic state available until the page's explicit teardown.
     if (!closeControl) data.control.close();
   }

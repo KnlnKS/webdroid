@@ -411,7 +411,7 @@ export class ProcessBroker {
       ports.push(() => { ime.close(); if (entry.ime === ime) entry.ime = undefined; });
       ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker.port,
+        registry: snapshots, launcher: entry.launcher, broker: broker.port,
         display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry),
         rotation: this.activities.rotation };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
