@@ -9,7 +9,6 @@ import { T } from "./wasmbin.ts";
 // A resolved symbolic site's operation: no method IR or copied callees, its inputs are the caller's bits, and virtual calls go through the receiver's current slot.
 class SymbolicMC extends MC {
   private inputs: SymbolicSite[4];
-  override symbolic = false;
   outputLocal = -1;
   constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; }
   override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {

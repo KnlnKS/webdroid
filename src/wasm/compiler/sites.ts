@@ -43,7 +43,7 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   const cx = mc.cx;
-  if (!mc.symbolic || cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
+  if (cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
   const entry = cx.symbolicImports.get(`${mc.m.cls}:${mc.m.index}:${ins.pc}`);
   if (!entry) return false;
   // the operands declareSymbolicSites gave the site, which its linked operation takes

@@ -73,7 +73,6 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
 
 export class MC {
   cx: Compiler; m: MethodInfo;
-  symbolic = true;
   code: Code; prepared!: PreparedMethod; flow!: Flow; typing!: Typing; item; dex;
   /** wasm local of each web */
   webLocal: number[] = [];
@@ -371,7 +370,7 @@ export class MC {
   }
   /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
   private deferredSite(ins: Ins): boolean {
-    return this.symbolic && this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
+    return this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
   }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   callee(ins: Ins): MethodInfo | null | "dynamic" {
