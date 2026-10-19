@@ -41,7 +41,7 @@ import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
 import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path.ts";
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
 import type { WorkerControl } from "./worker-control.ts";
-import { StoredParcel, StoredParcelError } from "./stored-parcel.ts";
+import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
 import { spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
@@ -104,7 +104,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
+export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & ClipboardCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -120,10 +120,6 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
   activityPresentation: (translucent: boolean) => Promise<void>;
   displayOrientation: (landscape: boolean) => Promise<void>;
-  clipboardSet: (data: ParcelData | null) => Promise<void>;
-  clipboardGet: () => Promise<ParcelData | null>;
-  clipboardHas: () => Promise<boolean>;
-  clipboardListen: (active: boolean) => Promise<void>;
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
   service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
@@ -235,14 +231,15 @@ export class ProcessBroker {
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
-  private clipboard: StoredParcel | null = null;
-  private clipboardQueue:Promise<void>=Promise.resolve();
-  private clipboardWatchers = new Set<number>();
   private booted = false;
   private bootstrapPorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
   private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
   private fileDescriptors = new FileDescriptors();
+  private clipboard = new Clipboard(this.fileDescriptors, {
+    uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
+    changed: pid => { if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.clipboardChanged())); },
+  });
   private accountClients = new Map<number, () => void>();
   private settingsClients = new Map<number, () => void>();
   private callerPorts = new Map<number, Set<() => void>>();
@@ -278,38 +275,6 @@ export class ProcessBroker {
     await this.broadcast(null, data, targets, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
-  private clipboardWork<T>(run:()=>Promise<T>):Promise<T> {
-    const pending=this.clipboardQueue.then(run);
-    this.clipboardQueue=pending.then(()=>{},()=>{});return pending;
-  }
-  setClipboard(pid: number, data: ParcelData | null): Promise<void> {
-    const copied=data && structuredClone(data);
-    return this.clipboardWork(async()=>{
-      this.entry(pid);
-      let next:StoredParcel|null=null;
-      try {next=copied && await StoredParcel.retain(this.fileDescriptors,pid,copied);}
-      catch(error) {
-        if(error instanceof StoredParcelError)throw rt.mkThrowable("android/os/BadParcelableException",error.message);
-        throw error;
-      }
-      try {this.entry(pid);} catch (error) {await next?.close();throw error;}
-      const previous=this.clipboard;this.clipboard=next;await previous?.close();
-      for (const watcher of this.clipboardWatchers) {
-        if (this.alive(watcher)) unawaited(this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
-      }
-    });
-  }
-  hasClipboard(pid:number):boolean {
-    const caller = this.entry(pid), foreground = this.entries.get(this.activities.foreground);
-    return caller.uid === foreground?.uid && this.clipboard !== null;
-  }
-  getClipboard(pid: number): Promise<ParcelData | null> {
-    return this.clipboardWork(async()=>this.hasClipboard(pid) ? this.clipboard!.replay(pid) : null);
-  }
-  watchClipboard(pid: number, active: boolean): void {
-    this.entry(pid);
-    if (active) this.clipboardWatchers.add(pid); else this.clipboardWatchers.delete(pid);
-  }
   /** `pid`: the page's own process; any other runs in a Worker */
   connect(pkg: string, process: string, pid?: number): Entry {
     const key = pkg + "/" + process, previous = this.byName.get(key);
@@ -615,10 +580,7 @@ export class ProcessBroker {
       activityFinish: async (id, code, data) => { this.entry(pid); unawaited(this.activities.finish(pid,id,code,data)); },
       activityPresentation: async translucent => { this.entry(pid); this.activities.presentation(pid,translucent); },
       displayOrientation: async landscape => this.activities.orientation(pid,landscape),
-      clipboardSet: async data => this.setClipboard(pid, data),
-      clipboardGet: async () => this.getClipboard(pid),
-      clipboardHas: async () => this.clipboardWork(async()=>this.hasClipboard(pid)),
-      clipboardListen: async active => this.watchClipboard(pid, active),
+      ...this.clipboard.calls(pid),
       settingsGet: async (table, name) => { this.watchSettings(pid); return this.settings.get(table, name); },
       settingsEntries: async table => { this.watchSettings(pid); return this.settings.entries(table); },
       settingsPut: async (table, name, value) => { this.watchSettings(pid); return this.settings.put(table, name, value); },
@@ -704,7 +666,7 @@ export class ProcessBroker {
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     for (const key of this.locationTokens.keys()) if (key.startsWith(pid + ":")) this.locationTokens.delete(key);
     this.workerReads.delete(pid); this.workerLiveness.delete(pid);
-    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
+    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
