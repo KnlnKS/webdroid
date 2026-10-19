@@ -3,17 +3,17 @@
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
 import { mem, wrote, anchor } from "./mem.ts";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
 import { E } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, utf8, logLine, scanSink, kernelResult } from "./libc.ts";
+import { fail, utf8, logLine, scanSink, kernelResult, readTs } from "./libc.ts";
 import { format, scan } from "./printf.ts";
 import { KLAYOUT } from "./syscall.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdWrite, fdDup2, javaCloseFd, javaLseekFd, javaPreadFd,
-  javaTruncateFd, javaAllocateFd, statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath,
-  removeProcess as removePath, mknodProcess, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
+  javaTruncateFd, javaAllocateFd, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess, javaChangeFdAttributes,
+  modifiedTime, AT_FDCWD, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
@@ -33,7 +33,7 @@ function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number | Pr
     if (count === 100) return fail(cpu,E.EXIST);
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
-    const pending = dir ? mkdirPath(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    const pending = dir ? mkdirProcess(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
     return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
   };
   return attempt(0);
@@ -224,16 +224,17 @@ export function stdioInit(): void {
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
     lseek64: (cpu, a) => complete(kernelResult(cpu,javaLseekFd(a.i(),Number(a.l()),a.i())),n => BigInt(n)),
-    stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
+    stat: (cpu, a) => statProcess(cpu, a.str(), a.p()),
+    access: (cpu, a) => faccessatPath(cpu, AT_FDCWD, a.str(), a.i(), 0),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
-    chmod: () => 0, chown: () => 0,
-    unlink: (cpu, a) => removePath(cpu, a.str(), false),
+    chmod: (cpu, a) => changeProcess(cpu, a.str(), { mode: a.i() }),
+    chown: (cpu, a) => changeProcess(cpu, a.str(), { uid: a.i(), gid: a.i() }),
+    unlink: (cpu, a) => removeProcess(cpu, a.str(), false),
     mkfifo: (cpu, a) => mknodProcess(cpu, a.str(), 0x1000 | a.i()),
-    remove: (cpu, a) => removePath(cpu, a.str()),
-    rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
-    mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
-    rmdir: (cpu, a) => removePath(cpu, a.str(), true),
+    remove: (cpu, a) => removeProcess(cpu, a.str()),
+    rename: (cpu, a) => renameProcess(cpu, a.str(), a.str()),
+    mkdir: (cpu, a) => mkdirProcess(cpu, a.str()),
+    rmdir: (cpu, a) => removeProcess(cpu, a.str(), true),
     ftruncate64: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), Number(a.l()))),
     // they report the error number itself
     posix_fallocate: (_c, a) => complete(javaAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
@@ -251,7 +252,7 @@ export function stdioInit(): void {
     },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
     __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
-    futimens: () => 0,
+    futimens: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), modifiedTime(a.p()))),
     pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
     fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
     statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
@@ -262,7 +263,9 @@ export function stdioInit(): void {
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
-    utimes: () => 0, utime: () => 0,
+    // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
+    utimes: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
+    utime: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
 
     opendir: (cpu, a) => openDir(cpu, a.str()),
     fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(cpu, f.path); },

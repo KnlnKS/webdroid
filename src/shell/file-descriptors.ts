@@ -1,7 +1,8 @@
 import { E } from "../native/abi.ts";
 import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaLseekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, type FdStat, type OpenFile } from "../native/fs.ts";
+  detachFdScope, fdBase, installFile, javaChangeFdAttributes, type FdStat, type OpenFile } from "../native/fs.ts";
+import type { AttributeChange } from "./file-path.ts";
 import { fifoOf, holdFifo, type Pipe } from "../native/pipe.ts";
 import { vfs, type VfsFile } from "./vfs.ts";
 import { writable } from "./lazyfile.ts";
@@ -25,6 +26,7 @@ type Operations = {
   unstage: [{ fd: number }, never];
   take: [{ fd: number }, never];
   ashmemProtect: [{ fd: number; prot: number }, never];
+  changeAttributes: [{ fd: number; change: AttributeChange }, never];
   /** a lease on a range of the open file; `region` names the file, and an immutable one's bytes cannot change */
   mappingAcquire: [{ fd: number; offset: number; length: number; prot: number }, { lease: number; region: number; immutable: boolean }];
   mappingRead: [{ lease: number; offset: number; length: number }, Uint8Array];
@@ -191,6 +193,7 @@ export class FileDescriptors {
       descriptor.incoming = false;
       return 0;
     },
+    changeAttributes: (session, {fd, change}) => this.inOrder(session, session.descriptors.get(fd), descriptor => javaChangeFdAttributes(descriptor.fd, change, session.uid)),
     ashmemProtect: (session, {fd, prot}) => this.inOrder(session, session.descriptors.get(fd), ({file}) => {
       const region = file.content.ashmem;
       if (!region) return -E.NOTTY;

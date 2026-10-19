@@ -2,7 +2,7 @@ import { E } from "./abi.ts";
 import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaFdBytes,
   O_ACCMODE, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG, openRemoteFifo, type FdStat, type OpenFile } from "./fs.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { isMutablePath } from "../shell/file-path.ts";
+import { isMutablePath, type AttributeChange } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
 import type { DescriptorCalls } from "../shell/file-descriptors.ts";
 import { settleRemoteMaps } from "./mappings.ts";
@@ -40,6 +40,7 @@ export class RemoteDescriptor {
   allocate(offset: number, length: number): Promise<number> { return this.calls().fileDescriptor({kind:"allocate",fd:this.token,offset,length}); }
   sync(): Promise<number> { return this.calls().fileDescriptor({kind:"sync",fd:this.token}); }
   fcntl(command: number, arg: number): Promise<number> { return this.calls().fileDescriptor({kind:"fcntl",fd:this.token,command,arg}); }
+  changeAttributes(change: AttributeChange): Promise<number> { return this.calls().fileDescriptor({kind:"changeAttributes",fd:this.token,change}); }
   stat(): Promise<FdStat | null> { return this.calls().fileDescriptor({kind:"stat",fd:this.token}).then(reply => typeof reply === "number" ? null : reply); }
   /** a lease on [offset, offset + length) of the open file */
   async map(offset: number, length: number, prot: number): Promise<ProcessMapping | number> {

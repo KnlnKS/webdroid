@@ -19,10 +19,10 @@ import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
 import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
-import { remoteFilePath, changeFileAttributes, pathStat } from "../shell/file-path.ts";
+import { filePaths, type AttributeChange } from "../shell/file-path.ts";
 import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, localFdStat, javaPipeFds, javaReadFd, javaPreadFd,
-  javaWriteFd, javaPwriteFd, javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath,
+  javaWriteFd, javaPwriteFd, javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, javaChangeFdAttributes, AT_FDCWD,
   S_IFMT, S_IFDIR, type FileStat } from "../native/fs.ts";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
@@ -399,11 +399,11 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       existing("stat", path, (st) => statOf(path, st.size, st.mode, st.mtime, st)),
     "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
-      return after(remoteFilePath(path)?.fileSetAttributes(path,{mode}) ?? changeFileAttributes(path,{mode}), result => { sys("chmod",result); });
+      return after(filePaths(path).fileSetAttributes(path,{mode}), result => { sys("chmod",result); });
     },
     "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => {
       if (path === null) rt.npe();
-      return after(remoteFilePath(path)?.fileSetAttributes(path,{uid,gid}) ?? changeFileAttributes(path,{uid,gid}), result => { sys("chown",result); });
+      return after(filePaths(path).fileSetAttributes(path,{uid,gid}), result => { sys("chown",result); });
     },
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
@@ -418,17 +418,17 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
     "access(Ljava/lang/String;I)Z": (path: string, mode: number) => {
       if (path === null) rt.npe();
-      return after(remoteFilePath(path)?.fileAccess(path, mode) ?? accessPath(null, path, mode), result => { sys("access", result); return 1; });
+      return after(filePaths(path).fileAccess(path, mode), result => { sys("access", result); return 1; });
     },
-    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); return after(remoteFilePath(path)?.fileRemove(path) ?? removePath(null, path), n => sys("remove", n)); },
-    // the VFS keeps no permission bits: the mode is not recorded
+    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); return after(filePaths(path).fileRemove(path), n => sys("remove", n)); },
+    // a new directory takes the default mode, not `mode`
     "mkdir(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
-      return after(remoteFilePath(path)?.fileMkdir(path) ?? mkdirPath(null, path), result => { sys("mkdir", result); });
+      return after(filePaths(path).fileMkdir(path), result => { sys("mkdir", result); });
     },
     "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
       if (from === null || to === null) rt.npe();
-      return after((remoteFilePath(from) ?? remoteFilePath(to))?.fileRename(from,to) ?? renamePath(null, from, to), n => sys("rename", n));
+      return after(filePaths(from, to).fileRename(from,to), n => sys("rename", n));
     },
 };
 /** a -errno result as the ErrnoException libcore's Os methods throw */
@@ -463,26 +463,25 @@ rt.registerJni("java/lang/ProcessEnvironment", "environ()[[B", () => jarray(Obje
 // Android interrupts threads blocked on the descriptor; a reader parked on a pipe here stays parked
 rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD})V`, () => {});
 
-// java.io.UnixFileSystem: java.io.File's natives over the VFS. It keeps no permission bits and
-// no hard links, so a mode change on an existing path succeeds, as chmod does above.
+// java.io.UnixFileSystem: java.io.File's natives over the path operations (file-path.ts). There are
+// no hard links.
 const BA_EXISTS = 1, BA_REGULAR = 2, BA_DIRECTORY = 4;
-const fileExists = (p: string) => { const remote = remoteFilePath(p); return remote ? after(remote.fileStat(p), ({ value }) => +!!value) : +vfs.exists(p); };
+/** the stat of a File's path, or null */
+const fileStat = (p: string) => after(filePaths(p).fileStat(p), ({ value }) => value);
+/** chmod of `p` to what `to` makes of its permission bits, as UnixFileSystem_md.c's statMode and chmod */
+const remode = (p: string, to: (mode: number) => number) =>
+  after(fileStat(p), stat => stat ? after(filePaths(p).fileSetAttributes(p, { mode: to(stat.mode & 0o7777) }), r => +(r === 0)) : 0);
 const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "initIDs()V": () => {},
   "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.canonical(path),
-  "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) => {
-    const p = vfs.norm(path), remote = remoteFilePath(p);
-    if (remote) return after(remote.fileStat(p), reply => reply.value ? BA_EXISTS | ((reply.value.mode & S_IFMT) === S_IFDIR ? BA_DIRECTORY : BA_REGULAR) : 0);
-    return vfs.isDir(p) ? BA_EXISTS | BA_DIRECTORY : vfs.exists(p) ? BA_EXISTS | BA_REGULAR : 0;
-  },
+  "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) =>
+    after(fileStat(vfs.norm(path)), stat => stat ? BA_EXISTS | ((stat.mode & S_IFMT) === S_IFDIR ? BA_DIRECTORY : BA_REGULAR) : 0),
   "list0(Ljava/io/File;)[Ljava/lang/String;": (file: JObj) => {
     const p = pathOf(file);
-    const remote = remoteFilePath(p);
-    if (remote) return after(remote.fileList(p), reply => reply.value ? jarray(reply.value, "Ljava/lang/String;") : null);
-    return vfs.isDir(p) ? jarray(vfs.list(p), "Ljava/lang/String;") : null;
+    return after(filePaths(p).fileList(p), reply => reply.value ? jarray(reply.value, "Ljava/lang/String;") : null);
   },
   "createFileExclusively0(Ljava/lang/String;)Z": driven(function* (path: string): Gen {
-    const r = yield* awaited(remoteFilePath(path)?.fileCreate(path) ?? createPath(null, path));
+    const r = yield* awaited(filePaths(path).fileCreate(path));
     if (r === -E.EXIST) return 0;
     // JNU_ThrowIOExceptionWithLastError: an IOException carrying strerror
     if (r < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-r] ?? path);
@@ -490,19 +489,19 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   }),
   "createDirectory0(Ljava/io/File;)Z": (file: JObj) => {
     const p = pathOf(file);
-    return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), result => +(result === 0));
+    return after(filePaths(p).fileMkdir(p), result => +(result === 0));
   },
-  "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => {
-    const p = pathOf(file), remote = remoteFilePath(p);
-    return remote ? after(remote.fileStat(p), ({ value }) => BigInt(value?.mtime ?? 0)) : BigInt(vfs.mtime(p));
-  },
+  "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => after(fileStat(pathOf(file)), stat => BigInt(stat?.mtime ?? 0)),
   "setLastModifiedTime0(Ljava/io/File;J)Z": (file: JObj, ms: bigint) => {
     const p = pathOf(file);
-    if (!vfs.exists(p)) return 0;
-    vfs.mtimes.set(p, Number(ms)); return 1;
+    return after(filePaths(p).fileSetAttributes(p, { mtime: Number(ms) }), r => +(r === 0));
   },
-  "setPermission0(Ljava/io/File;IZZ)Z": (file: JObj) => fileExists(pathOf(file)),
-  "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => fileExists(pathOf(file)),
+  // ACCESS_READ, ACCESS_WRITE and ACCESS_EXECUTE are 4, 2 and 1: the owner's bit, or everyone's
+  "setPermission0(Ljava/io/File;IZZ)Z": (file: JObj, access: number, enable: number, ownerOnly: number) => {
+    const bits = access * (ownerOnly ? 0o100 : 0o111);
+    return remode(pathOf(file), mode => enable ? mode | bits : mode & ~bits);
+  },
+  "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => remode(pathOf(file), mode => mode & ~0o222),
   // FileSystem.SPACE_TOTAL, SPACE_FREE, SPACE_USABLE
   "getSpace0(Ljava/io/File;I)J": driven(function* (_file: JObj, kind: number): Gen {
     const s = yield* awaited(storageStatVfs());
@@ -514,13 +513,13 @@ rt.registerJnis("java/io/UnixFileSystem", unixFileSystem);
 
 // sun.nio.fs.UnixNativeDispatcher (UnixNativeDispatcher.c): java.nio.file's syscalls over the VFS.
 // Paths arrive as NUL-terminated strings in native memory; failures throw UnixException(errno).
-// The VFS has no symbolic or hard links and keeps no permission bits, as the libc above.
+// There are no symbolic or hard links.
 // UnixException's fillInStackTrace records nothing, so none is captured
 const unixError = (e: number) => setDeclared(rt.make("sun/nio/fs/UnixException"), "sun/nio/fs/UnixException", { errno: e });
 const unixSys = (result: number): number => { if (result < 0) throw unixError(-result); return result; };
 const cpath = (address: bigint) => mem.cstr(mem.txVa(BigInt.asUintN(64, address)));
 const bytesOf = (s: string) => i8(utf8.enc.encode(s));
-const AT_FDCWD = -100, AT_REMOVEDIR = 0x200;
+const AT_REMOVEDIR = 0x200;
 /** a name relative to directory descriptor `dfd`, as the *at calls resolve it */
 function atPath(dfd: number, address: bigint): string {
   const name = cpath(address);
@@ -536,7 +535,7 @@ function fillAttrs(attrs: JObj, path: string, st: FileStat): void {
     st_size: BigInt(st.size), st_atime_sec: sec, st_atime_nsec: nsec, st_mtime_sec: sec, st_mtime_nsec: nsec, st_ctime_sec: sec, st_ctime_nsec: nsec });
 }
 /** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
-function pathReply(path: string) { const p = vfs.norm(path); return remoteFilePath(p)?.fileStat(p) ?? pathStat(p); }
+function pathReply(path: string) { const p = vfs.norm(path); return filePaths(p).fileStat(p); }
 function statPath(path: string, attrs: JObj | null): number | Promise<number> {
   return after(pathReply(path), ({ errno, value }) => {
     if (!value) throw unixError(errno);
@@ -547,30 +546,18 @@ function statPath(path: string, attrs: JObj | null): number | Promise<number> {
 /** unlink(2) with `directory` false, rmdir(2) with true */
 function removeAt(path: string, directory: boolean) {
   const p = vfs.norm(path);
-  return after(remoteFilePath(p)?.fileRemove(p, directory) ?? removePath(null, p, directory), (n) => { unixSys(n); });
+  return after(filePaths(p).fileRemove(p, directory), (n) => { unixSys(n); });
 }
-/** utimes(2): times in microseconds; the VFS keeps modification times only */
-function setTimes(path: string, modified: bigint): void {
-  const p = vfs.norm(path);
-  if (!vfs.exists(p)) throw unixError(E.NOENT);
-  vfs.mtimes.set(p, Number(modified / 1000n));
-}
-/** chown(2) as an app's uid may: its own uid, a group it is in (its own, or the cache and shared
- *  application gids ProcessList gives every app process), or -1 to keep one */
-function mayChown(uid: number, gid: number): boolean {
-  const own = procIdentity.uid, user = own - own % 100000, offset = own % 100000 - 10000;
-  return (uid === -1 || uid === own) && (gid === -1 || gid === own || offset >= 0 && (gid === user + 20000 + offset || gid === 50000 + offset));
-}
-function chownPath(path: string, uid: number, gid: number) {
-  return after(statPath(path, null), () => { if (!mayChown(uid, gid)) throw unixError(E.PERM); });
-}
+/** chmod, chown and utimes; the VFS keeps modification times only, which utimes gives in microseconds */
+const changePath = (path: string, change: AttributeChange) => after(filePaths(path).fileSetAttributes(path, change), (n) => { unixSys(n); });
+const changeFd = (fd: number, change: AttributeChange) => after(javaChangeFdAttributes(fd, change), (n) => { unixSys(n); });
 const fdPath = (fd: number) => after(javaFdStat(fd), st => { if (!st) throw unixError(E.BADF); return st.path ?? ""; });
 /** open DIR streams: the entries as readdir(3) returns them, and the descriptor closedir closes */
 const dirStreams = new Map<bigint, { names: string[]; i: number; fd: number }>();
 let nextDir = 0n;
 function openDirStream(path: string, fd: number) {
   const p = vfs.norm(path);
-  return after(remoteFilePath(p)?.fileList(p) ?? (vfs.isDir(p) ? {errno: 0, value: vfs.list(p)} : {errno: vfs.exists(p) ? E.NOTDIR : E.NOENT, value: null}), ({ errno, value }) => {
+  return after(filePaths(p).fileList(p), ({ errno, value }) => {
     if (!value) throw unixError(errno);
     dirStreams.set(++nextDir, { names: [".", "..", ...value], i: 0, fd });
     return nextDir;
@@ -591,9 +578,9 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "symlink0(JJ)V": () => { throw unixError(E.PERM); },
   "unlink0(J)V": (path: bigint) => removeAt(cpath(path), false),
   "unlinkat0(IJI)V": (dfd: number, path: bigint, flags: number) => removeAt(atPath(dfd, path), !!(flags & AT_REMOVEDIR)),
-  "rename0(JJ)V": (from: bigint, to: bigint) => { const a=cpath(from),b=cpath(to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
-  "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { const a=atPath(fromDir,from),b=atPath(toDir,to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
-  "mkdir0(JI)V": (path: bigint) => { const p = cpath(path); return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), (n) => { unixSys(n); }); },
+  "rename0(JJ)V": (from: bigint, to: bigint) => { const a = cpath(from), b = cpath(to); return after(filePaths(a, b).fileRename(a, b), (n) => { unixSys(n); }); },
+  "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { const a = atPath(fromDir, from), b = atPath(toDir, to); return after(filePaths(a, b).fileRename(a, b), (n) => { unixSys(n); }); },
+  "mkdir0(JI)V": (path: bigint) => { const p = cpath(path); return after(filePaths(p).fileMkdir(p), (n) => { unixSys(n); }); },
   "rmdir0(J)V": (path: bigint) => removeAt(cpath(path), true),
   // an existing path is never a link
   "readlink0(J)[B": (path: bigint) => after(statPath(cpath(path), null), () => { throw unixError(E.INVAL); }),
@@ -606,13 +593,13 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     if (!st) throw unixError(E.BADF);
     fillAttrs(attrs, st.path ?? "", st);
   }),
-  "chmod0(JI)V": (path: bigint) => after(statPath(cpath(path), null), () => {}),
-  "fchmod(II)V": (fd: number) => after(fdPath(fd), () => {}),
-  "chown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
-  "lchown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
-  "fchown(III)V": (fd: number, uid: number, gid: number) => after(fdPath(fd), path => chownPath(path, uid, gid)),
-  "utimes0(JJJ)V": (path: bigint, _accessed: bigint, modified: bigint) => setTimes(cpath(path), modified),
-  "futimes(IJJ)V": (fd: number, _accessed: bigint, modified: bigint) => after(fdPath(fd), path => setTimes(path, modified)),
+  "chmod0(JI)V": (path: bigint, mode: number) => changePath(cpath(path), { mode }),
+  "fchmod(II)V": (fd: number, mode: number) => changeFd(fd, { mode }),
+  "chown0(JII)V": (path: bigint, uid: number, gid: number) => changePath(cpath(path), { uid, gid }),
+  "lchown0(JII)V": (path: bigint, uid: number, gid: number) => changePath(cpath(path), { uid, gid }),
+  "fchown(III)V": (fd: number, uid: number, gid: number) => changeFd(fd, { uid, gid }),
+  "utimes0(JJJ)V": (path: bigint, _accessed: bigint, modified: bigint) => changePath(cpath(path), { mtime: Number(modified / 1000n) }),
+  "futimes(IJJ)V": (fd: number, _accessed: bigint, modified: bigint) => changeFd(fd, { mtime: Number(modified / 1000n) }),
   "opendir0(J)J": (path: bigint) => openDirStream(cpath(path), -1),
   "fdopendir(I)J": (fd: number) => after(fdPath(fd), path => openDirStream(path, fd)),
   "closedir(J)V": (dir: bigint) => {
@@ -626,8 +613,8 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     if (!stream) throw unixError(E.BADF);
     return stream.i < stream.names.length ? bytesOf(stream.names[stream.i++]) : null;
   },
-  "access0(JI)V": (path: bigint, mode: number) => { const p = cpath(path); return after(remoteFilePath(p)?.fileAccess(p, mode) ?? accessPath(null, p, mode), (n) => { unixSys(n); }); },
-  "exists0(J)Z": (path: bigint) => { const p = cpath(path); return after(remoteFilePath(p)?.fileAccess(p, 0) ?? accessPath(null, p, 0), (n) => +(n === 0)); },
+  "access0(JI)V": (path: bigint, mode: number) => { const p = cpath(path); return after(filePaths(p).fileAccess(p, mode), (n) => { unixSys(n); }); },
+  "exists0(J)Z": (path: bigint) => { const p = cpath(path); return after(filePaths(p).fileAccess(p, 0), (n) => +(n === 0)); },
   "getpwuid(I)[B": passwdName,
   "getgrgid(I)[B": passwdName,
   "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {

@@ -101,7 +101,7 @@ describe("file-descriptor", () => {
 
   test("one process at a time opens a fifo another realm names", async () => {
     const kernel = new FileDescriptors(), [a, b] = [1001,1002].map(pid => kernel.session(pid,() => 0)), path = "/fifo-kernel";
-    expect(makeFifo(null,path)).toBe(0);
+    expect(makeFifo(path)).toBe(0);
     try {
       expect(await a.fileDescriptor({kind:"open",path,flags:0x800})).toBe("fifo");
       expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe(-E.NXIO);
@@ -442,7 +442,7 @@ describe("file-descriptor", () => {
     }
   });
 
-  test("a process copies and stats canonical files through their owner", async () => {
+  test("a process copies, stats and changes canonical files through their owner", async () => {
     const source = "/data/data/test/fd/copy-source.bin", target = "/data/data/test/fd/copy-target.bin";
     const owner = new FileDescriptors(), paths = canonicalFilePaths(() => 0), channel = new MessageChannel();
     const stop = serveCalls(channel.port1, owner.session(1001, () => 0));
@@ -462,6 +462,10 @@ describe("file-descriptor", () => {
       const attrs = await newObj("sun/nio/fs/UnixFileAttributes", "()V");
       await scall("sun/nio/fs/UnixNativeDispatcher", "fstat", "(ILsun/nio/fs/UnixFileAttributes;)V", fdInt(fd), attrs);
       expect(getDeclared(attrs, "sun/nio/fs/UnixFileAttributes", "st_size")).toBe(5n);
+      await scall("sun/nio/fs/UnixNativeDispatcher", "fchmod", "(II)V", fdInt(fd), 0o600);
+      expect(vfs.attributes(target).mode).toBe(0o600);
+      expect(await vcall(await newFile(target), "setReadOnly", "()Z")).toBe(1);
+      expect(vfs.attributes(target).mode).toBe(0o400);
       await scall("android/system/Os", "close", "(Ljava/io/FileDescriptor;)V", fd);
     } finally {
       descriptorTransport.calls = previous; filePathTransport.calls = previousPaths;
@@ -539,7 +543,7 @@ describe("file-input-descriptor", () => {
     const borrowed = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
       expect(await vcall(owner, "getFD", "()Ljava/io/FileDescriptor;")).toBe(fd);
-      expect(renamePath(null, path, renamed)).toBe(0);
+      expect(renamePath(path, renamed)).toBe(0);
       vfs.delete(renamed);
       expect(await vcall(borrowed, "read", "()I")).toBe(1);
       const byte = new Uint8Array(1);
@@ -711,21 +715,21 @@ describe("rename", () => {
   describe("renamePath", () => {
     test("moves a loaded file and keeps a lazy source lazy", () => {
       vfs.write("/data/t/a.txt", new Uint8Array([1, 2, 3]));
-      expect(renamePath(null, "/data/t/a.txt", "/data/t/b.txt")).toBe(0);
+      expect(renamePath("/data/t/a.txt", "/data/t/b.txt")).toBe(0);
       expect(vfs.read("/data/t/a.txt")).toBeNull();
       expect([...vfs.read("/data/t/b.txt")!]).toEqual([1, 2, 3]);
 
       vfs.mount("/data/t/lazy.bin", new BytesFile(new Uint8Array([9])));
-      expect(renamePath(null, "/data/t/lazy.bin", "/data/t/moved.bin")).toBe(0);
+      expect(renamePath("/data/t/lazy.bin", "/data/t/moved.bin")).toBe(0);
       expect(vfs.lazyFiles.has("/data/t/moved.bin")).toBe(true);
       expect(vfs.exists("/data/t/lazy.bin")).toBe(false);
     });
 
     test("reports a missing source and a directory target", () => {
-      expect(renamePath(null, "/data/t/none", "/data/t/x")).toBe(-E.NOENT);
+      expect(renamePath("/data/t/none", "/data/t/x")).toBe(-E.NOENT);
       vfs.mkdir("/data/t/dir");
       vfs.write("/data/t/f", new Uint8Array(1));
-      expect(renamePath(null, "/data/t/f", "/data/t/dir")).toBe(-E.ISDIR);
+      expect(renamePath("/data/t/f", "/data/t/dir")).toBe(-E.ISDIR);
       expect(vfs.exists("/data/t/f")).toBe(true);
     });
 
@@ -736,7 +740,7 @@ describe("rename", () => {
       expect(vfs.exists("/data/t/old")).toBe(false);
       expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
       expect(vfs.isDir("/data/t/new/empty")).toBe(true);
-      expect(renamePath(null, "/data/t/new", "/data/t/new/inner")).toBe(-E.INVAL);
+      expect(renamePath("/data/t/new", "/data/t/new/inner")).toBe(-E.INVAL);
     });
   });
 });

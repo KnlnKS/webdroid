@@ -179,7 +179,7 @@ test("open files and mappings retain their identity through rename and unlink", 
   const from = "/mapped-file-test", to = "/mapped-file-renamed";
   vfs.write(from, Uint8Array.of(1));
   const fd = javaOpenFd(from, 2), file = fdFile(fd)!;
-  expect(renamePath(null, from, to)).toBe(0);
+  expect(renamePath(from, to)).toBe(0);
   vfs.writeAt(file, 0, Uint8Array.of(2));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2));
   expect(vfs.read(from)).toBeNull();

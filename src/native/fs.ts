@@ -3,13 +3,13 @@
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
 import { mem, guestAt, anchor } from "./mem.ts";
-import { type HostFn, PTR, ldp, stLong, ARG0, complete } from "./host.ts";
+import { type HostFn, PTR, ldp, ldLong, stLong, ARG0, complete } from "./host.ts";
 import { E } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, kernelResult, utf8, logLine, offArg, randomBytes } from "./libc.ts";
+import { fail, kernelResult, utf8, logLine, offArg, randomBytes, readTs } from "./libc.ts";
 import { KLAYOUT } from "./syscall.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
-import { remoteFilePath } from "../shell/file-path.ts";
+import { filePaths, changeFileAttributes, type AttributeChange, type PathReply } from "../shell/file-path.ts";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { BytesFile, readAt, readFully, writable, type FileSource } from "../shell/lazyfile.ts";
 import { concat, utf8 as codec } from "../jvm/abi.ts";
@@ -17,7 +17,7 @@ import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag 
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers.ts";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
-import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, holdFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe.ts";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, holdFifo, remoteFifo, type Pipe } from "./pipe.ts";
 import type { Socket, Received } from "./socket/core.ts";
 import type { Epoll } from "./poll.ts";
 import { processOpenFd, type RemoteDescriptor } from "./process-fd.ts";
@@ -55,12 +55,12 @@ export interface OpenFile {
 }
 type Fd = OpenFile;
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12;
-export const F_DUPFD_CLOEXEC = 0x406;
+export const F_DUPFD_CLOEXEC = 0x406, AT_FDCWD = -100;
 const EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
-export function makeFifo(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function makeFifo(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (!taken) nameFifo(p);
   return taken;
 }
@@ -170,21 +170,22 @@ export function watchFd(fd: number, wake: () => void): () => void {
 }
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
-  if (path.startsWith("/") || dirfd === -100) return path;
+  if (path.startsWith("/") || dirfd === AT_FDCWD) return path;
   const dir = fds.get(dirfd);
   if (!dir) return fail(cpu, E.BADF);
   return dir.dir ? dir.path + "/" + path : fail(cpu, E.NOTDIR);
 }
+// The path operations on this realm's own files, each answering -errno or 0 (file-path.ts dispatches them)
 /** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
-export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): number {
+export function renamePath(fromPath: string, toPath: string): number {
   const from = vfs.norm(fromPath), to = vfs.norm(toPath), parent = to.slice(0, to.lastIndexOf("/")) || "/";
-  if (from === to) return vfs.exists(from) ? 0 : fail(cpu, E.NOENT);
-  if (!vfs.isDir(parent)) return fail(cpu, vfs.exists(parent) ? E.NOTDIR : E.NOENT);
+  if (from === to) return vfs.exists(from) ? 0 : -E.NOENT;
+  if (!vfs.isDir(parent)) return -(vfs.exists(parent) ? E.NOTDIR : E.NOENT);
   if (vfs.isDir(from)) {
-    if (to === from || to.startsWith(from + "/")) return fail(cpu, E.INVAL);
+    if (to === from || to.startsWith(from + "/")) return -E.INVAL;
     if (vfs.exists(to)) {
-      if (!vfs.isDir(to)) return fail(cpu, E.NOTDIR);
-      if (vfs.list(to).length) return fail(cpu, E.NOTEMPTY);
+      if (!vfs.isDir(to)) return -E.NOTDIR;
+      if (vfs.list(to).length) return -E.NOTEMPTY;
       vfs.rmdir(to);
     }
     const prefix = from + "/";
@@ -200,46 +201,95 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
     return 0;
   }
   const source = vfs.source(from);
-  if (!source) return fail(cpu, E.NOENT);
-  if (vfs.isDir(to)) return fail(cpu, E.ISDIR);
+  if (!source) return -E.NOENT;
+  if (vfs.isDir(to)) return -E.ISDIR;
   vfs.rename(from, to);
   return 0;
 }
 const isRandomDevice = (path: string): boolean => path === "/dev/urandom" || path === "/dev/random";
-export function accessPath(cpu: Cpu | null, path: string, mode: number): number {
-  if (mode & ~7) return fail(cpu, E.INVAL);
+export function accessPath(path: string, mode: number): number {
+  if (mode & ~7) return -E.INVAL;
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : fail(cpu, E.NOENT);
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : -E.NOENT;
 }
-export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
-  const path = atPath(cpu, dirfd, name);
-  if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
-  return typeof path === "string" ? accessProcess(cpu, path, mode) : path;
+/** stat(2) of normalized `p`: a directory, a file (procfs included) or a random device */
+export function pathStat(p: string): PathReply<FileStat | null> {
+  const s = isRandomDevice(p) ? "" : procText(p);
+  if (s !== null) return { errno: 0, value: localStat(p, S_IFREG, utf8(s).length, Date.now()) };
+  const directory = vfs.isDir(p), file = directory ? null : vfs.stat(p);
+  return directory || file ? { errno: 0, value: localStat(p, pathType(p), file?.size ?? 0, vfs.mtime(p), null) } : { errno: E.NOENT, value: null };
 }
 /** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
-function newName(cpu: Cpu | null, p: string): number {
-  if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
+function newName(p: string): number {
+  if (vfs.exists(p) || vfs.isDir(p)) return -E.EXIST;
   const parent = p.slice(0, p.lastIndexOf("/")) || "/";
-  return parent !== "/" && !vfs.isDir(parent) ? fail(cpu, E.NOENT) : 0;
+  return parent !== "/" && !vfs.isDir(parent) ? -E.NOENT : 0;
 }
-export function mkdirPath(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function mkdirPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (taken) return taken;
   vfs.mkdir(p); return 0;
 }
 /** open(O_CREAT|O_EXCL) and close: an empty file where nothing was */
-export function createPath(cpu: Cpu | null, path: string): number {
-  const p = vfs.norm(path), taken = newName(cpu, p);
+export function createPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
   if (taken) return taken;
   vfs.write(p, new Uint8Array(0)); return 0;
 }
 /** unlink(2) with `directory` false, rmdir(2) with true, and remove(3) when it is omitted */
-export function removePath(cpu: Cpu | null, path: string, directory?: boolean): number {
+export function removePath(path: string, directory?: boolean): number {
   const p = vfs.norm(path);
-  if (!vfs.isDir(p)) return directory ? fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : fail(cpu, E.NOENT);
-  if (directory === false) return fail(cpu, E.ISDIR);
-  if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY);
+  if (!vfs.isDir(p)) return directory ? -(vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : -E.NOENT;
+  if (directory === false) return -E.ISDIR;
+  if (vfs.list(p).length) return -E.NOTEMPTY;
   vfs.rmdir(p); return 0;
+}
+
+// The path syscalls, where each path lives
+export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
+  const path = atPath(cpu, dirfd, name);
+  if (flags & ~(0x100 | 0x200) || mode & ~7) return fail(cpu, E.INVAL);
+  return typeof path === "string" ? kernelResult(cpu, filePaths(path).fileAccess(path, mode)) : path;
+}
+export const mkdirProcess = (cpu: Cpu, path: string): number | Promise<number> => kernelResult(cpu, filePaths(path).fileMkdir(path));
+export const renameProcess = (cpu: Cpu, from: string, to: string): number | Promise<number> => kernelResult(cpu, filePaths(from, to).fileRename(from, to));
+export const removeProcess = (cpu: Cpu, path: string, directory?: boolean): number | Promise<number> => kernelResult(cpu, filePaths(path).fileRemove(path, directory));
+/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
+export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
+  const type = mode & 0xf000;
+  if (type === S_IFIFO) return kernelResult(cpu, filePaths(path).fileFifo(path));
+  if (type === 0 || type === S_IFREG) return kernelResult(cpu, filePaths(path).fileCreate(path));
+  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
+}
+export function statProcess(cpu: Cpu, path: string, buf: number): number | Promise<number> {
+  const p = vfs.norm(path), destination = anchor(buf);
+  return complete(filePaths(p).fileStat(p), ({ errno, value }) => {
+    if (!value) return fail(cpu, errno || E.NOENT);
+    fillStat(destination(), p, value);
+    return 0;
+  });
+}
+/** a directory's entries as readdir lists them, or a negative errno */
+export const listProcess = (path: string): string[] | number | Promise<string[] | number> =>
+  complete(filePaths(path).fileList(path), ({ errno, value }) => value ? [".", "..", ...value] : -(errno || E.NOENT));
+/** chmod, chown and utimes of a path */
+export const changeProcess = (cpu: Cpu, path: string, change: AttributeChange): number | Promise<number> =>
+  kernelResult(cpu, filePaths(path).fileSetAttributes(path, change));
+/** fchmod, fchown and futimens: a change to the file open on `fd`, which its owner (by `uid`) makes */
+export function javaChangeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (f?.remote) return f.remote.changeAttributes(change);
+  if (!f) return -E.BADF;
+  const path = f.dir ? f.path : f.content.path;
+  // a pipe, socket or other anonymous file keeps no attributes
+  return path === null ? -E.NOTSUP : changeFileAttributes(path, change, uid);
+}
+const UTIME_NOW = 0x3fffffff, UTIME_OMIT = 0x3ffffffe;
+/** the modification time utimensat's `times` (struct timespec[2]) sets: now without them, none when omitted */
+export function modifiedTime(times: number): AttributeChange {
+  if (!times) return { mtime: Date.now() };
+  const mtime = times + KLAYOUT.TS_SIZE, nsec = ldLong(mtime + KLAYOUT.TS_NSEC);
+  return nsec === UTIME_OMIT ? {} : { mtime: nsec === UTIME_NOW ? Date.now() : readTs(mtime) };
 }
 function openLocal(cpu: Cpu | null, path: string, flags: number): number {
   path = vfs.norm(path);
@@ -452,45 +502,6 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   } finally { mem.free(guestAt(target)); }
 }
 
-export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<number> {
-  const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileMkdir(vfs.norm(path))) : mkdirPath(cpu,path);
-}
-export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
-  const calls = remoteFilePath(from) ?? remoteFilePath(to);
-  if (!calls) return renamePath(cpu,from,to);
-  const a = vfs.norm(from), b = vfs.norm(to);
-  return kernelResult(cpu,calls.fileRename(a,b).then(r => { if (!r) moveRemoteFifo(a,b); return r; }));
-}
-export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
-  const calls = remoteFilePath(path);
-  if (!calls) return removePath(cpu,path,directory);
-  const p = vfs.norm(path);
-  return kernelResult(cpu,calls.fileRemove(p,directory).then(r => { if (!r) moveRemoteFifo(p,null); return r; }));
-}
-/** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
-export function mknodProcess(cpu: Cpu, path: string, mode: number): number | Promise<number> {
-  const type = mode & 0xf000, p = vfs.norm(path), calls = remoteFilePath(p);
-  if (type === S_IFIFO) return calls ? kernelResult(cpu,calls.fileFifo(p)) : makeFifo(cpu,p);
-  if (type === 0 || type === S_IFREG) return calls ? kernelResult(cpu,calls.fileCreate(p)) : createPath(cpu,p);
-  return fail(cpu, type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
-}
-export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
-  if (mode & ~7) return fail(cpu,E.INVAL);
-  const calls = remoteFilePath(path);
-  return calls ? kernelResult(cpu,calls.fileAccess(vfs.norm(path),mode)) : accessPath(cpu,path,mode);
-}
-export function statProcess(cpu: Cpu, path: string, buf: number): number | Promise<number> {
-  const normalized = vfs.norm(path), calls = remoteFilePath(normalized);
-  if (!calls) return statPath(cpu,normalized,buf);
-  const destination = anchor(buf);
-  return calls.fileStat(normalized).then(reply => {
-    if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
-    const stat = reply.value;
-    fillStat(destination(),normalized,stat);
-    return 0;
-  });
-}
 /** a read of a remote open file into guest memory at `p`, landing once its owner answers */
 function remoteRead(cpu: Cpu | null, remote: RemoteDescriptor, p: number, n: number, offset?: number): Promise<number> {
   const target = new Uint8Array(n), destination = anchor(p);
@@ -771,16 +782,6 @@ function inotifyRmWatch(cpu: Cpu | null, fd: number, wd: number): number {
 export function javaInotifyInit(): number { hookInotify(); return makeInotify(null, IN_CLOEXEC); }
 export const javaInotifyAddWatch = (fd: number, path: string, mask: number): number => inotifyAddWatch(null, fd, path, mask);
 export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
-export function statPath(cpu: Cpu, path: string, buf: number): number {
-  path = vfs.norm(path);
-  if (isRandomDevice(path)) { fillStat(buf, path, localStat(path, S_IFREG, 0, Date.now())); return 0; }
-  const s = procText(path);
-  if (s !== null) { fillStat(buf, path, localStat(path, S_IFREG, utf8(s).length, Date.now())); return 0; }
-  const dir = vfs.isDir(path), file = dir ? null : vfs.stat(path);
-  if (!dir && !file) return fail(cpu, E.NOENT);
-  fillStat(buf, path, localStat(path, pathType(path), file?.size ?? 0, Date.now()));
-  return 0;
-}
 function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
   const f = fds.get(fd);
   if (f?.remote) {
@@ -877,12 +878,6 @@ export function javaAllocateFd(fd: number, offset: number, len: number): number 
 const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
-/** a directory's entries as readdir lists them, or a negative errno */
-export function listProcess(path: string): string[] | number | Promise<string[] | number> {
-  const p = vfs.norm(path), calls = remoteFilePath(p);
-  if (calls) return calls.fileList(p).then(reply => reply.value ? [".", "..", ...reply.value] : -(reply.errno || E.NOENT));
-  return vfs.isDir(p) ? dirEntries(p) : -(vfs.exists(p) ? E.NOTDIR : E.NOENT);
-}
 /** getdents64: linux_dirent64 records from the fd's position on */
 export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number | Promise<number> {
   const f = fds.get(fd);
@@ -953,7 +948,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const path = atPath(cpu, fd, name);
     return typeof path === "string" ? statProcess(cpu, path, buf) : path;
   },
-  fchmod: () => 0, fchown: () => 0, umask: () => 0o22,
+  fchmod: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), { mode: a.i() })),
+  fchown: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), { uid: a.i(), gid: a.i() })),
+  umask: () => 0o22,
   renameat: (cpu, a) => {
     const from = atPath(cpu, a.i(), a.str());
     if (typeof from !== "string") return from;
@@ -964,10 +961,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   mknodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mknodProcess(cpu, path, a.i()) : path; },
   ftruncate: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), offArg(a))),
   truncate: (cpu, a) => {
-    const file = vfs.open(a.str()), n = offArg(a);
-    if (!file) return fail(cpu, E.NOENT);
-    if (file.source && !writable(file.source)) return fail(cpu, E.ACCES);
-    vfs.resize(file, n); return 0;
+    const path = a.str(), n = offArg(a);
+    return kernelResult(cpu, complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r))));
   },
   fcntl: (cpu, a) => {
     const fd = a.i(), cmd = a.i();
@@ -1016,7 +1011,14 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   sendfile: (cpu) => fail(cpu, E.NOSYS),
   flock: () => 0,
   unlinkat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()), flags = a.i(); return typeof path === "string" ? removeProcess(cpu, path, !!(flags & 0x200)) : path; },
-  fchmodat: () => 0, utimensat: () => 0,
+  // no links to follow, so fchmodat's flags change nothing
+  fchmodat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()), mode = a.i(); return typeof path === "string" ? changeProcess(cpu, path, { mode }) : path; },
+  utimensat: (cpu, a) => {
+    const dirfd = a.i(), name = a.p(), change = modifiedTime(a.p());
+    if (!name) return kernelResult(cpu, javaChangeFdAttributes(dirfd, change));
+    const path = atPath(cpu, dirfd, mem.cstr(name));
+    return typeof path === "string" ? changeProcess(cpu, path, change) : path;
+  },
   ioctl: (cpu, a) => {
     const fd = a.i(), request = a.i(), argument = a.p();
     if (request !== FIONREAD) return fail(cpu, fds.get(fd)?.socket ? E.NOTTY : E.NOSYS);
