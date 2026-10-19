@@ -56,6 +56,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const paths = canonicalFilePaths(authorizePath, caller.uid);
   const descriptors = broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid);
   const locationAllowed = async () => {
+    if (privileged) return true;
     const granted = await permissions.permissionCheck(caller.pkg, ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]);
     broker.entry(pid);
     return granted.some(Boolean);

@@ -8,7 +8,7 @@ import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts.ts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
 import { alarmTransport } from "../android/alarm.ts";
-import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc.ts";
+import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
 import { PROCESS_PID, processTransport } from "../android/os.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
@@ -17,7 +17,7 @@ import { after } from "../jvm/natives/jentry.ts";
 import { systemProviderTransport } from "../android/systemproviders.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices.ts";
-import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
+import type { ServiceRequest } from "./servicerecords.ts";
 import { vfs } from "./vfs.ts";
 import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue.ts";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm.ts";
@@ -44,8 +44,10 @@ let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
-const workerLocation = remoteLocation(brokerCalls);
-const workerLife = remoteProcessLife(brokerCalls, logUncaught);
+const location = remoteLocation(brokerCalls);
+const life = remoteProcessLife(brokerCalls, logUncaught);
+/** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
+ *  and lives, SQLite, cookies, the clipboard, locations, PendingIntents, alarms and service starts */
 function connectCommandTransports(): void {
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
@@ -69,10 +71,8 @@ function connectCommandTransports(): void {
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.has = () => brokerCalls().clipboardHas();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
-}
-/** the stores and system services a Worker reaches only through the broker */
-function connectWorkerTransports(): void {
-  Object.assign(locationTransport,workerLocation.access);
+  cookieTransport.calls = brokerCalls;
+  Object.assign(locationTransport, location.access);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
   pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
   pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
@@ -95,14 +95,17 @@ function connectWorkerTransports(): void {
   };
   serviceTransport.starts = () => remoteStarts;
   serviceTransport.connected = (key, binder, dead) => brokerCalls().serviceConnected(key, exportBinder(binder), dead);
+  processTransport.signal = life.signal;
+  binderTransport.alive = life.alive;
+  binderTransport.watch = life.watch;
+}
+/** the stores and system services a Worker reaches through the broker, which system_server's realm holds */
+function connectRemoteStores(): void {
   webStorageTransport.calls = brokerCalls;
   useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
   systemProviderTransport.lookup = authority => brokerCalls().systemProvider(authority);
   notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
   useSettingsAccess(remoteSettings(brokerCalls));
-  processTransport.signal = workerLife.signal;
-  binderTransport.alive = workerLife.alive;
-  binderTransport.watch = workerLife.watch;
   filePathTransport.calls = brokerCalls;
   descriptorTransport.calls = brokerCalls;
   vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
@@ -125,16 +128,19 @@ function connectWorkerTransports(): void {
     accountCached: (key, type) => brokerCalls().accountCached(key, type),
     accountChange: change => brokerCalls().accountChange(change),
   });
+  exitRecordTransport.records = pkg => brokerCalls().exitRecords(pkg);
+  exitRecordTransport.publish = record => brokerCalls().processExited(record);
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();
-  workerLocation.close();
-  workerLife.close();
-  workerActivityResults.clear();
+  location.close();
+  life.close();
+  activityResults.clear();
   // its presence routes system providers to system_server, which a closed port no longer reaches
   systemProviderTransport.lookup = undefined;
 }
-const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
+/** each launch's result delivery, by request */
+const activityResults = new Map<number, ResultDelivery["deliver"]>();
 function connectActivityCommands(): void {
   let nextRequest = 1;
   activityTransport.presentation = translucent => {
@@ -142,9 +148,9 @@ function connectActivityCommands(): void {
   };
   activityTransport.launch = async (pkg, process, component, intent, result) => {
     const request = nextRequest++;
-    if (result) workerActivityResults.set(request, result.deliver);
+    if (result) activityResults.set(request, result.deliver);
     try { await brokerCalls().activityLaunch(pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null); }
-    catch (error) { workerActivityResults.delete(request); throw error; }
+    catch (error) { activityResults.delete(request); throw error; }
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
@@ -156,10 +162,8 @@ export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   if (calls) { commandProxy(port).close(); throw new Error("Process command port already attached"); }
   calls = commandProxy(port);
   connectCommandTransports();
-  connectWorkerTransports();
   connectActivityCommands();
-  exitRecordTransport.records = pkg => brokerCalls().exitRecords(pkg);
-  exitRecordTransport.publish = record => brokerCalls().processExited(record);
+  connectRemoteStores();
   return calls.endpoint;
 }
 
@@ -170,39 +174,25 @@ const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<Broadca
 /** whether this process's windows are on screen, which its display loop follows */
 export const processPresentation = { visible: true };
 function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
-function remoteError(error: unknown): never {
-  const failure = processFailure(error);
-  if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);
-  throw error;
-}
 async function remote<T>(pending: Promise<T>): Promise<T> {
-  try { return await pending; } catch (error) { return remoteError(error); }
+  try { return await pending; } catch (error) {
+    const failure = processFailure(error);
+    if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);
+    throw error;
+  }
 }
+/** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
+ *  the stores and its descriptors itself */
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
   onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
-  processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
   connectCommandTransports();
-  let nextRequest = 1;
-  /** each launch's result delivery, by request */
-  const requests = new Map<number, ResultDelivery["deliver"]>();
-  activityTransport.presentation = translucent => broker.activities.presentation(PROCESS_PID, translucent);
-  activityTransport.launch = async (pkg, process, component, intent, result) => {
-    const request = nextRequest++;
-    if (result) requests.set(request, result.deliver);
-    void broker.activities.launch(PROCESS_PID, pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null);
-  };
-  activityTransport.finished = (id, code, data) => {
-    setVisible(false);
-    detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
-  };
+  connectActivityCommands();
   broker.files.attach(PROCESS_PID, vfs);
   descriptorTransport.stageLocal = fd => broker.stageDescriptor(PROCESS_PID,fd);
   descriptorTransport.takeLocal = token => broker.takeDescriptor(PROCESS_PID,token);
   descriptorTransport.unstageLocal = token => broker.unstageDescriptor(PROCESS_PID,token);
   descriptorTransport.discardLocal = token => broker.discardDescriptor(PROCESS_PID,token);
-  useSystemServiceAccess([]);
-  notificationTransport.foreground = null;
   useNotificationStore(broker.notifications);
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
@@ -211,42 +201,14 @@ export function connectProcess(): ProcessEndpoint {
   const stopSettings = useSettingsStore(broker.settings);
   if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   useWebCookies((pkg) => broker.cookies(pkg));
-  cookieTransport.calls = brokerCalls;
-  locationTransport.available = () => broker.location.available;
-  locationTransport.enabled = () => broker.location.enabled;
-  locationTransport.last = () => broker.location.last;
-  locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
-  locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
-  binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
-  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));
-  pendingTransport.cancel = id => {
-    try { broker.cancelPending(PROCESS_PID, id); } catch (error) { remoteError(error); }
-  };
-  pendingTransport.send = (id, fill) => remote(broker.intents.send(id, fill));
-  pendingTransport.operation = id => {
-    try { return broker.takePending(PROCESS_PID, id); } catch (error) { return remoteError(error); }
-  };
-  pendingTransport.creator = id => {
-    const operation = broker.intents.get(id);
-    return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
-  };
-  pendingTransport.kind = id => broker.intents.get(id)?.kind ?? null;
-  pendingTransport.flags = id => broker.intents.get(id)?.flags ?? 0;
-  alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
-  alarmTransport.cancel = id => broker.alarms.cancel(id);
-  // The root retains its synchronous owner; Workers use acknowledged commands.
-  let starts: ServiceStarts | undefined;
-  serviceTransport.starts = () => starts ??= broker.serviceStarts(PROCESS_PID);
-  serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(PROCESS_PID, key, exportBinder(binder), dead);
-  return createProcessEndpoint(requests);
+  return createProcessEndpoint();
 }
 
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
-export function createProcessEndpoint(requests = workerActivityResults): ProcessEndpoint {
+export function createProcessEndpoint(): ProcessEndpoint {
   return {
-    processDied: async token => workerLife.died(token),
-    locationChanged: async (id,token,event) => workerLocation.changed(id,token,event),
+    processDied: async token => life.died(token),
+    locationChanged: async (id,token,event) => location.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
@@ -264,8 +226,8 @@ export function createProcessEndpoint(requests = workerActivityResults): Process
           yield startActivityInProcess(request.component, yield* awaited(decodeIntent(request.intent)), request.id, request.caller);
           setVisible(true);
         } else {
-          const deliver = requests.get(request.request);
-          requests.delete(request.request);
+          const deliver = activityResults.get(request.request);
+          activityResults.delete(request.request);
           deliver?.(request.code, request.data ? yield* awaited(decodeIntent(request.data)) : null);
         }
       }());
