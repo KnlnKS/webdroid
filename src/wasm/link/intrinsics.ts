@@ -5,7 +5,8 @@ import { emitRefCopy, classIntrinsics } from "./classes.ts";
 
 import { unsafeIntrinsics } from "./unsafe.ts";
 import { reflectIntrinsics } from "./reflect.ts";
-import { H, type ElemKind } from "../compiler/consts.ts";
+import { H, ELEM_KINDS, elemKindOf } from "../compiler/consts.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import { stringIntrinsics } from "./strings.ts";
 import { charIntrinsics } from "./chars.ts";
 import { threadIntrinsics } from "./sched.ts";
@@ -76,10 +77,9 @@ def("java/lang/Math.sqrt(D)D", f64Op(0x9f));
 // System.arraycopy(Object src, int sp, Object dst, int dp, int n): an element kind's arrays copy as one array.copy; a pair of arrays of
 // different classes (int[] to float[], or not both arrays) is an ArrayStoreException, a bad range the production AIOOBE message
 def("java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V", (cx, m, c) => {
-  const kinds: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
   c.lget(2).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  for (const k of kinds) {
+  for (const k of ELEM_KINDS) {
     const t = cx.tArr[k], d = cx.tData[k];
     c.lget(0).refTest(t).if_();
     c.lget(2).refTest(t).raw(OP.i32_eqz).if_(); cx.callThrower(c, "ase"); c.end();
@@ -101,10 +101,9 @@ def("java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V", (cx,
   cx.callThrower(c, "ase");
 });
 // the Unchecked forms are called once the range is known good
-const COPY_NAMES = { Z: "Boolean", B: "Byte", C: "Char", S: "Short", I: "Int", F: "Float", J: "Long", D: "Double" };
-for (const [d, k] of [["Z", "i8"], ["B", "i8"], ["C", "i16"], ["S", "i16"], ["I", "i32"], ["F", "i32"], ["J", "i64"], ["D", "i64"]] as const) {
-  def(`java/lang/System.arraycopy${COPY_NAMES[d]}Unchecked([${d}I[${d}II)V`, (cx, m, c) => {
-    const t = cx.tArr[k], a = cx.tData[k];
+for (const [d, { title }] of Object.entries(PRIMS)) {
+  def(`java/lang/System.arraycopy${title}Unchecked([${d}I[${d}II)V`, (cx, m, c) => {
+    const k = elemKindOf("[" + d), t = cx.tArr[k], a = cx.tData[k];
     c.lget(2).refCast(t).structGet(t, 2).lget(3).lget(0).refCast(t).structGet(t, 2).lget(1).lget(4).arrayCopy(a, a);
   });
 }

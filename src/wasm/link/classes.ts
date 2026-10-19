@@ -9,8 +9,9 @@
 // host for the slot of a generated function for that class.
 import { OP } from "../compiler/code.ts";
 import { HT, T, refNull } from "../compiler/wasmbin.ts";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts.ts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_KINDS } from "../compiler/consts.ts";
 import { ACC, descOf, javaName as stripLoader, typeName, type JClass } from "../compiler/program.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import { canAccess } from "../compiler/linkage.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
@@ -25,12 +26,10 @@ import { UInfo, RInfo, MInfo, Info } from "../compiler/info.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
-/** primitive descriptor -> [ART Primitive::Type, log2 size, Java name] */
-const PRIMS: Record<string, [number, number, string]> = { Z: [1, 0, "boolean"], B: [2, 0, "byte"], C: [3, 1, "char"], S: [4, 1, "short"], I: [5, 2, "int"],
-  J: [6, 3, "long"], F: [7, 2, "float"], D: [8, 3, "double"], V: [9, 0, "void"] };
-/** primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C) */
-export const PRIM = Object.fromEntries(Object.entries(PRIMS).map(([k, v]) => ["#" + k, v]));
-const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
+/** primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C): by key,
+ *  [ART Primitive::Type, log2 size, Java name] */
+export const PRIM = Object.fromEntries([...Object.entries(PRIMS).map(([d, p]) => [d, Math.log2(p.size), p.name] as const), ["V", 0, "void"] as const]
+  .map(([d, log, name], i): [string, [number, number, string]] => ["#" + d, [i + 1, log, name]]));
 const isPrim = (n: string) => n in PRIM;
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
@@ -194,7 +193,7 @@ rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
 }, true);
 // aclone(obj): a copy of an array with the same class, null for anything else
 rt("aclone", ["L"], "L", (cx, c) => {
-  for (const k of KINDS) {
+  for (const k of ELEM_KINDS) {
     const t = cx.tArr[k], d = cx.tData[k], a = c.newLocal(refNull(t)), src = c.newLocal(refNull(d)), dst = c.newLocal(refNull(d)), n = c.newLocal(T.i32);
     c.lget(0).refTest(t).if_();
     c.lget(0).refCast(t).lset(a).lget(a).structGet(t, 2).lset(src).lget(src).refAsNonNull().arrayLen().lset(n).lget(n).arrayNewDefault(d).lset(dst);

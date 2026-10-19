@@ -11,7 +11,6 @@ import { endsBlock, branchTargets } from "../../jvm/prepared.ts";
 import { type Flow, Go } from "../../jvm/structure.ts";
 import { mid } from "./ids.ts";
 import { CHUNK_MARK, COUNT_SLOTS } from "./exc.ts";
-import { NO_THROW } from "./opinfo.ts";
 import { FUEL } from "./hostcalls.ts";
 import type { MC } from "./method.ts";
 
@@ -253,18 +252,16 @@ function dispatchCycles(mc: MC): Map<number, number[]> {
       if (to !== k) { edges[k].add(to); reverse[to].add(k); }
     }
   }
-  for (const t of mc.item.tries) {
-    const handlers = [...t.handlers.map(([, pc]) => pc), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []];
-    let from = -1;
-    for (const ins of mc.prepared.instructions) {
-      if (mc.prepared.leaders[ins.pc]) from = owner[blockAt[ins.pc]];
-      if (from < 0 || ins.pc < t.start || ins.pc >= t.end || NO_THROW[ins.op]) continue;
-      for (const pc of handlers) {
-        const to = owner[blockAt[pc]];
-        if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
-      }
+  const { instructions, leaders, handlers } = mc.prepared;
+  let from = -1;
+  if (mc.tries) instructions.forEach((ins, i) => {
+    if (leaders[ins.pc]) from = owner[blockAt[ins.pc]];
+    const hs = handlers[i];
+    if (from >= 0 && hs) for (const pc of hs) {
+      const to = owner[blockAt[pc]];
+      if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
     }
-  }
+  });
   const seen = new Set<number>(), order: number[] = [];
   for (let start = 0; start < n; start++) {
     if (seen.has(start)) continue;

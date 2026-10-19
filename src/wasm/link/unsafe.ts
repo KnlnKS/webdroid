@@ -8,7 +8,9 @@
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { kindOf, type Kind } from "../compiler/program.ts";
-import type { ElemKind } from "../compiler/consts.ts";
+import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { SIZE } from "../compiler/copy.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
@@ -29,13 +31,10 @@ export function fieldCookie(w: World, id: number): number {
   if (c === undefined) { t.ofField.set(id, c = t.fields.push(id) * 8); }
   return c;
 }
-type Ty = "Z" | "B" | "S" | "C" | "I" | "F" | "J" | "D" | "L";
-const TYPES: Ty[] = ["Z", "B", "S", "C", "I", "F", "J", "D", "L"];
-const WIDTH: Record<Ty, number> = { Z: 1, B: 1, S: 2, C: 2, I: 4, F: 4, J: 8, D: 8, L: 4 };
-const NAME: Record<Ty, string> = { Z: "Boolean", B: "Byte", S: "Short", C: "Char", I: "Int", F: "Float", J: "Long", D: "Double", L: "Reference" };
+/** a primitive's descriptor, or L for a reference */
+type Ty = string;
+const width = (t: Ty) => (t === "L" ? 4 : PRIMS[t].size);
 const desc = (t: Ty) => (t === "L" ? "Ljava/lang/Object;" : t);
-const kindOfTy = (t: Ty): Kind => kindOf(desc(t));
-const ELEM: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" };
 
 /** Field accessor bodies are pure; install them before returning their slot so linking cannot split a VarHandle update. */
 const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
@@ -51,7 +50,7 @@ export function hostUnsafe(w: World, kind: number, a: number, b: number): number
   // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
   if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
-  if (kind === UInfo.ComponentScale) return name[0] === "#" ? WIDTH[name[1] as Ty] : 4;
+  if (kind === UInfo.ComponentScale) return name[0] === "#" ? PRIMS[name[1]]?.size ?? 0 : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
     return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }, true);
@@ -96,11 +95,9 @@ rt("ufield", ["I", "I", "I"], "I", (cx, c) => {
   c.lget(tab).refAsNonNull().lget(index).lget(slot).arraySet(t).lget(slot);
 }, true);
 
-/** array elements by storage kind: bytes each */
-const SIZES = { i8: 1, i16: 2, i32: 4, i64: 8 } as const;
 /** the array element holding byte `at` of the array (local `at`), as an i64 in `value` and the bit offset of the byte within it in `shift` */
-function element(cx: Compiler, c: Code, ek: keyof typeof SIZES, data: number, at: number, shift: number): void {
-  const size = SIZES[ek], d = cx.tData[ek];
+function element(cx: Compiler, c: Code, ek: ElemKind, data: number, at: number, shift: number): void {
+  const size = SIZE[ek], d = cx.tData[ek];
   c.lget(data).refAsNonNull().lget(at).i32(Math.log2(size)).raw(OP.i32_shr_u);
   if (ek === "i8" || ek === "i16") c.arrayGetU(d); else c.arrayGet(d);
   if (ek !== "i64") c.raw(OP.i64_extend_i32_u);
@@ -131,7 +128,7 @@ rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
     c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).lset(data);
     c.block().loop().lget(k).lget(2).raw(OP.i32_ge_s).brIf(1);
     c.lget(1).lget(k).raw(OP.i32_add).lset(at);
-    c.lget(data).refAsNonNull().lget(at).i32(Math.log2(SIZES[ek])).raw(OP.i32_shr_u);
+    c.lget(data).refAsNonNull().lget(at).i32(Math.log2(SIZE[ek])).raw(OP.i32_shr_u);
     element(cx, c, ek, data, at, shift);                        // the element, widened to i64
     c.i64(0xffn).lget(shift).raw(OP.i64_extend_i32_u, OP.i64_shl).i64(-1n).raw(OP.i64_xor, OP.i64_and);
     c.lget(3).lget(k).i32(3).raw(OP.i32_shl).raw(OP.i64_extend_i32_u, OP.i64_shr_u).i64(0xffn).raw(OP.i64_and).lget(shift).raw(OP.i64_extend_i32_u, OP.i64_shl).raw(OP.i64_or);
@@ -163,7 +160,7 @@ const OBJ = 1, OFF = 2;
 
 /** the array in local OBJ at index (offset - ARRAY_BASE) / width, as local `idx` */
 const index = (c: Code, t: Ty): number => {
-  const idx = c.newLocal(T.i32), shift = Math.log2(WIDTH[t]);
+  const idx = c.newLocal(T.i32), shift = Math.log2(width(t));
   c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_sub).raw(OP.i32_wrap_i64).i32(shift).raw(OP.i32_shr_u).lset(idx);
   return idx;
 };
@@ -176,7 +173,7 @@ const slotOf = (cx: Compiler, c: Code, kind: UInfo, k: Kind): number => {
 const onArray = (c: Code) => c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_ge_s);
 
 function emitGet(cx: Compiler, c: Code, t: Ty): void {
-  const k = kindOfTy(t), w = WIDTH[t], ek: ElemKind = t === "L" ? "ref" : ELEM[w], { tArr, tData } = cx;
+  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx;
   const signed = t === "B" || t === "S";
   onArray(c).if_(cx.vtOf(k));
   const idx = index(c, t);
@@ -199,7 +196,7 @@ function emitGet(cx: Compiler, c: Code, t: Ty): void {
 }
 
 function emitPut(cx: Compiler, c: Code, t: Ty): void {
-  const k = kindOfTy(t), w = WIDTH[t], ek: ElemKind = t === "L" ? "ref" : ELEM[w], { tArr, tData } = cx, V = 3;
+  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, V = 3;
   onArray(c).if_();
   const idx = index(c, t);
   c.lget(OBJ).refTest(tArr[ek]).if_();
@@ -219,7 +216,7 @@ function emitPut(cx: Compiler, c: Code, t: Ty): void {
 }
 
 function emitCas(cx: Compiler, c: Code, t: "I" | "J" | "L"): void {
-  const k = kindOfTy(t), ek: ElemKind = t === "L" ? "ref" : t === "I" ? "i32" : "i64", { tArr, tData } = cx, EXP = 3, NEW = 4;
+  const k = kindOf(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, EXP = 3, NEW = 4;
   onArray(c).if_(T.i32);
   const idx = index(c, t), data = c.newLocal(refNull(tData[ek]));
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lset(data);
@@ -231,8 +228,8 @@ function emitCas(cx: Compiler, c: Code, t: "I" | "J" | "L"): void {
   c.end();
 }
 
-for (const t of TYPES) {
-  const n = NAME[t], d = desc(t);
+for (const t of [...Object.keys(PRIMS), "L"]) {
+  const n = t === "L" ? "Reference" : PRIMS[t].title, d = desc(t);
   const names = t === "L" ? ["Reference", "ReferenceVolatile", "Object", "ObjectVolatile"] : t === "I" || t === "J" ? [n, n + "Volatile"] : [n];
   for (const g of names) def(`get${g}(Ljava/lang/Object;J)${d}`, (cx, c) => emitGet(cx, c, t));
   const puts = t === "L" ? ["Reference", "ReferenceVolatile", "Object", "ObjectVolatile", "OrderedObject"] : t === "I" || t === "J" ? [n, n + "Volatile", "Ordered" + n] : [n];

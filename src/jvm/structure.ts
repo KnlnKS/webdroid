@@ -54,7 +54,7 @@ export class Flow {
     }
     const entries = [0];
     for (const pc of extraEntries) entries.push(this.blockAt[pc]);
-    for (const t of code.tries) { for (const [, h] of t.handlers) entries.push(this.blockAt[h]); if (t.catchAllAddr >= 0) entries.push(this.blockAt[t.catchAllAddr]); }
+    for (const pc of prepared.handlerPcs) entries.push(this.blockAt[pc]);
     succs.push(entries);
     for (const e of entries) preds[e].push(root);
 
