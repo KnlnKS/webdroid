@@ -13,9 +13,10 @@ import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
-import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
-import { NO_THROW, isFieldAccess, isInvoke } from "./opinfo.ts";
-import { emitRestored, FUEL } from "./hostcalls.ts";
+import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
+import { isFieldAccess, isInvoke } from "./opinfo.ts";
+import { emitRestored } from "./hostcalls.ts";
+import { Outliner } from "./outline.ts";
 import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** what an invoke names: its kind without /range, the method's name and descriptor, the class whose methods it searches, and the resolved target */
@@ -23,8 +24,6 @@ type InvokeSite = { kind: string; name: string; desc: string; decl: string; targ
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
 const NONE: readonly string[] = [];
-/** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
-const CHUNK = 1024;
 /** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
 const INVOKE_USE: Record<string, number> = { "invoke-virtual": 0, "invoke-direct": 1, "invoke-static": 2, "invoke-interface": 3 };
 /** the Wasm instruction of each binary operation that is one, by operand kind */
@@ -93,32 +92,15 @@ export class MC {
   /** "web:struct" of the field accesses that share a cast, and the local holding it */
   shadowKeys = new Set<string>();
   shadows = new Map<string, number>();
-  private root!: Code;
-  /** the dispatch cycles (strong components of the regions): each runs in one chunk with a dispatch of its own */
-  private cycleOf = new Map<number, number[]>();
-  /** Loops and dispatch cycles run in functions of their own, re-entered every chunk of iterations, so a long activation reaches the engine's optimized code (G4).
-   *  The second tier runs code that has already been hot: its loops stay in the method, unless the first tier saw one run 64 chunks in one entry (World.longLoops). */
-  private outlining: boolean;
-  /** The first tier starts a loop in the method and moves it to its chunks at a fuel tick (and the loops around it at their next iteration): a short loop then costs neither
-   *  the state of an activation nor the engine's compiling of two more functions */
-  private deferred: boolean;
-  private armedLocal = -1;
-  private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] };
-  private cycleChunks = new Map<number[], NonNullable<MC["chunk"]>>();
-  /** the state field in which the dispatchers count the iterations the activation's chunks ran, toward its fuel (the chunks themselves only count to CHUNK) */
-  private chunkFuel = -1;
-  private chunks: NonNullable<MC["chunk"]>[] = [];
-  private resultLocal = -1;
-  private controlLocal = -1;
-  private stateType = -1;
-  private stateLocal = -1;
+  /** the method's own function, which `code` is while no chunk is being emitted */
+  root!: Code;
+  /** the loops and dispatch cycles that run in functions of their own (outline.ts), if the method has any to outline */
+  private loops?: Outliner;
   constructor(cx: Compiler, m: MethodInfo) {
     this.cx = cx; this.m = m;
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     this.tries = this.item.tries.length > 0;
-    this.outlining = cx.counting || cx.w.longLoops.has(mid(m));
-    this.deferred = cx.counting;
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
@@ -221,17 +203,10 @@ export class MC {
     this.allocateWebs();
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    if (this.outlining) this.findCyclicRegions();
-    const hasLoops = this.outlining && (this.cycleOf.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop)));
-    if (hasLoops) {
-      c.nullableLocals = true;
-      this.controlLocal = c.newLocal(T.i32);
-      if (m.ret !== "V") this.resultLocal = c.newLocal(cx.vtOf(kindOf(m.ret)));
-      if (!this.tries) this.excLocal = c.newLocal(T.anyref);
-    }
-    if (hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (cx.counting || cx.w.longLoops.has(mid(m))) { const loops = new Outliner(this); if (loops.any) (this.loops = loops).declare(); }
+    if (this.loops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
-    if (hasLoops && this.deferred) this.fuelLocal = c.newLocal(T.i32);
+    if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -272,49 +247,17 @@ export class MC {
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;
   private fuelLocal = -1;
-  private fuel(tick?: () => void) { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32)), tick); }
+  fuel(tick?: () => void) { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32)), tick); }
   /** where the frame's weight (exc.ts MAX_DEPTH) goes in the code, known once the locals are */
   private weights: number[] = [];
   private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
   /** gives the frame the weight of its parameters and locals */
   weigh(): Code {
     const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
-    if (this.chunks.length) {
-      this.stateType = this.cx.mb.addType({ k: "struct", fields: types.map((t) => ({ t, mut: true })) });
-      this.stateLocal = this.root.newLocal(refNull(this.stateType));
-    }
-    const own = (this.chunks.length ? 5 : 4) + types.length;
-    for (const ch of this.chunks) {
-      ch.locals = [...ch.code.locals].sort((a, b) => a - b);
-      // State fields retain method indices; native chunks declare only their used locals.
-      const locals = [...ch.locals, this.stateLocal];
-      ch.code.localMap = new Map(locals.map((l, i) => [l, i + 1]));
-      ch.code.nparams = 1;
-      ch.code.localTypes = locals.map((l) => l === this.stateLocal ? refNull(this.stateType) : types[l]);
-      const owner = this.cx.mb.funcNames[this.cx.fn.get(mid(this.m))! - this.cx.mb.nImportedFuncs];
-      const name = `${owner}#loop${ch.label.slice(1)}`;
-      ch.f = this.cx.mb.reserveFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), name);
-      this.cx.outlines.push({ name, f: ch.f, code: ch.code, m: this.m });
-      const d = new Code(1), count = d.newLocal(T.i32), status = d.newLocal(T.i32), fuel = d.newLocal(T.i32);
-      d.loop().lget(0).i32(0).structSet(this.stateType, ch.count);
-      d.lget(0).call(ch.f).lset(status);
-      // the activation's fuel: the iterations of every chunk it ran
-      d.lget(0).structGet(this.stateType, this.chunkFuel).lget(0).structGet(this.stateType, ch.count).raw(OP.i32_add).ltee(fuel).i32(FUEL).raw(OP.i32_ge_u).if_();
-      this.cx.callRt(d, "yieldNow"); d.i32(0).lset(fuel).end();
-      d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
-      d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
-      d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();
-      const slot = this.cx.counting ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
-      if (slot < COUNT_SLOTS) d.i32(slot).call(this.cx.imp.long);
-      d.i32(1).ret();
-      ch.dispatch = this.cx.mb.addFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), d.finish(), "$dispatch:" + name);
-    }
+    const own = (this.loops?.build(types) ? 5 : 4) + types.length;
     for (const at of this.weights) this.code.patch(at, own);
     if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
-    for (const ch of this.chunks) {
-      ch.code.materialize();
-      this.cx.mb.setBody(ch.f, ch.code.finish());
-    }
+    this.loops?.finish();
     this.root.materialize();
     return this.root;
   }
@@ -407,116 +350,31 @@ export class MC {
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
-  blk(label: string, loop: boolean, bt: VT | null = null, deferred?: { nested: boolean }) {
+  /** a scope of the structured flow: a block (B), or a loop (L) that stays in the method */
+  blk(label: string, loop: boolean) {
     this.push(label);
-    if (!loop) { this.code.block(bt); return; }
-    this.code.loop(bt);
-    if (deferred) {
-      const c = this.code, armed = this.armedLocal >= 0 ? this.armedLocal : (this.armedLocal = this.root.newLocal(T.i32));
-      if (deferred.nested) c.lget(armed).brIf(this.depth("$xfer" + label));
-      this.push("if");
-      this.fuel(() => c.i32(1).lset(armed).br(this.depth("$xfer" + label)));
-      this.pop();
-    } else if (label[0] === "L") {
-      if (this.chunk?.label === label) {
-        const ch = this.chunk, c = this.code;
-        c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.push("if");
-        this.chunkReturn(1); this.pop(); c.end();
-        c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
-      }
-      if (this.cx.counting && !this.chunk) this.cx.emitCount(this.code, this.m);
-      // every cycle passes a natural loop's head, which can hold the browser thread however finite the loop
-      if (this.chunk?.label !== label) this.fuel();
-    }
+    if (!loop) { this.code.block(); return; }
+    this.code.loop();
+    // every cycle passes a natural loop's head, which can hold the browser thread however finite the loop
+    this.fuel();
   }
   endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
-    const r = this.flow.regions[k], cycle = this.cycleOf.get(k);
-    if (!cycle || this.chunk?.cycle === cycle) { this.emitSpan(r, 0, r.order.length, r.scopes); return; }
-    let ch = this.cycleChunks.get(cycle);
-    if (!ch) this.cycleChunks.set(cycle, ch = this.chunkBody("$cycle" + cycle[0], () => this.emitCycle(cycle), cycle));
-    this.code.i32(k).lset(this.regionLocal);
-    this.chunkCall(ch);
+    const r = this.flow.regions[k];
+    if (!this.loops?.region(k)) this.emitSpan(r, 0, r.order.length, r.scopes);
   }
-  /** the regions of a dispatch cycle in its chunk: a jump between them dispatches here, each dispatch counting toward the chunk */
-  private emitCycle(cycle: number[]): void {
-    const c = this.code, ch = this.chunk!;
-    this.push("$cycleDisp"); c.loop();
-    c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.push("if"); this.chunkReturn(1); this.pop(); c.end();
-    c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
-    for (let i = cycle.length - 1; i >= 0; i--) { this.push("$C" + i); c.block(); }
-    const at = new Map(cycle.map((k, i) => [k, i]));
-    c.lget(this.regionLocal).brTable(Array.from({ length: this.flow.regions.length }, (_, k) => at.get(k) ?? 0), 0);
-    for (let i = 0; i < cycle.length; i++) { this.pop(); c.end(); this.emitRegion(cycle[i]); c.unreachable(); }
-    this.pop(); c.end().unreachable();
-  }
-  private findCyclicRegions(): void {
-    const { regions, blockAt } = this.flow, n = regions.length;
-    if (n < 2) return;
-    const owner = new Int32Array(this.flow.starts.length).fill(-1);
-    regions.forEach((r, k) => { for (const b of r.order) owner[b] = k; });
-    const edges = Array.from({ length: n }, () => new Set<number>()), reverse = Array.from({ length: n }, () => new Set<number>());
-    for (let k = 0; k < n; k++) for (const b of regions[k].order) {
-      const ins = this.blockIns[b].at(-1)!;
-      const targets = [...branchTargets(this.item, ins)];
-      if (!endsBlock(ins.op)) targets.push(ins.pc + ins.len);
-      for (const pc of targets) {
-        const to = owner[blockAt[pc]];
-        if (to !== k) { edges[k].add(to); reverse[to].add(k); }
-      }
-    }
-    for (const t of this.item.tries) {
-      const handlers = [...t.handlers.map(([, pc]) => pc), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []];
-      let from = -1;
-      for (const ins of this.prepared.instructions) {
-        if (this.prepared.leaders[ins.pc]) from = owner[blockAt[ins.pc]];
-        if (from < 0 || ins.pc < t.start || ins.pc >= t.end || NO_THROW[ins.op]) continue;
-        for (const pc of handlers) {
-          const to = owner[blockAt[pc]];
-          if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
-        }
-      }
-    }
-    // Strong components identify dispatch cycles without outlining acyclic handler paths; each cycle re-enters its chunk.
-    const seen = new Set<number>(), order: number[] = [];
-    for (let start = 0; start < n; start++) {
-      if (seen.has(start)) continue;
-      const stack: [number, boolean][] = [[start, false]];
-      while (stack.length) {
-        const [v, done] = stack.pop()!;
-        if (done) { order.push(v); continue; }
-        if (seen.has(v)) continue;
-        seen.add(v); stack.push([v, true]);
-        for (const to of edges[v]) if (!seen.has(to)) stack.push([to, false]);
-      }
-    }
-    seen.clear();
-    for (const start of order.reverse()) {
-      if (seen.has(start)) continue;
-      const component: number[] = [], stack = [start]; seen.add(start);
-      while (stack.length) {
-        const v = stack.pop()!; component.push(v);
-        for (const to of reverse[v]) if (!seen.has(to)) { seen.add(to); stack.push(to); }
-      }
-      if (component.length > 1) {
-        component.sort((a, b) => a - b);
-        for (const v of component) this.cycleOf.set(v, component);
-      }
-    }
-  }
-  private emitSpan(r: Flow["regions"][number], start: number, end: number, scopes: Flow["regions"][number]["scopes"]) {
+  emitSpan(r: Flow["regions"][number], start: number, end: number, scopes: Flow["regions"][number]["scopes"]) {
     const open: { close: number }[] = []; let next = 0, p = start;
     while (p <= end) {
       while (open.length && open[open.length - 1].close === p) { open.pop(); this.endBlk(); }
       let outlined = false;
       for (; next < scopes.length && scopes[next].open === p; next++) {
         const s = scopes[next];
-        if (s.loop && this.outlining) {
+        if (s.loop && this.loops) {
           let last = next + 1;
           while (last < scopes.length && scopes[last].open < s.close) last++;
-          if (this.deferred && !this.chunk) this.deferLoop(r, s, scopes.slice(next + 1, last));
-          else this.outline(r, s, scopes.slice(next + 1, last));
+          this.loops.loop(r, s, scopes.slice(next + 1, last));
           next = last; p = s.close; outlined = true;
           break;
         }
@@ -527,95 +385,10 @@ export class MC {
       p++;
     }
   }
-  /** the loop in the method, left for its chunks at a fuel tick or once a loop inside it was */
-  private deferLoop(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
-    const c = this.code, after = "$after" + scope.label;
-    this.push(after); c.block();
-    this.push("$xfer" + scope.label); c.block();
-    this.blk(scope.label, true, null, { nested: scopes.some((s) => s.loop) });
-    this.emitSpan(r, scope.open, scope.close, scopes);
-    this.endBlk(); c.br(this.depth(after));
-    this.pop(); c.end();
-    this.outline(r, scope, scopes);
-    this.pop(); c.end();
-  }
-  private chunkReturn(status: number): void {
-    this.code.i32(status).br(this.depth("$chunkReturn"));
-  }
-  private outline(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
-    this.chunkCall(this.chunkBody(scope.label, () => {
-      this.blk(scope.label, true);
-      this.emitSpan(r, scope.open, scope.close, scopes);
-      this.endBlk(); this.chunkReturn(0);
-    }));
-  }
-  /** a function of its own for what `emit` emits, which returns a status (chunkCall) and takes and leaves the method's locals in the state struct */
-  private chunkBody(label: string, emit: () => void, cycle?: number[]): NonNullable<MC["chunk"]> {
-    const parent = this.code, nest = this.nest, outer = this.chunk;
-    const body = new Code(this.root.nparams); body.localTypes = this.root.localTypes; body.nullableLocals = true; body.nonNullLocals = this.root.nonNullLocals; body.compactLocals = true;
-    body.defer((c) => {
-      c.raw(0x20, 0).lset(this.stateLocal);
-      this.loadState(c, ch.locals);
-    });
-    if (this.chunkFuel < 0) this.chunkFuel = this.root.newLocal(T.i32);
-    const ch = { code: body, label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1, cycle };
-    parent.locals.add(ch.entry);
-    this.chunks.push(ch); this.code = body; this.nest = []; this.chunk = ch;
-    this.push("$chunkReturn"); body.block(T.i32);
-    this.push("$chunkCaught"); body.block(T.anyref);
-    this.push("$chunkTry"); body.tryTable(null, [[0, this.cx.tag, 0]]);
-    emit();
-    this.pop(); body.end().unreachable();
-    this.pop(); body.end().lset(this.excLocal); this.chunkReturn(3);
-    this.pop(); body.end();
-    if (this.cx.counting) this.cx.emitCount(body, this.m, ch.count);
-    body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
-    for (const l of body.locals) parent.locals.add(l);
-    this.code = parent; this.nest = nest; this.chunk = outer;
-    return ch;
-  }
-  /** calls the chunk until it is done, then goes where it says: the method returns or throws, or control continues at one of its exits (status 0 falls through) */
-  private chunkCall(ch: NonNullable<MC["chunk"]>): void {
-    const c = this.code;
-    this.push("$chunkCall"); c.loop();
-    c.i32(0).lset(ch.count);
-    c.defer((c) => {
-      c.lget(this.stateLocal).refIsNull().if_().gc(1, this.stateType).lset(this.stateLocal).end();
-      this.saveState(c, ch.locals);
-      // Charge the dispatcher and chunk only while their native frames are active.
-      const weights = this.cx.emitEnter(c, ch.entry);
-      const size = ch.code.localTypes.length;
-      for (const at of weights) c.patch(at, 12 + size);
-      c.lget(this.stateLocal).refAsNonNull().call(ch.dispatch).lset(this.controlLocal);
-      this.cx.emitLeave(c, ch.entry, false);
-      this.loadState(c, ch.locals);
-    });
-    c.lget(this.controlLocal).i32(1).raw(OP.i32_eq).brIf(0);
-    c.lget(this.controlLocal).i32(2).raw(OP.i32_eq).if_(); this.push("if");
-    if (this.resultLocal >= 0) c.lget(this.resultLocal);
-    this.methodReturn(); this.pop(); c.end();
-    c.lget(this.controlLocal).i32(3).raw(OP.i32_eq).if_().lget(this.excLocal).throw_(this.cx.tag).end();
-    for (let i = 0; i < ch.exits.length; i++) {
-      c.lget(this.controlLocal).i32(4 + i).raw(OP.i32_eq).if_(); this.push("if");
-      const saved = this.block, exit = ch.exits[i]; this.block = exit.block;
-      this.jump(exit.pc, exit.final); this.block = saved; this.pop(); c.end();
-    }
-    this.pop(); c.end();
-  }
-  private saveState(c: Code, locals: number[]): void {
-    for (const i of locals) c.lget(this.stateLocal).refAsNonNull().lget(i, false).structSet(this.stateType, i);
-  }
-  private loadState(c: Code, locals: number[]): void {
-    for (const i of locals) if (i !== this.controlLocal) c.lget(this.stateLocal).refAsNonNull().structGet(this.stateType, i).lset(i);
-  }
-  private methodReturn(): void {
-    if (this.chunk) {
-      if (this.resultLocal >= 0) this.code.lset(this.resultLocal);
-      this.chunkReturn(2);
-    } else {
-      if (this.deferred && this.fuelLocal >= 0) this.cx.emitCount(this.code, this.m, this.fuelLocal);
-      this.leave(); this.code.ret();
-    }
+  methodReturn(): void {
+    if (this.loops?.ret()) return;
+    if (this.cx.counting && this.fuelLocal >= 0) this.cx.emitCount(this.code, this.m, this.fuelLocal);
+    this.leave(); this.code.ret();
   }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
@@ -637,12 +410,7 @@ export class MC {
     const flow = this.flow, c = this.code, v = flow.blockAt[targetPc];
     const go = flow.go(this.block, v, final);
     const label = go === Go.Continue ? "L" + targetPc : go === Go.Break ? "B" + targetPc : "$disp";
-    if (go === Go.Dispatch && this.chunk?.cycle?.includes(this.regionOfPc.get(targetPc)!)) { c.i32(this.regionOfPc.get(targetPc)!).lset(this.regionLocal).br(this.depth("$cycleDisp")); return; }
-    if (this.chunk && go !== Go.Next && !this.nest.includes(label)) {
-      let i = this.chunk.exits.findIndex((e) => e.pc === targetPc && e.block === this.block && e.final === final);
-      if (i < 0) { i = this.chunk.exits.length; this.chunk.exits.push({ pc: targetPc, block: this.block, final }); }
-      this.chunkReturn(4 + i); return;
-    }
+    if (this.loops?.exit(targetPc, final, go, label)) return;
     switch (go) {
       case Go.Next: return;
       case Go.Break: c.br(this.depth("B" + targetPc)); return;
