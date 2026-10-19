@@ -5,7 +5,10 @@ type Contract = Record<string, (...args: never[]) => unknown>;
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
   | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
-const methods = ["processDied", "locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "storageChanged", "accountsChanged", "packageRemoved", "kill"] as const;
+/** `names`, which must list every method of C; a proxy can only call the methods it names */
+export const methodsOf = <C extends Contract>() => <const L extends readonly (keyof C & string)[]>(
+  names: L & ([Exclude<keyof C, L[number]>] extends [never] ? unknown : { missing: Exclude<keyof C, L[number]> })): L => names;
+const methods = methodsOf<ProcessEndpoint>()(["processDied", "locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "storageChanged", "accountsChanged", "packageRemoved", "kill"]);
 
 export type ProcessFailure = { javaClass: string | null; name: string; message: string | null; stack?: string };
 

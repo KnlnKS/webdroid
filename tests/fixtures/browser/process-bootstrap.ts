@@ -11,7 +11,7 @@ import { callProxy } from "../../../src/shell/process-port.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { receiveIme } from "../../../src/shell/ime-port.ts";
-import { workerControlMethods } from "../../../src/shell/worker-control-methods.ts";
+import { workerControlMethods } from "../../../src/shell/process-worker-client.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 

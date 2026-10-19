@@ -1,5 +1,5 @@
 import type { ImeState } from "../android/ime.ts";
-import { callProxy, serveCalls } from "./process-port.ts";
+import { callProxy, methodsOf, serveCalls } from "./process-port.ts";
 
 type ImeCalls = {
   input(generation: number, text: string, start: number, end: number, composing: boolean): Promise<void>;
@@ -37,7 +37,7 @@ export function receiveIme(port: MessagePort, canvas: HTMLCanvasElement, supplie
   let closed = false, pending = false;
   let state: ImeState = { generation: 0, text: "", start: 0, end: 0, active: false, hasAction: false };
   const queue: Edit[] = [];
-  const proxy = callProxy<ImeCalls>(port, ["input", "selection", "finish", "action"], [], undefined, () => close());
+  const proxy = callProxy<ImeCalls>(port, methodsOf<ImeCalls>()(["input", "selection", "finish", "action"]), [], undefined, () => close());
   function mirror() {
     if (closed) return;
     input.disabled = !state.active || canvas.hidden;

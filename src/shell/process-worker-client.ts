@@ -1,7 +1,6 @@
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import { callProxy, processError, type ProcessFailure } from "./process-port.ts";
+import { callProxy, methodsOf, processError, type ProcessFailure } from "./process-port.ts";
 import type { WorkerControl } from "./worker-control.ts";
-import { workerControlMethods } from "./worker-control-methods.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveAot, serveCompileWorkers, serveWarm } from "../jvm/tier.ts";
@@ -17,6 +16,7 @@ export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; ao
 /** what a process Worker posts the page once its start succeeds or fails */
 export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
+export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "pointer", "back", "testFrame", "timeline"]);
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */

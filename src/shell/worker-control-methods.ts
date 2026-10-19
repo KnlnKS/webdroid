@@ -1,2 +1,0 @@
-// The copied-control wire allowlist is safe to import before JVM or rendering initialization.
-export const workerControlMethods = ["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "pointer", "back", "testFrame", "timeline"] as const;
