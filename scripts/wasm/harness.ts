@@ -1,6 +1,5 @@
 // What the harnesses run Java with: the registered natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
-import { existsSync, openSync, readFileSync, readSync } from "node:fs";
 import "../../src/natives.ts";
 import { jarDexes, mountPlatformJar } from "../../src/android/framework.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
@@ -13,6 +12,7 @@ import { lookup, natives, settled } from "../../src/wasm/host/nativesource.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
+import { mountLocalPlatformData, platformJarBytes } from "../aosp.ts";
 export { natives };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
@@ -29,20 +29,14 @@ export const fmt = (k: string, v: bigint) => {
   return String(v);
 };
 
-/** the platform's jars at their device paths and its /apex data, once per process before Java runs: read from the checkout at `from`, or the jars given */
-export async function mountPlatform(from: string | Uint8Array[]): Promise<void> {
+/** the platform's jars at their device paths and its /apex data, once per process before Java runs: read from the checkout at `from`, or the jars given.
+ *  Answers the jars' bytes. */
+export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8Array | undefined)[]> {
   const page = !!(globalThis as { document?: unknown }).document, aosp = `${from}/vendor/aosp`;
-  const jars = PLATFORM_JARS.map((jar, i) => {
-    const bytes = typeof from !== "string" ? from[i] : page || existsSync(`${aosp}/${jar}`) ? new Uint8Array(readFileSync(`${aosp}/${jar}`)) : undefined;
-    if (bytes) mountPlatformJar(bytes, i);
-    return bytes;
-  });
+  const jars = typeof from === "string" ? platformJarBytes(aosp) : from;
+  jars.forEach((bytes, i) => { if (bytes) mountPlatformJar(bytes, i); });
   // a page reads the data by range requests to its server
-  if (page) mountPlatformData();
-  else mountPlatformData((path, size) => {
-    const fd = openSync(aosp + path, "r");
-    return { size, read: async (at, length) => { const b = new Uint8Array(length); readSync(fd, b, 0, length, at); return b; } };
-  });
+  if (page) mountPlatformData(); else mountLocalPlatformData(aosp);
   // A mapped file faults its pages in asynchronously, which a synchronous entry cannot wait for: the ICU data files are read first into
   // the pages every mapping of them shares, as a warm page cache would hold them
   for (const path of Object.keys(PLATFORM_DATA).filter((p) => /\.(dat|res)$/.test(p))) {
@@ -56,6 +50,7 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<void> 
   // the natives are called as host code, on a World of the ICU jars: none of a harness's Worlds sees them run
   world(icu, { natives, aot: undefined });
   for (const [cls, key] of ICU_VERSIONS) { const f = lookup(cls, key, true); if (f) settled.set(cls + "." + key, await f.call(null)); }
+  return jars;
 }
 
 /** `w` with the classes the host implements, added after the constructor as host/boot.ts adds them */

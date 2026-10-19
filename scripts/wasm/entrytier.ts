@@ -4,14 +4,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import "../../src/natives.ts";
 import { loadPlatformJar } from "../../src/android/framework.ts";
-import { BOOT_JAR_PATHS } from "../../src/jvm/bootclasspath.ts";
-import { vfs } from "../../src/shell/vfs.ts";
-import { BytesFile } from "../../src/shell/lazyfile.ts";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
 import { loadDex, loadTier } from "../../src/jvm/tier.ts";
 import { getDeclared } from "../../src/jvm/runtime.ts";
 import { mountPlatform } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
@@ -21,13 +19,10 @@ import { callProxy, serveCalls } from "../../src/shell/process-port.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
 const expected = recorded(join(JAVA, "E.expected.txt"));
-await mountPlatform(ROOT);
+const jars = await mountPlatform(ROOT);
 await loadTier();
 // every jar of the boot class path is on the device; the classes of the four the fixture needs are loaded
-PLATFORM_PATHS.forEach((path, i) => {
-  const bytes = new Uint8Array(readFileSync(path));
-  if ([0, 1, 5, 12].includes(i)) loadPlatformJar(bytes, i); else vfs.mount(BOOT_JAR_PATHS[i], new BytesFile(bytes));
-});
+for (const jar of ["boot/core-oj.jar", "boot/core-libart.jar", "framework.jar", "boot/core-icu4j.jar"]) loadPlatformJar(jars[PLATFORM_JARS.indexOf(jar)]!, PLATFORM_JARS.indexOf(jar));
 const dexBytes = new Uint8Array(readFileSync(entryDex()));
 for (const d of dexesIn(dexBytes, "E")) loadDex(d);
 const got = await entryCases();
