@@ -36,10 +36,10 @@ import { installLatencyObserver } from "./observe.ts";
 import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
 import { consume } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
+import { BASE_URL, chromeArgs } from "../browser.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
 const SCENARIOS = join(import.meta.dirname, "scenarios");
 
 const args = process.argv.slice(2);
@@ -509,10 +509,9 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   }
   const chromeLog = process.env.WEBDROID_CHROME_LOG;
   const [command, ...argv] = [...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-    "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
+    ...chromeArgs(), "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
-    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
-    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
+    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
   // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
   const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
   const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });
@@ -545,7 +544,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
   const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
-  const url = new URL("/", BASE);
+  const url = new URL("/", BASE_URL);
   url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
   if (browser.context) {
     const page = await browser.context.newPage();
@@ -626,7 +625,7 @@ async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
 async function resetData(browser: BrowserDriver): Promise<void> {
   if (browser.context) {
     const page = await browser.context.newPage();
-    try { await page.goto(`${BASE}/?screen=${encodeURIComponent(SCREEN)}`); await page.waitForFunction(() => !!globalThis.wd); await page.evaluate(() => globalThis.wd.reset()); }
+    try { await page.goto(`${BASE_URL}/?screen=${encodeURIComponent(SCREEN)}`); await page.waitForFunction(() => !!globalThis.wd); await page.evaluate(() => globalThis.wd.reset()); }
     finally { await page.close(); }
     return;
   }
@@ -639,7 +638,7 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   await send("Page.addScriptToEvaluateOnNewDocument", { source: `addEventListener("DOMContentLoaded", async () => {
     while (!globalThis.wd) await new Promise((r) => setTimeout(r, 50));
     await globalThis.wd.reset(); document.title = "RESET"; });` }, sessionId);
-  await send("Page.navigate", { url: `${BASE}/?screen=${encodeURIComponent(SCREEN)}` }, sessionId);
+  await send("Page.navigate", { url: `${BASE_URL}/?screen=${encodeURIComponent(SCREEN)}` }, sessionId);
   try {
     for (const deadline = Date.now() + 60_000; Date.now() < deadline; await delay(200))
       if ((await send("Target.getTargetInfo", { targetId })).targetInfo.title === "RESET") return;

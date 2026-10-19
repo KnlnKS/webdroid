@@ -4,8 +4,7 @@ import { writeFileSync } from "node:fs";
 import type { Page } from "playwright";
 import { argv } from "./args.ts";
 import { corpusApks } from "./apk-corpus.ts";
-import { webdroidUrl } from "../tests/e2e/lib/util.ts";
-import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid.ts";
+import { CONTEXT_OPTS, launchBrowser, webdroidUrl } from "./browser.ts";
 import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 const args = process.argv.slice(2);

@@ -10,6 +10,7 @@ import { aotFile, aotManifest } from "../aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { bundleFor, checker, fixture } from "./tools.ts";
+import { launchBrowser } from "../browser.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)
 const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
@@ -28,8 +29,7 @@ const server = await serve({ fetch(req) {
   return p.startsWith("/vendor/aosp/") && !p.includes("..") ? fileResponse(join(ROOT, p), req) : new Response("", { status: 404 });
 } });
 
-const { chromium } = await import("playwright");
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("page error:", String(e).slice(0, 500)));
 await page.goto(server.url.href);

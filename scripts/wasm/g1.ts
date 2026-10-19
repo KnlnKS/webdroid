@@ -65,7 +65,7 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
   return result;
 };
 async function chromeRun() {
-  const { chromium } = await import("playwright");
+  const { launchBrowser } = await import("../browser.ts");
   const script = await bundleFor("browser", join(here, "g1run.ts"));
   const aotDir = process.env.WEBDROID_AOT;
   const preload = [dex, ...PLATFORM_PATHS];
@@ -86,7 +86,7 @@ async function chromeRun() {
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file ? fileResponse(file, req, iso) : new Response("", { status: 404 });
   } });
-  const browser = await chromium.launch({ channel: "chrome", headless: true, args: [`--js-flags=--expose-gc ${v8Flags}`] });
+  const browser = await launchBrowser(`--expose-gc ${v8Flags}`);
   const version = browser.version();
   return { version, run: async (cfg: G1Config): Promise<G1Result> => {
     const page = await (await browser.newContext()).newPage();

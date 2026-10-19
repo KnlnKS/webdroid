@@ -4,7 +4,7 @@
 import { readFile } from "node:fs/promises";
 import { chromium, type Browser, type BrowserServer, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
-import { BASE_URL, webdroidUrl } from "../lib/util.ts";
+import { BASE_URL, CONTEXT_OPTS, launchOptions, webdroidUrl } from "../../../scripts/browser.ts";
 import { DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe.ts";
 
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
@@ -20,34 +20,6 @@ function pageUrl(screen: CaptureScreen, controlled: boolean): string {
   if (controlled) u.searchParams.set("testClock", "controlled");
   return u.href;
 }
-
-// WEBDROID_SITE_ISOLATION=0 keeps Playwright's default, which shares a WebView page's renderer with
-// the app as Safari and Chrome on Android do
-const ISOLATED = process.env.WEBDROID_SITE_ISOLATION !== "0";
-const LAUNCH_ARGS = [
-  ...(ISOLATED ? ["--site-per-process"] : []),
-  "--font-render-hinting=none", "--disable-lcd-text",
-  "--force-device-scale-factor=1", "--hide-scrollbars",
-  ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []),
-];
-export const CONTEXT_OPTS = {
-  viewport: { width: 1400, height: 1500 },
-  deviceScaleFactor: 1,
-  locale: "en-US",
-  timezoneId: "UTC",
-  colorScheme: "light" as const,
-  reducedMotion: "reduce" as const,
-  geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
-  permissions: ["geolocation"],
-};
-const launchOptions = (gpu: "software" | "hardware" = "software") => ({
-  headless: true,
-  channel: gpu === "hardware" ? "chromium" : undefined,
-  args: [...LAUNCH_ARGS, ...(gpu === "software" ? ["--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"] : [])],
-  ignoreDefaultArgs: [...(ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : []), ...(gpu === "hardware" ? ["--enable-unsafe-swiftshader"] : [])],
-});
-
-export const launchBrowser = (gpu: "software" | "hardware" = "software") => chromium.launch(launchOptions(gpu));
 
 async function within<T>(work: Promise<T>, ms: number, reason: string | Error): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
