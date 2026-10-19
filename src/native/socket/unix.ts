@@ -8,6 +8,7 @@
 import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import { logLine } from "../libc.ts";
+import { complete } from "../host.ts";
 import { openFd, holdFile, dropFile, installSocket, naming, POLLIN, POLLERR, POLLHUP, POLLOUT, type OpenFile } from "../fs.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 import { parseIpv4 } from "../../shell/relay.ts";
@@ -278,8 +279,7 @@ function addrinfo(node: string, service: string, flags: number, family: number, 
     }
     return r.be32(0).done();
   };
-  const found = resolveHost(node, family < 0 ? 0 : family, flags < 0 ? 0 : flags);
-  return found instanceof Promise ? found.then(answer) : answer(found);
+  return complete(resolveHost(node, family < 0 ? 0 : family, flags < 0 ? 0 : flags), answer);
 }
 /** android_read_hostent's serialization: name, aliases, type, length, addresses */
 function hostent(name: string, addresses: number[][]): Uint8Array {
@@ -297,9 +297,7 @@ function query(line: string): Uint8Array | Promise<Uint8Array> {
   if (command === "gethostbyname") {
     const [, name, af] = args;
     if (Number(af) !== AF_INET && Number(af) !== AF_INET6) return failed(HOST_NOT_FOUND);
-    const found = resolveHost(name, Number(af), 0);
-    const answer = (f: number[][] | number) => (typeof f === "number" ? failed(HOST_NOT_FOUND) : hostent(name, f));
-    return found instanceof Promise ? found.then(answer) : answer(found);
+    return complete(resolveHost(name, Number(af), 0), f => typeof f === "number" ? failed(HOST_NOT_FOUND) : hostent(name, f));
   }
   if (command === "gethostbyaddr") {
     const address = parseIpv4(args[0]) ?? parseIpv6(args[0]), name = address && hostOf(address);

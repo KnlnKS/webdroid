@@ -8,6 +8,11 @@ import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL, E } from "./abi.ts";
 import { perf } from "../perf.ts";
 import { core, CORE_LIBC } from "./core.ts";
 
+/** `done` of `value`, now or once it settles */
+export function complete<V, T>(value: V | Promise<V>, done: (value: V) => T | Promise<T>): T | Promise<T> {
+  return value instanceof Promise ? value.then(done) : done(value);
+}
+
 export const NORET: unique symbol = Symbol("noret");
 /** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
 export const ARG0: unique symbol = Symbol("arg0");

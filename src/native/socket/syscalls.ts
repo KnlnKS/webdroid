@@ -4,7 +4,7 @@
 
 import { E } from "../abi.ts";
 import type { Cpu } from "../cpu.ts";
-import { hostLib, stLong, type HostFn, type HostRet } from "../host.ts";
+import { hostLib, stLong, complete, type HostFn, type HostRet } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
 import { fail, kernelResult } from "../libc.ts";
 import { fdRead, fdWrite, installSocket, installFile, dropFile, written, socketOf, type OpenFile } from "../fs.ts";
@@ -66,8 +66,7 @@ function receive(cpu: Cpu, fd: number, s: Socket, buffers: GuestBuffer[], flags:
     if (messageFlags) mem.st32(flagsAt(), (r.size > total ? MSG_TRUNC : 0) | cut);
     return flags & MSG_TRUNC ? r.size : r.length;
   };
-  const r = s.receive(fd, target, flags);
-  return r instanceof Promise ? r.then(land) : land(r);
+  return complete(s.receive(fd, target, flags), land);
 }
 /** the first `fit` received open files at the lowest free descriptors; the rest are dropped */
 function install(rights: OpenFile[], fit: number, cloexec: boolean): number[] {
@@ -89,8 +88,7 @@ function accept(cpu: Cpu, fd: number, address: number, length: number, flags: nu
     if (address && length) writeSockaddr(r.peer, addressAt(), lengthAt());
     return r.fd;
   };
-  const r = s.accept(fd, flags);
-  return r instanceof Promise ? r.then(land) : land(r);
+  return complete(s.accept(fd, flags), land);
 }
 function sockname(cpu: Cpu, fd: number, address: number, length: number, peer: boolean): number {
   const s = socketFor(cpu, fd);

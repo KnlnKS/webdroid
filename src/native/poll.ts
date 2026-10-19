@@ -2,7 +2,7 @@
 // gives for each descriptor.
 
 import { mem, anchor } from "./mem.ts";
-import { PTR, type HostFn } from "./host.ts";
+import { PTR, complete, type HostFn } from "./host.ts";
 import { E } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
 import { fail } from "./libc.ts";
@@ -44,8 +44,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
     for (let i = 0; i < count; i++) mem.st16(at + i * 8 + 6, entries[i].revents);
     return n;
   };
-  const n = pollEntries(entries, timeout, signal);
-  return n instanceof Promise ? n.then(land) : land(n);
+  return complete(pollEntries(entries, timeout, signal), land);
 }
 
 const FD_SETSIZE = 1024;
@@ -76,8 +75,7 @@ export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet:
     }
     return ready;
   };
-  const result = pollEntries(entries, ms);
-  return result instanceof Promise ? result.then(finish) : finish();
+  return complete(pollEntries(entries, ms), finish);
 }
 
 // ── epoll: an open file of watched descriptors, each entry woken through the descriptor's watch

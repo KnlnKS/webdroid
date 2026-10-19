@@ -3,7 +3,7 @@
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
 import { mem, wrote, anchor } from "./mem.ts";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort } from "./host.ts";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
 import { E } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
@@ -15,10 +15,6 @@ import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, o
   statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 import { processAllocateFd } from "./process-fd.ts";
-
-function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
-  return value instanceof Promise ? value.then(done) : done(value);
-}
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -93,13 +89,10 @@ function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
     if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
     return mem.u8[byte];
   };
-  const read = fdRead(cpu, fd, byte, 1);
-  return read instanceof Promise ? read.then(done) : done(read);
+  return complete(fdRead(cpu, fd, byte, 1), done);
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
-  const r = fdWrite(cpu, fileFd(fp), p, n);
-  const done = (written: number) => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; };
-  return r instanceof Promise ? r.then(done) : done(r);
+  return complete(fdWrite(cpu, fileFd(fp), p, n), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
 }
 function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   const b = utf8(s);
@@ -107,8 +100,7 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   mem.u8.set(b, tmp);
   const r = fwriteBytes(cpu, fp, tmp, b.length);
   mem.free(tmp);
-  const done = (written: number) => written < b.length ? -1 : b.length;
-  return r instanceof Promise ? r.then(done) : done(r);
+  return complete(r, written => written < b.length ? -1 : b.length);
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(cpu: Cpu, path: string): number | Promise<number> {
@@ -118,8 +110,7 @@ function openDir(cpu: Cpu, path: string): number | Promise<number> {
     dirs.set(h, { entries, i: 0, dirent: mem.malloc(DIRENT_SIZE) });
     return h;
   };
-  const entries = listProcess(path);
-  return entries instanceof Promise ? entries.then(open) : open(entries);
+  return complete(listProcess(path), open);
 }
 function nextDirent(d: { entries: string[]; i: number }, de: number): number {
   const name = d.entries[d.i++];
@@ -352,10 +343,9 @@ export function stdioInit(): void {
       if (!pending?.length) pushback.delete(fp);
       if (used === total) return n;
       const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
-      const r = fdRead(cpu, fileFd(fp), p + used, total - used);
-      return r instanceof Promise ? r.then(fin) : fin(r);
+      return complete(fdRead(cpu, fileFd(fp), p + used, total - used), fin);
     },
-    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return r instanceof Promise ? r.then(written => Math.floor(written / sz)) : Math.floor(r / sz); },
+    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; return complete(fwriteBytes(cpu, fp, p, total), written => Math.floor(written / sz)); },
     fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
     ftell: (cpu, a) => fileTell(cpu, a.p()),
     rewind: (cpu, a) => { const fp = a.p(); return complete(fileSeek(cpu,fp,0,0),()=>{mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_ERR);}); },
@@ -391,9 +381,9 @@ export function stdioInit(): void {
       mem.st8(buf + i, 0);
       return ARG0;
     },
-    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; const r=fwriteBytes(cpu,fp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
-    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; const r=fwriteBytes(cpu,stdoutFp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
-    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); const r=fwriteStr(cpu,fp,s);return r instanceof Promise ? r.then(n => n<0 ? -1 : 0) : r<0 ? -1 : 0; },
+    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return complete(fwriteBytes(cpu, fp, scratch, 1), n => n === 1 ? c : -1); },
+    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; return complete(fwriteBytes(cpu, stdoutFp, scratch, 1), n => n === 1 ? c : -1); },
+    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); return complete(fwriteStr(cpu, fp, s), n => n < 0 ? -1 : 0); },
     puts: (cpu, a) => fwriteStr(cpu, stdoutFp, a.str() + "\n"),
     fprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, a)); },
     vfprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, vaList(a.p()))); },

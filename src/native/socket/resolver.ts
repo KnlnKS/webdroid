@@ -6,7 +6,7 @@ import { parseIpv4 } from "../../shell/relay.ts";
 import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import type { Cpu } from "../cpu.ts";
-import { stp, ptr, cstr, type HostFn } from "../host.ts";
+import { stp, ptr, cstr, complete, type HostFn } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
 import { fail } from "../libc.ts";
 import {
@@ -88,8 +88,7 @@ function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: numbe
     record(`resolved ${node} -> ${addressText(address)} result=${mem.va(allocation).toString()}`);
     return 0;
   };
-  const found = resolveHost(node, family, flags & AI_NUMERICHOST);
-  return found instanceof Promise ? found.then(answer) : answer(found);
+  return complete(resolveHost(node, family, flags & AI_NUMERICHOST), answer);
 }
 
 function copyText(text: string, destination: number, capacity: number): boolean {
