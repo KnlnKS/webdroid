@@ -4,7 +4,7 @@
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { callProxy, methodsOf, processError, type ProcessFailure } from "./process-port.ts";
 import type { WorkerControl } from "./worker-control.ts";
-import type { WorkerTerminal } from "./processes.ts";
+import type { WorkerTerminal } from "./worker-diagnostics.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveAot, serveCompileWorkers, serveWarm } from "../jvm/tier.ts";

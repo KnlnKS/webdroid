@@ -32,6 +32,7 @@ import { vfs } from "./shell/vfs.ts";
 import { yieldStats, timedParks } from "./jvm/yield.ts";
 import { provisionPackages, provisionServices } from "./shell/provision.ts";
 import { processBroker } from "./shell/processes.ts";
+import { foregroundWorkerSnapshot, visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "./shell/worker-diagnostics.ts";
 import { displayRate } from "./shell/display-rate.ts";
 import { processPresentation } from "./shell/process-endpoint.ts";
 import { timelineSince } from "./timeline.ts";
@@ -175,13 +176,13 @@ const wd = {
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
-  workerProcesses: () => processBroker().workerSnapshots(),
+  workerProcesses: () => workerSnapshots(processBroker().processes()),
   counterReceipts: () => processBroker().counterReceipts(),
-  workerAotProfiles: () => processBroker().workerAotProfiles(),
+  workerAotProfiles: () => workerAotProfiles(processBroker().processes()),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
   mirrorFrames: (on: Mirror) => processBroker().hosts.mirror(on),
-  foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  foregroundWorkerSnapshot: () => foregroundWorkerSnapshot(processBroker()),
   processStarting: () => processBroker().starting(),
   /** the foreground process's frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
   foregroundTimeline: async (from: number) => (await processBroker().foregroundHost()?.control.timeline(from)) ?? [],
@@ -191,7 +192,7 @@ const wd = {
   foregroundDemandMark: async () => (await processBroker().foregroundHost()?.control.demandMark()) ?? null,
   foregroundDemandSince: async (mark: number[]) => (await processBroker().foregroundHost()?.control.demandSince(mark)) ?? null,
   foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundHost()?.control.codeReadiness(save)) ?? null,
-  visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
+  visibleWorkerProcesses: (ms = 1500) => visibleWorkerProcesses(processBroker(), ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotate(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
@@ -231,7 +232,7 @@ const wd = {
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
   // looks exactly like a settled screen from outside.
   alive: async (ms = 1500) => {
-    const workersAlive = processBroker().visibleWorkersAlive(ms);
+    const workersAlive = visibleWorkersAlive(processBroker(), ms);
     let id: ReturnType<typeof setTimeout>;
     const rootAlive = Promise.race([
       onMain(() => true).finally(() => clearTimeout(id)),

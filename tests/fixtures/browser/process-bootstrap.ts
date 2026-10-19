@@ -13,6 +13,7 @@ import { receiveIme } from "../../../src/shell/ime-port.ts";
 import { workerControlMethods, type ProcessHost } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
+import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
@@ -277,11 +278,11 @@ export async function clockBootstrapOwnership() {
     const exit = {pid:stored.pid,uid:stored.uid,process:stored.process,pkg:stored.pkg,reason:stored.reason,status:stored.status,dialog:stored.dialog,description:stored.description};
     reader.close();broker.fail(survivor.pid,"exit reader cleanup",NOT_CRASHED);
     worker.terminate();
-    const crashRow=(await broker.workerSnapshots()).find(row=>row.pid===pid)!;
+    const crashRow=(await workerSnapshots(broker.processes())).find(row=>row.pid===pid)!;
     const fatal=crashRow.terminal!.record!.crash!;
     const crash={expected:crashRow.terminal?.expected,reason:crashRow.terminal?.record?.reason,error:"error" in crashRow,fatal:{...fatal},copied:false};
     fatal.exceptionMessage="changed terminal copy";
-    crash.copied=(await broker.workerSnapshots()).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
+    crash.copied=(await workerSnapshots(broker.processes())).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
     const terminals=[];
     for(const [i,status] of [0,7,null].entries()) {
       const nextPid=8203+i,{worker:peer}=hosted(broker,pkg,pkg+":"+nextPid,nextPid,"clock");workers.push(peer);
@@ -289,12 +290,12 @@ export async function clockBootstrapOwnership() {
       const ended=new Promise<void>(resolve=>broker.watch(nextPid,()=>resolve()));
       if(status===null)await broker.forceStop(pkg);else peer.postMessage({finish:status});
       await ended;
-      const row=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!;
+      const row=(await workerSnapshots(broker.processes())).find(row=>row.pid===nextPid)!;
       if(!row.terminal?.record)throw new Error("missing canonical terminal record");
       const record=row.terminal.record;
       const result={expected:row.terminal.expected,reason:record.reason,status:record.status,error:"error" in row,copied:false};
       record.status=99;
-      result.copied=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!.terminal!.record!.status!==99;
+      result.copied=(await workerSnapshots(broker.processes())).find(row=>row.pid===nextPid)!.terminal!.record!.status!==99;
       terminals.push(result);peer.terminate();
     }
     const pendingAfterDeath = guestClockControl.pending();
@@ -519,17 +520,17 @@ export async function workerDiagnosticOwnership() {
       entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
-    const first=await broker.workerSnapshots(),second=await broker.workerSnapshots();
-    const profiles=await broker.workerAotProfiles();
+    const first=await workerSnapshots(broker.processes()),second=await workerSnapshots(broker.processes());
+    const profiles=await workerAotProfiles(broker.processes());
     const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
-    const blocked=await broker.visibleWorkerProcesses(30);
-    const stillBlocked=await broker.visibleWorkersAlive(30);
+    const blocked=await visibleWorkerProcesses(broker,30);
+    const stillBlocked=await visibleWorkersAlive(broker,30);
     broker.activities.setForeground(8401);
-    const live=await broker.visibleWorkersAlive(1000);
+    const live=await visibleWorkersAlive(broker,1000);
     const count=await new Promise<{hungCalls:number;aliveCalls:number}>(resolve=>{worker.onmessage=({data})=>resolve(data);worker.postMessage({count:true});});
     const hanging=broker.entry(8403);
-    const held=broker.workerSnapshots([hanging]);
+    const held=workerSnapshots([hanging]);
     const publish=callProxy<BrokerCalls>(broker.brokerPort(hanging.pid),brokerMethods);clients.push(publish);
     const died=new Promise<void>(resolve=>broker.watch(hanging.pid,()=>resolve()));
     void Promise.resolve(publish.endpoint.processExited({pid:9999,uid:0,pkg:"foreign",process:"foreign",reason:1,status:0,
@@ -538,7 +539,7 @@ export async function workerDiagnosticOwnership() {
     const terminal=(await held)[0].terminal!;
     const pendingTerminal={expected:terminal.expected,reason:terminal.record!.reason,status:terminal.record!.status,pid:terminal.record!.pid};
     broker.fail(8401,"actual diagnostic fixture exit",NOT_CRASHED);
-    const ended=await broker.workerSnapshots();
+    const ended=await workerSnapshots(broker.processes());
     const row=(rows:typeof first,pid:number)=>rows.find(row=>row.pid===pid)!;
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);

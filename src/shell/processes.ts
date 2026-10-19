@@ -38,7 +38,6 @@ import type { LocationCalls } from "./location-access.ts";
 import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
 import type { FilePathCalls } from "./file-path.ts";
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors.ts";
-import type { WorkerControl } from "./worker-control.ts";
 import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import { PrivateFiles } from "./privatefiles.ts";
@@ -121,11 +120,6 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
 };
 /** in a fixed order: census decodes a timeline's call indexes by it */
 export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
-export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
-type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
-export type WorkerDiagnosticRow = WorkerIdentity & (
-  {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
-  {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
 export type Entry = { pkg: string; process: string; uid: number; pid: number;
   /** the page's side of the Worker it runs in; the page's own process has none */
   host: ProcessHost | null;
@@ -159,22 +153,6 @@ export class ProcessSession {
     this.sqlite = this.settings = this.accounts = this.endpoint = null;
     this.bootstrap.length = 0; this.callers.clear(); this.locations.clear();
   }
-}
-/** p, or late()'s result once `ms` pass first */
-function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }).then(late)]).finally(() => clearTimeout(timer));
-}
-/** one in-flight read per process, shared by concurrent callers */
-function shared<T>(reads: Map<number, Promise<T>>, pid: number, start: () => Promise<T>): Promise<T> {
-  let read = reads.get(pid);
-  if (!read) {
-    const pending = read = Promise.resolve().then(start);
-    reads.set(pid, pending);
-    const clear = () => { if (reads.get(pid) === pending) reads.delete(pid); };
-    void pending.then(clear, clear);
-  }
-  return read;
 }
 export class ProcessBroker {
   /** the page realm's lifecycle, under ?perfProbe=1 (scripts/lat): a process Worker reports its
@@ -408,80 +386,8 @@ export class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    this.workerReads.delete(pid); this.workerLiveness.delete(pid);
     entry.watchers.clear(); host?.close(); this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
     this.activities.processDied(pid);
-  }
-  private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
-  workerAotProfiles() {
-    return Promise.all([...this.entries.values()].flatMap(entry => {
-      const host = entry.host;
-      if (!host) return [];
-      return [(async () => {
-        const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url:host.url};
-        try {
-          if (entry.dead) throw new Error("Worker has exited");
-          const result = await within(host.control.aotProfile(), 5000, () => { throw new Error("Worker AOT profile timeout"); });
-          if (entry.dead || result.dead) throw new Error("Worker has exited");
-          if (result.phase !== "ready") throw new Error("Worker is not ready: " + result.phase);
-          if (result.identity.pid !== entry.pid || result.identity.pkg !== entry.pkg || result.identity.process !== entry.process)
-            throw new Error("Worker AOT profile identity mismatch");
-          return {...identity,result};
-        } catch (error) {
-          return {...identity,error:error instanceof Error ? error.message : String(error)};
-        }
-      })()];
-    }));
-  }
-  workerSnapshots(entries = [...this.entries.values()]): Promise<WorkerDiagnosticRow[]> {
-    return Promise.all(entries.flatMap<Promise<WorkerDiagnosticRow>>(entry => {
-      const host = entry.host;
-      if (!host) return [];
-      const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url:host.url};
-      if (entry.dead) return [Promise.resolve(this.terminalWorker(entry,identity))];
-      const read = shared(this.workerReads, entry.pid, () => host.control.snapshot());
-      return [(async () => {
-        try {
-          const snapshot = await within(read, 5000, () => { throw new Error("Worker diagnostic timeout"); });
-          if (entry.dead) return this.terminalWorker(entry,identity);
-          if (snapshot.dead || snapshot.phase !== "ready")
-            throw new Error(`Worker is ${snapshot.dead || entry.dead ? "dead" : "not ready: " + snapshot.phase}`);
-          return {...identity,snapshot};
-        } catch (error) {
-          if (entry.dead) return this.terminalWorker(entry,identity);
-          return {...identity,error: error instanceof Error ? error.message : String(error)};
-        }
-      })()];
-    }));
-  }
-  private terminalWorker(entry: Entry, identity: WorkerIdentity): WorkerDiagnosticRow {
-    const ended = entry.host?.ended, owned = ended?.terminal;
-    const terminal = owned && {...owned,record:owned.record && copyExitRecord(owned.record)};
-    return terminal?.expected ? {...identity,terminal} :
-      {...identity,terminal,error:ended?.error ?? "Worker owner unavailable"};
-  }
-  private workerLiveness = new Map<number, Promise<boolean>>();
-  private async workerAlive(entry: Entry, ms: number): Promise<boolean> {
-    const host = entry.host;
-    if (!host || entry.dead) return false;
-    try {
-      return await within(shared(this.workerLiveness, entry.pid, () => host.control.alive()), ms, () => false) && !entry.dead;
-    } catch { return false; }
-  }
-  /** A control reply is not evidence that the Java main queue can dispatch a job. */
-  async visibleWorkersAlive(ms: number): Promise<boolean | null> {
-    const entries = this.activities.shownEntries().filter(entry => entry.host && !entry.dead);
-    return entries.length ? (await Promise.all(entries.map(entry => this.workerAlive(entry, ms)))).every(Boolean) : null;
-  }
-  async visibleWorkerProcesses(ms: number) {
-    const entries = this.activities.shownEntries().filter(entry => entry.host && !entry.dead);
-    const [rows, alive] = await Promise.all([this.workerSnapshots(entries), Promise.all(entries.map(entry => this.workerAlive(entry, ms)))]);
-    return rows.map((row, i) => ({...row, alive: alive[i]}));
-  }
-  async foregroundWorkerSnapshot() {
-    const entry = this.entries.get(this.activities.foreground);
-    if (!entry?.host) return null;
-    return (await this.workerSnapshots([entry]))[0] ?? null;
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
   starting(): boolean { return [...this.entries.values()].some(e => e.host && !e.dead && !e.session.endpoint); }
