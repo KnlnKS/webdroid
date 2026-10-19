@@ -259,7 +259,7 @@ if (substrate) {
     idleBeforeResume = true;
     try { expect("admitted Wasm restores ownership after another completion idles", await show(() => w.entryAsync("Th", "linkAdmissionIdentity", "(I)I")(0)), 1); }
     finally { idleBeforeResume = false; }
-    w.addHostClass(nativeSource.hostSpecs!().find(spec => spec.name === "webdroid/FnRunnable")!);
+    w.addHostClass(nativeSource.hostSpecs().find(spec => spec.name === "webdroid/FnRunnable")!);
     let runnableResult = 0;
     const runnable = fnRunnable(() => Promise.resolve(callbackEntry.scall("Th", "inner", "(I)I", 5)).then(value => { runnableResult = value as number; }));
     expect("host Runnable waits for its conditional Java callback", await show(() => callbackEntry.vcall(runnable, "run", "()V")), "undefined");

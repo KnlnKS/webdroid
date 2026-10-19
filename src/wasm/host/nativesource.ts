@@ -23,7 +23,7 @@ export const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
 });
-export const nativeSource: NativeSource = {
+export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
@@ -53,7 +53,7 @@ export const nativeSource: NativeSource = {
     if (e instanceof Error && e.name !== "SuspendError" && !waitsEnded() && !(e instanceof RangeError && e.message.includes("call stack"))) e = rt.jx(e);
     return e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined;
   },
-};
+} satisfies NativeSource;
 export const natives = new Natives(nativeSource);
 
 /** the ids (class.name+descriptor) of the registered natives that can answer a Promise (suspend.ts `mayWait`), for the platform build to hand to pages */

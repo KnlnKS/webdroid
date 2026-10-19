@@ -21,7 +21,7 @@ const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 
-const w = addHostClasses(world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) })), gaps: string[] = [];
+const w = addHostClasses(world([dex, ...jars], { natives })), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);

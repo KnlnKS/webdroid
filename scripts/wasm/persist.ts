@@ -3,8 +3,6 @@
 // bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`pnpm wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
 import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
-import { guestMemory } from "../../src/wasm/host/guest.ts";
-import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
@@ -24,6 +22,7 @@ import { fetchBundle } from "../../src/wasm/host/bundle.ts";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { current, fakeAot, loadDexes } from "./lib.ts";
+import { worldOptions } from "../../src/wasm/host/boot.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { checker, filesIn, fixture } from "./tools.ts";
@@ -47,7 +46,7 @@ const platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, loop: hostLoop, guest: guestMemory, aot: aotStore, ...opts }));
+const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { ...worldOptions(), aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => addHostClasses(world(dexes, opts));
 

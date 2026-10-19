@@ -66,9 +66,11 @@ export const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
+/** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */
+export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { holdUpgrades: () => starting, answering: () => answeringFor() > 0, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { ...worldOptions(), holdUpgrades: () => starting, answering: () => answeringFor() > 0, heapLimit: TAB_HEAP, note: note as (ev: number, arg?: number) => void, ...extra });
   bindWorld(w);
   globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.ahead.demandMark(), demandSince: (mark) => w.ahead.demandSince(mark) };
   w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
@@ -80,7 +82,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
     for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
     return null;
   };
-  for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
+  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
   rt.registered = (spec) => w.addHostClass(hostSpec(spec));
   return w;
 }

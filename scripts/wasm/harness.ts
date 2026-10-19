@@ -8,12 +8,12 @@ import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
-import { lookup, natives, settled } from "../../src/wasm/host/nativesource.ts";
+import { lookup, natives, nativeSource, settled } from "../../src/wasm/host/nativesource.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { mountLocalPlatformData, platformJarBytes } from "../aosp.ts";
-export { natives };
+export { natives, nativeSource };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
 const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
@@ -55,7 +55,7 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
 
 /** `w` with the classes the host implements, added after the constructor as host/boot.ts adds them */
 export function addHostClasses<W extends World>(w: W): W {
-  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
+  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
   return w;
 }
 

@@ -8,12 +8,9 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { zipTree } from "../../src/jvm/natives/jzip.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
-import { intrinsics, externs } from "../../src/wasm/link/intrinsics.ts";
+import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
-import { hostNet } from "../../src/wasm/host/inet.ts";
-import { guestMemory } from "../../src/wasm/host/guest.ts";
-import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { hostLoop, useWorld } from "../../src/wasm/host/boot.ts";
+import { useWorld, worldOptions } from "../../src/wasm/host/boot.ts";
 
 /** the platform build under `key` at `base`, as prepareApp sees it, without its files */
 export const fakeAot = (base: string, key: string): AppCodeRequest["aot"] => ({ base, key, bytes: () => undefined });
@@ -52,5 +49,5 @@ export function current(w: World): World {
 }
 /** a current World over `src` (dex and jar paths, or a Program) */
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return current(new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, loop: hostLoop, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts }));
+  return current(new World(Array.isArray(src) ? program(src) : src, { ...worldOptions(), natives: new Natives(), dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), ...(AOT && { aot: aotStore(AOT) }), ...opts }));
 }
