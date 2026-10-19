@@ -12,9 +12,9 @@ import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
-import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
+import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
-import { isFieldAccess, isInvoke } from "./opinfo.ts";
+import { isInvoke } from "./opinfo.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { Outliner } from "./outline.ts";
 import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
@@ -23,7 +23,6 @@ import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R a
 type InvokeSite = { kind: string; name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
-const NONE: readonly string[] = [];
 /** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
 const INVOKE_USE: Record<string, number> = { "invoke-virtual": 0, "invoke-direct": 1, "invoke-static": 2, "invoke-interface": 3 };
 /** the Wasm instruction of each binary operation that is one, by operand kind */
@@ -86,12 +85,11 @@ export class MC {
   consumed = new Set<number>();            // move-result pcs folded into their invoke
   tries: boolean;
   regionOfPc = new Map<number, number>();
-  /** what holds on every path to the start of each block, and at the instruction being emitted (facts.ts) */
-  entryFacts: Facts[] = [];
+  /** what holds on every path to the start of each block (facts.ts), and at the instruction being emitted */
+  private known?: MethodFacts;
   facts: Facts = newFacts();
-  /** "web:struct" of the field accesses that share a cast, and the local holding it */
-  shadowKeys = new Set<string>();
-  shadows = new Map<string, number>();
+  /** the local holding each shared cast of a field access's object (facts.ts shadowKeys) */
+  private shadows = new Map<string, number>();
   /** the method's own function, which `code` is while no chunk is being emitted */
   root!: Code;
   /** the loops and dispatch cycles that run in functions of their own (outline.ts), if the method has any to outline */
@@ -183,8 +181,7 @@ export class MC {
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
-    this.findShadows();
-    this.entryFacts = analyze(this);
+    this.known = new MethodFacts(this);
     lap("facts");
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
@@ -314,7 +311,7 @@ export class MC {
     return virtual ? this.cx.guards(...virtual) : [];
   }
   /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
-  private deferredSite(ins: Ins): boolean {
+  deferredSite(ins: Ins): boolean {
     return this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
   }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
@@ -337,7 +334,7 @@ export class MC {
   }
   private invokes = new Map<number, InvokeSite>();
   /** the reference of an invoke other than invoke-polymorphic and invoke-custom, and what it resolves to, read once per site */
-  private invoke(ins: Ins): InvokeSite {
+  invoke(ins: Ins): InvokeSite {
     let s = this.invokes.get(ins.pc);
     if (s) return s;
     const dex = this.dex, kind = ins.name.replace("/range", ""), mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls);
@@ -394,10 +391,10 @@ export class MC {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
-    this.facts = cloneFacts(this.entryFacts[b]);
+    this.facts = cloneFacts(this.known!.entry[b]);
     for (const ins of inss) {
       this.emit(ins);
-      step(this, ins, this.facts);
+      this.known!.step(ins, this.facts);
     }
     const last = inss[inss.length - 1];
     if (!endsBlock(last.op)) {
@@ -460,72 +457,12 @@ export class MC {
   }
   /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
-  private initedAt = new Map<number, readonly string[]>();
-  /** the classes whose initialization `ins` requests, as its translation does: its target and the target's superclasses */
-  initedBy(ins: Ins): readonly string[] {
-    const op = ins.op;
-    if (op !== 0x22 && (op < 0x60 || op > 0x6d) && op !== 0x71 && op !== 0x77) return NONE; // new-instance, sget/sput, invoke-static
-    let r = this.initedAt.get(ins.pc);
-    if (!r) { const cls = this.ensureTarget(ins); this.initedAt.set(ins.pc, r = cls ? this.cx.prog.chain(cls) : []); }
-    return r;
-  }
-  private ensureTarget(ins: Ins): string | undefined {
-    if (this.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) { const name = this.dex.typeName(ins.b); return name === STRING ? undefined : name; }
-    if (ins.op <= 0x6d) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
-    const { target } = this.invoke(ins);
-    return target === "clone" || failed(target) ? undefined : target.cls;
-  }
-  isStringInit(ins: Ins): boolean {
-    const { decl, name } = this.invoke(ins);
-    return name === "<init>" && decl === STRING;
-  }
-  /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
-  definesNonNull(ins: Ins, f: Facts): boolean {
-    const op = ins.op;
-    if (op === 0x22) return this.dex.typeName(ins.b) !== STRING; // new-instance
-    // const-string, const-string/jumbo, const-class, new-array, move-exception
-    if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
-    // move-object, move-object/from16, move-object/16, check-cast
-    if ((op >= 0x07 && op <= 0x09) || op === 0x1f) { const w = this.typing.use(ins.pc, op === 0x1f ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
-    return false;
-  }
-  /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
-  private shadowAt = new Map<number, string | undefined>();
-  shadowKey(ins: Ins): string | undefined {
-    if (!this.shadowKeys.size || !isFieldAccess(ins.op)) return undefined;
-    if (this.shadowAt.has(ins.pc)) return this.shadowAt.get(ins.pc);
-    const key = this.findShadowKey(ins);
-    this.shadowAt.set(ins.pc, key);
-    return key;
-  }
-  private findShadowKey(ins: Ins): string | undefined {
-    if (this.deferredSite(ins)) return undefined;
-    const w = this.typing.use(ins.pc, ins.b);
-    if (w < 0) return undefined;
-    const r = this.fieldOf(ins.c, false);
-    if (failed(r)) return undefined;
-    const key = `${w}:${this.cx.structFor(r.decl)}`;
-    return this.shadowKeys.has(key) ? key : undefined;
-  }
-  private findShadows() {
-    const seen = new Set<string>();
-    for (const ins of this.prepared.instructions) {
-      if (!isFieldAccess(ins.op) || this.deferredSite(ins)) continue;
-      const w = this.typing.use(ins.pc, ins.b);
-      if (w < 0) continue;
-      const r = this.fieldOf(ins.c, false);
-      if (failed(r)) continue;
-      const key = `${w}:${this.cx.structFor(r.decl)}`;
-      if (seen.has(key)) this.shadowKeys.add(key); else seen.add(key);
-    }
-  }
   refTo(reg: number, struct: number) {
     const c = this.code, key = `${this.useWeb(reg)}:${struct}`;
     let local = this.shadows.get(key);
     if (this.facts.typed.has(key) && local !== undefined) { c.lget(local); return; }
     this.nonNull(reg); c.refCast(struct);
-    if (this.shadowKeys.has(key)) { if (local === undefined) this.shadows.set(key, local = c.newLocal(refNull(struct))); c.ltee(local); }
+    if (this.known?.shadowKeys.has(key)) { if (local === undefined) this.shadows.set(key, local = c.newLocal(refNull(struct))); c.ltee(local); }
   }
 
   // ---------- instruction emission
