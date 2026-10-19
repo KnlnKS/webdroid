@@ -177,7 +177,6 @@ export class MC {
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     this.findShadows();
-    this.findWaiting();
     this.entryFacts = analyze(this);
     lap("facts");
     const c = this.code;
@@ -248,13 +247,6 @@ export class MC {
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;
   private fuelLocal = -1;
-  /** Every bytecode back edge can hold the browser thread, including finite arithmetic loops. */
-  private waiting = new Set<number>();
-  private findWaiting(): void {
-    for (const b of this.prepared.instructions) for (const t of branchTargets(this.item, b)) {
-      if (t <= b.pc) this.waiting.add(t);
-    }
-  }
   private fuel(tick?: () => void) { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32)), tick); }
   /** where the frame's weight (exc.ts MAX_DEPTH) goes in the code, known once the locals are */
   private weights: number[] = [];
@@ -399,7 +391,8 @@ export class MC {
         c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
       }
       if (this.cx.counting && !this.chunk) this.cx.emitCount(this.code, this.m);
-      if (this.waiting.has(+label.slice(1)) && this.chunk?.label !== label) this.fuel();
+      // every cycle passes a natural loop's head, which can hold the browser thread however finite the loop
+      if (this.chunk?.label !== label) this.fuel();
     }
   }
   endBlk() { this.pop(); this.code.end(); }
