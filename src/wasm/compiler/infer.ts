@@ -8,9 +8,9 @@
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
-import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
 import { buildCfg } from "./cfg.ts";
-import { NO_THROW, isInvoke, isInstanceInvoke } from "./opinfo.ts";
+import { isInvoke, isInstanceInvoke } from "./opinfo.ts";
 
 export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;
@@ -41,11 +41,11 @@ interface WebAnalysis {
 }
 
 /** analysis of the method, or why it was skipped */
-function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, ins: readonly PreparedInstruction[]): WebAnalysis | string {
-  const R_ = code.regs;
+function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, prepared: PreparedMethod): WebAnalysis | string {
+  const R_ = code.regs, ins = prepared.instructions;
   if (!ins.length) return "empty";
   for (const x of ins) if (x.op >= 0xe3 && x.op <= 0xf2) return "quickened";
-  const cfg = buildCfg(code, ins);
+  const cfg = buildCfg(code, prepared), handlerOfIdx = cfg.handlers;
   const n = ins.length;
   if (cfg.n * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
 
@@ -54,14 +54,6 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   const retMask = kc(sig.ret[0]);
   const effs: Eff[] = new Array(n);
   for (let i = 0; i < n; i++) effs[i] = effect(dex, ins[i], i ? ins[i - 1] : null, retMask);
-
-  // handler blocks per instruction (try ranges are disjoint in dex, handlers repeat)
-  const handlerOfIdx: (number[] | null)[] = new Array(n).fill(null);
-  for (const r of code.tries) {
-    const hs: number[] = r.handlers.map(([, h]) => cfg.blockOfIdx[cfg.pcToIdx[h]]);
-    if (r.catchAllAddr >= 0) hs.push(cfg.blockOfIdx[cfg.pcToIdx[r.catchAllAddr]]);
-    for (let i = Math.max(0, cfg.pcToIdx[r.start]); i < n && ins[i].pc < r.end; i++) if (ins[i].pc >= r.start) handlerOfIdx[i] = hs;
-  }
 
   // ---- liveness (block live-in bitsets of W words), handler edges treated as successors
   const B = cfg.n, W = (R_ + 31) >> 5;
@@ -78,7 +70,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
     for (let k = 0; k < e.u.length; k += 2) { const r = e.u[k]; if (r < R_) { set(r, true); if (e.u[k + 1] & WIDE && r + 1 < R_) set(r + 1, true); } }
     // a throwing instruction hands its PRE-state to the handlers
     const hs = handlerOfIdx[i];
-    if (hs && !NO_THROW[ins[i].op]) for (const h of hs) orLive(h);
+    if (hs) for (const h of hs) orLive(h);
   };
   const liveOut = (b: number) => { tmp.fill(0); for (const s of cfg.succ[b]) orLive(s); };
   while (work.length) {
@@ -156,10 +148,9 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
     st.set(inState[b]!);
     if (++guard > B * 50 + 1000) return "no-fixpoint";
     for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
-      const e = effs[i], x = ins[i];
+      const e = effs[i], hs = handlerOfIdx[i];
       reached[i] = 1;
-      const hs = handlerOfIdx[i];
-      if (hs && !NO_THROW[x.op]) for (const h of hs) joinInto(h, st);
+      if (hs) for (const h of hs) joinInto(h, st);
       if (e.u.length) {
         const at = useAt[i];
         for (let k = 0; k < e.u.length; k += 2) if (e.u[k] < R_) { cst(e.u[k], e.u[k + 1], st); useNode[at + (k >> 1)] = st[e.u[k]]; }
@@ -188,7 +179,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
         if (!reached[i]) continue;
         // EH observes the pre-state even when the normal result overwrites a register.
         const hs = handlerOfIdx[i];
-        if (hs && !NO_THROW[ins[i].op]) for (const h of hs) for (const r of liveList[h]) touch(st[r], i);
+        if (hs) for (const h of hs) for (const r of liveList[h]) touch(st[r], i);
         for (let k = useAt[i]; k < useAt[i + 1]; k++) touch(useNode[k], i);
         const e = effs[i];
         if (e.d >= 0 && e.d < R_) {
@@ -231,8 +222,8 @@ export interface Typing {
   param(reg: number): number;
 }
 /** Webs by lowest kind bit left in their component: an unconstrained int/float/null constant is an int. Throws when the code cannot be typed. */
-export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs: readonly PreparedInstruction[]): Typing {
-  const a = analyzeWebs(dex, code, desc, isStatic, instrs);
+export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, prepared: PreparedMethod): Typing {
+  const a = analyzeWebs(dex, code, desc, isStatic, prepared);
   if (typeof a === "string") throw new Error("type inference " + a);
   const maskOf = componentMask(a), id = new Int32Array(a.mask.length).fill(-1), kind: number[] = [];
   const web = (node: number): number => {

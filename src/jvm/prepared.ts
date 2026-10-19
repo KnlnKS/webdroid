@@ -18,6 +18,10 @@ export interface PreparedMethod {
   readonly instructions: readonly PreparedInstruction[];
   /** 1 at each pc that starts a basic block */
   readonly leaders: Readonly<Uint8Array>;
+  /** every pc a try hands exceptions to, once each, in the order the tries name them */
+  readonly handlerPcs: readonly number[];
+  /** by instruction index, the handler pcs of the try covering it, unless it cannot throw */
+  readonly handlers: readonly (readonly number[] | undefined)[];
 }
 
 type MutableInstruction = { -readonly [K in keyof PreparedInstruction]: PreparedInstruction[K] };
@@ -100,6 +104,11 @@ export function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
   return instructions;
 }
 
+/** ops that cannot throw: no handler edge is needed for them */
+const NO_THROW = new Uint8Array(256);
+for (const [lo, hi] of [[0x00, 0x19], [0x28, 0x2a], [0x2d, 0x3d], [0x7b, 0xe2]] as const) for (let o = lo; o <= hi; o++) NO_THROW[o] = 1;
+for (const o of [0x93, 0x94, 0x9e, 0x9f, 0xb3, 0xb4, 0xbe, 0xbf, 0xd3, 0xd4, 0xdb, 0xdc]) NO_THROW[o] = 0; // int/long div, rem
+
 export function endsBlock(op: number): boolean {
   return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
 }
@@ -157,11 +166,16 @@ export function prepareMethod(code: CodeItem): PreparedMethod {
     for (const target of targets) leaders[target] = 1;
     if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
   }
+  const all = new Set<number>(), handlers: (readonly number[] | undefined)[] = code.tries.length ? new Array(instructions.length) : [];
   for (const region of code.tries) {
     leaders[region.start] = 1;
     leaders[region.end] = 1;
-    for (const [, address] of region.handlers) leaders[address] = 1;
-    if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
+    const pcs = region.handlers.map(([, address]) => address);
+    if (region.catchAllAddr >= 0) pcs.push(region.catchAllAddr);
+    for (const pc of pcs) { leaders[pc] = 1; all.add(pc); }
+    let i = 0;
+    for (let hi = instructions.length; i < hi;) { const mid = (i + hi) >> 1; if (instructions[mid].pc < region.start) i = mid + 1; else hi = mid; }
+    for (; i < instructions.length && instructions[i].pc < region.end; i++) if (!NO_THROW[instructions[i].op]) handlers[i] = pcs;
   }
-  return { instructions, leaders };
+  return { instructions, leaders, handlerPcs: [...all], handlers };
 }

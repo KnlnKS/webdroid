@@ -176,7 +176,7 @@ export class MC {
     try { flow = structureAny(prepared, item); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow");
-    this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
+    this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared);
     lap("infer");
     // blocks
     let cur = -1;
@@ -430,8 +430,7 @@ export class MC {
         c.else_(); args(); c.call(this.cx.imp.catchBlockWait); c.end();
       });
       c.lset(target);
-      const targets = new Set(this.item.tries.flatMap(t => [...t.handlers.map(h => h[1]), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []]));
-      for (const addr of targets) {
+      for (const addr of this.prepared.handlerPcs) {
         c.lget(target).i32(addr).raw(OP.i32_eq).if_(); this.push("if"); dispatchTo(addr); this.pop(); c.end();
       }
       return;

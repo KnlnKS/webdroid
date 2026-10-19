@@ -64,7 +64,7 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     let t = performance.now();
     const prepared = prepareMethod(item);
     phase.prepare += performance.now() - t; t = performance.now();
-    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions);
+    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared);
     phase.infer += performance.now() - t;
     cx.methodAnalyses.set(m, { prepared, typing });
     for (const ins of prepared.instructions) {

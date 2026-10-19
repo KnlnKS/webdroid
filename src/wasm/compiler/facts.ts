@@ -79,7 +79,7 @@ export class MethodFacts {
     if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
     entry[0] = start;
     const handlers = new Set<number>();
-    for (const t of mc.item.tries) { for (const [, h] of t.handlers) handlers.add(flow.blockAt[h]); if (t.catchAllAddr >= 0) handlers.add(flow.blockAt[t.catchAllAddr]); }
+    for (const pc of mc.prepared.handlerPcs) handlers.add(flow.blockAt[pc]);
     for (const h of handlers) entry[h] = newFacts();
     // blocks whose entry facts changed since they were last stepped
     const dirty = new Uint8Array(n).fill(1);
