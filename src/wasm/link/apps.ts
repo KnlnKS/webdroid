@@ -70,7 +70,7 @@ function compileChecked(w: World, methods: MethodInfo[]): { cx: Compiler; built:
     const cx = new Compiler(w);
     w.beginTouch();
     let built: ReturnType<Compiler["buildUnit"]>;
-    try { built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), [], false, true); } catch (e) {
+    try { built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), { install: "build" }); } catch (e) {
       w.endTouch();
       if (!(e instanceof NeedsNumber) || !e.method || skipped.has(mid(e.method))) throw e;
       skipped.set(mid(e.method), e.message);

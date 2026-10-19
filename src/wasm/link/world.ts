@@ -12,7 +12,7 @@ import { CALLEE, Code, OP } from "../compiler/code.ts";
 import { type Program, ACC, kindOf, changedTypes, declaredMethod, declaresNaming, declaresStaticOf, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo, typeName } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
-import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
+import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type CallPlan, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
 import { Sched, defaultLoop, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched.ts";
 import { rtfns, type Synth } from "../compiler/rtfns.ts";
@@ -40,7 +40,7 @@ import { AotRuntime, VERSION, type AotBuild, type AotStore, type AppIndex } from
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import type { UnitResult, UpgradeJob } from "./unit.ts";
 import { HotUnits } from "./hotunits.ts";
-import { SlotTable } from "./slots.ts";
+import { SlotTable, type MethodSlot } from "./slots.ts";
 import { emitRestored, Sync, ROOT } from "../compiler/hostcalls.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
@@ -127,6 +127,8 @@ interface Assumption { decl: string; name: string; desc: string; tc: string; tk:
 
 export class World {
   opts: WorldOptions;
+  /** whether code is instantiated and runs here: a build's World and a compile worker's only number and name what code links */
+  readonly instantiates: boolean;
   prog: Program;
   cha: Cha;
   table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
@@ -180,6 +182,7 @@ export class World {
 
   constructor(prog: Program, opts: WorldOptions) {
     this.opts = opts;
+    this.instantiates = !opts.build && !opts.compileOnly;
     this.prog = prog;
     this.natives = opts.natives;
     this.bridge = this.natives.bridge(this);
@@ -460,7 +463,7 @@ export class World {
     if (!fresh) return slot;
     const s = { k: "synth" as const, name, d, done: false };
     this.slots.set(slot, s);
-    if (this.aot?.building || this.opts.compileOnly) return slot;
+    if (!this.instantiates) return slot;
     // the app build may hold its code, which its module puts in the slot
     if (this.aot?.installSynth(name)) { s.done = true; return slot; }
     if (eager) { this.linkSlot(slot); return slot; }
@@ -628,8 +631,8 @@ export class World {
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.slots.preassigned.get(name);
     slotBase ??= this.slots.numberBlock(name, methods.length + 1);
-    if (this.aot?.building || this.opts.compileOnly) {
-      this.classes.set(name, rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
+    if (!this.instantiates) {
+      this.classes.set(name, rt = { name, id, mod: this.opts.build ? this.aot!.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     // the class's globals are made when something first reads them, in one module with those of the other classes linked meanwhile
@@ -661,7 +664,7 @@ export class World {
   }
   /** the vtable of a class module the platform build holds was made before this World's host classes: the entries of the methods they implement (abstract in the build) are put right */
   private repairVtable(name: string): void {
-    if (this.opts.compileOnly || this.aot?.building) return;
+    if (!this.instantiates) return;
     const repairs = this.hosts.vtableRepairs(name);
     if (!repairs.length) return;
     const set = this.hostFn("vt:set:" + name, ["I", "I"], "V", (cx, c) => { c.gget(cx.vtGlobal(name)).refAsNonNull().lget(0).lget(1).arraySet(cx.tVT); });
@@ -817,16 +820,14 @@ export class World {
     if (!s || s.done) return;
     if (s.k === "ensure") { this.linkEnsure(slot); return; }
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
-    const clock = this.unitClock();
-    const cx = new Compiler(this), batch = s.k === "method" ? this.batch(s.m) : [];
-    cx.shareHelpers();
-    for (const m of batch) this.demand.methods.add(m);
-    this.noteRun(batch);
-    const built = s.k === "method" ? cx.buildUnit(batch) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
-      : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
-    this.stats.units++; this.stats.methods += Math.max(1, batch.length);
-    const group = batch.map((m) => this.slotOf(m));
-    this.install(group, false, cx, this.unitImports(cx), built, slot, clock);
+    const group = this.compileUnit(slot, false, (cx) => {
+      if (s.k !== "method") return { methods: [], built: s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
+        : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name)) };
+      const batch = this.batch(s.m);
+      for (const m of batch) this.demand.methods.add(m);
+      this.noteRun(batch);
+      return { methods: batch, built: cx.buildUnit(batch) };
+    })!;
     if (group.length && this.opts.compiler) {
       this.loose.push(group);
       if (this.loose.length >= this.mergeAt) this.opts.compiler.merge(this);
@@ -857,7 +858,7 @@ export class World {
     // what is not ready waits for more units to be linked
     if (!refs.units.length) { this.mergeAt = this.loose.length + MERGE_AT / 4; return undefined; }
     this.mergeAt = MERGE_AT;
-    return this.job(refs.units.flat(), [], refs, undefined, true);
+    return this.job(refs.units.flat(), [], refs, new Map(), undefined, true);
   }
   /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
    *  it rather than in a module each, which costs the engine far more than the functions */
@@ -881,16 +882,12 @@ export class World {
   /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
   private linkEnsure(slot: number): void {
     this.settleInits();
-    const cls = this.slots.blockClass[this.slots.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
+    const cls = this.slots.blockClass[this.slots.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V");
     const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slots.at(at);
-    const own = clinit?.k === "method" && !clinit.done && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
-    const cx = new Compiler(this);
-    cx.shareHelpers();
-    const built = cx.buildUnit(own ? [own] : [], [], false, false, [cls]);
-    if (own) { this.demand.methods.add(own); this.stats.methods++; }
-    this.stats.units++;
-    this.install(own ? [at!] : [], false, cx, this.unitImports(cx), built, slot, clock);
-    this.initializing.push([slot, cls, own ? at! : -1]);
+    const methods = clinit?.k === "method" && !clinit.done && !(this.aot?.install(at!) && clinit.done) ? [clinit.m] : [];
+    this.compileUnit(slot, false, (cx) => ({ methods, built: cx.buildUnit(methods, { ensures: [cls] }) }));
+    if (methods.length) this.demand.methods.add(methods[0]);
+    this.initializing.push([slot, cls, methods.length ? at! : -1]);
   }
   /** ensure() units whose class may still be initializing: their slot, class and the <clinit> slot compiled beside them (-1 if none) */
   private initializing: [number, string, number][] = [];
@@ -922,13 +919,11 @@ export class World {
       const waited = this.leafWaits.get(slot) ?? 0;
       if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
     }
-    if (this.opts.holdUpgrades?.()) { reset(); return; }
-    const taken = this.opts.compiler?.submit(this, slot);
-    if (taken) { if (taken === true) s.pending = true; reset(); return; }
+    if (this.opts.holdUpgrades?.() || this.offload(slot, s)) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
     // else to the one that has waited longest and asked again since, so it is still hot
-    const t0 = performance.now(), clock = this.unitClock();
+    const t0 = performance.now();
     const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
     if (!this.upgradeAllowed(t0)) { wait(); return; }
     let pick = this.outermostWaiting() ?? slot;
@@ -938,11 +933,38 @@ export class World {
     }
     this.refused.delete(pick);
     if (pick !== slot) wait();
-    const m = this.slots.method(pick)!.m, cx = new Compiler(this), { installed, copies } = this.group(m);
-    const built = cx.buildUnit(installed, copies, true);
-    this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
-    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, clock);
+    this.compileHot(pick, this.slots.method(pick)!.m);
     this.upgradeMs += performance.now() - t0;
+  }
+  /** hands the second-tier compile of the method in `slot` to a compile worker; whether it was taken, or is to be asked for later */
+  private offload(slot: number, s: MethodSlot): boolean {
+    const taken = this.opts.compiler?.submit(this, slot);
+    if (taken === true) s.pending = true;
+    return !!taken;
+  }
+  /** compiles and installs the second-tier unit of `m` in `slot`, with `members` installed beside it (a refresh's), unless `admit` turns the built unit down */
+  private compileHot(slot: number, m: MethodInfo, members?: MethodInfo[], admit?: (cx: Compiler) => boolean): boolean {
+    const group = this.compileUnit(slot, true, (cx, seq) => {
+      const { installed, copies, plan } = this.group(m, members);
+      return { methods: installed, copies: copies.length, built: cx.buildUnit(installed, { copies, hot: true, plan, seq }) };
+    }, admit);
+    if (group) this.stats.upgrades++;
+    return !!group;
+  }
+  /** the number the next unit's functions carry (Compiler.buildUnit) */
+  private unitSeq = 0;
+  /** compiles a unit with `build`, which names the methods it installs (none for a runtime function or a class's ensure()), and installs it: its functions go
+   *  in their slots, or in `slot`; first-tier units share helpers. The slots it installed, or undefined if `admit` turned the built unit down. */
+  private compileUnit(slot: number, hot: boolean, build: (cx: Compiler, seq: number) => { methods: MethodInfo[]; copies?: number; built: Built },
+    admit?: (cx: Compiler) => boolean): number[] | undefined {
+    const clock = this.unitClock(), cx = new Compiler(this);
+    if (!hot) cx.shareHelpers();
+    const { methods, copies = 0, built } = build(cx, this.unitSeq++);
+    this.stats.units++; this.stats.methods += methods.length + copies;
+    const group = methods.map((m) => this.slotOf(m)), imports = this.unitImports(cx);
+    if (admit && !admit(cx)) { this.accountCompilation(clock); return undefined; }
+    this.install(group, hot, cx, imports, built, slot, clock);
+    return group;
   }
   private upgradeAllowed(now: number): boolean {
     this.hotSince ??= now;
@@ -950,34 +972,25 @@ export class World {
   }
   /** Coalesce executed-site readiness at an existing Java entry or promotion boundary. */
   private refreshHotUnits(): void {
-    if (!this.hotUnits.hasPending() || this.refreshing || this.opts.build || this.opts.compileOnly || this.opts.holdUpgrades?.()) return;
+    if (!this.hotUnits.hasPending() || this.refreshing || !this.instantiates || this.opts.holdUpgrades?.()) return;
     for (const unit of this.hotUnits.pending()) {
-      const slot = unit.slots[0], s = this.slots.peek(slot);
-      if (!this.hotUnits.live(unit, this.table) || s?.k !== "method" || !s.done || !s.hot) { this.hotUnits.forget(slot); continue; }
+      const slot = unit.slots[0], s = this.slots.peekMethod(slot);
+      if (!this.hotUnits.live(unit, this.table) || !s?.done || !s.hot) { this.hotUnits.forget(slot); continue; }
       if (s.pending) continue;
       this.refreshing = true;
       let start: number | undefined;
-      let clock: Clock | undefined;
       try {
-        const taken = this.opts.compiler?.submit(this, slot);
-        if (taken) { if (taken === true) s.pending = true; return; }
+        if (this.offload(slot, s)) return;
         start = performance.now();
         if (!this.upgradeAllowed(start)) return;
-        const epoch = this.epoch;
-        clock = this.unitClock();
-        const cx = new Compiler(this);
-        const members = unit.slots.map(at => this.slots.peekMethod(at)!.m);
-        const { installed, copies } = this.group(s.m, members);
-        const built = cx.buildUnit(installed, copies, true);
-        this.stats.units++; this.stats.methods += installed.length + copies.length;
-        const imports = this.unitImports(cx);
-        if (epoch !== this.epoch || !this.hotUnits.live(unit, this.table)) return;
-        // A refresh must consume readiness, rather than recompile the same adapter forever.
-        if (![...unit.ready].some(name => !cx.symbolicImports.has(name))) { this.hotUnits.forget(slot); return; }
-        this.install(installed.map(m => this.slotOf(m)), true, cx, imports, built, slot, clock);
-        this.stats.upgrades++; this.hotRefreshes++;
+        const epoch = this.epoch, members = unit.slots.map(at => this.slots.peekMethod(at)!.m);
+        if (this.compileHot(slot, s.m, members, (cx) => {
+          if (epoch !== this.epoch || !this.hotUnits.live(unit, this.table)) return false;
+          // A refresh must consume readiness, rather than recompile the same adapter forever.
+          if (![...unit.ready].some(name => !cx.symbolicImports.has(name))) { this.hotUnits.forget(slot); return false; }
+          return true;
+        })) this.hotRefreshes++;
       } finally {
-        if (clock) this.accountCompilation(clock);
         if (start !== undefined) this.upgradeMs += performance.now() - start;
         this.refreshing = false;
       }
@@ -1015,13 +1028,14 @@ export class World {
     const refresh = this.hotUnits.get(slot);
     if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.table)))) return undefined;
     const clock = this.unitClock(), members = s.hot ? refresh!.slots.map(at => this.slots.peekMethod(at)!.m) : undefined;
-    const { installed, copies } = this.group(s.m, members);
+    const { installed, copies, plan } = this.group(s.m, members);
     const refs = this.jobRefs([[...installed, ...copies]]);
     this.accountCompilation(clock);
-    return refs.units.length ? this.job(installed, copies, refs, s.hot ? refresh!.generation : undefined) : undefined;
+    return refs.units.length ? this.job(installed, copies, refs, plan, s.hot ? refresh!.generation : undefined) : undefined;
   }
-  private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, refresh?: number, merge?: boolean): UpgradeJob {
-    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+  private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, plan: CallPlan, refresh?: number, merge?: boolean): UpgradeJob {
+    this.stats.units++;
+    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.unitSeq++, installed: installed.map(mid), copies: copies.map(mid), plan: [...plan].map(([key, ms]) => [key, ms.map(mid)]), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** what a compile worker must be told of this World's class loading to compile `units` as it would: the initiating identities their code resolves, and the
    *  hierarchies of those classes. A unit that reaches a class whose definition is not ready is left out */
@@ -1356,17 +1370,16 @@ export class World {
   }
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
-  private group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[] } {
-    const out = [...members], installed = [...members], copies: MethodInfo[] = [], ids = new Set(out.map(mid));
-    this.plan = new Map();
-    if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
+  private group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[]; plan: CallPlan } {
+    const out = [...members], installed = [...members], copies: MethodInfo[] = [], ids = new Set(out.map(mid)), plan = new Map<string, MethodInfo[]>();
+    if (!m.codeOff || this.intrinsic(m)) return { installed, copies, plan };
     this.noteAllocations(m);
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
       // the callees that have run often, busiest first: code the first tier saw run a few times is not worth compiling into the unit
       const callees: { t: MethodInfo; id: string; ran: number }[] = [];
-      for (const t of this.callees(out[i])) {
+      for (const t of this.callees(out[i], plan)) {
         const id = mid(t);
         if (ids.has(id) || this.slots.at(this.slotOf(t))?.k !== "method") continue;
         const ran = this.ran(t);
@@ -1380,7 +1393,7 @@ export class World {
         this.slots.method(this.slotOf(t))!.done ? copies.push(t) : installed.push(t);
       }
     }
-    return { installed, copies };
+    return { installed, copies, plan };
   }
   /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
   private ran(t: MethodInfo): number {
@@ -1393,8 +1406,6 @@ export class World {
   longLoops = new Set<string>();
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
-  /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
-  plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
   /** a method's call sites, and the classes it allocates and refers to */
   private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
@@ -1483,7 +1494,7 @@ export class World {
   /** the slots of methods compiled ahead that have not been seen to run: a build is made of what runs */
   private aheadUnran = new Set<number>();
   private noteRun(ms: MethodInfo[]): void {
-    if (this.opts.build || this.opts.compileOnly) return;
+    if (!this.instantiates) return;
     this.aheadRoots.push(...ms);
     if (this.aheadRoots.length > AHEAD_ROOTS) this.aheadRoots.splice(0, this.aheadRoots.length - AHEAD_ROOTS / 2);
   }
@@ -1519,11 +1530,8 @@ export class World {
         if (root.codeOff) for (const { t } of this.calls(root)) if (t && this.aheadSlot(t) >= 0) this.aheadQueue.push(t);
       }
       if (!unit.length) return false;
-      const clock = this.unitClock(), cx = new Compiler(this);
-      cx.shareHelpers();
-      const built = cx.buildUnit(unit), group = unit.map((m) => this.slotOf(m));
-      this.stats.units++; this.stats.methods += unit.length; this.stats.ahead += unit.length;
-      this.install(group, false, cx, this.unitImports(cx), built, group[0], clock);
+      const group = this.compileUnit(this.slotOf(unit[0]), false, (cx) => ({ methods: unit, built: cx.buildUnit(unit) }))!;
+      this.stats.ahead += unit.length;
       for (const at of group) this.aheadUnran.add(at);
       // what these call is likely next in turn, after what the methods that ran call
       this.aheadRoots.unshift(...unit);
@@ -1542,15 +1550,15 @@ export class World {
       yield { t: targets ? targets.length === 1 ? targets[0] : undefined : this.prog.resolve(decl, mr.name, desc), targets, decl, name: mr.name, desc };
     }
   }
-  /** Direct callees followed by guarded implementations, preserving their planning order. */
-  private callees(m: MethodInfo): MethodInfo[] {
+  /** Direct callees followed by guarded implementations, preserving their planning order; `plan` gets the small implementations, among the allocated classes', each virtual call tests for first. */
+  private callees(m: MethodInfo, plan: Map<string, MethodInfo[]>): MethodInfo[] {
     const direct: MethodInfo[] = [], guarded: MethodInfo[] = [];
     for (const { t, targets, decl, name, desc } of this.calls(m)) {
       if (t && t !== m && this.inlinable(t) && !direct.includes(t)) direct.push(t);
       if (!targets) continue;
       const key = `${decl}.${name}${desc}`;
-      let choices = this.plan.get(key);
-      if (!choices) this.plan.set(key, choices = targets.length > 1 ? this.likely(decl, name, desc) : []);
+      let choices = plan.get(key);
+      if (!choices) plan.set(key, choices = targets.length > 1 ? this.likely(decl, name, desc) : []);
       for (const choice of choices) if (!guarded.includes(choice)) guarded.push(choice);
     }
     return direct.concat(guarded);

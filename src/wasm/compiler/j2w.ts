@@ -97,9 +97,27 @@ const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "plan" | "claims" | "allocated" | "longLoops"
+export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
   | "idOf" | "slotOf" | "vslot" | "selectorId" | "ensureSlot" | "ensureBody" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
   | "needsSymbolicSite" | "guestShared" | "sharedHelpers">;
+/** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (World.group) */
+export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
+/** how Compiler.buildUnit compiles its methods */
+export interface UnitOptions {
+  /** compiled beside the methods for the unit's own calls and not exported; what they assume about the class hierarchy counts against the first method */
+  copies?: MethodInfo[];
+  /** the second tier: its methods do not count */
+  hot?: boolean;
+  /** the methods go straight into their table slots when the module is instantiated and call each other through them, as precompiled code ("build",
+   *  aot.ts) or code merged from first-tier units ("merge"), which unlike precompiled code relies on the classes loaded now */
+  install?: "build" | "merge";
+  /** classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
+  ensures?: string[];
+  plan?: CallPlan;
+  /** the number a hot or merged unit's function names carry, apart from earlier units of the same methods */
+  seq?: number;
+}
+const NO_PLAN: CallPlan = new Map();
 export class Compiler implements Base {
   w: LinkEnv;
   mb = new ModuleBuilder();
@@ -114,6 +132,7 @@ export class Compiler implements Base {
   /** the names and descriptors of `fn`'s methods: a virtual call of any other can have no target in the module */
   private keys = new Set<string>();
   private direct = true;
+  private plan = NO_PLAN;
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
@@ -317,7 +336,7 @@ export class Compiler implements Base {
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
-    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
+    return (this.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
   }
   /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
   emitCount(c: Code, m: MethodInfo, iterations?: number): void {
@@ -677,19 +696,14 @@ export class Compiler implements Base {
   }
 
   // ---------- units
-  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
-   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
-   *  unit is the second tier: its methods do not count. With `install` the methods go straight into their table slots when the module is
-   *  instantiated, and call each other through them, as precompiled code (true, aot.ts) or code merged from first-tier units ("merge"), which
-   *  unlike precompiled code relies on the classes loaded now. `ensures`: classes whose ensure() the unit also defines, exported as the methods
-   *  are (World.ensureBody) */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install: boolean | "merge" = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
+  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>" unless the unit installs them */
+  buildUnit(methods: MethodInfo[], { copies = [], hot = false, install, ensures = [], plan = NO_PLAN, seq = 0 }: UnitOptions = {}): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
-    this.counting = !hot;
+    this.counting = !hot; this.plan = plan;
     this.natives.declare(this, all);
     declareSymbolicSites(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
-    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
+    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${seq}` : mid(m));
     all.forEach((m, i) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))); this.keys.add(m.key); });
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
     this.direct = !install; this.head = methods[0];

@@ -611,7 +611,7 @@ async function hotRefreshControl(): Promise<void> {
     const job = w.upgradeJob(slot)!;
     if (!job || !job.copies.some(id => id.startsWith(cls + ".helper"))) throw new Error("hot refresh did not copy the executed callee");
     const cx = new Compiler(w), method = (id: string) => methodOf(p, id)!;
-    const built = cx.buildUnit(job.installed.map(id => method(id)!), job.copies.map(id => method(id)!), true);
+    const built = cx.buildUnit(job.installed.map(id => method(id)!), { copies: job.copies.map(id => method(id)!), hot: true, seq: job.unit });
     if (!cx.symbolicImports.size) throw new Error("hot refresh seed lost the unused later reference");
     // Install the actual compiled unit with the same canonical publication path as inline promotion.
     const owner = w as unknown as { unitImports(cx: Compiler): Record<string, unknown>; unitClock(): { start: number; accounted: number };
@@ -682,7 +682,7 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
     const clock = owner.unitClock(), job = w.upgradeJob(slot);
     if (!job) throw new Error("pending control has no real compilation job");
     const cx = new Compiler(w), methods = job.installed.map(id => methodOf(w.prog, id)!);
-    const built = cx.buildUnit(methods, job.copies.map(id => methodOf(w.prog, id)!), true);
+    const built = cx.buildUnit(methods, { copies: job.copies.map(id => methodOf(w.prog, id)!), hot: true, seq: job.unit });
     return () => owner.install(methods.map(m => w.slotOf(m)), true, cx, owner.unitImports(cx), built, slot, clock);
   };
   const state = (w: ReturnType<typeof world>, slot: number) => w.slots.peek(slot) as { pending?: boolean; hot?: boolean };

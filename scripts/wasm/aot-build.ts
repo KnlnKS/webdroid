@@ -131,7 +131,7 @@ cGroups.forEach((blocks, k) => {
   if (!methods.length) { empty.add(k); return; }
   const cx = new Compiler(w);
   w.beginTouch();
-  const built = cx.buildUnit(methods, [], false, true), touch = w.endTouch();
+  const built = cx.buildUnit(methods, { install: "build" }), touch = w.endTouch();
   const bad = check(built.bytes);
   if (bad) {
     const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";

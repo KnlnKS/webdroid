@@ -372,7 +372,7 @@ export class AotRuntime {
       if (slots === undefined || app === undefined) return undefined;
       base = slots;
     }
-    const exports = this.building || w.opts.compileOnly ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
+    const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
     // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
     if (!exports && app === undefined) this.fallbackD.add(g);
     const jc = w.prog.get(name);
@@ -396,7 +396,7 @@ export class AotRuntime {
   /** makes sure the module that holds class `id` is loaded: the class's own record is made when something asks for the class, not for every class a module names */
   private touch(id: number): void {
     const w = this.w;
-    if (id <= this.nSeeded && !this.building && !w.opts.compileOnly && this.loadD(this.dOf[id - 1])) return;
+    if (id <= this.nSeeded && w.instantiates && this.loadD(this.dOf[id - 1])) return;
     w.link(w.nameOf(id));
   }
   /** puts a build's code of synthetic function `name` in its slot, with the others of its module; false if the builds have none */
@@ -483,7 +483,7 @@ export class AotRuntime {
   private prepared = new Set<number>();
   private preparationModule(slot: number): number {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1;
-    return !this.store?.prefetch || this.building || this.w.opts.compileOnly || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
+    return !this.store?.prefetch || !this.w.instantiates || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
   }
   private preparationFiles(c: number): string[] {
     const file = `c${c}.wasm`, mod = this.store!.get(file);
