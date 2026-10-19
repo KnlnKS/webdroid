@@ -17,7 +17,7 @@ import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag 
 import { armClockTimer, disarmClockTimer, timerState, setClockTimer, type ClockTimer } from "./timers.ts";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
-import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe.ts";
+import { newPipe, wakeAll, takePipe, nameFifo, fifoOf, isFifo, holdFifo, remoteFifo, moveRemoteFifo, type Pipe } from "./pipe.ts";
 import type { Socket, Received } from "./socket/core.ts";
 import type { Epoll } from "./poll.ts";
 import { processOpenFd, type RemoteDescriptor } from "./process-fd.ts";
@@ -260,7 +260,7 @@ function openLocal(cpu: Cpu | null, path: string, flags: number): number {
   }
   if (flags & O_DIRECTORY) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
   const existing = vfs.open(path), fifo = fifoOf(existing);
-  if (fifo) return openFifo(path, existing!, fifo, flags);
+  if (fifo) return holdFifo(fifo, 0) ? openFifo(path, existing!, fifo, flags) : fail(cpu, E.NXIO);
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);

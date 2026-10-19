@@ -17,7 +17,7 @@ import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, openFd } from "../src/native/fs.ts";
+import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, makeFifo, openFd } from "../src/native/fs.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
@@ -97,6 +97,18 @@ describe("file-descriptor", () => {
     } finally {
       await vcall(shared,"close","()V"); kernel.close(1001); kernel.close(1002);
     }
+  });
+
+  test("one process at a time opens a fifo another realm names", async () => {
+    const kernel = new FileDescriptors(), [a, b] = [1001,1002].map(pid => kernel.session(pid,() => 0)), path = "/fifo-kernel";
+    expect(makeFifo(null,path)).toBe(0);
+    try {
+      expect(await a.fileDescriptor({kind:"open",path,flags:0x800})).toBe("fifo");
+      expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe(-E.NXIO);
+      expect(javaOpenFd(path,1)).toBe(-E.NXIO);
+      kernel.close(1001);
+      expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe("fifo");
+    } finally { kernel.close(1001); kernel.close(1002); vfs.delete(path); }
   });
 
   test("Java Parcel owner release closes only its descriptor side table", async () => {

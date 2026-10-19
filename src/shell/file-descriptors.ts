@@ -2,14 +2,14 @@ import { E } from "../native/abi.ts";
 import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaLseekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, fdBase, installFile, type FdStat, type OpenFile } from "../native/fs.ts";
-import { isFifo } from "../native/pipe.ts";
+import { fifoOf, holdFifo, type Pipe } from "../native/pipe.ts";
 import { vfs, type VfsFile } from "./vfs.ts";
 import { writable } from "./lazyfile.ts";
 
 /** each descriptor operation's request, and what it answers other than a number (a result or -errno) */
 type Operations = {
   ashmemCreate: [{ size: number }, never];
-  /** a process keeps its own pipe behind a fifo's name */
+  /** the process that holds a fifo keeps its own pipe behind its name */
   open: [{ path: string; flags: number }, { token: number; dir: boolean } | "fifo"];
   /** at the open file's position, or at `offset` without moving it */
   read: [{ fd: number; length: number; offset?: number }, Uint8Array];
@@ -38,7 +38,7 @@ export type DescriptorCalls = { fileDescriptor<K extends DescriptorKind>(request
 type Handlers = { [K in DescriptorKind]: (session: Session, request: DescriptorRequest<K>) => DescriptorReply<K> | Promise<DescriptorReply<K>> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
 type Mapping = { fd: number; file: OpenFile; offset: number; length: number; prot: number };
-type Session = { dead: boolean; descriptors: Map<number, Descriptor>; mappings: Map<number, Mapping>; authorize(path: string, write: boolean): number; uid?: number };
+type Session = { pid: number; dead: boolean; descriptors: Map<number, Descriptor>; mappings: Map<number, Mapping>; fifos: Set<Pipe>; authorize(path: string, write: boolean): number; uid?: number };
 export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; closed:boolean; closing?:Promise<void> };
 /** why [offset, offset + length) of a lease cannot be read (access 1) or written (2), or 0 */
 function rangeError(mapping: Mapping, offset: number, length: number, access: number): number {
@@ -86,7 +86,7 @@ export class FileDescriptors {
 
   session(pid: number, authorize: Session["authorize"], uid?: number): DescriptorCalls {
     let session = this.sessions.get(pid);
-    if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), mappings:new Map(), authorize,uid});
+    if (!session) this.sessions.set(pid, session = {pid, dead:false, descriptors:new Map(), mappings:new Map(), fifos:new Set(), authorize,uid});
     else { session.authorize = authorize;session.uid = uid; }
     const owner = session;
     return {fileDescriptor: request => this.dispatch(owner, request)};
@@ -154,7 +154,12 @@ export class FileDescriptors {
       const path = vfs.norm(request.path), flags = request.flags;
       const denied = session.authorize(path, !!(flags & (O_ACCMODE | O_CREAT | O_TRUNC)));
       if (denied) return -denied;
-      if (isFifo(path)) return "fifo";
+      const fifo = fifoOf(vfs.open(path));
+      if (fifo) {
+        if (!holdFifo(fifo, session.pid)) return -E.NXIO;
+        session.fifos.add(fifo);
+        return "fifo";
+      }
       const existed = vfs.exists(path), fd = javaOpenFd(path,flags);
       if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
       const dir = fd >= 0 && openFd(fd)!.dir, token = this.put(session,fd);
@@ -272,6 +277,7 @@ export class FileDescriptors {
     const session = this.sessions.get(pid);
     if (!session) return;
     this.sessions.delete(pid); session.dead = true;
+    for (const fifo of session.fifos) fifo.holder = undefined;
     for (const table of [session.descriptors,session.mappings]) {
       for (const resource of table.values())
         void this.ordered(resource.file, () => javaCloseFd(resource.fd)).catch(error => console.error("[descriptor cleanup]",error));
