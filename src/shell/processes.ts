@@ -48,7 +48,7 @@ import { hostUiMethods, type HostUi } from "./host-ui.ts";
 import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsCalls, SettingsTable } from "./settings.ts";
-import { serveProcess, processProxy, processError, methodsOf } from "./process-port.ts";
+import { serveProcess, processProxy, processError, methodsOf, closePort } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
@@ -348,12 +348,12 @@ export class ProcessBroker {
   private publishEndpoint(pid: number, port: MessagePort, stop = () => {}): void {
     try {
       const entry = this.entry(pid);
-      if (entry.session.endpoint) { port.postMessage({ kind: "close" }); port.close(); stop(); return; }
+      if (entry.session.endpoint) { closePort(port); stop(); return; }
       const proxy = processProxy(port, error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error),
         error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); });
       entry.session.endpoint = () => { stop(); proxy.close(); };
       entry.resolve(proxy.endpoint);
-    } catch (error) { port.postMessage({ kind: "close" }); port.close(); stop(); throw error; }
+    } catch (error) { closePort(port); stop(); throw error; }
   }
   /** Root uses its local Java watcher; remote processes keep only this owner-side notifier. */
   watchAccounts(pid: number, local?: () => void): void {

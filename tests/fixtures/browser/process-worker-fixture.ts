@@ -11,6 +11,7 @@ import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
 import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
 import type { BrokerCalls } from "../../../src/shell/processes.ts";
+import type { ImeView } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 
@@ -149,13 +150,13 @@ const roles: Record<string, () => (data: never) => void> = {
   },
   /** an editor whose first edit holds its input until the page releases it */
   ime: () => {
-    let generation = 1, release = () => {}, port: MessagePort;
+    let generation = 1, release = () => {}, page: ImeView;
     const state = (text: string, start: number, end: number, active: boolean) =>
-      port.postMessage({ kind: "imeState", state: { generation, text, start, end, active, hasAction: false } });
-    return (data: { port: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
-      if ("port" in data) {
-        port = data.port;
-        serveCalls(port, {
+      page.state({ generation, text, start, end, active, hasAction: false });
+    return (data: { input: MessagePort; view: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
+      if ("input" in data) {
+        page = callProxy<ImeView>(data.view, ["state"], ["state"]).endpoint;
+        serveCalls(data.input, {
           input: async (edit: number, text: string, start: number, end: number) => {
             if (edit !== generation) return;
             post({ input: text });

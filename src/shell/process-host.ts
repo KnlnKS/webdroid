@@ -16,7 +16,7 @@ import { displayRate } from "./display-rate.ts";
 import { device, formatScreen } from "./config.ts";
 import type { ClockBootstrap } from "./clock-port.ts";
 import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
-import { receiveIme } from "./ime-port.ts";
+import { inputMethods, receiveIme, type InputCalls } from "./input-port.ts";
 import { receiveMedia } from "./media-port.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
@@ -28,7 +28,7 @@ export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; ao
 /** what a process Worker posts the page once its start succeeds or fails */
 export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
-export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "pointer", "back", "testFrame", "timeline"]);
+export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
@@ -131,11 +131,7 @@ export class ProcessHost {
     const client = callProxy<WorkerControl>(this.controlPorts.port1, workerControlMethods, [], processError,
       error => this.fail(error.message ?? "Process Worker control closed"));
     this.control = client.endpoint;
-    const pointers = attachPointerInput(canvas, () => device, client.endpoint.pointer, () => {
-      clearTimeout(this.focusTimer);
-      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) this.ime?.focus(); }, 0);
-    });
-    this.ends.push(pointers.close, client.close);
+    this.ends.push(client.close);
     window.addEventListener("pagehide", this.pagehide, { once: true });
     worker.onerror = event => this.fail(event.message);
     worker.onmessageerror = () => this.fail("Invalid process Worker message");
@@ -165,13 +161,17 @@ export class ProcessHost {
   }
   /** the bootstrap's ends of the process's display, input, web and media ports, once: the canvas
    *  hands its control to the display */
-  surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "ime" | "web" | "media"> {
-    const display = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
-    const frames = this.display = receiveFrames(display.port1, this.canvas, () => this.presented.resolve());
+  surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "input" | "ime" | "web" | "media"> {
+    const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
+    const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
     if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
-    const input = this.ime = receiveIme(ime.port1, this.canvas);
-    this.ends.push(receiveMedia(media.port1), frames.close, input.close, receiveWebSurfaces(web.port1, this.canvas, () => device));
-    return { display: display.port2, screen: this.canvas.transferControlToOffscreen(), ime: ime.port2, web: web.port2, media: media.port2 };
+    const calls = callProxy<InputCalls>(input.port1, inputMethods), text = this.ime = receiveIme(ime.port1, canvas, calls.endpoint);
+    const pointers = attachPointerInput(canvas, () => device, calls.endpoint.pointer, () => {
+      clearTimeout(this.focusTimer);
+      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
+    });
+    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), receiveWebSurfaces(web.port1, canvas, () => device));
+    return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
   }
   private fail(message: string): void { if (!this.closed) this.hosts.owner.failed(this.pid, message); }
   close(): void {

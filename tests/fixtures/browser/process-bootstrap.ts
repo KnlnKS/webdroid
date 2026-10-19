@@ -9,7 +9,7 @@ import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestC
 import { callProxy } from "../../../src/shell/process-port.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
-import { receiveIme } from "../../../src/shell/ime-port.ts";
+import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
 import { workerControlMethods, type ProcessHost } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
@@ -607,14 +607,15 @@ export async function locationOwnership() {
 
 export async function imeOwnership() {
   const canvas = document.createElement("canvas"); document.body.append(canvas);
-  const port = new MessageChannel(), owner = receiveIme(port.port1,canvas), inputs:string[]=[];
+  const input = new MessageChannel(), view = new MessageChannel(), calls = callProxy<InputCalls>(input.port1,inputMethods);
+  const owner = receiveIme(view.port1,canvas,calls.endpoint), inputs:string[]=[];
   let entered!:()=>void; const first = new Promise<void>(resolve=>entered=resolve);
   const worker=fixtureWorker("ime");
   worker.onmessage=({data})=>{if(data.input){inputs.push(data.input);if(data.input==='a')entered();}};
   const wait = async (ready:()=>boolean) => {const until=performance.now()+2000;while(!ready()){if(performance.now()>until)throw new Error("IME core deadline");await new Promise(resolve=>setTimeout(resolve,0));}};
   try {
-    const forwarded=structuredClone({port:port.port2},{transfer:[port.port2]});
-    worker.postMessage(forwarded,[forwarded.port]);
+    const forwarded=structuredClone({input:input.port2,view:view.port2},{transfer:[input.port2,view.port2]});
+    worker.postMessage(forwarded,[forwarded.input,forwarded.view]);
     await wait(()=>!owner.input.disabled);
     const edit=(text:string)=>{owner.input.value=text;owner.input.setSelectionRange(text.length,text.length);owner.input.dispatchEvent(new InputEvent("input",{isComposing:false}));};
     edit("a");await first;edit("ab");edit("abc");worker.postMessage({kind:"release"});
@@ -625,5 +626,5 @@ export async function imeOwnership() {
     const inactive=owner.input.disabled;
     owner.close();edit("closed");await new Promise(resolve=>setTimeout(resolve,0));
     return {inputs,switched,inactive,closed:!owner.input.isConnected};
-  }finally{owner.close();worker.terminate();canvas.remove();}
+  }finally{owner.close();calls.close();worker.terminate();canvas.remove();}
 }

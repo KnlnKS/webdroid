@@ -32,6 +32,12 @@ export function processError(error: ProcessFailure): Error {
   return result;
 }
 const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
+/** closes `port` once its peer is told, with `error` as the reason; a port a failed transfer
+ *  detached is only closed */
+export function closePort(port: MessagePort, error?: ProcessFailure): void {
+  try { port.postMessage({ kind: "close", error } satisfies Message); } catch { /* detached */ }
+  port.close();
+}
 
 /** what releases a method's result that never reached its caller */
 type Undelivered<C extends Contract> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => unknown };
@@ -44,7 +50,7 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
   const close = (error?: ProcessFailure) => {
     if (closed) return;
     closed = true;
-    try { port.postMessage({ kind: "close", error } satisfies Message); } finally { port.close(); onClose(); }
+    closePort(port, error); onClose();
   };
   port.onmessageerror = () => close(closedFailure);
   port.onmessage = async ({ data }: MessageEvent<Message>) => {
