@@ -35,7 +35,6 @@ export function fieldCookie(w: World, id: number): number {
 type Ty = string;
 const width = (t: Ty) => (t === "L" ? 4 : PRIMS[t].size);
 const desc = (t: Ty) => (t === "L" ? "Ljava/lang/Object;" : t);
-const kindOfTy = (t: Ty): Kind => kindOf(desc(t));
 
 /** Field accessor bodies are pure; install them before returning their slot so linking cannot split a VarHandle update. */
 const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
@@ -174,7 +173,7 @@ const slotOf = (cx: Compiler, c: Code, kind: UInfo, k: Kind): number => {
 const onArray = (c: Code) => c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_ge_s);
 
 function emitGet(cx: Compiler, c: Code, t: Ty): void {
-  const k = kindOfTy(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx;
+  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx;
   const signed = t === "B" || t === "S";
   onArray(c).if_(cx.vtOf(k));
   const idx = index(c, t);
@@ -197,7 +196,7 @@ function emitGet(cx: Compiler, c: Code, t: Ty): void {
 }
 
 function emitPut(cx: Compiler, c: Code, t: Ty): void {
-  const k = kindOfTy(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, V = 3;
+  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, V = 3;
   onArray(c).if_();
   const idx = index(c, t);
   c.lget(OBJ).refTest(tArr[ek]).if_();
@@ -217,7 +216,7 @@ function emitPut(cx: Compiler, c: Code, t: Ty): void {
 }
 
 function emitCas(cx: Compiler, c: Code, t: "I" | "J" | "L"): void {
-  const k = kindOfTy(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, EXP = 3, NEW = 4;
+  const k = kindOf(t), ek = elemKindOf("[" + t), { tArr, tData } = cx, EXP = 3, NEW = 4;
   onArray(c).if_(T.i32);
   const idx = index(c, t), data = c.newLocal(refNull(tData[ek]));
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lset(data);

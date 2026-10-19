@@ -1,6 +1,6 @@
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { inferTyping, R, J, D, type Typing } from "./infer.ts";
+import { inferTyping, KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
@@ -32,8 +32,7 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
     const web = typing.use(ins.pc, reg);
     if (web < 0 || seen.has(web)) continue;
     seen.add(web);
-    const k = typing.kind[web];
-    inputs.push([reg, k === R ? "L" : k === J || k === D ? "J" : "I"]);
+    inputs.push([reg, KINDS[typing.kind[web]].abi]);
   }
   const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
     : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)

@@ -2,7 +2,7 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { javaName, type JClass, typeName } from "../compiler/program.ts";
+import { javaName, kindOf, type JClass, type Kind, typeName } from "../compiler/program.ts";
 import { idOfClass, fieldId } from "./classes.ts";
 
 import { executableSlot, methodAt } from "./reflect.ts";
@@ -13,7 +13,6 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
-import type { Kind } from "../compiler/program.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
@@ -64,13 +63,13 @@ function make(w: World) {
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
   const aset = fn("an:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
   const box = (letter: string) => {
-    const cls = PRIMS[letter].box, bits = letter === "J" || letter === "D" ? "J" : "I";
-    return java("an:box:" + letter, [bits], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
+    const cls = PRIMS[letter].box;
+    return java("an:box:" + letter, [kindOf(letter)], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
   };
-  const call = (cls: string, name: string, desc: string, params: ("I" | "J" | "L")[], ret: "I" | "L" | "V") =>
+  const call = (cls: string, name: string, desc: string, params: Kind[], ret: "I" | "L" | "V") =>
     java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
   const enumConstant = (cls: string, name: string, desc: string) => java(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
-  const construct = (cls: string, desc: string, params: ("I" | "J" | "L")[]) =>
+  const construct = (cls: string, desc: string, params: Kind[]) =>
     java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => cx.construct(c, cx.prog.resolve(cls, "<init>", desc)!, () => params.forEach((_, i) => arg(i))));
   return {
     classOf, mkExec, newArray, aset, box,

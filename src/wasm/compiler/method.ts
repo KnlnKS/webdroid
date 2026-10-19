@@ -17,7 +17,7 @@ import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
 import { isInvoke } from "./opinfo.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { Outliner } from "./outline.ts";
-import { inferTyping, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
+import { inferTyping, KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** what an invoke names: its kind without /range, the method's name and descriptor, the class whose methods it searches, and the resolved target */
 type InvokeSite = { kind: string; name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
@@ -102,10 +102,9 @@ export class MC {
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
-  storage(k: number): VT { return k === KR ? T.anyref : k === KJ ? T.i64 : k === KD ? T.f64 : k === KF ? T.f32 : T.i32; }
   local(web: number): number {
     let l = this.webLocal[web];
-    if (l === undefined) this.webLocal[web] = l = this.code.newLocal(this.storage(this.typing.kind[web]));
+    if (l === undefined) this.webLocal[web] = l = this.code.newLocal(KINDS[this.typing.kind[web]].vt);
     return l;
   }
   private allocateWebs() {
@@ -114,7 +113,7 @@ export class MC {
     const pools = new Map<VT, { local: number; end: number }[]>();
     const webs = start.map((_, w) => w).filter(w => start[w] !== undefined && !reserved.has(w)).sort((a, b) => start[a] - start[b] || a - b);
     for (const w of webs) {
-      const type = this.storage(this.typing.kind[w]);
+      const type = KINDS[this.typing.kind[w]].vt;
       let pool = pools.get(type); if (!pool) pools.set(type, pool = []);
       let slot = pool.find(slot => slot.end < start[w]);
       if (!slot) { slot = { local: this.root.newLocal(type), end: -1 }; pool.push(slot); }
@@ -143,27 +142,27 @@ export class MC {
   }
   /** push `reg` in the bits ABI of `kind` (I: int and float bits, J: long and double bits, L: reference) */
   get(kind: Kind, reg: number): void {
-    const k = this.load(reg), c = this.code;
-    if (kind !== (k === KR ? "L" : k === KJ || k === KD ? "J" : "I")) throw new Error(`v${reg} holds a ${k} where ${kind} is read at ${this.cur.pc}`);
-    if (k === KF) c.raw(OP.i32_reinterpret_f32); else if (k === KD) c.raw(OP.i64_reinterpret_f64);
+    const k = this.load(reg), { abi, toBits } = KINDS[k];
+    if (kind !== abi) throw new Error(`v${reg} holds a ${k} where ${kind} is read at ${this.cur.pc}`);
+    if (toBits) this.code.raw(toBits);
   }
   /** pop a value in the bits ABI of `kind` into what `ins` (default: the current one) defines */
   set(kind: Kind, ins = this.cur): void {
-    const w = this.typing.def(ins.pc), c = this.code;
+    const w = this.typing.def(ins.pc);
     if (w >= 0) {
-      const k = this.typing.kind[w];
-      if (kind !== (k === KR ? "L" : k === KJ || k === KD ? "J" : "I")) throw new Error(`a ${kind} is defined as a ${k} at ${ins.pc}`);
-      if (k === KF) c.raw(OP.f32_reinterpret_i32); else if (k === KD) c.raw(OP.f64_reinterpret_i64);
+      const k = this.typing.kind[w], { abi, fromBits } = KINDS[k];
+      if (kind !== abi) throw new Error(`a ${kind} is defined as a ${k} at ${ins.pc}`);
+      if (fromBits) this.code.raw(fromBits);
     }
     this.store(ins);
   }
   /** push `reg` as a number of kind `k` (infer.ts I, J, F or D): an int or long in the bits ABI, a float or double as itself */
   num(k: number, reg: number): void {
-    if (k === KI || k === KJ) { this.get(k === KJ ? "J" : "I", reg); return; }
+    if (!KINDS[k].toBits) { this.get(KINDS[k].abi, reg); return; }
     if (this.load(reg) !== k) throw new Error(`v${reg} is not a ${k === KF ? "float" : "double"} at ${this.cur.pc}`);
   }
   /** pop a number of kind `k` into what the current instruction defines */
-  setNum(k: number): void { if (k === KI || k === KJ) this.set(k === KJ ? "J" : "I"); else this.store(this.cur); }
+  setNum(k: number): void { if (KINDS[k].toBits) this.store(this.cur); else this.set(KINDS[k].abi); }
 
   run(): void {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
@@ -189,9 +188,8 @@ export class MC {
     const param = (wide: boolean) => {
       const w = this.typing.param(reg);
       if (w >= 0) {
-        const k = this.typing.kind[w], native = k === KF || k === KD;
-        if (native) { c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); }
-        else this.webLocal[w] = pi;
+        const { fromBits } = KINDS[this.typing.kind[w]];
+        if (fromBits) c.lget(pi).raw(fromBits).lset(this.local(w)); else this.webLocal[w] = pi;
       }
       pi++; reg += wide ? 2 : 1;
     };

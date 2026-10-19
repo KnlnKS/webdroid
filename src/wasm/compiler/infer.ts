@@ -11,10 +11,20 @@ import type { CodeItem, DexFile } from "../../jvm/dex.ts";
 import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
 import { buildCfg } from "./cfg.ts";
 import { isInvoke, isInstanceInvoke } from "./opinfo.ts";
+import { OP } from "./code.ts";
+import { T, type VT } from "./wasmbin.ts";
+import type { Kind } from "./program.ts";
 
 export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;
-const kc = (c: string) => (c === "L" || c === "[" ? R : c === "J" ? J : c === "D" ? D : c === "F" ? F : I);
+/** the kind of a value of type `desc` */
+export const valueKind = (desc: string) => { const c = desc[0]; return c === "L" || c === "[" ? R : c === "J" ? J : c === "D" ? D : c === "F" ? F : I; };
+/** by kind: the Wasm type a value is held in, its kind in the bits ABI, and for F and D the reinterpretations to and from those bits */
+export const KINDS: { readonly [k: number]: { vt: VT; abi: Kind; toBits?: number; fromBits?: number } } = {
+  [I]: { vt: T.i32, abi: "I" }, [R]: { vt: T.anyref, abi: "L" }, [J]: { vt: T.i64, abi: "J" },
+  [F]: { vt: T.f32, abi: "I", toBits: OP.i32_reinterpret_f32, fromBits: OP.f32_reinterpret_i32 },
+  [D]: { vt: T.f64, abi: "J", toBits: OP.i64_reinterpret_f64, fromBits: OP.f64_reinterpret_i64 },
+};
 
 interface Eff { u: number[]; d: number; dm: number; link: number }
 const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0 };
@@ -51,7 +61,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
 
   // ---- per-instruction effects
   const sig = parseMethodDesc(desc);
-  const retMask = kc(sig.ret[0]);
+  const retMask = valueKind(sig.ret);
   const effs: Eff[] = new Array(n);
   for (let i = 0; i < n; i++) effs[i] = effect(dex, ins[i], i ? ins[i - 1] : null, retMask);
 
@@ -112,7 +122,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   let p = R_ - code.ins;
   if (!isStatic) { start[p] = paramNode[p] = mk(R, p); p++; }
   for (const t of sig.params) {
-    const m = kc(t[0]);
+    const m = valueKind(t);
     const node = mk(m, p);
     start[p] = paramNode[p] = node;
     if (m & WIDE) start[p + 1] = node;
@@ -253,7 +263,6 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   };
 }
 
-/** the operand and result kinds of the unary operations 0x7b (neg-int) to 0x8f (int-to-short) */
 /** the operand and result kinds of each unary op, neg-int (0x7b) to int-to-short (0x8f) */
 export const UNARY: readonly [number, number][] = [
   [I, I], [I, I], [J, J], [J, J], [F, F], [D, D],
@@ -279,7 +288,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
     let m = N32;
     if (op === 0x0b) m = WIDE; else if (op === 0x0c) m = R;
     if (prev) {
-      if (isInvoke(prev.op)) { const r = retOf(dex, prev); if (r) m = kc(r[0]); }
+      if (isInvoke(prev.op)) { const r = retOf(dex, prev); if (r) m = valueKind(r); }
       else if (prev.op === 0x24 || prev.op === 0x25) m = R;
     }
     return E([], a, m);
@@ -298,7 +307,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   if (op === 0x22) return E([], a, R);
   if (op === 0x23) return E([b, I], a, R);
   if (op === 0x24 || op === 0x25) {
-    const el = kc(dex.type(b)[1] ?? "L");
+    const el = valueKind(dex.type(b)[1] ?? "L");
     return E(x.regs.flatMap((r) => [r, el]));
   }
   if (op <= 0x27) return E([a, R]);
@@ -320,10 +329,10 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
     const m = op === 0x4b ? I | F : op === 0x4c ? WIDE : op === 0x4d ? R : I;
     return E([a, m, b, R, c, I]);
   }
-  if (op >= 0x52 && op <= 0x58) return E([b, R], a, kc(dex.type(dex.field(c).type)[0]));
-  if (op >= 0x59 && op <= 0x5f) return E([a, kc(dex.type(dex.field(c).type)[0]), b, R]);
-  if (op >= 0x60 && op <= 0x66) return E([], a, kc(dex.type(dex.field(b).type)[0]));
-  if (op >= 0x67 && op <= 0x6d) return E([a, kc(dex.type(dex.field(b).type)[0])]);
+  if (op >= 0x52 && op <= 0x58) return E([b, R], a, valueKind(dex.type(dex.field(c).type)));
+  if (op >= 0x59 && op <= 0x5f) return E([a, valueKind(dex.type(dex.field(c).type)), b, R]);
+  if (op >= 0x60 && op <= 0x66) return E([], a, valueKind(dex.type(dex.field(b).type)));
+  if (op >= 0x67 && op <= 0x6d) return E([a, valueKind(dex.type(dex.field(b).type))]);
   if (isInvoke(op)) {
     const u: number[] = [];
     let params: string[] = [];
@@ -334,7 +343,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
     } catch { return E(x.regs.flatMap((r) => [r, N32])); }
     let k = 0;
     if (isInstanceInvoke(op)) u.push(x.regs[k++], R);
-    for (const t of params) { const m = kc(t[0]); if (x.regs[k] === undefined) break; u.push(x.regs[k], m); k += m & WIDE ? 2 : 1; }
+    for (const t of params) { const m = valueKind(t); if (x.regs[k] === undefined) break; u.push(x.regs[k], m); k += m & WIDE ? 2 : 1; }
     return E(u);
   }
   if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }

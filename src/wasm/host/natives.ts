@@ -9,6 +9,7 @@ import { T, type VT } from "../compiler/wasmbin.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import { ACC, kindOf, type MethodInfo } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { KINDS, valueKind } from "../compiler/infer.ts";
 import { mid } from "../compiler/ids.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
 import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
@@ -23,8 +24,7 @@ import { crossings } from "./stats.ts";
 const OBJECT = "Ljava/lang/Object;", STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
 const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && d[1] in PRIMS;
 const isRef = (d: string) => d[0] === "L" || d[0] === "[";
-const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref)
-  : ({ Z: T.i32, B: T.i32, S: T.i32, C: T.i32, I: T.i32, F: T.f32, D: T.f64, J: T.i64 } as Record<string, VT>)[d];
+const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref) : KINDS[valueKind(d)].vt;
 /** String methods whose Java body needs charset or regex machinery (class objects, ICU natives), or ART's native doReplace, and whose
  *  production override is a self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
 const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(|^replace\(CC\)/;
