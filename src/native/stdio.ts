@@ -7,14 +7,14 @@ import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, pt
 import { E } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, utf8, logLine, scanSink } from "./libc.ts";
+import { fail, utf8, logLine, scanSink, kernelResult } from "./libc.ts";
 import { format, scan } from "./printf.ts";
 import { KLAYOUT } from "./syscall.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, mknodProcess, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdWrite, fdDup2, javaCloseFd, javaLseekFd, javaPreadFd,
+  javaTruncateFd, javaAllocateFd, statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath,
+  removeProcess as removePath, mknodProcess, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
-import { processAllocateFd } from "./process-fd.ts";
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -62,13 +62,13 @@ function newFile(fd: number, flags: number): number {
 }
 function fileFd(fp: number): number { return files.get(fp) ?? mem.ld16s(fp + FILE.file); }
 function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number | Promise<number> {
-  return complete(fdSeek(cpu,fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence),result => {
+  return complete(kernelResult(cpu,javaLseekFd(fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence)),result => {
     if(result<0)return -1;
     pushback.delete(fp);mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_EOF);return 0;
   });
 }
 function fileTell(cpu: Cpu, fp: number): number | Promise<number> {
-  return complete(fdSeek(cpu,fileFd(fp),0,1),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
+  return complete(kernelResult(cpu,javaLseekFd(fileFd(fp),0,1)),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
 }
 function setFlag(fp: number, f: number): void { mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) | f); }
 function modeFlags(mode: string): { o: number; f: number } {
@@ -223,7 +223,7 @@ export function stdioInit(): void {
     mkdtemp: (cpu, a) => { const p = a.p(), destination = anchor(p); return complete(fdTemp(cpu,p,0,true),n => n < 0 ? 0 : destination()); },
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
-    lseek64: (cpu, a) => complete(fdSeek(cpu,a.i(),Number(a.l()),a.i()),n => BigInt(n)),
+    lseek64: (cpu, a) => complete(kernelResult(cpu,javaLseekFd(a.i(),Number(a.l()),a.i())),n => BigInt(n)),
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
@@ -234,10 +234,10 @@ export function stdioInit(): void {
     rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
     mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
     rmdir: (cpu, a) => removePath(cpu, a.str(), true),
-    ftruncate64: (cpu, a) => truncateFd(cpu, a.i(), Number(a.l())),
+    ftruncate64: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), Number(a.l()))),
     // they report the error number itself
-    posix_fallocate: (_c, a) => complete(processAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
-    posix_fallocate64: (_c, a) => complete(processAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
+    posix_fallocate: (_c, a) => complete(javaAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
+    posix_fallocate64: (_c, a) => complete(javaAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
     sync: () => {},
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
@@ -325,12 +325,12 @@ export function stdioInit(): void {
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return openFd(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
     freopen: (cpu, a) => {
       const path=a.str(),mode=a.str(),fp=a.p(),{o,f}=modeFlags(mode);pushback.delete(fp);
-      return complete(fdClose(cpu,fileFd(fp)),()=>complete(fdOpen(cpu,path,o),fd => {
+      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(fdOpen(cpu,path,o),fd => {
         if(fd<0)return 0;files.set(fp,fd);mem.st16(fp+FILE.file,fd);mem.st16(fp+FILE.flags,f);return fp;
       }));
     },
     tmpfile: (cpu) => { return complete(fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
-    fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
+    fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = kernelResult(cpu, javaCloseFd(fd)); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (cpu, a) => { const fp = a.p(); return !fp || openFd(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {
       const p = a.p(), sz = a.u(), n = a.u(), fp = a.p();
@@ -389,28 +389,28 @@ export function stdioInit(): void {
     vfprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, vaList(a.p()))); },
     printf: (cpu, a) => { const f = a.str(); return fwriteStr(cpu, stdoutFp, format(f, a)); },
     vprintf: (cpu, a) => { const f = a.str(); return fwriteStr(cpu, stdoutFp, format(f, vaList(a.p()))); },
-    fscanf: (cpu, a) => {
-      const fp = a.p(), f = a.str();
-      const fd = fileFd(fp), fo = openFd(fd);
-      if (!fo) return -1;
+    fscanf: (_c, a) => {
+      const fp = a.p(), f = a.str(), fd = fileFd(fp), sink = scanSink(a);
+      if (!openFd(fd)) return -1;
       // scan the rest of the file as text, then advance by how much the conversions consumed
-      const pending = pushback.get(fp);
-      let data = fo.content.data.subarray(fo.pos, Math.min(fo.content.len, fo.pos + 65536));
-      if (pending?.length) {
-        const combined = new Uint8Array(pending.length + data.length);
-        for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];
-        combined.set(data, pending.length);
-        data = combined;
-      }
-      const text = codec.dec.decode(data);
-      let consumed = 0;
-      const sink = scanSink(a);
-      const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));
-      const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
-      if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
-      fo.pos += bytes - used;
-      if (r < 0) setFlag(fp, F_EOF);
-      return r;
+      const window = new Uint8Array(65536);
+      return complete(javaLseekFd(fd, 0, 1), position => complete(position < 0 ? 0 : javaPreadFd(fd, window, position), n => {
+        const pending = pushback.get(fp);
+        let data = window.subarray(0, Math.max(0, n));
+        if (pending?.length) {
+          const combined = new Uint8Array(pending.length + data.length);
+          for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];
+          combined.set(data, pending.length);
+          data = combined;
+        }
+        const text = codec.dec.decode(data);
+        let consumed = 0;
+        const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));
+        const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
+        if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
+        if (r < 0) setFlag(fp, F_EOF);
+        return position < 0 || bytes === used ? r : complete(javaLseekFd(fd, position + bytes - used, 0), () => r);
+      }));
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };

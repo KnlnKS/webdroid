@@ -6,7 +6,7 @@ import { StoredParcel } from "../src/shell/stored-parcel.ts";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel.ts";
 import { handle, release as releaseHandle, take } from "../src/android/handles.ts";
 import { newObj, vcall, vcallAsync, mainThread, iof, staticField } from "../src/jvm/natives/jentry.ts";
-import type { JObj } from "../src/jvm/runtime.ts";
+import { getDeclared, type JObj } from "../src/jvm/runtime.ts";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { mkAssetFd } from "../src/android/resnative.ts";
@@ -16,6 +16,7 @@ import { defineHost, lookupHost } from "../src/native/host.ts";
 import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
+import { jarray } from "../src/jvm/abi.ts";
 import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
@@ -422,6 +423,33 @@ describe("file-descriptor", () => {
       owner.close(1001);proxy.close();stop();
       descriptorTransport.calls=previous;filePathTransport.calls=previousPaths;
       mem.free(buffer);mem.free(pathPointer);cpu.dispose();setA64(false);vfs.delete(path);vfs.delete(renamed);
+    }
+  });
+
+  test("a process copies and stats canonical files through their owner", async () => {
+    const source = "/data/data/test/fd/copy-source.bin", target = "/data/data/test/fd/copy-target.bin";
+    const owner = new FileDescriptors(), paths = canonicalFilePaths(() => 0), channel = new MessageChannel();
+    const stop = serveCalls(channel.port1, owner.session(1001, () => 0));
+    const proxy = callProxy<DescriptorCalls>(channel.port2, ["fileDescriptor"]);
+    const previous = descriptorTransport.calls, previousPaths = filePathTransport.calls;
+    descriptorTransport.calls = () => proxy.endpoint;
+    filePathTransport.calls = () => new Proxy(paths, { get: (calls, name) => async (...args: never[]) => (calls as unknown as Record<string, (...a: never[]) => unknown>)[name as string]?.(...args) }) as never;
+    vfs.mkdir("/data/data/test/fd");
+    vfs.write(source, Uint8Array.of(1, 2, 3, 4, 5));
+    try {
+      const path = (p: string) => scall("java/nio/file/Paths", "get", "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;", p, jarray([], "Ljava/lang/String;"));
+      await scall("java/nio/file/Files", "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;",
+        await path(source), await path(target), jarray([], "Ljava/nio/file/CopyOption;"));
+      expect([...vfs.read(target)!]).toEqual([1, 2, 3, 4, 5]);
+      const fd = await scall("android/system/Os", "open", "(Ljava/lang/String;II)Ljava/io/FileDescriptor;", target, 2, 0);
+      expect(isRemoteFd(fdInt(fd))).toBe(true);
+      const attrs = await newObj("sun/nio/fs/UnixFileAttributes", "()V");
+      await scall("sun/nio/fs/UnixNativeDispatcher", "fstat", "(ILsun/nio/fs/UnixFileAttributes;)V", fdInt(fd), attrs);
+      expect(getDeclared(attrs, "sun/nio/fs/UnixFileAttributes", "st_size")).toBe(5n);
+      await scall("android/system/Os", "close", "(Ljava/io/FileDescriptor;)V", fd);
+    } finally {
+      descriptorTransport.calls = previous; filePathTransport.calls = previousPaths;
+      owner.close(1001); proxy.close(); stop(); vfs.delete(source); vfs.delete(target);
     }
   });
 

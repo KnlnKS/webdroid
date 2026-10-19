@@ -5,7 +5,8 @@ import { createCodec, type Codec, type Info } from "../android/media-codec.ts";
 import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs.ts";
+import { javaCloseFd, javaDupFd } from "./fs.ts";
+import { processOpenFd } from "./process-fd.ts";
 import { windowOf } from "./libandroid.ts";
 import { mem, anchor } from "./mem.ts";
 import { cstr, hostData, hostLib, PTR, ptr, stp, stpVa, stLong, type HostFn } from "./host.ts";
@@ -52,10 +53,10 @@ async function openExtractor(cpu: Cpu, handle: number, source: (cpu: Cpu) => Fil
     await extractor.value.open(source(cpu)); extractor.source = source; extractor.close = close; return 0;
   } catch (error) { console.warn("[media extractor]", error); await close(cpu); return UNSUPPORTED; }
 }
-function openFd(cpu: Cpu, handle: number, fd: number, offset: bigint, length: bigint): Promise<number> | number {
-  const copy = javaDupFd(fd), source = fdSlice(copy, offset, length);
-  if (!source) { if (copy >= 0) javaCloseFd(copy); return INVALID; }
-  return openExtractor(cpu, handle, () => source, () => { javaCloseFd(copy); });
+async function openFd(cpu: Cpu, handle: number, fd: number, offset: bigint, length: bigint): Promise<number> {
+  const copy = javaDupFd(fd), source = await fdSlice(copy, offset, length);
+  if (!source) { if (copy >= 0) await javaCloseFd(copy); return INVALID; }
+  return openExtractor(cpu, handle, () => source, () => after(javaCloseFd(copy), () => {}));
 }
 export function mediaInit(): void {
   const api: Record<string, HostFn> = {
@@ -84,9 +85,10 @@ export function mediaInit(): void {
     AMediaExtractor_delete: async (cpu, a) => { const handle = a.p(), extractor = extractors.get(handle); if (!extractor) return BAD_OBJECT; extractors.delete(handle); await extractor.close?.(cpu); return 0; },
     AMediaExtractor_setDataSourceFd: (cpu, a) => { const handle = a.p(), fd = a.i(), offset = a.l(), length = a.l(); return openFd(cpu, handle, fd, offset, length); },
     AMediaExtractor_setDataSource: async (cpu, a) => {
-      const handle = a.p(), path = a.str(), fd = javaOpenFd(path.startsWith("file://") ? decodeURI(path.slice(7)) : path, 0);
+      const handle = a.p(), path = a.str(), fd = await processOpenFd(path.startsWith("file://") ? decodeURI(path.slice(7)) : path, 0);
       if (fd < 0) return IO;
-      try { return await openFd(cpu, handle, fd, 0n, BigInt(javaFdSource(fd)?.size ?? 0)); } finally { javaCloseFd(fd); }
+      // the whole file: fdSlice bounds a slice by the file's size
+      try { return await openFd(cpu, handle, fd, 0n, BigInt(Number.MAX_SAFE_INTEGER)); } finally { await javaCloseFd(fd); }
     },
     AMediaExtractor_setDataSourceCustom: async (cpu, a) => {
       const handle = a.p(), source = sources.get(a.p());

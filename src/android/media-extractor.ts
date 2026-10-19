@@ -149,7 +149,7 @@ rt.registerJnis("android/media/MediaExtractor", {
   "release()V": peers.detach,
   "setDataSource(Ljava/io/FileDescriptor;JJ)V": E((p, fd: JObj | null, offset: bigint, length: bigint) => {
     if (!fd) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    return opened(p, fdSlice(fdInt(fd), offset, length));
+    return after(fdSlice(fdInt(fd), offset, length), source => opened(p, source));
   }),
   // a path or a URL; only the file system is read
   "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": E((p, _http: unknown, path: string) =>

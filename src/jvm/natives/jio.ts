@@ -10,8 +10,9 @@ import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal
 import { addressSize } from "./jvmruntime.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared, trackSharedMap } from "../../native/mappings.ts";
-import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease } from "../../native/fs.ts";
-import { processCloseFd as javaCloseFd, processSeekFd as javaSeekFd, processReadFd as javaReadFd, processPreadFd as javaPreadFd, processWriteFd as javaWriteFd, processPwriteFd as javaPwriteFd, processTruncateFd as javaTruncateFd, processFcntlFd as javaFcntlFd, processSyncFd as javaSyncFd, processFdStat as javaFdStat, processIoctlIntFd as javaIoctlIntFd, processMapping, isRemoteFd } from "../../native/process-fd.ts";
+import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
+  javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fs.ts";
+import { processMapping, isRemoteFd } from "../../native/process-fd.ts";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
@@ -107,8 +108,8 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
       const n = yield* awaited(javaIoctlIntFd(fd, FIONREAD));
       if (n >= 0) return n;
     }
-    const cur = lastError(yield* awaited(javaSeekFd(fd, 0, 1)), null), end = lastError(yield* awaited(javaSeekFd(fd, 0, 2)), null);
-    lastError(yield* awaited(javaSeekFd(fd, cur, 0)), null);
+    const cur = lastError(yield* awaited(javaLseekFd(fd, 0, 1)), null), end = lastError(yield* awaited(javaLseekFd(fd, 0, 2)), null);
+    lastError(yield* awaited(javaLseekFd(fd, cur, 0)), null);
     return Math.max(0, Math.min(0x7fffffff, end - cur));
   }),
   "length0()J": driven(function* (this: JObj): Gen {
@@ -116,12 +117,12 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
     if (!st) lastError(-E.BADF, "GetLength failed");
     return BigInt(st!.size);
   }),
-  "position0()J": function () { return after(javaSeekFd(streamFd(this),0,1),result => BigInt(lastError(result,"Seek failed"))); },
+  "position0()J": function () { return after(javaLseekFd(streamFd(this),0,1),result => BigInt(lastError(result,"Seek failed"))); },
   "skip0(J)J": driven(function* (this: JObj, n: bigint): Gen {
-    const fd = streamFd(this), cur = yield* awaited(javaSeekFd(fd, 0, 1));
+    const fd = streamFd(this), cur = yield* awaited(javaLseekFd(fd, 0, 1));
     if (cur === -E.SPIPE) throw rt.mkThrowable("java/io/FileInputStream$UseManualSkipException", null);
     lastError(cur, "Seek error");
-    return BigInt(lastError(yield* awaited(javaSeekFd(fd, Number(n), 1)), "Seek error") - cur);
+    return BigInt(lastError(yield* awaited(javaLseekFd(fd, Number(n), 1)), "Seek error") - cur);
   }),
 };
 rt.registerJnis("java/io/FileInputStream", fisNatives);
@@ -213,27 +214,27 @@ let channelFd: string | undefined;
 rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   "initIDs()J": () => 4096n,
   "position0(Ljava/io/FileDescriptor;J)J": (d: JObj, offset: bigint) =>
-    after(offset < 0n ? javaSeekFd(openFd(d),0,1) : javaSeekFd(openFd(d),Number(offset),0),n => BigInt(lastError(n,"Position failed"))),
+    after(offset < 0n ? javaLseekFd(openFd(d),0,1) : javaLseekFd(openFd(d),Number(offset),0),n => BigInt(lastError(n,"Position failed"))),
   // sendfile is not offered: FileChannelImpl copies through buffers instead
   "transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;)J": () => BigInt(IOS_UNSUPPORTED),
   // An immutable file maps read-only outside guest memory, paged in as read; any other mapping is
   // guest memory holding the file's bytes, a shared one kept coherent with the file (mappings.ts)
   "map0(IJJ)J": function (this: JObj, prot: number, position: bigint, length: bigint) {
     const fd = openFd((this as unknown as Record<string, JObj>)[channelFd ??= declaredField("sun/nio/ch/FileChannelImpl", "fd")]);
-    const file = fdFile(fd), source = file?.source ?? javaFdSource(fd), start = Number(position), n = Number(length);
+    const start = Number(position), n = Number(length);
     if (isRemoteFd(fd)) {
       if (prot === MAP_PV) return BigInt(lastError(-E.NOTSUP,"Map failed"));
       return processMapping(fd,start,n,prot === MAP_RO ? 1 : 3).then(mapping => typeof mapping === "number" ? BigInt(lastError(mapping,"Map failed")) : mapRemote(mapping));
     }
-    if (!source) return BigInt(lastError(-E.INVAL, "Map failed"));
+    const file = fdFile(fd);
     if (prot === MAP_RO && file?.source && !writable(file.source)) return mapExternal(file.source, start, n);
-    return after(readFully(source, start, n), (bytes) => {
+    return after(file?.source ?? javaFdSource(fd), source => !source ? BigInt(lastError(-E.INVAL, "Map failed")) : after(readFully(source, start, n), (bytes) => {
       const va = mem.mapVa(n, false);
       if (!va) throw rt.mkThrowable("java/lang/OutOfMemoryError", "Map failed");
       mem.write(mem.txVa(BigInt(va)), bytes);
       if (file && prot !== MAP_PV) trackSharedMap(BigInt(va), n, start, file, prot !== MAP_RO);
       return BigInt(va);
-    });
+    }));
   },
   "unmap0(JJ)I": (address: bigint, length: bigint) => {
     if (isExternal(address)) return after(unmapExternal(address,Number(length)),() => 0);

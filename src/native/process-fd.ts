@@ -1,11 +1,11 @@
 import { E } from "./abi.ts";
-import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaPreadFd, javaWriteFd, javaFdBytes,
-  javaPwriteFd, javaSeekFd, javaTruncateFd, javaAllocateFd, javaSyncFd, javaFcntlFd, javaFdStat, javaIoctlIntFd, O_ACCMODE, O_CLOEXEC, S_IFDIR, S_IFIFO, openRemoteFifo, type OpenFile } from "./fs.ts";
+import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaFdBytes,
+  O_ACCMODE, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFIFO, S_IFREG, openRemoteFifo, type FdStat, type OpenFile } from "./fs.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
 import { isMutablePath } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
 import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../shell/file-descriptors.ts";
 
-export type RemoteDescriptor = { token: number; calls: () => DescriptorCalls; close: Promise<number> | null };
 /** Bound lazily after the process is registered; the page's kernel never installs this. */
 export const descriptorTransport: {
   calls?: () => DescriptorCalls;
@@ -16,22 +16,59 @@ export const descriptorTransport: {
   discardLocal?: (token: number) => Promise<number>;
 } = {};
 type Operation = DescriptorRequest extends infer R ? R extends {fd:number} ? Omit<R,"fd"> : never : never;
-const request = (remote: RemoteDescriptor, operation: Operation) => remote.calls().fileDescriptor({...operation,fd:remote.token} as DescriptorRequest);
-const result = (remote: RemoteDescriptor, operation: Operation) => request(remote,operation).then(reply => reply.result);
+
+/** An open file another realm owns: its position, flags and bytes live there, so every operation is a request. */
+export class RemoteDescriptor {
+  token: number;
+  calls: () => DescriptorCalls;
+  /** the owner's close, requested when this realm's last descriptor for it closed */
+  closing: Promise<number> | null = null;
+  constructor(token: number, calls: () => DescriptorCalls) { this.token = token; this.calls = calls; }
+  request(operation: Operation): Promise<DescriptorReply> {
+    return this.calls().fileDescriptor({...operation,fd:this.token} as DescriptorRequest);
+  }
+  result(operation: Operation): Promise<number> { return this.request(operation).then(reply => reply.result); }
+  read(target: Uint8Array, offset?: number): Promise<number> {
+    const length = target.length;
+    return this.request(offset === undefined ? {kind:"read",length} : {kind:"pread",length,offset}).then(reply => {
+      if (reply.result > 0) {
+        if (!reply.bytes || reply.bytes.length !== reply.result || reply.result > length) throw new Error("Invalid descriptor read reply");
+        target.set(reply.bytes);
+      }
+      return reply.result;
+    });
+  }
+  write(bytes: Uint8Array, offset?: number): Promise<number> {
+    return this.result(offset === undefined ? {kind:"write",bytes:bytes.slice()} : {kind:"pwrite",bytes:bytes.slice(),offset});
+  }
+  seek(offset: number, whence: number): Promise<number> { return this.result({kind:"seek",offset,whence}); }
+  truncate(length: number): Promise<number> { return this.result({kind:"truncate",length}); }
+  allocate(offset: number, length: number): Promise<number> { return this.result({kind:"allocate",offset,length}); }
+  sync(): Promise<number> { return this.result({kind:"sync"}); }
+  fcntl(command: number, arg: number): Promise<number> { return this.result({kind:"fcntl",command,arg}); }
+  stat(): Promise<FdStat | null> { return this.request({kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null); }
+  /** a regular file as a source of its size now, read through its owner */
+  source(): Promise<FileSource | null> {
+    return this.stat().then(stat => stat && (stat.mode & S_IFMT) === S_IFREG ? { size: stat.size, read: (offset, length) => {
+      const target = new Uint8Array(length);
+      return this.read(target, offset).then(n => { if (n < 0) throw new Error("Bad file descriptor"); return target.subarray(0, n); });
+    } } : null);
+  }
+}
 export const isRemoteFd = (fd: number): boolean => !!openFd(fd)?.remote;
 
 function installRemote(token: number, calls: () => DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
-  const remote: RemoteDescriptor = {token,calls,close:null};
+  const remote = new RemoteDescriptor(token,calls);
   const file: OpenFile = {...fdBase(path),write:!!(flags & O_ACCMODE),statusFlags:flags,remote,dir};
   file.onLastClose = () => {
-    remote.close = result(remote,{kind:"close"});
-    void remote.close.catch(() => {});
+    remote.closing = remote.result({kind:"close"});
+    void remote.closing.catch(() => {});
   };
   return installFile(file,cloexec);
 }
 export function stageBinderFd(fd: number): number | Promise<number> | null {
   const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"stage"}) : descriptorTransport.stageLocal?.(fd) ?? null;
+  return remote ? remote.result({kind:"stage"}) : descriptorTransport.stageLocal?.(fd) ?? null;
 }
 export function unstageBinderFd(token: number): Promise<number> {
   const calls = descriptorTransport.calls ?? descriptorTransport.importCalls;
@@ -69,78 +106,10 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
   if (!isMutablePath(path) || !descriptorTransport.calls) return vfs.readFile(path);
   const fd = await processOpenFd(path, 0);
   if (fd < 0) return null;
-  try { return await processFdBytes(fd); } finally { await processCloseFd(fd); }
+  try { return await javaFdBytes(fd); } finally { await javaCloseFd(fd); }
 }
-export function processCloseFd(fd: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote, closed = javaCloseFd(fd);
-  return remote?.close ?? closed;
-}
-export function processReadFd(fd: number, target: Uint8Array): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  if (!remote) return javaReadFd(fd,target);
-  return request(remote,{kind:"read",length:target.length}).then(reply => land(reply,target));
-}
-export function processPreadFd(fd: number, target: Uint8Array, offset: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  if (!remote) return javaPreadFd(fd,target,offset);
-  return request(remote,{kind:"pread",length:target.length,offset}).then(reply => land(reply,target));
-}
-function land(reply: DescriptorReply, target: Uint8Array): number {
-  if (reply.result > 0) {
-    if (!reply.bytes || reply.bytes.length !== reply.result || reply.result > target.length) throw new Error("Invalid descriptor read reply");
-    target.set(reply.bytes);
-  }
-  return reply.result;
-}
-export function processWriteFd(fd: number, bytes: Uint8Array): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"write",bytes:bytes.slice()}) : javaWriteFd(fd,bytes);
-}
-export function processPwriteFd(fd: number, bytes: Uint8Array, offset: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"pwrite",bytes:bytes.slice(),offset}) : javaPwriteFd(fd,bytes,offset);
-}
-export function processSeekFd(fd: number, offset: number, whence: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"seek",offset,whence}) : javaSeekFd(fd,offset,whence);
-}
-export function processTruncateFd(fd: number, length: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"truncate",length}) : javaTruncateFd(fd,length);
-}
-export function processAllocateFd(fd: number, offset: number, length: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"allocate",offset,length}) : javaAllocateFd(fd,offset,length);
-}
-export function processSyncFd(fd: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"sync"}) : javaSyncFd(fd);
-}
-export function processFcntlFd(fd: number, command: number, arg: number): number | Promise<number> {
-  const remote = openFd(fd)?.remote;
-  // Descriptor flags/duplication belong to this process's table. File flags belong
-  // to the canonical open file and can be changed by a different descriptor owner.
-  return remote && (command === 3 || command === 4) ? result(remote,{kind:"fcntl",command,arg}) : javaFcntlFd(fd,command,arg);
-}
-export function processFdStat(fd: number): ReturnType<typeof javaFdStat> | Promise<ReturnType<typeof javaFdStat>> {
-  const remote = openFd(fd)?.remote;
-  return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 ? null : reply.stat ?? null) : javaFdStat(fd);
-}
-const remoteRest = (fd: number) => Promise.all([processFdStat(fd),processSeekFd(fd,0,1)])
-  .then(([stat,position]) => !stat || position < 0 ? null : {position,length:Math.max(0,stat.size-position)});
-/** the bytes from `fd`'s position to its end, which stays where it was */
-export async function processFdBytes(fd: number): Promise<Uint8Array | null> {
-  if (!isRemoteFd(fd)) return javaFdBytes(fd);
-  const rest = await remoteRest(fd);
-  if (!rest) return null;
-  const bytes = new Uint8Array(rest.length), n = await processPreadFd(fd,bytes,rest.position);
-  return n < 0 ? null : bytes.subarray(0,n);
-}
-export function processIoctlIntFd(fd: number, command: number): number | Promise<number> {
-  if (!isRemoteFd(fd)) return javaIoctlIntFd(fd,command);
-  if (command !== 0x541b) return -E.NOTTY;
-  return remoteRest(fd).then(rest => rest ? rest.length : -E.BADF);
-}
+/** hostnatives' name for javaReadFd, which reads every kind of open file */
+export const processReadFd = javaReadFd;
 
 /** A live owner lease; a mapping outlives the descriptor that acquired it. */
 export type ProcessMapping = { size: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; force(): Promise<void>; close(): Promise<void> };
@@ -183,9 +152,9 @@ export function processAshmemCreate(size: number): Promise<number> | null {
 }
 export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
   const remote = openFd(fd)?.remote;
-  return remote ? result(remote,{kind:"ashmemProtect",prot}) : null;
+  return remote ? remote.result({kind:"ashmemProtect",prot}) : null;
 }
 export function processAshmemSize(fd: number): Promise<number> | null {
   const remote = openFd(fd)?.remote;
-  return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 || reply.ashmemProt === undefined ? -1 : reply.stat!.size) : null;
+  return remote ? remote.request({kind:"stat"}).then(reply => reply.result < 0 || reply.ashmemProt === undefined ? -1 : reply.stat!.size) : null;
 }

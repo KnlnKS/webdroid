@@ -1,7 +1,7 @@
 import { E } from "../native/abi.ts";
-import { F_DUPFD_CLOEXEC, javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
-  javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, S_IFDIR, S_IFIFO, S_IFREG, type OpenFile } from "../native/fs.ts";
+import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
+  javaReadFd, javaLseekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
+  detachFdScope, fdBase, installFile, S_IFDIR, S_IFIFO, S_IFREG, type FdStat, type OpenFile } from "../native/fs.ts";
 import { isFifo } from "../native/pipe.ts";
 import { vfs, type VfsFile } from "./vfs.ts";
 import { writable } from "./lazyfile.ts";
@@ -27,7 +27,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingSync"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
 /** `type`: an open's file type (S_IFMT bits) */
-export type DescriptorReply = { result: number; type?: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
+export type DescriptorReply = { result: number; type?: number; bytes?: Uint8Array; stat?: FdStat; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number; immutable: boolean } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -60,7 +60,7 @@ export class FileDescriptors {
     if (!target || target.dead || right.closed) return -E.BADF;
     return this.ordered(right.file,()=>{
       if (right.closed || target.dead) return -E.BADF;
-      const token=this.put(target,javaFcntlFd(right.fd,F_DUPFD_CLOEXEC,0));
+      const token=this.put(target,javaDupFd(right.fd,true));
       if (token >= 0) target.descriptors.get(token)!.incoming=true;
       return token;
     });
@@ -86,7 +86,7 @@ export class FileDescriptors {
     const file = openFd(fd)!;
     // Pipes/sockets must not wait behind their own blocking read. They require their
     // existing independent readiness protocol, not this regular-file operation queue.
-    if (!file.dir && (javaFdStat(fd)!.mode & 0xf000) !== 0x8000) { javaCloseFd(fd); return -E.NOTSUP; }
+    if (!file.dir && (localFdStat(fd)!.mode & 0xf000) !== 0x8000) { javaCloseFd(fd); return -E.NOTSUP; }
     const token = this.next++;
     session.descriptors.set(token, {fd,file});
     return token;
@@ -116,7 +116,7 @@ export class FileDescriptors {
         if (request.kind === "mappingRelease") { javaCloseFd(mapping.fd); return {result:0}; }
         if (session.dead) return {result:-E.BADF};
         if (request.kind === "mappingSync") {
-          const result = javaSyncFd(mapping.fd);
+          const result = await javaSyncFd(mapping.fd);
           if (!result) await vfs.flush();
           return {result};
         }
@@ -126,7 +126,7 @@ export class FileDescriptors {
         // This is a live file-range lease, not a guest mmap bridge. EOF/page-cache
         // tails and raw cross-process loads need the separate shared-memory design.
         if (mapping.offset + request.offset + length > mapping.file.content.len) return {result:-E.NOTSUP};
-        if (request.kind === "mappingWrite") return {result:javaPwriteFd(mapping.fd,bytes!,mapping.offset + request.offset)};
+        if (request.kind === "mappingWrite") return {result:await javaPwriteFd(mapping.fd,bytes!,mapping.offset + request.offset)};
         const target = new Uint8Array(length), result = await javaPreadFd(mapping.fd,target,mapping.offset + request.offset);
         return session.dead ? {result:-E.BADF} : {result,...(result >= 0 ? {bytes:target.slice(0,result)} : {})};
       });
@@ -157,7 +157,7 @@ export class FileDescriptors {
     const operation = request;
     return this.ordered(descriptor.file, async () => {
       const fd = descriptor.fd;
-      if (operation.kind === "close" || operation.kind === "unstage") return {result:javaCloseFd(fd)};
+      if (operation.kind === "close" || operation.kind === "unstage") return {result:await javaCloseFd(fd)};
       if (session.dead) return {result:-E.BADF};
       let reply: DescriptorReply;
       switch (operation.kind) {
@@ -173,7 +173,7 @@ export class FileDescriptors {
           if (mode === 1 || prot & 2 && mode !== 2) return {result:-E.ACCES};
           if (prot & ~(file.content.ashmem?.prot ?? 7)) return {result:-E.PERM};
           if (offset + length > file.content.len) return {result:-E.NOTSUP};
-          const retained = javaFcntlFd(fd,F_DUPFD_CLOEXEC,0);
+          const retained = javaDupFd(fd,true);
           if (retained < 0) return {result:retained};
           detachFdScope(retained);
           const token = this.next++;
@@ -190,24 +190,24 @@ export class FileDescriptors {
           const result = operation.kind === "read" ? await javaReadFd(fd,target) : await javaPreadFd(fd,target,operation.offset);
           reply = {result, ...(result >= 0 ? {bytes:target.slice(0,result)} : {})}; break;
         }
-        case "write": reply = {result:javaWriteFd(fd,bytes!)}; break;
-        case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,operation.offset)}; break;
-        case "seek": reply = {result:javaSeekFd(fd,operation.offset,operation.whence)}; break;
-        case "truncate": reply = {result:javaTruncateFd(fd,operation.length)}; break;
-        case "allocate": reply = {result:javaAllocateFd(fd,operation.offset,operation.length)}; break;
+        case "write": reply = {result:await javaWriteFd(fd,bytes!)}; break;
+        case "pwrite": reply = {result:await javaPwriteFd(fd,bytes!,operation.offset)}; break;
+        case "seek": reply = {result:await javaLseekFd(fd,operation.offset,operation.whence)}; break;
+        case "truncate": reply = {result:await javaTruncateFd(fd,operation.length)}; break;
+        case "allocate": reply = {result:await javaAllocateFd(fd,operation.offset,operation.length)}; break;
         case "sync": {
-          const result = javaSyncFd(fd);
+          const result = await javaSyncFd(fd);
           if (result === 0) await vfs.flush();
           reply = {result}; break;
         }
-        case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat,ashmemProt:descriptor.file.content.ashmem?.prot} : {result:-E.BADF}; break; }
-        case "dup": reply = {result:this.put(session, operation.cloexec ? javaFcntlFd(fd,F_DUPFD_CLOEXEC,0) : javaDupFd(fd))}; break;
+        case "stat": { const stat = localFdStat(fd); reply = stat ? {result:0,stat,ashmemProt:descriptor.file.content.ashmem?.prot} : {result:-E.BADF}; break; }
+        case "dup": reply = {result:this.put(session,javaDupFd(fd,operation.cloexec))}; break;
         case "stage": {
           const token = this.put(session,javaDupFd(fd));
           if (token >= 0) session.descriptors.get(token)!.staged = true;
           reply = {result:token}; break;
         }
-        case "fcntl": reply = {result:operation.command >= 1 && operation.command <= 4 ? javaFcntlFd(fd,operation.command,operation.arg) : -E.INVAL}; break;
+        case "fcntl": reply = {result:operation.command >= 1 && operation.command <= 4 ? await javaFcntlFd(fd,operation.command,operation.arg) : -E.INVAL}; break;
       }
       return session.dead ? {result:-E.BADF} : reply;
     });
@@ -230,7 +230,7 @@ export class FileDescriptors {
     return this.ordered(descriptor.file, () => {
       try {
         if (source.dead || target.dead) return -E.BADF;
-        const received = this.put(target,javaFcntlFd(descriptor.fd,F_DUPFD_CLOEXEC,0));
+        const received = this.put(target,javaDupFd(descriptor.fd,true));
         if (received >= 0) target.descriptors.get(received)!.incoming = true;
         return received;
       }

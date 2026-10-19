@@ -111,9 +111,10 @@ rt.registerJnis("android/media/MediaMetadataRetriever", {
   "release()V": retrievers.detach,
   "native_finalize()V": retrievers.detach,
   "_setDataSource(Ljava/io/FileDescriptor;JJ)V": R((r, fd: JObj | null, offset: bigint, length: bigint) => {
-    const source = fd && fdSlice(fdInt(fd), offset, length);
-    if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    return opened(r, source);
+    return after(fd && fdSlice(fdInt(fd), offset, length), source => {
+      if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      return opened(r, source);
+    });
   }),
   "_setDataSource(Landroid/media/MediaDataSource;)V": R((r, data: JObj) => after(dataSourceFile(data), (source) => opened(r, source))),
   "nativeExtractMetadata(I)Ljava/lang/String;": R((r, key: number) => r.metadata.get(key) ?? null),

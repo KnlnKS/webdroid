@@ -116,7 +116,7 @@ function* exportObject(o: unknown, descriptors = false): Gen<BinderHandle | File
   // implement shared FD backing; the current importer only writes back on last close.
   const bytes = new Uint8Array(contents);
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
-  if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
+  if (((yield* awaited(javaFcntlFd(o.fd, F_GETFL, 0))) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
   linkClass("webdroid/FileWriter");
   const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
   return { bytes, writer: exportBinder(writer), ...region };
@@ -420,10 +420,9 @@ rt.registerJnis("android/os/Parcel", {
 rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": function (this: JFileWriter, code: number, data: JObj) {
     if (code !== 1 || this.fd < 0) return 0;
-    const bytes = u8(createByteArray(nativeParcel(data))!);
-    javaTruncateFd(this.fd, 0); javaPwriteFd(this.fd, bytes, 0); javaCloseFd(this.fd);
+    const bytes = u8(createByteArray(nativeParcel(data))!), fd = this.fd;
     this.fd = -1;
-    return 1;
+    return after(javaTruncateFd(fd, 0), () => after(javaPwriteFd(fd, bytes, 0), () => after(javaCloseFd(fd), () => 1)));
   },
 } });
 

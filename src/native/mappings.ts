@@ -11,7 +11,8 @@
 import { guestAt, mem } from "./mem.ts";
 import { vfs, type VfsFile } from "../shell/vfs.ts";
 import { E } from "./abi.ts";
-import { processFdStat, processMapping, type ProcessMapping } from "./process-fd.ts";
+import { processMapping, type ProcessMapping } from "./process-fd.ts";
+import { javaFdStat } from "./fs.ts";
 
 type SharedMapping = { va: bigint; n: number; off: number; base: Uint8Array | null };
 const overlaps = (m: SharedMapping, va: bigint, end: bigint) => m.va < end && va < m.va + BigInt(m.n);
@@ -105,7 +106,7 @@ function flushRemote(m: RemoteMapping): void {
 /** a shared mapping at va of [off, off + n) of the file `fd` reaches in another process; an errno, or 0. File bytes past
  *  EOF are not the file's, so the lease covers what the file holds and the rest of the mapping stays zero. */
 export async function mapRemoteShared(va: bigint, n: number, off: number, fd: number, prot: number): Promise<number> {
-  const stat = await processFdStat(fd);
+  const stat = await javaFdStat(fd);
   if (!stat) return E.BADF;
   const path = stat.path, length = Math.max(0, Math.min(n, stat.size - off));
   if (!length) return 0;
