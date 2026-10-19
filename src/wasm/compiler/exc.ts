@@ -128,6 +128,8 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
 }
 
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
+/** what an outlined loop's function name adds to its method's (outline.ts): a stack frame names only the function, and the loop's frames are its method's */
+export const CHUNK_MARK = "#loop";
 /** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
 const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
 /** the names of the Wasm functions on a V8 `Error.stack`, innermost first */
@@ -140,7 +142,7 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
     if (out.length >= count) break;
     const m = FRAME.exec(line);
     const name = m?.[1], exact = name ? traces.get(name) : undefined;
-    const loop = exact ? -1 : name?.lastIndexOf("#loop") ?? -1;
+    const loop = exact ? -1 : name?.lastIndexOf(CHUNK_MARK) ?? -1;
     const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
     if (!t?.m) continue;                                  // host code, throwers and stubs are not Java frames
     const id = t.m.cls + "." + t.m.key;

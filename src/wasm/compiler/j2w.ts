@@ -746,7 +746,8 @@ export class Compiler implements Base {
     }
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
-  outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
+  /** the functions of outlined loops (outline.ts), with the function of the method each is part of */
+  outlines: { name: string; f: number; code: Code; m: MethodInfo; owner: string }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
     const roots = fns.length;
     fns = fns.concat(this.outlines);
@@ -760,12 +761,9 @@ export class Compiler implements Base {
       for (let i = 0; i < n; i++) { offsets[i] = start + code.marks[2 * i]; pcs[i] = code.marks[2 * i + 1]; }
       return { name, m, offsets, pcs };
     });
-    // AOT traces are keyed by Java slot. Chunk offsets join their owner's trace (method.ts names a chunk `${owner}#loop<label>`) without changing that format.
+    // AOT traces are keyed by Java slot: an outlined loop's offsets join its method's trace without changing that format
     const chunks = new Map<string, FnTrace[]>();
-    for (const t of traces.slice(roots)) {
-      const at = t.name.lastIndexOf("#loop"), owner = t.name.slice(0, at);
-      if (at > 0) (chunks.get(owner) ?? chunks.set(owner, []).get(owner)!).push(t);
-    }
+    this.outlines.forEach(({ owner }, i) => (chunks.get(owner) ?? chunks.set(owner, []).get(owner)!).push(traces[roots + i]));
     for (let i = 0; i < roots; i++) {
       const root = traces[i], parts = chunks.get(root.name);
       if (!parts) continue;
