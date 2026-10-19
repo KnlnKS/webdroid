@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
-import type { WorkerTerminal } from "../../../src/shell/processes.ts";
+import type { WorkerTerminal } from "../../../src/shell/worker-diagnostics.ts";
 
 export type ProcessDiagnostics = {
   status: "ok";

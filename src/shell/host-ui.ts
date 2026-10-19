@@ -2,6 +2,8 @@
 // chooser, a browser tab and the print dialog. It needs the page's document and
 // the user's gesture there, so a process Worker reaches it through the broker.
 
+import { methodsOf } from "./process-port.ts";
+
 // lib.dom types the handles but not the pickers
 declare global {
   interface Window {
@@ -23,7 +25,7 @@ export type HostUi = {
   chooseOne(heading: string, labels: string[]): Promise<number | null>;
   printPdf(pdf: Uint8Array): Promise<void>;
 };
-export const hostUiMethods = ["pickDirectory", "pickFiles", "shareSheet", "openTab", "chooseOne", "printPdf"] as const;
+export const hostUiMethods = methodsOf<HostUi>()(["pickDirectory", "pickFiles", "shareSheet", "openTab", "chooseOne", "printPdf"]);
 
 /** Chrome only opens a picker, or re-grants a permission, while a user gesture is still warm.
  *  A request that arrives too late is parked and replayed on the next press rather than lost. */

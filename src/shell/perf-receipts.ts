@@ -15,7 +15,3 @@ export function installCounterReceipt(counters: Record<string, number>, source: 
     at: clock.timeOrigin + clock.now(), realmAt: performance.timeOrigin + performance.now(), clockUrl, realmBornAt, sequence: ++sequence, resets, initial, counters: copy() }) });
   return () => { resets++; };
 }
-
-export function readCounterReceipt(win: Window): Readonly<CounterReceipt> | null {
-  return win.__wdCounterReceipt?.() ?? null;
-}

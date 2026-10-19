@@ -1,18 +1,57 @@
-import { processBroker, type ProcessEndpoint } from "../../../src/shell/processes.ts";
+import { processBroker, brokerMethods, type BrokerCalls, type ProcessBroker, type ProcessBootstrap } from "../../../src/shell/processes.ts";
 import { packages, PackageRecord } from "../../../src/android/packages.ts";
 import { Resources } from "../../../src/android/res.ts";
 import { TV } from "../../../src/android/axml.ts";
 import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
-import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
 import { callProxy } from "../../../src/shell/process-port.ts";
-import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes.ts";
+import { sendFrames } from "../../../src/shell/frame-port.ts";
+import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
+import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
+import { workerControlMethods, type ProcessHost } from "../../../src/shell/process-host.ts";
+import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
+import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
+import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
+
+const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
+type ClientEvent = { changed?: true; accountsChanged?: true; setting?: [string, string] };
+/** a client fixture Worker calling the broker as `pid`: `ask` answers a call's value, or `{error}` with its
+ *  message; given `events`, the Worker serves `pid`'s endpoint and reports its notifications there */
+function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: ClientEvent) => void) {
+  const worker = fixtureWorker("client"), waiting = new Map<number, (value: unknown) => void>();
+  let next = 1, ready!: () => void;
+  const started = new Promise<void>(resolve => ready = resolve);
+  worker.onmessage = ({ data }) => {
+    if (data.ready) ready();
+    else if ("id" in data) { waiting.get(data.id)!("error" in data ? { error: data.error } : data.value); waiting.delete(data.id); }
+    else events?.(data);
+  };
+  const port = broker.brokerPort(pid), endpoint = events && new MessageChannel();
+  worker.postMessage({ broker: port, methods: brokerMethods, endpoint: endpoint?.port1 } satisfies BrokerInit & { endpoint?: MessagePort },
+    endpoint ? [port, endpoint.port1] : [port]);
+  if (endpoint) broker.readyPort(pid, endpoint.port2);
+  const ask = (method: keyof BrokerCalls | "write", ...args: unknown[]) => started.then(() => new Promise<unknown>(resolve => {
+    const id = next++;
+    waiting.set(id, resolve);
+    worker.postMessage({ id, method, args });
+  }));
+  return { ask, worker };
+}
+/** a process of `pkg` in a fixture Worker playing `role`, which the broker starts as it starts its own */
+function hosted(broker: ProcessBroker, pkg: string, process: string, pid: number, role: string) {
+  const worker = fixtureWorker(role), host = broker.hosts.adopt({ pid, url: fixtureUrl(role), worker, release() {} }, pkg);
+  return { worker, entry: broker.register(pkg, process, pid, host) };
+}
+/** what `worker` first posts under `key` */
+const posted = <T>(worker: Worker, key: string) => new Promise<T>((resolve, reject) => {
+  worker.addEventListener("message", ({ data }) => { if (data && typeof data === "object" && key in data) resolve(data[key]); });
+  worker.addEventListener("error", event => reject(new Error(event.message)));
+});
 
 export async function bootstrapOwnership() {
-  const {sendFrames} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port.ts");
   const displays: Promise<void>[] = [];
   let reads = 0, began!: () => void;
   const waiting = new Promise<void>(resolve => began = resolve);
@@ -27,57 +66,54 @@ export async function bootstrapOwnership() {
     } });
   }
   const broker = processBroker(), callers: ReturnType<typeof callProxy<BrokerCalls>>[] = [];
-  const watchClock = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
+  const watchClock = (data: ProcessBootstrap) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
     if (!data.display) throw new Error("expected display capability");
     displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
     sendFrames(data.display, data.screen);
   };
-  const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001),ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);
-  // each bootstrap hands its process the canvas it presents to
-  const bootstrap = (owner: typeof ownerOne) => { owner.canvas=document.createElement("canvas"); return broker.bootstrap(owner.pid); };
-  const file = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
+  // each process's Worker posts back the bootstrap it is started with
+  const start = (pkg: string, process: string, pid: number) => {
+    const { worker, entry } = hosted(broker, pkg, process, pid, "echo");
+    return { entry, data: posted<ProcessBootstrap>(worker, "bootstrap") };
+  };
+  const file = (data: ProcessBootstrap) => {
     watchClock(data);
     const source = data.registry[0].source;
     if (!("port" in source)) throw new Error("expected lazy archive port");
     return new RemoteFile(source);
   };
-  const first = file(await bootstrap(ownerOne)), other = file(await bootstrap(ownerTwo));
-  const firstIme=ownerOne.ime!,otherIme=ownerTwo.ime!;
+  const one = start("test.archive.one", "test.archive.one", 7001), two = start("test.archive.two", "test.archive.two", 7002);
+  const first = file(await one.data), other = file(await two.data);
+  const firstIme = one.entry.host!.ime!, otherIme = two.entry.host!.ime!;
   const eagerReads = reads;
-  const replacement = file(await bootstrap(ownerOne));
-  const replacementIme=ownerOne.ime!;
-  const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
-  const superseded = await first.read(0, 1).catch(error => error.message);
-  // A failed handoff must dispose its new exports while retaining the published owner set.
+  // A failed handoff disposes the exports it made, and its process dies.
   const clone = globalThis.structuredClone;
   const unpublished: RemoteFile[] = [];
-  let failed = false;
+  let failed: unknown;
   try {
     globalThis.structuredClone = value => {
-      const data = value as Awaited<ReturnType<typeof broker.bootstrap>>;
+      const data = value as ProcessBootstrap;
       watchClock(data);
       for (const record of data.registry) if ("port" in record.source) unpublished.push(new RemoteFile(record.source));
       throw new DOMException("handoff failed", "DataCloneError");
     };
-    await bootstrap(ownerOne);
-  } catch (error) { failed = error instanceof DOMException && error.name === "DataCloneError"; }
-  finally { globalThis.structuredClone = clone; }
+    failed = await start("test.archive.one", "test.archive.one:handoff", 7003).entry.ready.then(() => null, error => error.msg);
+  } finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
-  const retained = Array.from(await replacement.read(0, 1));
-  const imeRetained=ownerOne.ime===replacementIme && replacementIme.input.isConnected;
-  const pending = replacement.read(7, 1).catch(error => error.message);
+  const retained = Array.from(await first.read(0, 1));
+  const pending = first.read(7, 1).catch(error => error.message);
   await waiting;
   broker.fail(7001, "fixture process exit", NOT_CRASHED);
   const ended = await pending;
-  const imeDeadClosed=!replacementIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
+  const imeDeadClosed=!firstIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all(displays);
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
+  return { imeOwners:{deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
 }
 
 export async function endpointOwnership() {
@@ -86,12 +122,12 @@ export async function endpointOwnership() {
   const entries = names.map((pkg, i) => {
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
     packages.set(pkg, new PackageRecord(root, new Resources(null, {}), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
-    return broker.connect(pkg, pkg, 8001 + i);
+    return broker.register(pkg, pkg, 8001 + i);
   });
   let entered!: () => void, killed = false, removed = false;
   const waiting = new Promise<void>(resolve => entered = resolve);
-  const endpoint = (pid: number): ProcessEndpoint => ({
-    activity: async () => {}, transact: async (request, caller) => {
+  const endpoint = (pid: number) => stubEndpoint({
+    transact: async (request, caller) => {
       if (request.code === 2) { await other.clipboardChanged(); return {handled:caller.pid,data:{bytes:Uint8Array.of(caller.uid & 255),objects:[]}}; }
       if (request.code === 3) {
         const right=request.data.objects[0]?.[1];
@@ -108,57 +144,13 @@ export async function endpointOwnership() {
       }
       entered(); return new Promise(() => {});
     },
-    service: async () => ({ pid, id: 1 }), serviceConnected: async () => {}, contentProvider: async () => null,
-    broadcast: async (_intent, _component, _ordered, result) => result, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged: async () => {},
+    service: async () => ({ pid, id: 1 }),
     packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
-  const workerCode = `import {remoteProcessLife} from ${JSON.stringify(location.origin + "/process-life.js")};
-    import {serveProcess,callProxy} from ${JSON.stringify(location.origin + "/process-port.js")};
-    let removed = false, clips = 0, fd = -1, received = -1, deaths = 0, cancel;
-    let life;
-    self.onmessage = ({data}) => {
-      const broker = callProxy(data.broker,${JSON.stringify(brokerMethods)}).endpoint;
-      life=remoteProcessLife(()=>broker,error=>{throw error;});
-      serveProcess(data.port, {
-      activity:async()=>{}, transact:async()=>new Promise(()=>{}),
-      service:async(request)=>{
-        if(request.intent?.bytes[0]===42){const reply=await broker.transact({handle:{pid:8001,id:1},code:2,flags:0,data:request.intent,caller:{pid:9999,uid:9999}});return {pid:reply.handled,id:clips};}
-        if(request.intent?.bytes[0]===43){
-          fd=(await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.two/fd.bin',flags:2})).result;
-          const foreign=await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.one/fd.bin',flags:2});
-          await broker.fileDescriptor({kind:'pwrite',fd,bytes:Uint8Array.of(55),offset:0});
-          return {pid:fd,id:foreign.result};
-        }
-        if(request.intent?.bytes[0]===44){const reply=await broker.fileDescriptor({kind:'pread',fd,length:1,offset:0});return {pid:reply.bytes?.[0]??-1,id:reply.result};}
-        if(request.intent?.bytes[0]===45){
-          const stage=await broker.fileDescriptor({kind:'stage',fd});
-          const reply=await broker.transact({handle:{pid:8001,id:1},code:3,flags:0,data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage.result}]]}});
-          received=reply.data.objects[0][1].descriptor;
-          const read=await broker.fileDescriptor({kind:'read',fd:received,length:1});
-          const position=await broker.fileDescriptor({kind:'seek',fd,offset:0,whence:1});
-          await broker.fileDescriptor({kind:'close',fd});
-          return {pid:read.bytes[0],id:position.result};
-        }
-        if(request.intent?.bytes[0]===46){const read=await broker.fileDescriptor({kind:'pread',fd:received,length:1,offset:0});await broker.fileDescriptor({kind:'close',fd:received});return {pid:read.bytes[0],id:read.result};}
-        if(request.intent?.bytes[0]===47){
-          const live=await life.alive(8001),system=await life.alive(0),absent=await life.alive(9999);
-          cancel=await life.watch(8001,()=>{deaths+=100;});cancel();
-          await life.watch(8001,()=>{deaths++;});
-          let denied=false;try{await life.watch(9999,()=>{deaths+=1000;});}catch{denied=true;}
-          return {pid:+live+2*(+system)+4*(+absent),id:+denied};
-        }
-        if(request.intent?.bytes[0]===48){return {pid:deaths,id:+(await life.alive(8001))};}
-        if(request.intent?.bytes[0]===49){await life.signal(8001,9);await life.signal(8003,9);return {pid:deaths,id:1};}
-        return {pid:8002,id:removed?2:1};
-      }, serviceConnected:async()=>{}, contentProvider:async()=>null,
-      broadcast:async(_i,_c,_o,r)=>r, processDied:async token=>life.died(token), locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
-      packageRemoved:async()=>{await new Promise(r=>setTimeout(r,10));removed=true;}
-    });};`;
-  const url = URL.createObjectURL(new Blob([workerCode], {type:"text/javascript"}));
-  const worker = new Worker(url, {type:"module"}), channel = new MessageChannel();
+  const worker = fixtureWorker("endpoint"), channel = new MessageChannel();
   const reverse = broker.brokerPort(8002);
-  worker.postMessage({port:channel.port1,broker:reverse}, [channel.port1,reverse]);
+  worker.postMessage({port:channel.port1,broker:reverse,methods:brokerMethods} satisfies BrokerInit & {port:MessagePort}, [channel.port1,reverse]);
   broker.ready(8001, endpoint(8001)); broker.readyPort(8002, channel.port2);
   broker.ready(8001, endpoint(9999));
   const first = await entries[0].ready, other = await entries[1].ready;
@@ -176,7 +168,7 @@ export async function endpointOwnership() {
     .catch(error => error.msg);
   await waiting;
   const lifeRead = await other.service({...request,intent:{bytes:Uint8Array.of(47),objects:[]}});
-  const victim=broker.connect(names[1],names[1]+":signal",8003);
+  const victim=broker.register(names[1],names[1]+":signal",8003);
   broker.ready(victim.pid,{...endpoint(victim.pid),kill:()=>broker.fail(victim.pid,"fixture signal delivered",NOT_CRASHED)});
   await other.service({...request,intent:{bytes:Uint8Array.of(49),objects:[]}});
   const signalOwn = !broker.alive(8003), signalForeign = broker.alive(8001);
@@ -195,7 +187,7 @@ export async function endpointOwnership() {
   removed = (await other.service(request))?.id === 2;
   broker.fail(8002, "fixture cleanup", NOT_CRASHED);
   vfs.delete(filePath);
-  worker.terminate(); URL.revokeObjectURL(url);
+  worker.terminate();
   return { repeatedReady, reverseCaller, killed, alive: broker.alive(8001), pendingCause, otherAlive, removed,
     lifecycle:{read:lifeRead,dead:lifeDead,signalOwn,signalForeign,watcherCleaned},
     fileDescriptors:{opened:!!fileOpened && fileOpened.pid>0,foreign:fileOpened?.id,written:fileWritten,read:fileRead,binder:binderFile,survivor:binderSurvivor} };
@@ -208,29 +200,14 @@ export async function cookieOwnership() {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
     packages.set(name, new PackageRecord(root, new Resources(null, {}), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
   }
-  for (const [i, name] of [pkg, pkg, isolated].entries()) broker.connect(name, name + ":" + i, 8101 + i);
+  for (const [i, name] of [pkg, pkg, isolated].entries()) broker.register(name, name + ":" + i, 8101 + i);
   const peers = [8102, 8103].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods));
   const jar = await broker.cookies(pkg), otherJar = await broker.cookies(isolated);
   jar.remove(); otherJar.remove();
   let changes = 0;
   const unwatch = jar.watch(() => changes++);
-  const code = `import {callProxy} from ${JSON.stringify(location.origin + "/process-port.js")};
-    let client;
-    self.onmessage = async ({data}) => {
-      if(data.port) { client=callProxy(data.port,${JSON.stringify(brokerMethods)}); self.postMessage('ready'); return; }
-      try { self.postMessage({value:await client.endpoint[data.method](...data.args)}); }
-      catch(error) { self.postMessage({error:error.message}); }
-    };`;
-  const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
-  const ask = (method: keyof BrokerCalls, ...args: unknown[]) => new Promise<{value?: unknown; error?: string}>(resolve => {
-    worker.onmessage = ({data}) => resolve(data);
-    worker.postMessage({method,args});
-  });
+  const { ask, worker } = brokerWorker(broker, 8101);
   try {
-    await new Promise<void>(resolve => {
-      worker.onmessage = () => resolve();
-      const port = broker.brokerPort(8101); worker.postMessage({port}, [port]);
-    });
     const url = "https://cookies.example/dir/index";
     const session = await ask("cookieSet", url, "session=one; Path=/; HttpOnly");
     const persisted = await ask("cookieSet", url, "saved=two; Path=/; Max-Age=86400");
@@ -246,7 +223,7 @@ export async function cookieOwnership() {
     let entered!: () => void, release!: () => void;
     const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
     broker.cookies = async name => { entered(); await blocked; return original.call(broker, name); };
-    let pending: {value?: unknown; error?: string};
+    let pending: unknown;
     try {
       const write = ask("cookieSet", url, "late=no");
       await waiting;
@@ -258,11 +235,11 @@ export async function cookieOwnership() {
     await peers[0].endpoint.cookieRemove(false);
     const empty = await peers[0].endpoint.cookieHas();
     return {session, persisted, read, isolatedRead, document, accept, denied, removed, afterSession, saved,
-      dead: !!dead.error, pendingDead: !!pending.error, survivor, empty, changes};
+      dead: failed(dead), pendingDead: failed(pending), survivor, empty, changes};
   } finally {
     unwatch(); for (const client of peers) client.close();
     for (const pid of [8101, 8102, 8103]) broker.fail(pid, "cookie fixture cleanup", NOT_CRASHED);
-    worker.terminate(); URL.revokeObjectURL(url); jar.forget(); otherJar.forget(); packages.delete(pkg); packages.delete(isolated);
+    worker.terminate(); jar.forget(); otherJar.forget(); packages.delete(pkg); packages.delete(isolated);
   }
 }
 
@@ -272,43 +249,15 @@ export async function clockBootstrapOwnership() {
   const path = `/data/app/${pkg}/base.apk`;
   packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
-  const entry = broker.connect(pkg, pkg, pid);entry.canvas=document.createElement("canvas");
-  const clock = createGuestClockPort(pid);
+  const clock = createGuestClockPort(pid), start = guestClockControl.now(), wall = wallMillis();
+  const { worker, entry } = hosted(broker, pkg, pkg, pid, "clock"), workers = [worker];
+  // the clock comes before the start the broker sends once it has the bootstrap
+  worker.postMessage({clock:clock.data}, [clock.data.port!]);
   broker.watch(pid, clock.close);
-  const data = await broker.bootstrap(pid), start = guestClockControl.now(), wall = wallMillis();
-  const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout,attachGuestClockPort} from ${JSON.stringify(location.origin + "/guest-clock.js")};
-    self.onmessage = async ({data}) => {
-      if(data.clock){attachGuestClockPort(data.clock);return;}
-      if(data.finish!==undefined){const {exitProcess}=await import(${JSON.stringify(location.origin + "/process-exit.js")});exitProcess({code:data.finish});return;}
-      const {attachWorkerBootstrap,serveWorkerEndpoint} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
-      const broker = await attachWorkerBootstrap(data);
-      const {appCrashed} = await import(${JSON.stringify(location.origin + "/appexitinfo.js")});
-      const fatal={exceptionClassName:"fixture.FatalException",exceptionMessage:"fatal fixture",throwFileName:"Fixture.java",throwLineNumber:17,stackTrace:${JSON.stringify("fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)")}};
-      if(data.pid===8201){appCrashed(fatal,false);fatal.exceptionMessage="changed local report";}
-      const endpoint = new MessageChannel();
-      await serveWorkerEndpoint(endpoint.port1);
-      const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
-      const {RemoteFile} = await import(${JSON.stringify(location.origin + "/remote-file.js")});
-      const file = new RemoteFile(data.registry.find(record=>record.pkg===data.pkg).source);
-      const archive = Array.from(await file.read(0,1));
-      setGuestTimeout(()=>{
-        self.postMessage({tick:'first',now:uptimeMillis(),wall:wallMillis()});
-        queueMicrotask(()=>setGuestTimeout(()=>self.postMessage({tick:'nested',now:uptimeMillis()}),0));
-        setGuestTimeout(()=>self.postMessage({tick:'dead'}),5);
-      },10);
-      self.postMessage({ready:true,display:!!data.display,archive,controlled:guestClockControl.controlled,bootTime,
-        identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()},endpoint:endpoint.port2},[endpoint.port2]);
-    };`;
-  const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"}), workers=[worker];
-  entry.workerDiagnostic={url};
   const ticks: {tick:string;now:number;wall?:number}[] = [];
+  worker.addEventListener("message", ({data}) => { if (data.tick) ticks.push(data); });
   try {
-    const ready = await new Promise<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
-      worker.onerror = event => reject(new Error(event.message));
-      worker.onmessage = ({data}) => { if(data.ready) {broker.readyPort(pid,data.endpoint);resolve(data);} else ticks.push(data); };
-      worker.postMessage({clock:clock.data}, [clock.data.port!]);
-      worker.postMessage(data, bootstrapTransfers(data));
-    });
+    const ready = await posted<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>(worker, "report");
     let brokerTimer = 0;
     setSystemTimeout(()=>brokerTimer++,20);
     const incoming = await entry.ready;
@@ -318,7 +267,7 @@ export async function clockBootstrapOwnership() {
     const previous = {pid:8199,uid:15000,process:pkg,pkg,reason:4,status:0,importance:400,timestamp:wall,
       description:"crash",state:null,tombstone:null,dialog:false};
     recordRemoteExit(previous);
-    const survivor = broker.connect(pkg,pkg+":reader",8202);
+    const survivor = broker.register(pkg,pkg+":reader",8202);
     const reader = callProxy<BrokerCalls>(broker.brokerPort(survivor.pid),brokerMethods);
     const died = new Promise<void>(resolve=>broker.watch(pid,()=>resolve()));
     incoming.kill(9,{reason:4,description:"crash"});
@@ -329,30 +278,24 @@ export async function clockBootstrapOwnership() {
     const exit = {pid:stored.pid,uid:stored.uid,process:stored.process,pkg:stored.pkg,reason:stored.reason,status:stored.status,dialog:stored.dialog,description:stored.description};
     reader.close();broker.fail(survivor.pid,"exit reader cleanup",NOT_CRASHED);
     worker.terminate();
-    const crashRow=(await broker.workerSnapshots()).find(row=>row.pid===pid)!;
+    const crashRow=(await workerSnapshots(broker.processes())).find(row=>row.pid===pid)!;
     const fatal=crashRow.terminal!.record!.crash!;
     const crash={expected:crashRow.terminal?.expected,reason:crashRow.terminal?.record?.reason,error:"error" in crashRow,fatal:{...fatal},copied:false};
     fatal.exceptionMessage="changed terminal copy";
-    crash.copied=(await broker.workerSnapshots()).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
+    crash.copied=(await workerSnapshots(broker.processes())).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
     const terminals=[];
     for(const [i,status] of [0,7,null].entries()) {
-      const nextPid=8203+i,next=broker.connect(pkg,pkg+":"+nextPid,nextPid);
-      next.workerDiagnostic={url};next.canvas=document.createElement("canvas");
-      const nextData=await broker.bootstrap(nextPid),peer=new Worker(url,{type:"module"});workers.push(peer);
-      await new Promise<void>((resolve,reject)=>{
-        peer.onerror=event=>reject(new Error(event.message));
-        peer.onmessage=({data})=>{if(data.ready){broker.readyPort(nextPid,data.endpoint);resolve();}};
-        peer.postMessage(nextData,bootstrapTransfers(nextData));
-      });
+      const nextPid=8203+i,{worker:peer}=hosted(broker,pkg,pkg+":"+nextPid,nextPid,"clock");workers.push(peer);
+      await posted(peer,"report");
       const ended=new Promise<void>(resolve=>broker.watch(nextPid,()=>resolve()));
       if(status===null)await broker.forceStop(pkg);else peer.postMessage({finish:status});
       await ended;
-      const row=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!;
+      const row=(await workerSnapshots(broker.processes())).find(row=>row.pid===nextPid)!;
       if(!row.terminal?.record)throw new Error("missing canonical terminal record");
       const record=row.terminal.record;
       const result={expected:row.terminal.expected,reason:record.reason,status:record.status,error:"error" in row,copied:false};
       record.status=99;
-      result.copied=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!.terminal!.record!.status!==99;
+      result.copied=(await workerSnapshots(broker.processes())).find(row=>row.pid===nextPid)!.terminal!.record!.status!==99;
       terminals.push(result);peer.terminate();
     }
     const pendingAfterDeath = guestClockControl.pending();
@@ -360,7 +303,7 @@ export async function clockBootstrapOwnership() {
     return {crash,terminals,exit,display:ready.display,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
-  } finally { workers.forEach(peer=>peer.terminate());for(const nextPid of [8203,8204,8205])broker.fail(nextPid,"exit fixture cleanup",NOT_CRASHED);broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }
+  } finally { workers.forEach(peer=>peer.terminate());for(const nextPid of [8203,8204,8205])broker.fail(nextPid,"exit fixture cleanup",NOT_CRASHED);broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); packages.delete(pkg); }
 }
 
 export async function clipboardOwnership() {
@@ -371,49 +314,20 @@ export async function clipboardOwnership() {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
   }
-  const entries = [pkg,pkg,foreign].map((name,i)=>broker.connect(name,name+":"+i,8301+i));
+  const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.activities.setForeground(8301);
   let peerChanges = 0, peerChanged!: () => void;
-  const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),
-    service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-    processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
-  broker.ready(8302,empty); broker.ready(8303,{...empty,processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{}});
+  broker.ready(8302,stubEndpoint({clipboardChanged:async()=>{peerChanges++;peerChanged?.();}})); broker.ready(8303,stubEndpoint());
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
-  const code = `import {callProxy,serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
-    let broker;
-    self.onmessage = async ({data}) => {
-      if(data.reverse){
-        broker=callProxy(data.reverse,${JSON.stringify(brokerMethods)}).endpoint;
-        serveProcess(data.endpoint,{activity:async()=>{},transact:async r=>({handled:0,data:r.data}),service:async()=>null,
-          serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-          processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>self.postMessage({accountsChanged:true}), settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}),storageChanged:async()=>{}, clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
-        self.postMessage({ready:true});return;
-      }
-      try {
-        let value;
-        if(data.method==='write'){const bytes=Uint8Array.of(1,2);await broker.clipboardSet({bytes,objects:[]});bytes[0]=9;value=Array.from(bytes);}
-        else value=await broker[data.method](...data.args);
-        self.postMessage({id:data.id,value});
-      }catch(error){self.postMessage({id:data.id,error:error.message});}
-    };`;
-  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  let next=1,changes=0,changed!:()=>void,ready!:()=>void,settingChanged!:()=>void,accountChanged!:()=>void,accountChanges=0;
+  let changes=0,changed!:()=>void,settingChanged!:()=>void,accountChanged!:()=>void,accountChanges=0;
   const settingChanges: string[][] = [];
-  const waiting = new Map<number,(value:unknown)=>void>();
-  worker.onmessage=({data})=>{
-    if(data.ready){ready();return;} if(data.changed){changes++;changed?.();return;}
-    if(data.accountsChanged){accountChanges++;accountChanged?.();return;}
-    if(data.setting){settingChanges.push(data.setting);settingChanged?.();return;}
-    const resolve=waiting.get(data.id);waiting.delete(data.id);resolve?.(data.error?{error:data.error}:data.value);
-  };
-  const ask=(method:string,...args:unknown[])=>new Promise<unknown>(resolve=>{
-    const id=next++;waiting.set(id,resolve);worker.postMessage({id,method,args});
+  const {ask,worker}=brokerWorker(broker,8301,event=>{
+    if(event.changed){changes++;changed?.();}
+    if(event.accountsChanged){accountChanges++;accountChanged?.();}
+    if(event.setting){settingChanges.push(event.setting);settingChanged?.();}
   });
   try {
-    const channel=new MessageChannel(),reverse=broker.brokerPort(8301);
-    const started=new Promise<void>(resolve=>ready=resolve);
-    worker.postMessage({reverse,endpoint:channel.port1},[reverse,channel.port1]);broker.readyPort(8301,channel.port2);
-    await started;await ask("clipboardListen",true);await peers[0].endpoint.clipboardListen(true);
+    await ask("clipboardListen",true);await peers[0].endpoint.clipboardListen(true);
     const notification=new Promise<void>(resolve=>changed=resolve),peerNotification=new Promise<void>(resolve=>peerChanged=resolve);
     const source=await ask("write");await Promise.all([notification,peerNotification]);
     const read=await peers[0].endpoint.clipboardGet();read!.bytes[0]=7;
@@ -506,7 +420,7 @@ export async function clipboardOwnership() {
       changes,peerChanges,survivor:Array.from(survivor!.bytes),
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
   }finally{
-    for(const client of peers)client.close();worker.terminate();URL.revokeObjectURL(url);
+    for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"clipboard fixture cleanup",NOT_CRASHED);
     for (let i=broker.accounts.records.length-1;i>=0;i--)
       if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
@@ -524,22 +438,11 @@ export async function storedClipboardRights() {
   const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
   vfs.mkdir("/data/data");
-  for(const pid of pids)broker.connect(pkg,pkg+":"+pid,pid);
+  for(const pid of pids)broker.register(pkg,pkg+":"+pid,pid);
   broker.activities.setForeground(8402);
-  const code=`import {callProxy} from ${JSON.stringify(location.origin+"/process-port.js")};
-    let calls;self.onmessage=async({data})=>{
-      if(data.port){calls=callProxy(data.port,${JSON.stringify(brokerMethods)}).endpoint;self.postMessage({ready:true});return;}
-      try{self.postMessage({id:data.id,value:await calls[data.method](...data.args)});}
-      catch(error){self.postMessage({id:data.id,error:error.message});}
-    };`;
-  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  const reader=callProxy<BrokerCalls>(broker.brokerPort(8402),brokerMethods),waiting=new Map<number,(value:unknown)=>void>();
-  let ready!:()=>void,next=1;
-  worker.onmessage=({data})=>{if(data.ready){ready();return;}waiting.get(data.id)?.(data.error?{error:data.error}:data.value);waiting.delete(data.id);};
-  const ask=(method:string,...args:unknown[])=>new Promise<unknown>(resolve=>{const id=next++;waiting.set(id,resolve);worker.postMessage({id,method,args});});
+  const reader=callProxy<BrokerCalls>(broker.brokerPort(8402),brokerMethods),{ask,worker}=brokerWorker(broker,8401);
   const imported:number[]=[];
   try {
-    const started=new Promise<void>(resolve=>ready=resolve),port=broker.brokerPort(8401);worker.postMessage({port},[port]);await started;
     await ask("fileMkdir",`/data/data/${pkg}`);
     const fd=(await ask("fileDescriptor",{kind:"open",path,flags:0x42}) as {result:number}).result;
     if(fd<0)throw new Error("Stored clipboard open failed: "+fd);
@@ -573,7 +476,7 @@ export async function storedClipboardRights() {
     return {has,cleared:!(await reader.endpoint.clipboardHas()),reads,backing:[...vfs.read(path)!],replacementRejected,pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
   } finally {
     for(const fd of imported)await reader.endpoint.fileDescriptor({kind:"close",fd});
-    reader.close();worker.terminate();URL.revokeObjectURL(url);
+    reader.close();worker.terminate();
     for(const pid of pids)broker.fail(pid,"stored clipboard fixture cleanup",NOT_CRASHED);
     vfs.delete(path);packages.delete(pkg);
   }
@@ -582,15 +485,7 @@ export async function storedClipboardRights() {
 
 
 export async function pointerInputOwnership() {
-  const {attachPointerInput} = await import("../../../src/shell/pointer-input.ts");
-  type Calls = { pointer(owner: number, action: number, x: number, y: number): Promise<void>; release(): Promise<void>; samples(): Promise<number[][]> };
-  const code = `import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
-    let release, samples=[];
-    self.onmessage=({data})=>serveCalls(data.port,{
-      pointer:async(owner,action,x,y)=>{samples.push([owner,action,x,y]);if(owner===1&&action===0)await new Promise(r=>release=r);},
-      release:async()=>{release();},samples:async()=>samples});`;
-  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  const channel=new MessageChannel(),client=callProxy<Calls>(channel.port1,["pointer","release","samples"]);
+  const worker=fixtureWorker("pointer"),channel=new MessageChannel(),client=callProxy<PointerCalls>(channel.port1,["pointer","release","samples"]);
   worker.postMessage({port:channel.port2},[channel.port2]);
   const canvases=[1,2].map(()=>{const c=document.createElement("canvas");c.style.cssText="position:fixed;left:0;top:0;width:100px;height:100px";document.body.append(c);return c;});
   const bindings=canvases.map((canvas,i)=>attachPointerInput(canvas,()=>({width:200,height:200,scrollUnit:128,touchSlop:16,edgeSlop:6,minScalingSpan:40}),
@@ -608,46 +503,34 @@ export async function pointerInputOwnership() {
     pointer(0,"pointerdown",1,1);pointer(1,"pointerdown",1,1);
     const closed=await client.endpoint.samples();
     return {samples,closed:closed.length===samples.length};
-  } finally { bindings.forEach(binding=>binding.close());client.close();worker.terminate();URL.revokeObjectURL(url);canvases.forEach(c=>c.remove()); }
+  } finally { bindings.forEach(binding=>binding.close());client.close();worker.terminate();canvases.forEach(c=>c.remove()); }
 }
 
 export async function workerDiagnosticOwnership() {
-  const {workerControlMethods} = await import(location.origin+"/worker-control-methods.js") as typeof import("../../../src/shell/worker-control-methods.ts");
   const broker=processBroker(),pkg="test.worker.diagnostics",clients:ReturnType<typeof callProxy>[]=[];
   const root={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
-  const code=`import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
-    let hungCalls=0,aliveCalls=0;
-    self.onmessage=({data})=>{
-      if(data.count){self.postMessage({hungCalls,aliveCalls});return;}
-      serveCalls(data.port,{snapshot:async()=>{
-        if(data.mode==='hang'){hungCalls++;return new Promise(()=>{});}
-        if(data.mode==='reject')throw new Error('owned diagnostic failure');
-        return {phase:data.mode==='queueHang'?'ready':data.mode,dead:false,identity:{pid:data.pid}};
-      },aotProfile:async()=>({phase:data.mode==='queueHang'?'ready':data.mode,dead:false,
-        identity:{pid:data.pid,pkg:data.mode==='ready'?data.pkg:null,process:data.process},profile:null}),
-        alive:async()=>{aliveCalls++;if(data.mode==='queueHang')return new Promise(()=>{});return true;}});self.postMessage({ready:true});
-    };`;
-  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  const worker=fixtureWorker("control");
   const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
   try {
     for(const [i,mode] of ['ready','reject','hang','packages','queueHang'].entries()) {
-      const entry=broker.connect(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
-      const client=callProxy(channel.port1,workerControlMethods);clients.push(client);
-      Object.assign(entry,{worker:{url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close}});
+      const entry=broker.register(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
+      const client=callProxy<WorkerControl>(channel.port1,workerControlMethods);clients.push(client);
+      // a host whose control the fixture Worker serves as `mode` says
+      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
-    const first=await broker.workerSnapshots(),second=await broker.workerSnapshots();
-    const profiles=await broker.workerAotProfiles();
+    const first=await workerSnapshots(broker.processes()),second=await workerSnapshots(broker.processes());
+    const profiles=await workerAotProfiles(broker.processes());
     const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
-    const blocked=await broker.visibleWorkerProcesses(30);
-    const stillBlocked=await broker.visibleWorkersAlive(30);
+    const blocked=await visibleWorkerProcesses(broker,30);
+    const stillBlocked=await visibleWorkersAlive(broker,30);
     broker.activities.setForeground(8401);
-    const live=await broker.visibleWorkersAlive(1000);
+    const live=await visibleWorkersAlive(broker,1000);
     const count=await new Promise<{hungCalls:number;aliveCalls:number}>(resolve=>{worker.onmessage=({data})=>resolve(data);worker.postMessage({count:true});});
-    const hanging=broker.connect(pkg,pkg+":2",8403);
-    const held=broker.workerSnapshots([hanging]);
+    const hanging=broker.entry(8403);
+    const held=workerSnapshots([hanging]);
     const publish=callProxy<BrokerCalls>(broker.brokerPort(hanging.pid),brokerMethods);clients.push(publish);
     const died=new Promise<void>(resolve=>broker.watch(hanging.pid,()=>resolve()));
     void Promise.resolve(publish.endpoint.processExited({pid:9999,uid:0,pkg:"foreign",process:"foreign",reason:1,status:0,
@@ -656,7 +539,7 @@ export async function workerDiagnosticOwnership() {
     const terminal=(await held)[0].terminal!;
     const pendingTerminal={expected:terminal.expected,reason:terminal.record!.reason,status:terminal.record!.status,pid:terminal.record!.pid};
     broker.fail(8401,"actual diagnostic fixture exit",NOT_CRASHED);
-    const ended=await broker.workerSnapshots();
+    const ended=await workerSnapshots(broker.processes());
     const row=(rows:typeof first,pid:number)=>rows.find(row=>row.pid===pid)!;
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);
@@ -667,7 +550,7 @@ export async function workerDiagnosticOwnership() {
   } finally {
     broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);
-    clients.forEach(client=>client.close());worker.terminate();URL.revokeObjectURL(url);packages.delete(pkg);
+    clients.forEach(client=>client.close());worker.terminate();packages.delete(pkg);
   }
 }
 
@@ -679,32 +562,18 @@ export async function locationOwnership() {
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,17000+i,async()=>[]));
   }
   broker.permissions.grant(pkg,["android.permission.ACCESS_FINE_LOCATION"]);
-  const entry = broker.connect(pkg,pkg,8501), denied = broker.connect(other,other,8502), peer = broker.connect(pkg,pkg+":peer",8503);
+  const entry = broker.register(pkg,pkg,8501), denied = broker.register(other,other,8502), peer = broker.register(pkg,pkg+":peer",8503);
   const oldGeo = Object.getOwnPropertyDescriptor(navigator,"geolocation");
   let watched: PositionCallback | undefined, cleared = 0;
   Object.defineProperty(navigator,"geolocation",{configurable:true,value:{
     watchPosition(success:PositionCallback){watched=success;return 71;},clearWatch(){cleared++;},
   }});
-  type Control = {subscribe():Promise<void>;remove():Promise<void>;read():Promise<unknown>;events():Promise<number[]>};
-  const code = `import {callProxy,serveCalls,serveProcess} from ${JSON.stringify(location.origin+"/process-port.js")};
-    import {remoteLocation} from ${JSON.stringify(location.origin+"/location-access.js")};
-    self.onmessage=({data})=>{
-      const broker=callProxy(data.broker,["locationAvailable","locationEnabled","locationLast","locationSubscribe","locationRemove"]);
-      const remote=remoteLocation(()=>broker.endpoint),events=[];
-      serveProcess(data.endpoint,{processDied:async()=>{}, locationChanged:async(id,token,event)=>remote.changed(id,token,event)});
-      serveCalls(data.control,{
-        subscribe:()=>remote.access.subscribe(41,false,true,event=>{if(event.kind==="fix")events.push(event.fix.latitude);}),
-        remove:()=>remote.access.remove(41),read:()=>remote.access.last(),events:async()=>events.slice(),
-      });
-    };`;
-  const url = URL.createObjectURL(new Blob([code],{type:"text/javascript"})), worker = new Worker(url,{type:"module"});
-  const endpoint = new MessageChannel(), control = new MessageChannel(), client = callProxy<Control>(control.port1,["subscribe","remove","read","events"]);
+  const worker = fixtureWorker("location"), endpoint = new MessageChannel(), control = new MessageChannel();
+  const client = callProxy<LocationControl>(control.port1,["subscribe","remove","read","events"]);
   const deniedClient = callProxy<BrokerCalls>(broker.brokerPort(denied.pid),brokerMethods,[],error=>Object.assign(new Error(error.message??""),{javaClass:error.javaClass}));
   const peerClient = callProxy<BrokerCalls>(broker.brokerPort(peer.pid),brokerMethods);
   let peerEvents = 0;
-  const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,
-    broadcast:async(_i,_c,_o,r)=>r,accountsChanged:async()=>{},settingsChanged:async()=>{},storageChanged:async()=>{},clipboardChanged:async()=>{},processDied:async()=>{}, locationChanged:async()=>{peerEvents++;},packageRemoved:async()=>{},kill:()=>{}};
-  broker.ready(peer.pid,empty);
+  broker.ready(peer.pid,stubEndpoint({locationChanged:async()=>{peerEvents++;}}));
   const emit = (latitude:number) => watched!({coords:{latitude,longitude:2,accuracy:3,altitude:null,altitudeAccuracy:null,heading:null,speed:null},timestamp:Date.now()} as GeolocationPosition);
   const waitEvents = async(count:number)=>{
     for(let i=0;i<30;i++){const events=await client.endpoint.events();if(events.length===count)return events;await new Promise(r=>setTimeout(r,5));}
@@ -731,37 +600,22 @@ export async function locationOwnership() {
     return {available,denied:deniedRead,events,copied,stale,removed,peerSurvives,deathCloses:cleared===2};
   } finally {
     for(const pid of [8501,8502,8503])broker.fail(pid,"location fixture cleanup",NOT_CRASHED);
-    client.close();deniedClient.close();peerClient.close();worker.terminate();URL.revokeObjectURL(url);broker.permissions.clear(pkg);
+    client.close();deniedClient.close();peerClient.close();worker.terminate();broker.permissions.clear(pkg);
     if(oldGeo)Object.defineProperty(navigator,"geolocation",oldGeo);else Reflect.deleteProperty(navigator,"geolocation");
   }
 }
 
 export async function imeOwnership() {
-  const {receiveIme} = await import(location.origin+"/ime-port.js") as typeof import("../../../src/shell/ime-port.ts");
   const canvas = document.createElement("canvas"); document.body.append(canvas);
-  const port = new MessageChannel(), owner = receiveIme(port.port1,canvas), inputs:string[]=[];
+  const input = new MessageChannel(), view = new MessageChannel(), calls = callProxy<InputCalls>(input.port1,inputMethods);
+  const owner = receiveIme(view.port1,canvas,calls.endpoint), inputs:string[]=[];
   let entered!:()=>void; const first = new Promise<void>(resolve=>entered=resolve);
-  const workerCode = `import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
-    let generation=1, release;
-    self.onmessage=({data})=>{
-      if(data.kind==='release'){release?.();return;}
-      if(data.kind==='switch'){generation=2;self.port.postMessage({kind:'imeState',state:{generation,text:'new editor',start:10,end:10,active:true,hasAction:false}});return;}
-      if(data.kind==='hide'){self.port.postMessage({kind:'imeState',state:{generation,text:'new editor',start:10,end:10,active:false,hasAction:false}});return;}
-      self.port=data.port;
-      serveCalls(data.port,{input:async(g,text,start,end)=>{
-        if(g!==generation)return;
-        self.postMessage({input:text});
-        if(text==='a')await new Promise(resolve=>release=resolve);
-        data.port.postMessage({kind:'imeState',state:{generation,text,start,end,active:true,hasAction:false}});
-      },selection:async()=>{},finish:async()=>{},action:async()=>true});
-      data.port.postMessage({kind:'imeState',state:{generation,text:'',start:0,end:0,active:true,hasAction:false}});
-    };`;
-  const url=URL.createObjectURL(new Blob([workerCode],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  const worker=fixtureWorker("ime");
   worker.onmessage=({data})=>{if(data.input){inputs.push(data.input);if(data.input==='a')entered();}};
   const wait = async (ready:()=>boolean) => {const until=performance.now()+2000;while(!ready()){if(performance.now()>until)throw new Error("IME core deadline");await new Promise(resolve=>setTimeout(resolve,0));}};
   try {
-    const forwarded=structuredClone({port:port.port2},{transfer:[port.port2]});
-    worker.postMessage(forwarded,[forwarded.port]);
+    const forwarded=structuredClone({input:input.port2,view:view.port2},{transfer:[input.port2,view.port2]});
+    worker.postMessage(forwarded,[forwarded.input,forwarded.view]);
     await wait(()=>!owner.input.disabled);
     const edit=(text:string)=>{owner.input.value=text;owner.input.setSelectionRange(text.length,text.length);owner.input.dispatchEvent(new InputEvent("input",{isComposing:false}));};
     edit("a");await first;edit("ab");edit("abc");worker.postMessage({kind:"release"});
@@ -772,5 +626,5 @@ export async function imeOwnership() {
     const inactive=owner.input.disabled;
     owner.close();edit("closed");await new Promise(resolve=>setTimeout(resolve,0));
     return {inputs,switched,inactive,closed:!owner.input.isConnected};
-  }finally{owner.close();worker.terminate();URL.revokeObjectURL(url);canvas.remove();}
+  }finally{owner.close();calls.close();worker.terminate();canvas.remove();}
 }

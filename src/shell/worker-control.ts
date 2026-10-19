@@ -3,8 +3,7 @@ import { appHost } from "../android/apphost.ts";
 import { rt } from "../jvm/runtime.ts";
 import { realmWd } from "./realmwd.ts";
 import { processExited } from "../process-exit.ts";
-import { dispatchTouches, pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
-import type { TouchPointer } from "./pointer-queue.ts";
+import { pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
 import { yieldStats, timedParks } from "../jvm/yield.ts";
 import { webViewInfo } from "../android/webframes.ts";
 import { mainDbg, onMain } from "../android/mainloop.ts";
@@ -53,7 +52,6 @@ export function workerControl(logs: string[], phase: () => string) {
     type: async (text: string) => { await imeInput(text, text.length, text.length, false, imeState().generation); },
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),
-    pointer: async (action: number, pointers: TouchPointer[]) => { await dispatchTouches(action, pointers); },
     back: async () => { await pressBack(); },
     testFrame: local.testFrame,
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
