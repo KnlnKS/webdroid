@@ -9,7 +9,7 @@ import type { World } from "../../src/wasm/link/world.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { Pool, u2, u4 } from "./classfile.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { fixture, javac, onJdk, tempDir } from "./tools.ts";
+import { checker, fixture, javac, onJdk, tempDir } from "./tools.ts";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles.ts";
 import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
@@ -236,8 +236,7 @@ const artViews: Record<string, (a: number) => number> = {
   tInvokerViewKinds: (a) => ((a + 65530) & 0xffff) + ((-a << 16) >> 16) + 1103,
 };
 cases.forEach((c, i) => { const art = artViews[c.m.name]; if (art && jdk[i] === "throw") jdk[i] = String(art(Number(c.args[0]))); });
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, jdk, hit);
-console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (the JDK or documented ART differences); ${threw} threw`);
+const suite = checker("customdiff"), { blocked, threw } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const bridgeCounts: Record<string, number> = {};
 for (const name of ["inst", "tDirectAdapt", "tDirectViews"]) {
   const before = bridgeCalls, method = methods.find(m => m.cls === "Vh" && m.name === name)!;
@@ -321,13 +320,12 @@ console.log("4 ART collector/retry/racing cases match");
   } finally { owner.end(); }
 }
 console.log("2 synchronous handle callbacks reject blocking without orphan strands");
-if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 // Missing bootstrap classes fail resolution; libcore LambdaMetafactory returns null and ART wraps that CCE in BME.
 const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.bridge.toHost(w.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t))}` : String(e); } };
 const concat = outcome("concat"), lambda = outcome("lambda");
-if (concat !== "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;") { console.log(`FAIL concat: ${concat}`); process.exit(1); }
-if (!lambda.startsWith("java/lang/BootstrapMethodError")) { console.log(`FAIL lambda: ${lambda}`); process.exit(1); }
-process.exit(bad || blocked ? 1 : 0);
+suite.check("concat", concat, "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;");
+if (!lambda.startsWith("java/lang/BootstrapMethodError")) suite.fail(`lambda: ${lambda}`);
+suite.done(`${cases.length - blocked} cases match (the JDK or documented ART differences); ${threw} threw`);
 
 async function checkDeferredSignatures(): Promise<void> {
   const signaturePath = "/data/local/tmp/mh-signatures.dex";

@@ -1,7 +1,7 @@
 // Argument generation and the Wasm-vs-JDK comparison shared by the differential harnesses.
-import { mangleField } from "../../src/jvm/abi.ts";
 import { kindOf, type MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { db, fb, fmt } from "./harness.ts";
+import type { Suite } from "./tools.ts";
 
 const pool: Record<string, bigint[]> = {
   I: [0, 1, -1, 2, 3, 5, 7, 9, 10, 16, 31, 32, 33, 36, 48, 57, 63, 64, 65, 90, 97, 100, 122, 255, 65536, 123456789, 0x7fffffff, -0x80000000].map(BigInt),
@@ -26,20 +26,18 @@ export function genCases(methods: MethodInfo[], small: Record<string, number[]> 
   });
 }
 
-/** Runs every case on the Wasm tier (`run` returns the callable of a method) against `jdk`'s line for it; prints each disagreement.
- *  A case that reaches a compiler gap (`gapHits` grew) is blocked, not compared. */
-export async function compare(cases: Case[], run: (m: MethodInfo) => (...a: any[]) => unknown, jdk: string[], gapHits: unknown[] = []) {
-  let bad = 0, threw = 0, blocked = 0;
+/** Runs every case on the Wasm tier (`run` returns the callable of a method) against `jdk`'s line for it; each disagreement fails in `suite`.
+ *  A case that reaches a compiler gap (`gapHits` grew) is blocked, not compared, and the blocked cases fail together. */
+export async function compare(suite: Suite, cases: Case[], run: (m: MethodInfo) => (...a: any[]) => unknown, jdk: string[], gapHits: unknown[] = []) {
+  let threw = 0, blocked = 0;
   for (const [i, { m, args }] of cases.entries()) {
     const want = jdk[i] === "throw" ? "throw" : fmt(retKind(m), BigInt(jdk[i])), seen = gapHits.length;
     let wasm: string;
-    try { wasm = fmt(retKind(m), BigInt(await run(m)(...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" ? a : Number(a)))) as bigint)); } catch (e) {
-      if (process.env.J2W_V) { const w = (globalThis as any).__dbgw, t = w?.throwable(e); console.log(m.name, t ? w.classNameOf(t) + " " + String((w.bridge.toHost(t) as any)[mangleField("java/lang/Throwable", "detailMessage")]) : String((e as Error)?.stack ?? e).slice(0, 2500)); }
-      wasm = "throw";
-    }
+    try { wasm = fmt(retKind(m), BigInt(await run(m)(...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" ? a : Number(a)))) as bigint)); } catch { wasm = "throw"; }
     if (gapHits.length > seen) { blocked++; continue; }
     if (wasm === "throw") threw++;
-    if (wasm !== want) { bad++; console.log(`MISMATCH ${m.cls}.${m.name}${m.desc}(${args.join(", ")}): jdk=${want} wasm=${wasm}`); }
+    suite.check(`${m.cls}.${m.name}${m.desc}(${args.join(", ")})`, wasm, want);
   }
-  return { bad, threw, blocked };
+  if (blocked) suite.fail(`${blocked} cases blocked by a compiler gap: ${[...new Set(gapHits)].join("; ")}`);
+  return { threw, blocked };
 }

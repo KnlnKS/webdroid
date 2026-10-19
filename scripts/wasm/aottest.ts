@@ -22,7 +22,7 @@ const jars = PLATFORM_PATHS;
 const out = fixture({ sources: [join(JAVA, "Aot.java"), join(JAVA, "Aot2.java")], classes: /^Aot(\$\w+)?\.class$/ });
 fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Aot2(\$\w+)?\.class$/) });
 
-const suite = checker(), { check } = suite;
+const suite = checker("aottest"), { check } = suite;
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
@@ -302,5 +302,4 @@ for (const [what, make, expected] of stores) {
   check(`${what}: a subclass overriding indexOf takes effect`, w.entry("Aot2", "sub", "()I")(), 1);
   check(`${what}: and the plain list is as before`, w.entry("Aot2", "plain", "()I")(), 0);
 }
-console.log(suite.failed ? `${suite.failed} failures / ${suite.checks} checks` : `aottest: all ${suite.checks} checks pass`);
-process.exit(suite.failed ? 1 : 0);
+suite.done(`all ${suite.checks} checks pass`);

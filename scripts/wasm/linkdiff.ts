@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, fixture, javac, onJdk, tempDir } from "./tools.ts";
+import { checker, filesIn, fixture, javac, onJdk, tempDir } from "./tools.ts";
 
 const out = tempDir(), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const src = (d: string, ...n: string[]) => n.map((x) => join(JAVA, "lk", d, `${x}.java`));
@@ -39,25 +39,23 @@ const hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 const names = Object.keys(expected);
 const jdk = onJdk(run, names.map((n) => `Lk.${n}`));
-const catchGone = w.entry("LkX", "catchGone", "()Ljava/lang/String;")();
-if (catchGone !== "rte") { console.log(`FAIL catchGone: ${catchGone}`); process.exit(1); }
-let failed = 0;
+const suite = checker("linkdiff"), { check, fail } = suite;
+check("catchGone", w.entry("LkX", "catchGone", "()Ljava/lang/String;")(), "rte");
 names.forEach((n, i) => {
   let got: string;
   try { got = w.entry("Lk", n, "()Ljava/lang/String;")() as string; } catch (e) { got = `escaped ${w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e}`; }
   const kind = (s: string) => s.split(":")[0];
-  if (kind(got) !== kind(jdk[i])) { failed++; console.log(`FAIL ${n}: ${kind(got)} on Wasm, ${kind(jdk[i])} on the JDK`); }
-  if (got !== expected[n]) { failed++; console.log(`FAIL ${n}:\n  got  ${got}\n  want ${expected[n]}`); }
+  check(`${n}: the error on Wasm and on the JDK`, kind(got), kind(jdk[i]));
+  check(n, got, expected[n]);
 });
 const part = w.entry("Lk", "partial", "(I)I");
-if (part(5) !== 11) { failed++; console.log(`FAIL partial(5) = ${part(5)}`); }
-try { part(500); failed++; console.log("FAIL partial(500) did not throw"); } catch (e) { if (w.classNameOf(w.throwable(e)!) !== "java/lang/NoClassDefFoundError") { failed++; console.log(`FAIL partial(500): ${e}`); } }
-if (hit.length) { failed++; console.log(`FAIL gaps hit: ${[...new Set(hit)].join("; ")}`); }
+check("partial(5)", part(5), 11);
+try { part(500); fail("partial(500) did not throw"); } catch (e) { check("partial(500)", w.classNameOf(w.throwable(e)!), "java/lang/NoClassDefFoundError"); }
+if (hit.length) fail(`gaps hit: ${[...new Set(hit)].join("; ")}`);
 // a dex loaded later that defines the class: the sites that failed resolve
 w.addDexes(loadDexes(join(gone, "classes.dex")));
 for (const n of ["newGone", "staticGone", "sgetGone", "classGone"]) {
   const got = w.entry("Lk", n, "()Ljava/lang/String;")() as string;
-  if (/Error/.test(got)) { failed++; console.log(`FAIL ${n} after the class is loaded: ${got}`); }
+  if (/Error/.test(got)) fail(`${n} after the class is loaded: ${got}`);
 }
-console.log(failed ? `${failed} failures` : `${names.length} unresolved-reference cases match ART and the JDK`);
-process.exit(failed ? 1 : 0);
+suite.done(`${names.length} unresolved-reference cases match ART and the JDK`);

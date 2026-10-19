@@ -27,7 +27,7 @@ w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);
 
-const suite = checker(), { fail } = suite;
+const suite = checker("hostclass"), { fail } = suite;
 for (const failure of unlike(expected, wasm)) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
@@ -169,5 +169,4 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-console.log(suite.failed ? `${suite.failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
-process.exit(suite.failed ? 1 : 0);
+suite.done(`${expected.length} cases answer as recorded on a World with host classes`);

@@ -36,7 +36,7 @@ fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Pst2
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
 await mountPlatform(ROOT);
 
-const suite = checker(), { check, fail } = suite;
+const suite = checker("persist"), { check, fail } = suite;
 const until = async (what: string, done: () => boolean, ms = 60000) => {
   const t0 = performance.now();
   while (!done()) { if (performance.now() - t0 > ms) { fail(`${what}: timed out`); return false; } await new Promise((r) => setTimeout(r, 2)); }
@@ -498,5 +498,4 @@ if (saved) {
   check("the prefix leaves the bounded entries alone", [await p.load("c") !== undefined, (await p.save("d", [["x", blob(100)]]), await p.prefix("platform") !== undefined)].join(), "true,true");
 }
 for (const p of ports) p.terminate();
-console.log(suite.failed ? `${suite.failed} failures` : "persist: all pass");
-process.exit(suite.failed ? 1 : 0);
+suite.done();

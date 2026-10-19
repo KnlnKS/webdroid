@@ -10,7 +10,7 @@ import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { fixture, onJdk } from "./tools.ts";
+import { checker, fixture, onJdk } from "./tools.ts";
 
 const out = fixture({ sources: ["W", "S", "N", "Ref"].map((c) => join(JAVA, c + ".java")), classes: /^[WSN](\$\w+)?\.class$/ });
 
@@ -36,7 +36,6 @@ const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 await startProcess(w);
 const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
-(globalThis as any).__dbgw = w;
 // asynchronous, as a process enters Java: S and N reach natives that wait (files, the user database)
 const entries = new Map(methods.map((m) => [m, w.entryAsync(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
@@ -47,8 +46,7 @@ const small: Record<string, number[]> = {
 };
 const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
 const jdk = onJdk(out, cases.map(caseLine));
-const r = await compare(cases, (m) => entries.get(m)!, jdk, hit);
-let wideBad = 0, dispatchBad = 0;
+const suite = checker("diff"), { blocked } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
   const wide = world([dex, ...CORE_PATHS], { natives });
@@ -59,17 +57,12 @@ if (wideCases.length) {
   const high = wide.selectorId("size()I");
   wide.host.imtMiss(a, high);
   const expected = wide.slotOf(wide.prog.implFor("java/util/HashMap", "hashCode", "()I")!);
-  if (wide.host.imtMiss(b, low) !== expected) { dispatchBad++; console.log("MISMATCH full-width interface dispatch cache"); }
-  else console.log("full-width interface dispatch cache: distinct class/selector pairs remain distinct");
+  suite.check("full-width interface dispatch cache: distinct class/selector pairs remain distinct", wide.host.imtMiss(b, low), expected);
   while (wide.numbers.names.length < 65536) wide.idOf("reflection/reserved/" + wide.numbers.names.length);
   for (const i of wideCases) {
     const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));
-    if (String(got) !== jdk[i]) { wideBad++; console.log(`MISMATCH full-width reflection ${m.name}: ${got} vs ${jdk[i]}`); }
+    suite.check(`full-width reflection ${m.name}`, String(got), jdk[i]);
   }
-  console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
 }
-const bad = r.bad + wideBad + dispatchBad, blocked = r.blocked;
-console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} methods`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
-if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-process.exit(bad || blocked ? 1 : 0);
+suite.done(`${cases.length - blocked} cases (${wideCases.length} full-width) match the JDK across ${methods.length} methods`);

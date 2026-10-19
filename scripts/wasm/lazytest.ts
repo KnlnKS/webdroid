@@ -12,7 +12,7 @@ const jars = PLATFORM_PATHS.slice(0, 2);
 const out = fixture({ sources: ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`)), classes: /^(Ex|Lz)(\$\w+)?\.class$/ });
 fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Lz2(\$\w+)?\.class$/) });
 
-const suite = checker(), { check } = suite;
+const suite = checker("lazytest"), { check } = suite;
 
 // ---- CHA under open-world loading: the app's dexes join the hierarchy as they are added, another loader's classes once they are linked
 for (const own of [false, true]) {
@@ -123,5 +123,4 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   const t = w.throwable(thrown);
   check("stack overflow becomes a StackOverflowError", t && w.classNameOf(t), "java/lang/StackOverflowError");
 }
-console.log(suite.failed ? `${suite.failed} failures` : "lazytest: all pass");
-process.exit(suite.failed ? 1 : 0);
+suite.done();

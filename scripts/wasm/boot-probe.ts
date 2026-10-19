@@ -9,7 +9,7 @@ import { fileResponse, serve } from "../serve.ts";
 import { aotFile, aotManifest } from "./aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { bundleFor, fixture } from "./tools.ts";
+import { bundleFor, checker, fixture } from "./tools.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)
 const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
@@ -39,8 +39,7 @@ await page.evaluate(() => { const f = document.createElement("iframe"); f.src = 
 const frame = await run("probeFrame");
 await browser.close(); server.stop();
 
-let failed = false;
-const check = (what: string, ok: boolean) => { if (!ok) { failed = true; console.log("FAIL", what); } };
+const suite = checker("boot-probe"), check = (what: string, ok: boolean) => suite.check(what, ok, true);
 for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
   console.log(`${name}: ${r.error ? "ERROR " + r.error.slice(0, 600) : `attached ${r.attached}; ${r.loaded.length} modules loaded, ${r.missed.length} missed, ${r.failed.length} failed to fetch; ${r.syncRequests} synchronous requests`}`);
   if (!r.error) console.log(`  ahead (fetch + compile, off the main thread) ${r.aheadMs.toFixed(0)} ms; boot ${r.bootMs.toFixed(0)} ms = our compiler ${r.compileMs.toFixed(0)} (${r.methods} methods), Module ${r.moduleMs.toFixed(0)}, Instance ${r.instantiateMs.toFixed(0)}, build ${r.aotMs.toFixed(0)}`);
@@ -59,5 +58,4 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
 check("the first load has no saved build and makes one", !tab.error && !tab.app.hit && !tab.app.attached && tab.app.made?.kept === true);
 check("the second load finds it, attaches it and uses its modules", !frame.error && frame.app.hit && frame.app.attached && frame.app.modules > 0);
 check("and compiles fewer methods on demand", !frame.error && !tab.error && frame.app.compiledOnDemand < tab.app.compiledOnDemand);
-console.log(failed ? "boot-probe: FAILED" : "boot-probe: all pass");
-process.exit(failed ? 1 : 0);
+suite.done();

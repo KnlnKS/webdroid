@@ -13,7 +13,7 @@ import { getDeclared } from "../../src/jvm/runtime.ts";
 import { mountPlatform } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
-import { recorded, unlike } from "./tools.ts";
+import { checker, recorded, unlike } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
 import { descriptorTransport } from "../../src/native/process-fd.ts";
@@ -31,11 +31,10 @@ PLATFORM_PATHS.forEach((path, i) => {
 const dexBytes = new Uint8Array(readFileSync(entryDex()));
 for (const d of dexesIn(dexBytes, "E")) loadDex(d);
 const got = await entryCases();
-let failed = 0;
-for (const failure of unlike(expected, got)) { failed++; console.log("FAIL " + failure); }
+const suite = checker("entrytier");
+for (const failure of unlike(expected, got)) suite.fail(failure);
 await inMemoryControl();
-console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as recorded through the page's seam`);
-process.exit(failed ? 1 : 0);
+suite.done(`${got.length} entry calls answer as recorded through the page's seam`);
 
 async function inMemoryControl(): Promise<void> {
   const bytes = dexBytes, padded = new Int8Array(bytes.length + 16);

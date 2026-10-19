@@ -12,7 +12,7 @@ import { irreducibleClass } from "./irfuzz.ts";
 import { Irreducible, Flow } from "../../src/jvm/structure.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { fixture, onJdk, tempDir } from "./tools.ts";
+import { checker, fixture, onJdk, tempDir } from "./tools.ts";
 import { argv } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
@@ -145,8 +145,6 @@ const cyclic = irreducible ? methods.filter((m) => {
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);
 const jdk = onJdk(out, cases.map(caseLine));
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, jdk, hit);
-console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
-if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-if (bad || blocked) console.log(`source: ${join(out, "F.java")}`);
-process.exit(bad || blocked ? 1 : 0);
+const suite = checker(`fuzz seed ${seed}`), { threw } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
+if (suite.failed) console.log(`source: ${join(out, "F.java")}`);
+suite.done(`${cases.length} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);

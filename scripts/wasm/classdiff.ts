@@ -6,7 +6,7 @@ import { program, world } from "./lib.ts";
 import { intrinsics } from "../../src/wasm/link/intrinsics.ts";
 import { mountPlatform, natives } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { fixture, java, javac, onJdk, tempDir } from "./tools.ts";
+import { checker, fixture, java, javac, onJdk, tempDir } from "./tools.ts";
 import { ACC, declaredMethod } from "../../src/wasm/compiler/program.ts";
 import { Cha } from "../../src/wasm/compiler/cha.ts";
 import { fieldCookie, hostUnsafe, UInfo } from "../../src/wasm/link/unsafe.ts";
@@ -53,21 +53,19 @@ if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== reg
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const cases = methods.map((m) => ({ m, args: [0n] }));
 const jdk = onJdk(out, cases.map((c) => `C.${c.m.name} 0`));
-let bad = 0;
-const hit: string[] = [];
+const suite = checker("classdiff"), hit: string[] = [];
 for (const [i, c] of cases.entries()) {
   const w = world(prog, { natives }); w.onGap = (gap) => hit.push(gap);
   const exp = jdk[i], name = `C.${c.m.name}`;
-  const got = async (f: () => unknown) => { try { return String(await f()); } catch (e) { if (process.env.J2W_V) console.log(name, e); return "throw"; } };
-  const wasm = await got(() => w.entry(c.m.cls, c.m.name, c.m.desc)(0));
-  if (wasm !== exp) { bad++; console.log(`MISMATCH ${name}: jdk=${exp} wasm=${wasm}`); }
+  let wasm: string;
+  try { wasm = String(await w.entry(c.m.cls, c.m.name, c.m.desc)(0)); } catch { wasm = "throw"; }
+  suite.check(name, wasm, exp);
   if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].join("; ")}`); hit.length = 0; }
 }
 {
   const w = world([join(am, "classes.dex"), ...jars]);
   let r: string;
   try { r = String(w.entry("Am", "run", "(I)I")(0)); } catch (e) { const t = w.throwable(e); r = t ? "java " + w.classNameOf(t) : String(e); }
-  if (r !== amExpected) { bad++; console.log(`MISMATCH Am.run: jvm=${amExpected} wasm=${r}`); }
+  suite.check("Am.run", r, amExpected);
 }
-console.log(`${cases.length - bad}/${cases.length} cases match the JDK`);
-process.exit(bad ? 1 : 0);
+suite.done(`${cases.length} cases match the JDK`);

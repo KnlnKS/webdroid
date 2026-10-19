@@ -4,17 +4,16 @@ import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { fixture } from "./tools.ts";
+import { checker, fixture } from "./tools.ts";
 
 const dex = join(fixture({ sources: [join(JAVA, "Nest.java")], release: 11, minApi: 34 }), "classes.dex");
 await mountPlatform(ROOT);
 const w = world([dex, ...[0, 1, 12].map((i) => PLATFORM_PATHS[i])], { natives });
 await startProcess(w);
 const listed = await w.entryAsync("Nest", "loop", "(I)I")(3) as number;
-let failed = 0;
+const suite = checker("nested entries");
 for (const n of [100, 3000, 10000]) {
-  try { const got = await w.entryAsync("Nest", "loop", "(I)I")(n) as number; if (got !== listed / 3 * n) { failed++; console.log(`FAIL ${n} calls: ${got}`); } }
-  catch (e) { failed++; console.log(`FAIL ${n} calls: ${w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e}`); }
+  try { suite.check(`${n} calls`, await w.entryAsync("Nest", "loop", "(I)I")(n), listed / 3 * n); }
+  catch (e) { suite.fail(`${n} calls: ${w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e}`); }
 }
-console.log(failed ? `${failed} failures` : "nested entries: all pass");
-process.exit(failed ? 1 : 0);
+suite.done();

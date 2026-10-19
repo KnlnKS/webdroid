@@ -66,15 +66,18 @@ export function cutWorkloads(text: string): { names: string[]; source: string } 
   return { names, source: text.replace(/}\s*$/, methods.join("\n") + "\n}\n") };
 }
 
-/** a suite's failures: `fail` prints and counts one, `check` compares a value with the one wanted */
-export function checker() {
+/** a suite's outcome: `fail` prints and counts a failure, `check` compares a value with the one wanted (and answers whether it is),
+ *  `done` prints the result and exits, with status 1 after any failure */
+export function checker(name: string) {
   const t = {
     failed: 0, checks: 0,
     fail(what: string) { t.failed++; console.log("FAIL " + what); },
-    check(what: string, got: unknown, want: unknown) { t.checks++; if (got !== want) t.fail(`${what}: got ${String(got)}, want ${String(want)}`); },
+    check(what: string, got: unknown, want: unknown): boolean { t.checks++; if (got === want) return true; t.fail(`${what}: got ${String(got)}, want ${String(want)}`); return false; },
+    done(passed = "all pass"): never { console.log(`${name}: ${t.failed ? `${t.failed} failures` : passed}`); process.exit(t.failed ? 1 : 0); },
   };
   return t;
 }
+export type Suite = ReturnType<typeof checker>;
 
 /** the lines a fixture's expected file records */
 export const recorded = (path: string): string[] => readFileSync(path, "utf8").trimEnd().split("\n");
