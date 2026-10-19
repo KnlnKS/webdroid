@@ -12,12 +12,12 @@ import { Block, emitBlock, St } from "../../src/wasm/compiler/hostcalls.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 
-const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => PLATFORM_PATHS[i]);
+const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "core-icu4j");
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 
@@ -26,7 +26,7 @@ w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);
 
-const suite = checker(), { fail } = suite;
+const suite = checker("hostclass"), { fail } = suite;
 for (const failure of unlike(expected, wasm)) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
@@ -168,5 +168,4 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-console.log(suite.failed ? `${suite.failed} failures` : `${expected.length} cases answer as recorded on a World with host classes`);
-process.exit(suite.failed ? 1 : 0);
+suite.done(`${expected.length} cases answer as recorded on a World with host classes`);

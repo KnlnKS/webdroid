@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-// The guest address map, which scripts/build-core.ts also gives TS (src/native/core-abi.gen.ts): every
+// The guest address map, which scripts/generated.ts also gives TS (src/native/core-abi.gen.ts): every
 // `pub const` here must be an integer expression JS evaluates alike.
 pub const PAGE_SHIFT = 12;
 pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;

@@ -5,7 +5,8 @@
 //
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
-import { openApk, dexesOf, mountLocalPlatformData } from "./lib.ts";
+import { openApk, dexesOf } from "./lib.ts";
+import { mountLocalPlatformData } from "./aosp.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import { loadDex, loadTier } from "../src/jvm/tier.ts";
 import "../src/jvm/natives/jlang.ts";
@@ -26,7 +27,7 @@ await loadTier();
 for (const dex of dexesOf(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
-await mountLocalPlatformData();
+mountLocalPlatformData();
 
 // the ABIs this apk actually ships this library for, in the order the tree lists them
 const abis = Object.keys(rt.classpath).flatMap((k) => {

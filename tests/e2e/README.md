@@ -40,7 +40,7 @@ in a step (max 240) as `<dir>/<flow>/<NN-id>/fNNN.png`; wiped per run, gitignore
 | `WEBDROID_SCREEN=WxH@dpi` | geometry: `--full` runs smoke, quick visual checks fail |
 | `WEBDROID_BYTECODE` | `?bytecode=` provenance cut |
 | `WEBDROID_CPU_THROTTLE=N` | CDP CPU slowdown (load races) |
-| `WEBDROID_SITE_ISOLATION=0` | WebView shares the app's renderer (as Safari/Android) |
+| `WEBDROID_SITE_ISOLATION=0` | WebView shares the app's renderer (as Safari/Android; also `lat`) |
 | `WEBDROID_JS_FLAGS` | V8 flags, e.g. `'--no-sparkplug --no-maglev'` (also `lat`) |
 
 Verification and the default corpus (`scripts/apk-corpus.ts`) exclude Genshin Impact, Clash of

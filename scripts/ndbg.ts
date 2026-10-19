@@ -2,7 +2,8 @@
 //   pnpm ts scripts/ndbg.ts <apk> [waitMs] [traceRegex]
 import { writeFileSync } from "node:fs";
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid.ts";
-import { BASE_URL, sleep } from "../tests/e2e/lib/util.ts";
+import { sleep } from "../tests/e2e/lib/util.ts";
+import { BASE_URL } from "./browser.ts";
 
 const [apk, waitMs = "8000", re] = process.argv.slice(2);
 const drv = await WebdroidDriver.launch();

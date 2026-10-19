@@ -1,4 +1,4 @@
-import { openSync, readFileSync, readSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { DexFile } from "../src/jvm/dex.ts";
 import { dexesFrom } from "./dexes.ts";
 import { writeWhole } from "./generated.ts";
@@ -7,15 +7,6 @@ import { openInstall } from "../src/shell/install.ts";
 import type { XmlNode } from "../src/android/axml.ts";
 
 type Zip = Record<string, Uint8Array>;
-
-/** the reference build's files (ICU, tz, bionic) at their device paths, read from vendor/aosp */
-export async function mountLocalPlatformData(): Promise<void> {
-  const { mountPlatformData } = await import("../src/shell/apex.ts");
-  mountPlatformData((path, size) => {
-    let fd: number | undefined;
-    return { size, read: (at, length) => { const b = new Uint8Array(length); return b.subarray(0, readSync(fd ??= openSync(new URL(`../vendor/aosp${path}`, import.meta.url), "r"), b, 0, length, at)); } };
-  });
-}
 
 /** an apk or a split install, as the one merged tree the shell boots — entries materialise on
  *  read, so there is nothing for a caller to filter down to */

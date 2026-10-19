@@ -7,8 +7,7 @@
 // and a hyphenated line's glyphs; widths and line extents are reported.
 import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
-import { BASE_URL } from "../tests/e2e/lib/util.ts";
-import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid.ts";
+import { BASE_URL, CONTEXT_OPTS, launchBrowser } from "./browser.ts";
 import { adb, probeSdk, runDex, tempDir } from "./adb.ts";
 
 const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";

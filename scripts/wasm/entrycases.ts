@@ -1,7 +1,5 @@
 // The calls the entry suite makes from the host, through the names jentry exports, and what they answer as lines of text.
 import { join } from "node:path";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { getDeclared, setDeclared } from "../../src/jvm/runtime.ts";
 import { JThrowable } from "../../src/jvm/natives/jthrowable.ts";
 import { boxDesc, unbox } from "../../src/jvm/natives/jbox.ts";
@@ -9,16 +7,11 @@ import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticFiel
 import { javaInterface } from "../../src/android/webjavabridge.ts";
 import { processFailure } from "../../src/shell/process-port.ts";
 import { JAVA } from "./paths.ts";
-import { dexAndroid, shellIn } from "./tools.ts";
+import { androidFixture } from "./tools.ts";
 
 let built: string | undefined;
 /** the fixture E (and its nested classes) as a dex, built once per process */
-export function entryDex(): string {
-  if (built) return built;
-  const out = mkdtempSync(join(tmpdir(), "wasm-entry-"));
-  dexAndroid(shellIn(out), out, [join(JAVA, "E.java")]);
-  return built = join(out, "classes.dex");
-}
+export const entryDex = (): string => built ??= join(androidFixture({ sources: [join(JAVA, "E.java")] }), "classes.dex");
 
 const STR = "Ljava/lang/String;", INT = "Ljava/lang/Integer;", E = "E";
 async function show(v: unknown): Promise<string> {

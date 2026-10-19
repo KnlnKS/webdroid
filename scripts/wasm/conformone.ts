@@ -8,14 +8,14 @@ import { extraBootEntries } from "../../src/wasm/host/hostnatives.ts";
 import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
 import { world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { ROOT, platformJars } from "./paths.ts";
 import { filesIn } from "./tools.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 
 const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);
 const dexFiles = filesIn(dexDir, /\.dex$/).sort();
 await mountPlatform(ROOT);
-const jars = [0, 1, 2, 3, 4, 12, 18].map((i) => PLATFORM_PATHS[i]);
+const jars = platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "core-icu4j", "conscrypt");
 // the runner's own output (60 MB of test names for the largest class, two bytes a char here) is far over ART's 512 MB limit with the suite's objects: the limit is raised
 const w = world([...dexFiles, ...jars], { heapLimit: 3 * 2 ** 30, natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 w.onGap = (gap) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + gap); };

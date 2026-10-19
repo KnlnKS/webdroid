@@ -1,7 +1,6 @@
 // Differential test: every static method of W.java, S.java and N.java runs as Wasm (this compiler, S and N over the AOSP boot dex) and on the
-// JDK; results must be bit-identical. Needs javac, d8 and java on PATH. Run: pnpm wasm diff [method-name-filter]
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+// JDK; results must be bit-identical. Needs javac and java on PATH. Run: pnpm wasm diff [method-name-filter]
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
@@ -11,12 +10,9 @@ import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, onJdk, shellIn } from "./tools.ts";
+import { checker, fixture, onJdk } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "W.java"), join(JAVA, "S.java"), join(JAVA, "N.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^[WSN](\$\w+)?\.class$/)]);
+const out = fixture({ sources: ["W", "S", "N", "Ref"].map((c) => join(JAVA, c + ".java")), classes: /^[WSN](\$\w+)?\.class$/ });
 
 const dex = join(out, "classes.dex");
 // the d8 that built the apps ended a try range at the invoke, leaving its move-result outside (a block of its own, Doodle Jump's RamLogger.Append); this one keeps it inside: end every range that way
@@ -40,7 +36,6 @@ const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 await startProcess(w);
 const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
-(globalThis as any).__dbgw = w;
 // asynchronous, as a process enters Java: S and N reach natives that wait (files, the user database)
 const entries = new Map(methods.map((m) => [m, w.entryAsync(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
@@ -50,9 +45,8 @@ const small: Record<string, number[]> = {
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
 const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
-const jdk = onJdk(sh, out, cases.map(caseLine));
-const r = await compare(cases, (m) => entries.get(m)!, jdk, hit);
-let wideBad = 0, dispatchBad = 0;
+const jdk = onJdk(out, cases.map(caseLine));
+const suite = checker("diff"), { blocked } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
   const wide = world([dex, ...CORE_PATHS], { natives });
@@ -63,17 +57,12 @@ if (wideCases.length) {
   const high = wide.selectorId("size()I");
   wide.host.imtMiss(a, high);
   const expected = wide.slotOf(wide.prog.implFor("java/util/HashMap", "hashCode", "()I")!);
-  if (wide.host.imtMiss(b, low) !== expected) { dispatchBad++; console.log("MISMATCH full-width interface dispatch cache"); }
-  else console.log("full-width interface dispatch cache: distinct class/selector pairs remain distinct");
+  suite.check("full-width interface dispatch cache: distinct class/selector pairs remain distinct", wide.host.imtMiss(b, low), expected);
   while (wide.numbers.names.length < 65536) wide.idOf("reflection/reserved/" + wide.numbers.names.length);
   for (const i of wideCases) {
     const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));
-    if (String(got) !== jdk[i]) { wideBad++; console.log(`MISMATCH full-width reflection ${m.name}: ${got} vs ${jdk[i]}`); }
+    suite.check(`full-width reflection ${m.name}`, String(got), jdk[i]);
   }
-  console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
 }
-const bad = r.bad + wideBad + dispatchBad, blocked = r.blocked;
-console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match the JDK across ${methods.length} methods`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
-if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-process.exit(bad || blocked ? 1 : 0);
+suite.done(`${cases.length - blocked} cases (${wideCases.length} full-width) match the JDK across ${methods.length} methods`);

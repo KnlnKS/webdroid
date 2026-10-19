@@ -5,8 +5,7 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { guestMemory } from "../../src/wasm/host/guest.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { APP_VERSION, VERSION, packModule } from "../../src/wasm/link/aot.ts";
@@ -27,20 +26,17 @@ import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { current, fakeAot, loadDexes } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { checker, filesIn, shellIn } from "./tools.ts";
+import { checker, filesIn, fixture } from "./tools.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;
 if (!AOT) { console.log("persist: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }
-const out = mkdtempSync(join(tmpdir(), "j2w-persist-")), sh = shellIn(out);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^Pst(\$\w+)?\.class$/)]);
-sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Pst2(\$\w+)?\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Pst.java"), join(JAVA, "Pst2.java")], classes: /^Pst(\$\w+)?\.class$/ });
+fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Pst2(\$\w+)?\.class$/) });
 const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex"));
 await mountPlatform(ROOT);
 
-const suite = checker(), { check, fail } = suite;
+const suite = checker("persist"), { check, fail } = suite;
 const until = async (what: string, done: () => boolean, ms = 60000) => {
   const t0 = performance.now();
   while (!done()) { if (performance.now() - t0 > ms) { fail(`${what}: timed out`); return false; } await new Promise((r) => setTimeout(r, 2)); }
@@ -504,5 +500,4 @@ if (saved) {
   check("the prefix leaves the bounded entries alone", [await p.load("c") !== undefined, (await p.save("d", [["x", blob(100)]]), await p.prefix("platform") !== undefined)].join(), "true,true");
 }
 for (const p of ports) p.terminate();
-console.log(suite.failed ? `${suite.failed} failures` : "persist: all pass");
-process.exit(suite.failed ? 1 : 0);
+suite.done();

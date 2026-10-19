@@ -31,15 +31,16 @@ import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { chromium, webkit, type BrowserContext } from "playwright";
+import { chromium, webkit } from "playwright";
 import { installLatencyObserver } from "./observe.ts";
 import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
 import { consume } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
+import { BASE_URL, chromeArgs } from "../browser.ts";
+import { ERROR_LINE, pageDiagnostics } from "../../tests/e2e/lib/processes.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
 const SCENARIOS = join(import.meta.dirname, "scenarios");
 
 const args = process.argv.slice(2);
@@ -70,30 +71,22 @@ type Tap = { intended: number | null; response?: First; timeline?: unknown; page
 type Launch = { demand?: [string, boolean, boolean, boolean][] | null; firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
   idle: number; perf: Record<string, number>; marks: string[]; timeline: number[][] };
 type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number; frames?: any };
-type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: unknown; processesAfter?: unknown;
+/** what the page read of its own realm and of every process Worker */
+type Diagnostics = { at: number; frames: ({ url: string } & ReturnType<typeof pageDiagnostics>)[]; workers: { snapshot?: { logs: string[] }; error?: string }[] };
+type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: Diagnostics; processesAfter?: Diagnostics;
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, E: typeof Ev) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `${pageDiagnostics};(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, E: typeof Ev, errorLine: string) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
   const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
-  const readRealm = (win: Window) => {
-    const wd = (win as any).wd, wasm = win.__wdWasm;
-    if (!wd) return { url: win.location.href, status: "unavailable" };
-    return { url: win.location.href, status: "ok", pkg: wd.app()?.pkg ?? null, ticks: wd.ticks,
-      pid: new URLSearchParams(win.location.search).get("pid"), process: new URLSearchParams(win.location.search).get("process"),
-      missing: [...wd.rt.missing], missingAt: Object.fromEntries([...wd.rt.missingAt ?? []].map(([name, frames]) => [name, frames.slice()])), placeholders: [...wd.rt.placeholders],
-      placeholderAt: Object.fromEntries([...wd.rt.placeholderAt].map(([name, frames]) => [name, frames.slice()])), native: wd.nativeRequirements(), logs: wd.logs?.slice() ?? null,
-      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, wasm: wasm ? { appSaved: wasm.appSaved ?? null, appAttached: wasm.appAttached ?? null, appSource: wasm.appSource ?? null,
-        aotKey: wasm.aotKey ?? null, appBuilds: wasm.appBuilds?.map(b => ({ ...b })) ?? [], worker: wasm.worker ? { ...wasm.worker } : null } : null };
-  };
   const diagnostics = w.__wdLatRead = async () => {
     let workers;
     try { workers = w.wd?.workerProcesses ? await w.wd.workerProcesses() : []; }
     catch (error) { workers = [{ error: String(error) }]; }
-    return { at: performance.now(), frames: [readRealm(window)], workers };
+    return { at: performance.now(), frames: [{ url: location.href, aotKey: globalThis.__wdWasm?.aotKey ?? null, ...pageDiagnostics(errorLine) }], workers };
   };
   const workerReadiness = async (save: boolean) => {
     const code = await w.wd.foregroundCodeReadiness(save);
@@ -494,25 +487,38 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   result.processesAfter = await diagnostics();
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}, ${JSON.stringify(Ev)}).catch(async e => {
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}, ${JSON.stringify(Ev)}, ${JSON.stringify(ERROR_LINE.source)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
   try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";
 });`;
 
-/** one headless Chrome over raw CDP, with its own profile directory */
-type BrowserDriver = { context?: BrowserContext; send?: (method: string, params?: object, sessionId?: string) => Promise<any>; events?: Set<(m: any) => void>; version: string; close(): void | Promise<void> };
-async function openBrowser(profile: string): Promise<BrowserDriver> {
-  if (engine === "webkit") {
-    const context = await webkit.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, colorScheme: "light" });
-    return { context, version: context.browser()!.version(), close: () => context.close() };
-  }
+type CdpEvent = { method: string; params: any; sessionId?: string };
+/** Chrome's protocol: commands to the browser or one of its sessions, and every session's events */
+type Cdp = { send(method: string, params?: object, sessionId?: string): Promise<any>; events: Set<(m: CdpEvent) => void> };
+/** a page under measurement: its title, which it sets once done (undefined once it crashed), and its globals */
+type Tab = { title(): Promise<string | undefined>; read<T>(name: string): Promise<T | undefined>; close(): Promise<void> };
+/** a headless browser with its own profile directory, WebKit through Playwright or Chrome over raw CDP: a tab opens at `url` with `script`
+ *  run first in each of its documents, and on Chrome `prepare` runs on its session before it navigates */
+type Browser = { version: string; cdp?: Cdp; open(url: string, script: string, prepare?: (session: string) => Promise<void>): Promise<Tab>; close(): Promise<void> };
+
+async function openWebkit(profile: string): Promise<Browser> {
+  const context = await webkit.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, colorScheme: "light" });
+  return { version: context.browser()!.version(), close: () => context.close(), async open(url, script) {
+    const page = await context.newPage();
+    let crashed = false;
+    page.on("crash", () => { crashed = true; });
+    await page.addInitScript(script); await page.goto(url, { waitUntil: "commit" });
+    return { title: async () => crashed ? undefined : page.title(), read: (name) => page.evaluate((name) => Reflect.get(globalThis, name), name), close: () => page.close() };
+  } };
+}
+
+async function openChrome(profile: string): Promise<Browser> {
   const chromeLog = process.env.WEBDROID_CHROME_LOG;
   const [command, ...argv] = [...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-    "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
+    ...chromeArgs(), "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
-    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]),
-    ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
+    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : ["--use-gl=angle", "--use-angle=swiftshader"]), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
   // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
   const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
   const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });
@@ -527,7 +533,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   const ws = new WebSocket(webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
   let nextId = 1;
-  const pending = new Map<number, (m: any) => void>(), events = new Set<(m: any) => void>();
+  const pending = new Map<number, (m: { result?: unknown; error?: { message: string } }) => void>(), events = new Set<(m: CdpEvent) => void>();
   ws.addEventListener("message", (e) => {
     const m = JSON.parse(String(e.data));
     if (m.id === undefined) for (const on of events) on(m);
@@ -540,30 +546,42 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   });
   // the profile is removed after close, so close waits for Chrome's last writes to it
   const exited = new Promise((r) => proc.once("exit", r));
-  return { send, events, version: (await send("Browser.getVersion")).product, close: async () => { ws.close(); proc.kill(); await exited; } };
+  return { cdp: { send, events }, version: (await send("Browser.getVersion")).product, close: async () => { ws.close(); proc.kill(); await exited; }, async open(url, script, prepare) {
+    const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+    // a crashed page answers nothing
+    let crashed = false;
+    const crash = (m: CdpEvent) => { if (m.method === "Inspector.targetCrashed" && m.sessionId === sessionId) crashed = true; };
+    events.add(crash);
+    await send("Page.enable", {}, sessionId);
+    // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
+    await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: script }, sessionId);
+    await prepare?.(sessionId);
+    await send("Inspector.enable", {}, sessionId);
+    await send("Page.navigate", { url }, sessionId);
+    return {
+      title: async () => crashed ? undefined : (await send("Target.getTargetInfo", { targetId })).targetInfo.title,
+      read: async (name) => JSON.parse((await send("Runtime.evaluate", { expression: `JSON.stringify(globalThis.${name} ?? null)`, returnByValue: true }, sessionId)).result.value) ?? undefined,
+      close: async () => { events.delete(crash); await Promise.race([send("Target.closeTarget", { targetId }).catch(() => {}), delay(10_000)]); },
+    };
+  } };
 }
 
-async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
-  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
-  const url = new URL("/", BASE);
-  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
-  if (browser.context) {
-    const page = await browser.context.newPage();
-    try {
-      await page.addInitScript(injection); await page.goto(url.href, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.title === "DONE", null, { timeout: 600_000 });
-      return await page.evaluate(() => Reflect.get(globalThis, "__wdLat"));
-    } catch (e) { return { ...await page.evaluate(() => Reflect.get(globalThis, "__wdLat") ?? { taps: [] }), error: String(e) }; }
-    finally { await page.close(); }
+/** whether `tab`'s title became `done` within `ms`, or its page crashed first */
+async function outcome(tab: Tab, done: string, ms: number): Promise<"done" | "crashed" | "timeout"> {
+  for (const deadline = Date.now() + ms; Date.now() < deadline;) {
+    await delay(500);
+    const title = await tab.title();
+    if (title === undefined) return "crashed";
+    if (title === done) return "done";
   }
-  const send = browser.send!;
-  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
-  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
-  await send("Page.enable", {}, sessionId);
-  // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
-  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
-  // the page and every Worker it starts, each paused until its profiler runs
+  return "timeout";
+}
+
+/** V8's sampling profiler, and with --heapsample its allocation sampler, on a page and every Worker it starts, each paused until its profiler runs:
+ *  the page's profile is written to `file` and each Worker's beside it */
+function profiler({ send, events }: Cdp, file: string) {
   const profiled = new Map<string, string>(), instrumented = new Set<string>();
   const instrument = async (session: string, label: string) => {
     instrumented.add(session);
@@ -572,88 +590,79 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
     await send("Profiler.enable", {}, session); await send("Profiler.setSamplingInterval", { interval: 200 }, session); await send("Profiler.start", {}, session);
     if (heapSample) { await send("HeapProfiler.enable", {}, session); await send("HeapProfiler.startSampling", { samplingInterval: 16384 }, session); }
   };
-  const attached = (m: any) => {
-    if (m.method !== "Target.attachedToTarget" || !instrumented.has(m.sessionId)) return;
+  const attached = (m: CdpEvent) => {
+    if (m.method !== "Target.attachedToTarget" || !m.sessionId || !instrumented.has(m.sessionId)) return;
     const { sessionId: worker, targetInfo } = m.params, pid = new URL(targetInfo.url).searchParams.get("pid");
     void instrument(worker, pid ?? `${targetInfo.type}-${worker.slice(0, 6)}`).catch(() => {})
       .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
   };
-  if (profile) { browser.events!.add(attached); await instrument(sessionId, ""); }
-  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: [...new Set([...process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"], "blink.user_timing"])] } });
-  // a crashed page answers nothing, so the wait ends with what the page reported last
-  let crashed = false;
-  const crash = (m: any) => { if (m.method === "Inspector.targetCrashed" && m.sessionId === sessionId) crashed = true; };
-  browser.events!.add(crash);
-  await send("Inspector.enable", {}, sessionId);
-  await send("Page.navigate", { url: url.href }, sessionId);
-  try {
-    for (const deadline = Date.now() + 600_000; Date.now() < deadline && !crashed;) {
-      await delay(500);
-      const { targetInfo } = await send("Target.getTargetInfo", { targetId });
-      if (targetInfo.title !== "DONE") continue;
+  return {
+    start: (session: string) => { events.add(attached); return instrument(session, ""); },
+    stop: () => events.delete(attached),
+    async write() {
       for (const [session, label] of profiled) {
         // a Worker that has ended may never answer
         const stopped = await Promise.race([send("Profiler.stop", {}, session).catch(() => undefined), delay(10_000)]);
-        if (stopped) writeFileSync(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
+        if (stopped) writeFileSync(label ? file.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : file, JSON.stringify(stopped.profile));
         // the sampled allocations still live at the end, by allocating stack
         const heap = heapSample && await Promise.race([send("HeapProfiler.getSamplingProfile", {}, session).catch(() => undefined), delay(10_000)]);
-        if (heap) writeFileSync(profile!.replace(/\.cpuprofile$/, `${label ? "-" + label : ""}.heapprofile`), JSON.stringify(heap.profile));
+        if (heap) writeFileSync(file.replace(/\.cpuprofile$/, `${label ? "-" + label : ""}.heapprofile`), JSON.stringify(heap.profile));
       }
-      if (trace) await writeTrace(browser, trace);
-      const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
-      return JSON.parse(read.result.value);
-    }
-    const partial = crashed ? undefined : await Promise.race([send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId).catch(() => undefined), delay(10_000)]);
-    return { ...JSON.parse(partial?.result.value ?? '{"taps":[]}'), error: crashed ? "the page crashed" : "scenario timed out" };
-  } finally { browser.events?.delete(attached); browser.events?.delete(crash); await Promise.race([send("Target.closeTarget", { targetId }).catch(() => {}), delay(10_000)]); }
+    },
+  };
 }
 
-async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
-  const done = new Promise<string>((resolve) => browser.events!.add(function on(m) {
-    if (m.method === "Tracing.tracingComplete") { browser.events!.delete(on); resolve(m.params.stream); }
+async function launch(browser: Browser, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
+  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
+  const url = new URL("/", BASE_URL);
+  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
+  // only Chrome is profiled or traced
+  const { cdp } = browser, profiling = profile && cdp ? profiler(cdp, profile) : undefined;
+  const tab = await browser.open(url.href, injection, async (session) => {
+    await profiling?.start(session);
+    if (trace) await cdp?.send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: [...new Set([...process.env.WEBDROID_TRACE_CATEGORIES?.split(",") ?? ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "gpu", "viz", "cc", "v8", "v8.wasm", "disabled-by-default-v8.gc"], "blink.user_timing"])] } });
+  });
+  try {
+    const end = await outcome(tab, "DONE", 600_000);
+    if (end === "done") {
+      await profiling?.write();
+      if (trace && cdp) await writeTrace(cdp, trace);
+      return await tab.read<Capture>("__wdLat") ?? { taps: [], error: "the page kept no capture" };
+    }
+    // the wait ends with what the page reported last
+    const partial = end === "crashed" ? undefined : await Promise.race([tab.read<Capture>("__wdLat").catch(() => undefined), delay(10_000)]);
+    return { ...partial ?? { taps: [] }, error: end === "crashed" ? "the page crashed" : "scenario timed out" };
+  } finally { profiling?.stop(); await tab.close(); }
+}
+
+async function writeTrace({ send, events }: Cdp, file: string): Promise<void> {
+  const done = new Promise<string>((resolve) => events.add(function on(m) {
+    if (m.method === "Tracing.tracingComplete") { events.delete(on); resolve(m.params.stream); }
   }));
-  await browser.send!("Tracing.end");
+  await send("Tracing.end");
   const handle = await done, out = openSync(file, "w");
   for (let eof = false; !eof;) {
-    const chunk = await browser.send!("IO.read", { handle, size: 1 << 22 });
+    const chunk = await send("IO.read", { handle, size: 1 << 22 });
     writeSync(out, chunk.base64Encoded ? Buffer.from(chunk.data, "base64") : chunk.data);
     eof = chunk.eof;
   }
-  closeSync(out); await browser.send!("IO.close", { handle });
+  closeSync(out); await send("IO.close", { handle });
 }
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */
-async function resetData(browser: BrowserDriver): Promise<void> {
-  if (browser.context) {
-    const page = await browser.context.newPage();
-    try { await page.goto(`${BASE}/?screen=${encodeURIComponent(SCREEN)}`); await page.waitForFunction(() => !!globalThis.wd); await page.evaluate(() => globalThis.wd.reset()); }
-    finally { await page.close(); }
-    return;
-  }
-  const send = browser.send!;
-  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
-  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
-  await send("Page.enable", {}, sessionId);
-  // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
-  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `addEventListener("DOMContentLoaded", async () => {
+async function resetData(browser: Browser): Promise<void> {
+  const tab = await browser.open(`${BASE_URL}/?screen=${encodeURIComponent(SCREEN)}`, `addEventListener("DOMContentLoaded", async () => {
     while (!globalThis.wd) await new Promise((r) => setTimeout(r, 50));
-    await globalThis.wd.reset(); document.title = "RESET"; });` }, sessionId);
-  await send("Page.navigate", { url: `${BASE}/?screen=${encodeURIComponent(SCREEN)}` }, sessionId);
-  try {
-    for (const deadline = Date.now() + 60_000; Date.now() < deadline; await delay(200))
-      if ((await send("Target.getTargetInfo", { targetId })).targetInfo.title === "RESET") return;
-    throw new Error("reset timed out");
-  } finally { await send("Target.closeTarget", { targetId }); }
+    await globalThis.wd.reset(); document.title = "RESET"; });`);
+  try { if (await outcome(tab, "RESET", 60_000) !== "done") throw new Error("reset did not finish"); }
+  finally { await tab.close(); }
 }
 
 type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string; browserErrors?: string[] };
-/** the page's uncaught errors and every realm's unhandled rejections; a Worker's console.error is app logcat, not a browser error */
-function browserErrors(after: any): string[] {
-  const uncaught = (l: string) => /^(window\.error|unhandledrejection):/.test(l);
-  return [...(after?.frames ?? []).flatMap((f: any) => f.logs ?? []), ...(after?.workers ?? []).flatMap((w: any) => w.snapshot?.logs ?? [])].filter(uncaught);
-}
+/** every realm's error lines */
+const browserErrors = (after?: Diagnostics): string[] => [...after?.frames.flatMap((f) => f.status === "ok" ? f.errors ?? [] : []) ?? [],
+  ...after?.workers.flatMap((w) => w.snapshot?.logs.filter((l) => ERROR_LINE.test(l)) ?? []) ?? []];
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
@@ -662,7 +671,7 @@ for (const name of names) {
     instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; response-region crops of every presented frame read after the window; compile counters end when the window closes",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
   report.push(row);
-  let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
+  let profile: string | undefined, browser: Browser | undefined;
   const gated = gates(name);
   try {
     const { apk, steps: scenarioSteps, launch: expectedLaunch, responses } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
@@ -672,7 +681,7 @@ for (const name of names) {
     if (engine === "webkit" && (cpuProfile || traceOut)) throw new Error("WebKit profiling and tracing require a separate protocol");
     row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
-    browser = await openBrowser(profile); row.browser = browser.version;
+    browser = await (engine === "webkit" ? openWebkit : openChrome)(profile); row.browser = browser.version;
     if (warm) {
       row.preparation = await launch(browser, apk, steps, expectedLaunch, undefined, true);
       if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);

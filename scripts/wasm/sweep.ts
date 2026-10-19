@@ -10,7 +10,7 @@ import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { natives } from "./harness.ts";
 import { mid } from "../../src/wasm/compiler/ids.ts";
 import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module.ts";
-import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { PLATFORM_PATHS, ROOT, platformJars } from "./paths.ts";
 
 const KNOWN = [/^native: /];
 // Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.
@@ -18,7 +18,7 @@ const validate = WebAssembly.validate as unknown as (bytes: BufferSource, option
 
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
-const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_PATHS.slice(0, 6), join(ROOT, "apks/FitNotes.apk")];
+const targets = args.length ? args.map((a) => resolve(a)) : [...platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "framework"), join(ROOT, "apks/FitNotes.apk")];
 const jars = PLATFORM_PATHS;
 let unexplained = 0;
 for (const target of targets) {

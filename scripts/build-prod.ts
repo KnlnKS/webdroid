@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
 import { PLATFORM_DATA } from "../src/jvm/bootclasspath.ts";
-import { AOT_ROOT, sourceKey, type AotManifest } from "./wasm/aot-key.ts";
+import { AOT_ROOT, sourceKey, type AotManifest } from "./aot-key.ts";
 import { bundle } from "./bundle.ts";
 import { runNode } from "./node.ts";
 import { WORKER_SCRIPTS } from "../src/worker-scripts.ts";

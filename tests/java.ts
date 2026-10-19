@@ -28,7 +28,7 @@ export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppH
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */
 export function mountApexData(): Promise<void> {
-  return apex ??= import("../scripts/lib.ts").then((m) => m.mountLocalPlatformData());
+  return apex ??= import("../scripts/aosp.ts").then((m) => m.mountLocalPlatformData());
 }
 let fontMap: Promise<void> | null = null;
 /** the font map and text paints the zygote preloads (whose locale scripts are ICU's), as a booted

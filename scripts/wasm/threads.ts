@@ -1,11 +1,9 @@
 // Threads, monitors, waiting natives and class initialization waits on JSPI strands: the static int(int) cases of java/Th.java run on
 // the JDK and the Wasm tier, and the pieces of the substrate that no Java case reaches are checked directly: natives that
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
-// answers a Promise or waits under a JS frame. Needs javac, d8 and java on PATH.
+// answers a Promise or waits under a JS frame. Needs javac and java on PATH.
 // Run: pnpm wasm threads [case,case,... | substrate]
-import { mkdtempSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
@@ -26,12 +24,9 @@ import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { filesIn, shellIn } from "./tools.ts";
+import { checker, fixture } from "./tools.ts";
 
-const out = mkdtempSync(join(tmpdir(), "j2w-th-"));
-const sh = shellIn(out);
-sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "Th.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...filesIn(out, /^Th.*\.class$/)]);
+const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -89,10 +84,10 @@ await mountPlatform(ROOT);
 await startProcess(w);
 const callbackEntry = wasmEntry(w);
 
-let bad = 0, checks = 0;
+const suite = checker("threads");
 const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000)): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms).unref())]);
 const show = async (f: () => unknown) => { try { return String(await timed(Promise.resolve(f()))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
-const expect = (what: string, got: unknown, want: unknown) => { checks++; if (String(got) !== String(want)) { bad++; console.log(`MISMATCH ${what}: want ${want}, got ${got}`); } };
+const expect = (what: string, got: unknown, want: unknown) => suite.check(what, String(got), String(want));
 
 // ---------- the Java cases against the JDK
 const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
@@ -142,8 +137,7 @@ for (const [i, [name, arg]] of CASES.entries()) {
   const wasm = await show(() => w.entryAsync("Th", name, "(I)I")(arg));
   if (process.env.J2W_V) console.log("  wasm", wasm);
   const norm = (v: string) => v.startsWith("java ") || v.startsWith("throw ") ? "throw" : v;
-  checks++;
-  if (norm(wasm) !== want) { bad++; console.log(`MISMATCH Th.${name}(${arg}): jdk=${want} wasm=${wasm}${gaps.length > gapsBefore ? " gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; ") : ""}`); }
+  if (!suite.check(`Th.${name}(${arg}) (${wasm})`, norm(wasm), want) && gaps.length > gapsBefore) console.log("  gaps: " + [...new Set(gaps.slice(gapsBefore))].join("; "));
 }
 
 // ---------- the substrate, directly
@@ -361,5 +355,4 @@ if (substrate) {
   // a plain entry that does not block is unchanged, between strands
   expect("plain entry after strands", await show(() => w.entry("Th", "reentrant", "(I)I")(3)), 3);
 }
-console.log(`${checks - bad}/${checks} threads checks ok; strands ${w.sched.strands.filter(Boolean).length} live, ${w.stats.methods} methods compiled`);
-process.exit(bad ? 1 : 0);
+suite.done(`${suite.checks} checks ok; strands ${w.sched.strands.filter(Boolean).length} live, ${w.stats.methods} methods compiled`);

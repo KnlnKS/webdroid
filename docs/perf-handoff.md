@@ -112,11 +112,11 @@ A maintainability pass followed the performance work: `git log 7ef4de0b5^..bdff1
   - Process-fd `viaRemote` would allocate two closures per local read/write.
   - Relay `ByteQueue` → socket `Loopback` would couple the shell to native socket internals.
   - Moving `discardDescriptors` into FileDescriptors gains nothing.
-- **Flake.** `tests/app.browser.test.ts` fails with `ZipException: End Of Central Directory signature not found` in about 1 full `bun run test` in 6, and passes on rerun. An instrumented failure showed the platform jars arriving at full length with misplaced content. This is the Bun HTTP body corruption already recorded under "Fixture bundle corruption" in the history.
+- **Flake.** `tests/app.browser.test.ts` fails with `ZipException: End Of Central Directory signature not found` in about 1 full `test` run in 6, and passes on rerun. An instrumented failure showed the platform jars arriving at full length with misplaced content. This is the Bun HTTP body corruption already recorded under "Fixture bundle corruption" in the history.
 - **Verified at `bdff18475`.**
-  - `typecheck`, and `bun run test` 1148/1148 apart from the flake.
+  - `typecheck`, and `test` 1148/1148 apart from the flake.
   - `fwtest` 31/31, and `smoke apks/FitNotes.apk` with no unexplained failures.
-  - After `bun run aot`, `bun run e2e --jobs 1` passed 7/7 in 170 s with empty telemetry.
+  - After `aot`, `e2e --jobs 1` passed 7/7 in 170 s with empty telemetry.
   - `wasm all` last ran clean before the native commits; none of them touches the shared front end.
   - The parallel quick gate (5 jobs) failed 5/7 at host load ~9. Every failure was a timeout, a wedged main loop, or a Worker stuck at "Reading package…", and each failed flow passed on a serial rerun. That fits the host-capacity failures noted below, but no matched parallel run of the starting commit was made.
 
@@ -125,18 +125,18 @@ A second pass (`git log 2510a6a77..`) cut TypeScript by 121 lines net (+113/−2
 - **Removed.** `waitsFor`/`Strand.waitsOn` (no reader), `answeringInput` (the input window is `answeringFor` alone), the unused test `axmlBytes` and harness `unbits`.
 - **Consolidated.** One CREATOR helper in binder, one surrogate pair in jstring, one `BOX` table in `compiler/fields.ts`, and one AEAD core in conscrypt. try_table catch clauses are encoded once. The native tests share `calls.testkit.ts`, and the device probes record through `runDex`.
 - **Left.** The fdlibm `log`/`log10` and `cha.ts` walk clones; the first mirrors the C reference, and the second would need a visit protocol on a compile hot path.
-- **Verified at `866f1ceca`.** `typecheck`; `bun run test` 1148/1148; `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; and, after `bun run aot`, `e2e --jobs 1` 7/7 in 175 s. The rewritten vector and input probes reproduce their fixtures on the reference AVD, apart from per-boot input-device generation counters. The AVD kills `textcmp --record` both before and after the change.
+- **Verified at `866f1ceca`.** `typecheck`; `test` 1148/1148; `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; and, after `aot`, `e2e --jobs 1` 7/7 in 175 s. The rewritten vector and input probes reproduce their fixtures on the reference AVD, apart from per-boot input-device generation counters. The AVD kills `textcmp --record` both before and after the change.
 
 ## Verification status (end of 2026-10-13)
 
 - **Passing at `975b232b`:**
-  - `bun run typecheck`;
-  - `bun run test`: 1148/1148. Runs that overlapped `bun run wasm all` failed with `ZipException` while it rebuilt the platform build; don't run the two together;
-  - `bun run wasm all`, run without `WEBDROID_AOT`. With it set, `diff` and `lazytest` fail even on the starting commit;
-  - `bun run smoke apks/FitNotes.apk`.
+  - `typecheck`;
+  - `test`: 1148/1148. Runs that overlapped `wasm all` failed with `ZipException` while it rebuilt the platform build; don't run the two together;
+  - `wasm all`, run without `WEBDROID_AOT`. With it set, `diff` and `lazytest` fail even on the starting commit;
+  - `smoke apks/FitNotes.apk`.
 - **e2e:**
-  - `bun run e2e --jobs 1`: 7/7 in 177 s.
-  - Parallel `bun run e2e` (5 jobs) fails 1–2/7. The starting commit `ef6d85ca` fails the same way under matching load (host load ~43, memory compressed), so this is host capacity, not a regression.
+  - `e2e --jobs 1`: 7/7 in 177 s.
+  - Parallel `e2e` (5 jobs) fails 1–2/7. The starting commit `ef6d85ca` fails the same way under matching load (host load ~43, memory compressed), so this is host capacity, not a regression.
 - **`lat --gpu`, cold, trio:**
   - Calculator 21–128 ms;
   - FitNotes 8–72 ms;
@@ -223,7 +223,7 @@ it was measured and found to have nothing on the tap or frame path to recover.
 | 7.1–7.3 Redraw less | Not a lever | "Composite and frame close wait for nothing": draw ≤ 0.9 ms, composite ≤ 0.5 ms at p95 |
 | 7.4 WebGL filters | Not a lever in the gate apps | their draws, readbacks included, stay under 1 ms at p95 |
 
-Verified at `f105fcec4`, after `bun run aot`: `typecheck`; `bun run wasm all` (17 suites); `bun run test` 1148/1148 (one earlier run hit the `ZipException` flake); `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; `e2e --jobs 1` 7/7 in 169 s.
+Verified at `f105fcec4`, after `aot`: `typecheck`; `wasm all` (17 suites); `test` 1148/1148 (one earlier run hit the `ZipException` flake); `fwtest` 31/31; `smoke apks/FitNotes.apk` with no unexplained failures; `e2e --jobs 1` 7/7 in 169 s.
 
 ---
 
