@@ -3,8 +3,7 @@ import { chromium } from "playwright";
 import { serveModules } from "./browser.ts";
 
 test("lazy archive reads cross a Worker without sharing buffers and fail on process teardown", async () => {
-  const server = await serveModules(["src/process-exit.ts", "src/android/server/appexitinfo.ts", "src/shell/remote-file.ts", "tests/fixtures/browser/process-bootstrap.ts",
-    "src/guest-clock.ts", "src/shell/worker-bootstrap.ts", "src/android/os.ts", "src/shell/frame-port.ts"]);
+  const server = await serveModules(["src/shell/remote-file.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts"]);
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
