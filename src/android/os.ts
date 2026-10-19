@@ -4,7 +4,7 @@ import { processEnv } from "../shell/environment.ts";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
 import { guestAt, mem } from "../native/mem.ts";
 import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
-import { awaited, rt, type JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, noops, driven, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
 import { i8, jarray, utf8 } from "../jvm/abi.ts";
 import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
@@ -234,12 +234,8 @@ export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThr
 /** `then` once `path` exists in the realm that owns it (an app's private storage lives in the system realm), else `fn`'s ErrnoException */
 const existing = <T>(fn: string, path: string, then: (st: FileStat) => T) => after(pathReply(path), ({ errno: e, value }) => { if (!value) throw errno(fn, e); return then(value); });
 /** libcore's StructTimespec for a time in milliseconds */
-function timespec(ms: number): JObj {
-  const t = rt.make("android/system/StructTimespec") as Record<string, bigint>;
-  t[declaredField("android/system/StructTimespec", "tv_sec")] = BigInt(Math.floor(ms / 1000));
-  t[declaredField("android/system/StructTimespec", "tv_nsec")] = BigInt(Math.round((ms % 1000) * 1e6));
-  return t as unknown as JObj;
-}
+const timespec = (ms: number): JObj => setDeclared(rt.make("android/system/StructTimespec"), "android/system/StructTimespec",
+  { tv_sec: BigInt(Math.floor(ms / 1000)), tv_nsec: BigInt(Math.round((ms % 1000) * 1e6)) });
 export const FD = "Ljava/io/FileDescriptor;";
 /** a StructStat as libcore's JNI fills one: a file's stat in 4K blocks of 512-byte units, one link */
 function statOf(path: string | null, size: number, mode: number, mtimeMs: number, attributes?: FileAttributes): JObj {
@@ -300,17 +296,16 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return after(mkFd(read), (r) => after(mkFd(write), (w) => jarray([r, w], FD)));
     },
     [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JObj | null, input: JObj | null, offset: JObj | null, count: bigint) => {
-      const value = offset && declaredField("android/system/Int64Ref", "value");
-      const start = value ? Number((offset as unknown as Record<string, bigint>)[value]) : 0;
+      const start = offset ? Number(getDeclared<bigint>(offset, "android/system/Int64Ref", "value")) : 0;
       const n = count < 0n ? -1 : Math.min(Number(count), SENDFILE_CHUNK);
       if (n < 0 || start < 0) throw errno("sendfile", E.INVAL);
       if (!javaFdStat(fdInt(out))) throw errno("sendfile", E.BADF);
       const scratch = new Uint8Array(n), from = fdInt(input);
-      return after(value ? javaPreadFd(from, scratch, start) : javaReadFd(from, scratch), (read) => {
+      return after(offset ? javaPreadFd(from, scratch, start) : javaReadFd(from, scratch), (read) => {
         sys("sendfile", read);
         const written = read ? javaWriteFd(fdInt(out), scratch.subarray(0, read)) : 0;
         sys("sendfile", written);
-        if (value) (offset as unknown as Record<string, bigint>)[value] = BigInt(start + written);
+        if (offset) setDeclared(offset, "android/system/Int64Ref", { value: BigInt(start + written) });
         return BigInt(written);
       });
     },
@@ -321,7 +316,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     }),
     [`close(${FD})V`]: (d: JObj | null) => {
       if (d === null) return rt.npe();
-      const fd = fdInt(d), owner = (d as unknown as Record<string, bigint | undefined>)[declaredField("java/io/FileDescriptor", "ownerId")];
+      const fd = fdInt(d), owner = getDeclared<bigint | undefined>(d, "java/io/FileDescriptor", "ownerId");
       setFdInt(d, -1);
       let pending: number | Promise<number> | undefined;
       const immediate = fdsanClose(fd, owner ?? 0n, fd => {
@@ -519,11 +514,7 @@ rt.registerJnis("java/io/UnixFileSystem", unixFileSystem);
 // Paths arrive as NUL-terminated strings in native memory; failures throw UnixException(errno).
 // The VFS has no symbolic or hard links and keeps no permission bits, as the libc above.
 // UnixException's fillInStackTrace records nothing, so none is captured
-const unixError = (e: number) => {
-  const x = rt.make("sun/nio/fs/UnixException");
-  x[declaredField("sun/nio/fs/UnixException", "errno")] = e;
-  return x;
-};
+const unixError = (e: number) => setDeclared(rt.make("sun/nio/fs/UnixException"), "sun/nio/fs/UnixException", { errno: e });
 const unixSys = (result: number): number => { if (result < 0) throw unixError(-result); return result; };
 const cpath = (address: bigint) => mem.cstr(mem.txVa(BigInt.asUintN(64, address)));
 const bytesOf = (s: string) => i8(utf8.enc.encode(s));
@@ -537,15 +528,10 @@ function atPath(dfd: number, address: bigint): string {
   if ((st.mode & S_IFMT) !== S_IFDIR || st.path === null) throw unixError(E.NOTDIR);
   return st.path + "/" + name;
 }
-const ATTR_FIELDS = ["st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size",
-  "st_atime_sec", "st_atime_nsec", "st_mtime_sec", "st_mtime_nsec", "st_ctime_sec", "st_ctime_nsec"] as const;
-let attrProps: string[] | undefined;
 function fillAttrs(attrs: JObj, path: string, st: FileStat): void {
-  const a = attrs as unknown as Record<string, number | bigint>;
-  const p = attrProps ??= ATTR_FIELDS.map((name) => declaredField("sun/nio/fs/UnixFileAttributes", name));
   const sec = BigInt(Math.floor(st.mtime / 1000)), nsec = BigInt((st.mtime % 1000) * 1e6);
-  a[p[0]] = st.mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = st.uid; a[p[5]] = st.gid; a[p[6]] = BigInt(st.size);
-  for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
+  setDeclared(attrs, "sun/nio/fs/UnixFileAttributes", { st_mode: st.mode, st_ino: BigInt(inoOf(path)), st_dev: 1n, st_nlink: 1, st_uid: st.uid, st_gid: st.gid,
+    st_size: BigInt(st.size), st_atime_sec: sec, st_atime_nsec: nsec, st_mtime_sec: sec, st_mtime_nsec: nsec, st_ctime_sec: sec, st_ctime_nsec: nsec });
 }
 /** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
 function pathReply(path: string) { const p = vfs.norm(path); return remoteFilePath(p)?.fileStat(p) ?? pathStat(p); }
@@ -645,9 +631,8 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "getgrgid(I)[B": passwdName,
   "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {
     yield* awaited(statPath(cpath(path), null));
-    const s = yield* awaited(storageStatVfs()), a = attrs as unknown as Record<string, bigint>;
-    const f = (name: string) => declaredField("sun/nio/fs/UnixFileStoreAttributes", name);
-    a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
+    const s = yield* awaited(storageStatVfs());
+    setDeclared(attrs, "sun/nio/fs/UnixFileStoreAttributes", { f_frsize: s.f_frsize, f_blocks: s.f_blocks, f_bfree: s.f_bfree, f_bavail: s.f_bavail });
   }),
 };
 rt.registerJnis("sun/nio/fs/UnixNativeDispatcher", unixNativeDispatcher);
@@ -670,8 +655,7 @@ const linuxNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "getmntent(JLsun/nio/fs/UnixMountEntry;)I": (table: bigint, entry: JObj) => {
     const fields = mountTables.get(table)?.shift();
     if (!fields) return -1;
-    const e = entry as unknown as Record<string, Int8Array>;
-    ["name", "dir", "fstype", "opts"].forEach((name, i) => { e[declaredField("sun/nio/fs/UnixMountEntry", name)] = bytesOf(fields[i]); });
+    setDeclared(entry, "sun/nio/fs/UnixMountEntry", { name: bytesOf(fields[0]), dir: bytesOf(fields[1]), fstype: bytesOf(fields[2]), opts: bytesOf(fields[3]) });
     return 0;
   },
   "endmntent(J)V": (table: bigint) => { mountTables.delete(table); },
