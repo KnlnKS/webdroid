@@ -15,6 +15,16 @@ export type FilePathCalls = {
   fileFifo(path: string): Promise<number>;
   fileSetAttributes(path: string, change: Partial<FileAttributes>): Promise<number>;
 }
+/** The package a path belongs to, as Android 11+ scopes them: its internal data directories and its
+ *  external Android/data and Android/obb directories are private to it (FuseDaemon's
+ *  is_app_accessible_path), while Android/media/<pkg> is attributed to it but shared. `within` is
+ *  the rest of the path under the package's directory. */
+export function packageOfPath(path: string): { pkg: string; private: boolean; within: string } | undefined {
+  const m = /^\/(?:data\/(?:data|user\/0|user_de\/0)|sdcard\/Android\/(data|obb|media))\/([^/]+)(?:\/(.*))?$/.exec(path);
+  return m ? { pkg: m[2], private: m[1] !== "media", within: m[3] ?? "" } : undefined;
+}
+/** root and system_server act on every package's files, an app on its own */
+export const sameUidOrSystem = (caller: number, owner: number | undefined): boolean => caller === 0 || caller === 1000 || caller === owner;
 /** Only mutable app/shared paths cross; platform archives and procfs stay in their owning realm. */
 export const isMutablePath = (path: string): boolean => /^\/(?:data\/(?:data|user\/0|user_de\/0)(?:\/|$)|sdcard(?:\/|$))/.test(vfs.norm(path));
 export const filePathTransport: { calls?: () => FilePathCalls } = {};

@@ -5,6 +5,7 @@ import { procIdentity, procList, procText } from "./procfs.ts";
 import type { SharedMaps } from "../native/mappings.ts";
 import { utf8 } from "../jvm/abi.ts";
 import { knownUid } from "../android/packages.ts";
+import { packageOfPath } from "./file-path.ts";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -50,7 +51,7 @@ export const vfs = {
     directory ??= p !== null && this.isDir(p);
     const path = p === null ? null : this.norm(p), stored = path === null ? undefined : this.metadata.get(path);
     if (stored) return stored;
-    const pkg = path === null ? undefined : /^(?:\/data\/(?:data|user\/0|user_de\/0)|\/sdcard\/Android\/(?:data|media|obb))\/([^/]+)(?:\/|$)/.exec(path)?.[1];
+    const pkg = path === null ? undefined : packageOfPath(path)?.pkg;
     const uid = path !== null && /^\/(?:system|apex|vendor|product|dev)(?:\/|$)/.test(path) ? 0 : (pkg ? knownUid(pkg) : undefined) ?? procIdentity.uid;
     const attributes = {uid, gid:uid, mode:directory ? 0o755 : 0o644};
     if (path !== null && this.exists(path)) this.metadata.set(path,attributes);
