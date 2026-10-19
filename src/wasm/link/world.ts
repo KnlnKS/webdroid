@@ -558,9 +558,7 @@ export class World {
 
   private interfaceAccessSlot({ params, ret }: Kinds): number {
     return this.synthSlot(`interfaceAccess:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => {
-      const cls = "java/lang/IllegalAccessError", e = c.newLocal(T.anyref);
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(e).lget(e);
-      cx.callMethod(c, cx.prog.resolve(cls, "<init>", "()V")!); c.lget(e).throw_(cx.tag);
+      cx.construct(c, cx.prog.resolve("java/lang/IllegalAccessError", "<init>", "()V")!); c.throw_(cx.tag);
     } });
   }
 

@@ -14,7 +14,7 @@ export const NetOp = { Resolve: 0, Byte: 1 } as const;
 
 export const inetIntrinsics = new Map<string, Intrinsic>();
 inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;", (cx, m, c) => {
-  const n = c.newLocal(T.i32), i = c.newLocal(T.i32), j = c.newLocal(T.i32), len = c.newLocal(T.i32), arr = c.newLocal(T.anyref), bytes = c.newLocal(T.anyref), ex = c.newLocal(T.anyref);
+  const n = c.newLocal(T.i32), i = c.newLocal(T.i32), j = c.newLocal(T.i32), len = c.newLocal(T.i32), arr = c.newLocal(T.anyref), bytes = c.newLocal(T.anyref);
   const hints = cx.structFor(STRUCT), field = (name: string) => cx.fieldIndex(STRUCT, cx.prog.resolveField(STRUCT, name, "I")!);
   const byte = (a: () => void, b: () => void) => { c.i32(NetOp.Byte).lget(1).externConvertAny(); a(); b(); c.call(cx.imp.net); };
   for (const l of [1, 2]) { c.lget(l).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); }
@@ -28,8 +28,8 @@ inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landr
   c.end();
   c.lget(n).i32(0).raw(OP.i32_lt_s).if_();
   const ctor = cx.prog.resolve(GAI, "<init>", "(Ljava/lang/String;I)V")!;
-  cx.emitEnsure(c, GAI); cx.emitNew(c, GAI); c.lset(ex).lget(ex); cx.str.literal(c, "android_getaddrinfo"); c.i32(0).lget(n).raw(OP.i32_sub); cx.callMethod(c, ctor);
-  c.lget(ex).throw_(cx.tag).end();
+  cx.construct(c, ctor, () => { cx.str.literal(c, "android_getaddrinfo"); c.i32(0).lget(n).raw(OP.i32_sub); });
+  c.throw_(cx.tag).end();
   cx.emitNewArray(c, `[L${INET};`, () => c.lget(n)); c.lset(arr);
   const getByAddress = cx.prog.resolve(INET, "getByAddress", "(Ljava/lang/String;[BI)Ljava/net/InetAddress;")!;
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);

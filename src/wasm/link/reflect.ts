@@ -88,7 +88,7 @@ export function methodAt(w: World, slot: number): MethodInfo {
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
  *  lets it through, and calls the method itself rather than the receiver's override when it invokes a super or direct method. */
 function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct: boolean): void {
-  const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref), recv = c.newLocal(T.anyref);
+  const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref);
   if (wrap) {
     // ART checks the number of arguments, the receiver and each argument's type before anything runs
     const given = c.newLocal(T.i32);
@@ -114,15 +114,26 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     return c.lset(v), v;
   });
   if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-  if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
-  else if (!m.isStatic) { c.lget(0).lset(recv); c.lget(recv); }
-  else cx.emitEnsure(c, m.cls);
+  if (ctor) cx.construct(c, m, () => { for (const v of values) c.lget(v); });
+  else callBoxed(cx, c, m, direct, values);
+  if (!wrap) return;
+  c.br(2).end().unreachable().end();
+  // what the method threw, wrapped
+  const ite = cx.prog.resolve(ITE, "<init>", "(Ljava/lang/Throwable;)V");
+  c.lset(e); cx.emitNew(c, ITE); c.lset(w);
+  if (ite) { c.lget(w).lget(e); cx.callMethod(c, ite); }
+  c.lget(w).throw_(cx.tag).end();
+}
+
+/** calls method `m` as the invoke instruction would, on the receiver in local 0, and boxes what it answers */
+function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values: number[]): void {
+  if (m.isStatic) cx.emitEnsure(c, m.cls); else c.lget(0);
   for (const v of values) c.lget(v);
-  const prog = cx.prog, decl = prog.get(m.cls)!;
-  if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
+  const decl = cx.prog.get(m.cls)!;
+  if (m.isStatic || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
-    c.lget(recv).call(cx.helper("vtab"));
+    c.lget(0).call(cx.helper("vtab"));
     if (!decl.isInterface) c.i32(cx.w.vslot(m.cls, m.key)).arrayGet(cx.tVT);
     else {
       const sel = cx.w.selectorId(m.key), s = sel % H.IMT_N, vt = c.newLocal(refNull(cx.tVT));
@@ -131,18 +142,10 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     }
     c.callIndirect(sig);
   }
-  if (ctor) c.lget(recv);
-  else if (m.ret === "V") c.anyNull();
+  if (m.ret === "V") c.anyNull();
   else if (BOX[m.ret]) {
     const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
   }
-  if (!wrap) return;
-  c.br(2).end().unreachable().end();
-  // what the method threw, wrapped
-  const ite = prog.resolve(ITE, "<init>", "(Ljava/lang/Throwable;)V");
-  c.lset(e); cx.emitNew(c, ITE); c.lset(w);
-  if (ite) { c.lget(w).lget(e); cx.callMethod(c, ite); }
-  c.lget(w).throw_(cx.tag).end();
 }
 
 const execField = (cx: Compiler, cls: string, name: string, d: string) => cx.fieldIndex(cls, { owner: EXEC, name, desc: d });

@@ -1,7 +1,6 @@
 import { javaName, type Loader } from "../compiler/program.ts";
 import { idOfClass } from "./classes.ts";
 import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders.ts";
-import { T } from "../compiler/wasmbin.ts";
 import type { Strand } from "./sched.ts";
 import type { World } from "./world.ts";
 import type { MethodInfo } from "../compiler/program.ts";
@@ -128,10 +127,7 @@ export function resolveForName(w: World, name: string, object: object | null, ow
     if (!cause) throw error;
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
     if (!ctor) throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)"));
-    const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => {
-      const value = c.newLocal(T.anyref);
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(value); arg(0); arg(1); cx.callMethod(c, ctor); c.lget(value);
-    }, owner)(w.javaString(name), cause);
+    const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => cx.construct(c, ctor, () => { arg(0); arg(1); }), owner)(w.javaString(name), cause);
     const fail = (value: unknown): never => { throw w.exception(value as object); };
     return value instanceof Promise ? value.then(fail) : fail(value);
   };

@@ -100,10 +100,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.AllocSlot: {
       const ctor = jc?.byKey.get("<init>()V");
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
-      return w.synthSlot("new:" + name, { params: [], ret: "L", body: (cx, c) => {
-        const o = c.newLocal(cx.vtOf("L"));
-        cx.emitEnsure(c, name); cx.emitNew(c, name); c.lset(o).lget(o); cx.callMethod(c, ctor); c.lget(o);
-      } });
+      return w.synthSlot("new:" + name, { params: [], ret: "L", body: (cx, c) => cx.construct(c, ctor) });
     }
     case Info.CloneSlot: {
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT) return 0;
@@ -234,9 +231,9 @@ rt("aclone", ["L"], "L", (cx, c) => {
 
 // cnfe(name): ClassNotFoundException with the requested name as its message
 rt("cnfe", ["L"], "V", (cx, c) => {
-  const cls = "java/lang/ClassNotFoundException", ctor = cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;)V"), exn = c.newLocal(T.anyref);
+  const ctor = cx.prog.resolve("java/lang/ClassNotFoundException", "<init>", "(Ljava/lang/String;)V");
   if (!ctor) { cx.gap(c, "ClassNotFoundException.<init>(String)"); return; }
-  cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(exn).lget(exn).lget(0); cx.callMethod(c, ctor); c.lget(exn).throw_(cx.tag);
+  cx.construct(c, ctor, () => c.lget(0)); c.throw_(cx.tag);
 });
 
 // ---------- class initialization (the state machine is World.ensureBody)

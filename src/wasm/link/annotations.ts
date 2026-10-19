@@ -70,10 +70,7 @@ function make(w: World) {
     java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
   const enumConstant = (cls: string, name: string, desc: string) => java(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
   const construct = (cls: string, desc: string, params: ("I" | "J" | "L")[]) =>
-    java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => {
-      const o = c.newLocal(cx.vtOf("L"));
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(o).lget(o); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, "<init>", desc)!); c.lget(o);
-    });
+    java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => cx.construct(c, cx.prog.resolve(cls, "<init>", desc)!, () => params.forEach((_, i) => arg(i))));
   return {
     classOf, mkExec, newArray, aset, box,
     create: call(FACTORY, "createAnnotation", `(Ljava/lang/Class;[L${MEMBER};)Ljava/lang/annotation/Annotation;`, ["L", "L"], "L"),

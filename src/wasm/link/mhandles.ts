@@ -286,14 +286,10 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     rest.forEach((v, i) => s.aset(list, i, v));
     const m = w.prog.require(w.nameOf(cid)).methods[idx];
     if (m.isCtor && m.cls === "java/lang/String") {
-      return handleThunk(w, `mh:string:${m.desc}`, ["L"], "L", (cx, c, arg) => {
-        m.params.forEach((p, i) => {
-          arg(0); objects(cx, c).i32(i).arrayGet(cx.tData.ref);
-          if (BOX[p]) unbox(cx, c, p);
-        });
-        const factory = cx.str.factory(m.desc);
-        if (factory === undefined) cx.gap(c, `String constructor ${m.desc}`); else c.call(factory);
-      }, parent)(list);
+      return handleThunk(w, `mh:string:${m.desc}`, ["L"], "L", (cx, c, arg) => cx.construct(c, m, () => m.params.forEach((p, i) => {
+        arg(0); objects(cx, c).i32(i).arrayGet(cx.tData.ref);
+        if (BOX[p]) unbox(cx, c, p);
+      })), parent)(list);
     }
     if (m.isCtor && recv !== null) {
       return handleThunk(w, `mh:init:${cid}:${idx}`, ["L", "L"], "L", (cx, c, arg) => {
@@ -404,7 +400,7 @@ export function chain<A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B
 /** Use libcore's frame accessors: they own reference slots, little-endian primitive storage and return offsets. */
 function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret: boolean): number {
   const name = `${FRAME}$StackFrame${write ? "Writer" : "Reader"}`, base = `${FRAME}$StackFrameAccessor`, local = c.newLocal(T.anyref);
-  cx.emitEnsure(c, name); cx.emitNew(c, name); c.ltee(local); cx.callMethod(c, cx.prog.resolve(name, "<init>", "()V")!);
+  cx.construct(c, cx.prog.resolve(name, "<init>", "()V")!); c.lset(local);
   c.lget(local); frame(); cx.callMethod(c, cx.prog.resolve(base, "attach", `(L${FRAME};)L${base};`)!); c.drop();
   if (ret) { c.lget(local); cx.callMethod(c, cx.prog.resolve(base, "makeReturnValueAccessor", "()V")!); }
   return local;

@@ -67,6 +67,10 @@ public class C {
     Object o = A.class.newInstance();
     return (o instanceof A ? 1 : 0) + (o.getClass() == A.class ? 2 : 0) + (((I) o).g() == 5 ? 4 : 0);
   }
+  public static int stringConstructors(int n) throws Exception {
+    String empty = String.class.newInstance(), s = String.class.getConstructor(char[].class, int.class, int.class).newInstance(new char[] {'a', 'b', 'c'}, 1, 2);
+    return empty.length() * 1000 + s.hashCode();
+  }
   public static int defaults(int n) {
     I a = new A(), d = new D();
     return a.f() * 100 + d.f() + (a.g() + d.g()) * 1000;

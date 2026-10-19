@@ -27,8 +27,7 @@ refIntrinsics.set("sun/misc/Cleaner.create(Ljava/lang/Object;Ljava/lang/Runnable
   if (!ctor || !add) { cx.gap(c, "sun.misc.Cleaner"); return; }
   const cleaner = c.newLocal(T.anyref);
   c.lget(1).refIsNull().if_(T.anyref).anyNull().else_();
-  cx.emitEnsure(c, CLEANER); cx.emitNew(c, CLEANER); c.lset(cleaner);
-  c.lget(cleaner).anyNull().lget(1); cx.callMethod(c, ctor);
+  cx.construct(c, ctor, () => c.anyNull().lget(1)); c.lset(cleaner);
   c.lget(0).externConvertAny().lget(cleaner).externConvertAny().call(cx.imp.watch);
   c.lget(cleaner); cx.callMethod(c, add);
   c.end();

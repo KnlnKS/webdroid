@@ -424,6 +424,16 @@ export class Compiler implements Base {
       return f;
     }, GENERIC_LOCALS.has(key) ? type : undefined);
   }
+  /** push a new object of constructor `ctor`'s class, initialized by it with the arguments `args` pushes; a String is made by its factory, as at an invoke-direct */
+  construct(c: Code, ctor: MethodInfo, args: () => void = () => {}): void {
+    if (ctor.cls === "java/lang/String") {
+      const make = this.str.factory(ctor.desc);
+      if (make === undefined) this.gap(c, `String.<init>${ctor.desc}`); else { args(); c.call(make); }
+      return;
+    }
+    const o = c.newLocal(T.anyref);
+    this.emitEnsure(c, ctor.cls); this.emitNew(c, ctor.cls); c.ltee(o); args(); this.callMethod(c, ctor); c.lget(o);
+  }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string

@@ -124,9 +124,8 @@ function wrap(w: World, e: unknown, index: number, parent: Strand): never | Prom
   const throwable = w.throwable(w.boundary(e));
   if (!throwable || w.prog.isSubclass(w.classNameOf(throwable), "java/lang/Error")) throw e;
   return chain(handleThunk(w, `custom:bootstrapError:${index}`, ["L"], "L", (cx, c, arg) => {
-    const cls = "java/lang/BootstrapMethodError", local = c.newLocal(T.anyref);
-    cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, `Exception from call site #${index} bootstrap method`); arg(0);
-    cx.callMethod(c, cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")!); c.lget(local);
+    const ctor = cx.prog.resolve("java/lang/BootstrapMethodError", "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")!;
+    cx.construct(c, ctor, () => { cx.str.literal(c, `Exception from call site #${index} bootstrap method`); arg(0); });
   }, parent)(throwable) as object | Promise<object>, wrapped => { throw w.exception(wrapped); });
 }
 export function invokeCustom(w: World, site: string, args: object, parent: Strand): object | null | Promise<object | null> {

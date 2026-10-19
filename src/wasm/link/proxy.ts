@@ -100,10 +100,7 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
   c.lget(list).refAsNonNull().lget(i).arrayGet(cx.tData.ref); c.lget(e); cx.callMethod(c, prog.resolve(CLASS, "isInstance", "(Ljava/lang/Object;)Z")!);
   c.if_(); rethrow(); c.end();
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-  const wrapped = c.newLocal(T.anyref);
-  cx.emitEnsure(c, UTE); cx.emitNew(c, UTE); c.lset(wrapped);
-  c.lget(wrapped).lget(e); cx.callMethod(c, prog.resolve(UTE, "<init>", "(Ljava/lang/Throwable;)V")!);
-  c.lget(wrapped).throw_(cx.tag).end();
+  cx.construct(c, prog.resolve(UTE, "<init>", "(Ljava/lang/Throwable;)V")!, () => c.lget(e)); c.throw_(cx.tag).end();
   // the result: void drops it; a primitive unboxes its wrapper; a reference is cast to the declared class
   c.lset(result);
   if (m.ret === "V") return;
