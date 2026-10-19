@@ -117,8 +117,6 @@ export const PRIMS: Record<string, ReturnType<typeof prim>> = {
 };
 /** Java type name → primitive descriptor, void included */
 export const PRIM_DESC: Record<string, string> = { ...Object.fromEntries(Object.entries(PRIMS).map(([d, p]) => [p.name, d])), void: "V" };
-export const PRIM_ARRAYS = Object.fromEntries(Object.entries(PRIMS).map(([d, p]) => [d, p.array]));
-export type PrimElem = keyof typeof PRIM_ARRAYS;
 
 /** tag a JS array as a Java `elem[]` for compiled code (in place, returns the same array) */
 export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {

@@ -1,7 +1,7 @@
 // A JavaScript interface: an object's @JavascriptInterface methods, called on the WebView's bridge
 // thread with their arguments and results converted as Chromium's Java bridge converts them.
 import { driven, type Gen, type JObj } from "../jvm/runtime.ts";
-import { PRIM_DESC, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi.ts";
+import { PRIM_DESC, PRIMS, jarray } from "../jvm/abi.ts";
 import { vcall, scall, callOn, type JThread } from "../jvm/natives/jentry.ts";
 import type { WebInterfaces } from "../shell/webbridge.ts";
 
@@ -21,8 +21,8 @@ const toJava = (d: string, x: unknown): unknown =>
  *  elements convert, and any other array type, or a value that is no array, is null */
 function toJavaArray(elem: string, x: unknown): unknown {
   if (!Array.isArray(x)) return null;
-  if (elem in PRIM_ARRAYS) {
-    const out = new PRIM_ARRAYS[elem as PrimElem](x.length) as unknown as unknown[];
+  if (elem in PRIMS) {
+    const out = new PRIMS[elem].array(x.length) as unknown as unknown[];
     x.forEach((v, i) => { out[i] = toJava(elem, v); });
     return out;
   }

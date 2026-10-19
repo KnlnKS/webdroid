@@ -6,7 +6,7 @@
 // libcore Java code over EmulatedStackFrame; invokeExactWithFrame re-enters the direct-handle dispatcher.
 import { T } from "../compiler/wasmbin.ts";
 import { descOf, javaName, type FieldInfo, type Kind, type MethodInfo, typeName } from "../compiler/program.ts";
-import { parseMethodDesc } from "../../jvm/abi.ts";
+import { PRIMS, parseMethodDesc } from "../../jvm/abi.ts";
 import { hostReflect } from "./reflect.ts";
 import { BOX, box, unbox } from "../compiler/primitives.ts";
 import { CLASS, InvokeMode, MH, MT, OBJECTS, emitInvokeImport, emitMethodType, handleKinds } from "../compiler/handles.ts";
@@ -235,7 +235,6 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
   }, parent) as never;
 }
 
-const primitiveNames: Record<string, string> = { Z: "Boolean", B: "Byte", C: "Char", S: "Short", I: "Int", J: "Long", F: "Float", D: "Double" };
 /** `next` applied to `value`, after it settles when it is a promise */
 export function chain<A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B>): B | Promise<B> { return value instanceof Promise ? value.then(next) : next(value); }
 
@@ -250,13 +249,13 @@ function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret:
 function readFrame(cx: Compiler, c: Code, reader: number, desc: string): void {
   const name = `${FRAME}$StackFrameReader`;
   c.lget(reader);
-  if (BOX[desc]) { cx.callMethod(c, cx.prog.resolve(name, "next" + primitiveNames[desc], `()${desc}`)!); box(cx, c, desc); }
+  if (BOX[desc]) { cx.callMethod(c, cx.prog.resolve(name, "next" + PRIMS[desc].title, `()${desc}`)!); box(cx, c, desc); }
   else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`)!); }
 }
 function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: () => void): void {
   const name = `${FRAME}$StackFrameWriter`;
   c.lget(writer); value();
-  if (BOX[desc]) { unbox(cx, c, desc); cx.callMethod(c, cx.prog.resolve(name, "putNext" + primitiveNames[desc], `(${desc})V`)!); }
+  if (BOX[desc]) { unbox(cx, c, desc); cx.callMethod(c, cx.prog.resolve(name, "putNext" + PRIMS[desc].title, `(${desc})V`)!); }
   else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
 }
 function signatureOf(w: World, type: object): { params: string[]; ret: string } {
