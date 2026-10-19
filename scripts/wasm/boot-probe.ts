@@ -11,6 +11,7 @@ import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { bundleFor, checker, fixture } from "./tools.ts";
 import { launchBrowser } from "../browser.ts";
+import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)
 const bundle = await bundleFor("browser", join(import.meta.dirname, "boot-probe-page.ts"));
@@ -21,7 +22,7 @@ const server = await serve({ fetch(req) {
   const p = new URL(req.url).pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
   if (p === "/probe.js") return new Response(bundle, { headers: { "content-type": "text/javascript" } });
-  if (p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript" } });
+  if (p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript" } });
   if (p === "/app.dex") return fileResponse(join(appDir, "classes.dex"), req);
   if (p === "/aot/current.json") return aotManifest();
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);

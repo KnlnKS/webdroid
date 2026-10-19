@@ -19,6 +19,7 @@ import { androidFixture, bundleFor, cutWorkloads } from "./tools.ts";
 import { sourceKey } from "../aot-key.ts";
 import { createHash } from "node:crypto";
 import { geo, med, sampleError } from "./g1report.ts";
+import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 const here = import.meta.dirname;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
@@ -82,7 +83,7 @@ async function chromeRun() {
     if (p === "/g1.js") return new Response(script, { headers: { "content-type": "text/javascript", ...iso } });
     if (installedDir && p === "/app/files.json") return Response.json(readdirSync(installedDir), { headers: iso });
     if (installedDir && p.startsWith("/app/")) return fileResponse(join(installedDir, p.split("/").pop()!), req, iso);
-    if (worker && p === "/wasm-compile-worker.js") return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
+    if (worker && p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file ? fileResponse(file, req, iso) : new Response("", { status: 404 });
   } });
