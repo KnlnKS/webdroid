@@ -14,13 +14,15 @@ import { rtfns, type Synth } from "./rtfns.ts";
 import type { LinkFailure } from "./linkage.ts";
 import { Block, Sync, FUEL, emitBlock, emitSync } from "./hostcalls.ts";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
-import { StructStrings, stringCtor } from "../link/strings.ts";
+import { STRING, StructStrings } from "./strings.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
+/** a String constructor is never called: each call site makes the String with its factory (Compiler.construct) */
+const stringCtor: Intrinsic = (_cx, _m, c) => { c.unreachable(); };
 /** how `m` is implemented without its bytecode: an intrinsic, a String constructor (a call site makes the string), or a host import */
 export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: NativeBinder, m: MethodInfo): Intrinsic | undefined {
-  return intrinsics.get(mid(m)) ?? (m.isCtor && m.cls === "java/lang/String" ? stringCtor : natives.stub(m));
+  return intrinsics.get(mid(m)) ?? (m.isCtor && m.cls === STRING ? stringCtor : natives.stub(m));
 }
 
 /** the types every module declares identically; Wasm canonicalises them across modules */
@@ -152,7 +154,7 @@ export class Compiler implements Base {
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
     this.str = new StructStrings(this);
-    this.classStruct.set("java/lang/String", this.tStr);
+    this.classStruct.set(STRING, this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
     for (const name of HOST_IMPORT_NAMES) mb.importFunc("host", name, HOST_IMPORTS[name]);
     this.str.importBuiltins();
@@ -442,7 +444,7 @@ export class Compiler implements Base {
   }
   /** push a new object of constructor `ctor`'s class, initialized by it with the arguments `args` pushes; a String is made by its factory, as at an invoke-direct */
   construct(c: Code, ctor: MethodInfo, args: () => void = () => {}): void {
-    if (ctor.cls === "java/lang/String") {
+    if (ctor.cls === STRING) {
       const make = this.str.factory(ctor.desc);
       if (make === undefined) this.gap(c, `String.<init>${ctor.desc}`); else { args(); c.call(make); }
       return;
@@ -453,7 +455,7 @@ export class Compiler implements Base {
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
-    if (cls === "java/lang/String") { this.str.literal(c, ""); return; }
+    if (cls === STRING) { this.str.literal(c, ""); return; }
     this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);

@@ -1,4 +1,5 @@
 import { emitSymbolicSite } from "./sites.ts";
+import { STRING } from "./strings.ts";
 import { Code, OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
@@ -363,7 +364,7 @@ export class MC {
     const target = this.invokeTarget(ins.b, kind, declared, mr.name, desc);
     if (failed(target)) return null;
     if (kind === "invoke-static") return target;
-    if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
+    if (kind === "invoke-direct" && decl === STRING && mr.name === "<init>") return "dynamic";
     if (kind === "invoke-direct" || kind === "invoke-super") return target;
     const only = cx.devirt(decl, mr.name, target.desc);
     this.virtuals.set(ins.pc, [decl, mr.name, target.desc]);
@@ -668,19 +669,19 @@ export class MC {
   }
   private ensureTarget(ins: Ins): string | undefined {
     if (this.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) { const name = this.dex.typeName(ins.b); return this.cx.str.isString(name) ? undefined : name; }
+    if (ins.op === 0x22) { const name = this.dex.typeName(ins.b); return name === STRING ? undefined : name; }
     if (ins.op <= 0x6d) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const mr = this.dex.method(ins.b), decl = this.dex.typeName(mr.cls);
     return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
   }
   isStringInit(ins: Ins): boolean {
     const mr = this.dex.method(ins.b);
-    return mr.name === "<init>" && this.cx.str.isString(this.dex.typeName(mr.cls));
+    return mr.name === "<init>" && this.dex.typeName(mr.cls) === STRING;
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   definesNonNull(ins: Ins, f: Facts): boolean {
     const op = ins.op;
-    if (op === 0x22) return !this.cx.str.isString(this.dex.typeName(ins.b)); // new-instance
+    if (op === 0x22) return this.dex.typeName(ins.b) !== STRING; // new-instance
     // const-string, const-string/jumbo, const-class, new-array, move-exception
     if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
     // move-object, move-object/from16, move-object/16, check-cast
@@ -788,7 +789,7 @@ export class MC {
         if (this.unresolved(dex.type(b))) return;
         const name = dex.typeName(b);
         // a String is made by the constructor call, which assigns its register
-        if (cx.str.isString(name)) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
+        if (name === STRING) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case "new-array": {
@@ -926,18 +927,22 @@ export class MC {
     if (r === undefined) { r = resolve(); if (!failed(r)) refs.set(key, r); }
     return r;
   }
+  /** the field an iget or iput names; String's representation has no fields to translate an access of */
+  private instanceField(ins: Ins) {
+    const r = this.fieldOf(ins.c, false);
+    if (!failed(r) && r.decl === STRING) throw new Error(`String.${r.f.name}: a field of the representation`);
+    return r;
+  }
   emitIget(ins: Ins) {
-    const cx = this.cx, c = this.code, r = this.fieldOf(ins.c, false);
+    const cx = this.cx, c = this.code, r = this.instanceField(ins);
     if (failed(r)) return this.linkFail(r);
     const { decl, f } = r, st = cx.structFor(decl);
-    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); c.structGet(st, cx.fieldIndex(decl, f)); this.set(f.kind);
   }
   emitIput(ins: Ins) {
-    const cx = this.cx, c = this.code, r = this.fieldOf(ins.c, false);
+    const cx = this.cx, c = this.code, r = this.instanceField(ins);
     if (failed(r)) return this.linkFail(r);
     const { decl, f } = r, st = cx.structFor(decl);
-    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
     if (cx.w.claims(f)) { this.refTo(ins.b, st); c.externConvertAny(); this.get("J", ins.a); c.call(cx.imp.claim); }
   }
@@ -1050,7 +1055,7 @@ export class MC {
     const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (isStatic) {
       this.ensure(target.cls); pushArgs(this, ins, p.params, 0); cx.callMethod(c, target);
-    } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
+    } else if (kind === "invoke-direct" && decl === STRING && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
       pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
@@ -1063,7 +1068,7 @@ export class MC {
       const guards = this.callGuards(ins);
       this.nonNull(ins.regs[0]); c.lset(this.tmpL);
       c.lget(this.tmpL); pushArgs(this, ins, p.params);
-      c.lget(this.tmpL); cx.str.vtab(c, decl);
+      c.lget(this.tmpL).refCast(cx.tObj).structGet(cx.tObj, 0);
       if (declC && !declC.isInterface) {
         c.i32(cx.w.vslot(decl, target.key)).arrayGet(cx.tVT);
       } else if (prog.get("java/lang/Object")!.byKey.has(target.key)) {
