@@ -158,9 +158,10 @@ async function boot(file: string, local?: File) {
 }
 
 const local = realmWd();
-// a system window, then the process on top, takes the tap, as they take the browser's own pointer events
+// a system window, then the process on top, takes the harness's input, as they take the browser's own events
+const inputHost = () => processBroker().activities.shownEntries().at(-1)?.host;
 const tap = (x: number, y: number): Promise<void> => {
-  const host = processBroker().activities.shownEntries().at(-1)?.host;
+  const host = inputHost();
   return host && !hasTouchWindow(x, y) ? host.control.tap(x, y) : local.tap(x, y);
 };
 
@@ -224,7 +225,7 @@ const wd = {
     return `tapped ${s} @ ${hit.x},${hit.y}`;
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
-    const host = processBroker().foregroundHost();
+    const host = inputHost();
     if (host && !hasTouchWindow(x1, y1)) await host.control.swipe(x1, y1, x2, y2, ms);
     else await swipe(x1, y1, x2, y2, ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
@@ -253,13 +254,13 @@ const wd = {
   clearData: async (pkg: string) => (await onMain(() => clearUserData(pkg, false, false, null))).done,
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
-    const host = processBroker().foregroundHost();
+    const host = inputHost();
     if (host && !hasFocusedWindow()) await host.control.type(s);
     else { kbd.value = s; await imeInput(s); }
     return "typed " + s;
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundHost()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
+  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : inputHost()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop.ts").then((m) => m.looperDump()),
   threads: wasmThreads,
   redraw,
