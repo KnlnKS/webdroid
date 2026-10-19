@@ -6,7 +6,7 @@
 //   pnpm wasm boot-probe          (after pnpm aot)
 import { join } from "node:path";
 import { fileResponse, serve } from "../serve.ts";
-import { aotFile, aotManifest } from "./aot-serve.ts";
+import { aotFile, aotManifest } from "../aot-serve.ts";
 import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { bundleFor, checker, fixture } from "./tools.ts";

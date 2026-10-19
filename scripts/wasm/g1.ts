@@ -16,7 +16,7 @@ import { fileResponse, serve } from "../serve.ts";
 import type { G1Config, G1Result } from "./g1run.ts";
 import { G1_DIR, JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { androidFixture, bundleFor, cutWorkloads } from "./tools.ts";
-import { sourceKey } from "./aot-key.ts";
+import { sourceKey } from "../aot-key.ts";
 import { createHash } from "node:crypto";
 import { geo, med, sampleError } from "./g1report.ts";
 

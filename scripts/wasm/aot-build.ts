@@ -1,7 +1,7 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
 //   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
-// Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
+// Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
 // and a page fetches and compiles what a start needs, so no module should be much larger than that.
@@ -21,7 +21,7 @@ import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wa
 import { synthModules } from "../../src/wasm/link/apps.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
-import { AOT_ROOT, buildKey, sourceKey } from "./aot-key.ts";
+import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 import { PLATFORM_PATHS } from "./paths.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };

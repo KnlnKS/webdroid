@@ -1,14 +1,14 @@
-// What identifies a platform build (aot-build.ts): the sources that make its modules, the jars it is made from, the natives it was bound to and its options.
+// What identifies a platform build (wasm/aot-build.ts): the sources that make its modules, the jars it is made from, the natives it was bound to and its options.
 // A page asks the server for the current key (aot-serve.ts) and fetches /aot/<key>/..., so a build made by other code is never served for these sources.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { VERSION } from "../../src/wasm/link/aot.ts";
-import { AOSP, ROOT } from "./paths.ts";
+import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
+import { VERSION } from "../src/wasm/link/aot.ts";
+import { AOSP, ROOT } from "./wasm/paths.ts";
 
 // Host registrations outside Wasm determine class layouts and suspension imports too.
-const SOURCES = ["src", "scripts/wasm/aot-build.ts", "scripts/wasm/aot-key.ts", "scripts/wasm/aot-startup.ts", "scripts/wasm/harness.ts"];
+const SOURCES = ["src", "scripts/wasm/aot-build.ts", "scripts/aot-key.ts", "scripts/wasm/aot-startup.ts", "scripts/wasm/harness.ts"];
 
 export const AOT_ROOT = join(ROOT, "vendor/wasm-aot");
 

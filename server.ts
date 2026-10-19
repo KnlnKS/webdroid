@@ -18,7 +18,7 @@ import { mimeOf } from "./src/mime.ts";
 import { WebRelay } from "./src/shell/webrelay.ts";
 import { parseIpv4 } from "./src/shell/relay.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
-import { aotFile, aotManifest } from "./scripts/wasm/aot-serve.ts";
+import { aotFile, aotManifest } from "./scripts/aot-serve.ts";
 import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";

@@ -7,7 +7,7 @@ import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { AOT_ROOT } from "./aot-key.ts";
+import { AOT_ROOT } from "../aot-key.ts";
 import { readProcesses } from "../../tests/e2e/lib/processes.ts";
 import type { AotProfile } from "../../src/shell/aot-profile.ts";
 

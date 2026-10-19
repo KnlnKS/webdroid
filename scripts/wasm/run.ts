@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeWhole } from "../generated.ts";
 import { nodeCommand } from "../node.ts";
-import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
+import { AOT_ROOT, type AotManifest } from "../aot-key.ts";
 
 /** the tests `all` runs, in this order */
 const ALL = ["diff", "classdiff", "customdiff", "linkdiff", "loaders", "entry", "hostclass", "lazytest", "fuzz", "jbench", "threads", "nested", "conform-quick", "sweep", "aottest", "persist"];
