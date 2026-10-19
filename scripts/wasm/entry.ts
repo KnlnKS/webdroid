@@ -68,12 +68,8 @@ if (suite.failed === ownerFailures) console.log("3/3 constructor ownership check
 const parentFailures = suite.failed;
 const originRec = entry.callOn(origin, () => runningThread(w)), backgroundRec = entry.callOn(background, () => runningThread(w));
 await entry.callOn(background, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
-const parent = w.sched.strand(originRec), interposed = w.sched.strand(backgroundRec), globals = w.rtImports();
+const parent = w.sched.strand(originRec), interposed = w.sched.strand(backgroundRec);
 const lock = w.bridge.toJava(facade, "LE;") as object;
-const activate = (s: typeof parent) => {
-  globals.sid.value = s.id; globals.thr.value = s.thread.obj; globals.depth.value = 0;
-  w.sched.running = s; w.sched.onThread?.(s.thread, false);
-};
 let constructorParent: typeof parent | null = null;
 const originalInvoke = w.bridge.invokeOn;
 try {
@@ -82,9 +78,9 @@ try {
     if (m.cls === "E$Owner" && m.name === "<init>") constructorParent = s.parent;
     return originalInvoke.call(this, s, m, ...a);
   };
-  delayAllocation(() => activate(interposed));
+  delayAllocation(() => w.sched.become(interposed));
   for (const reentry of [true, false]) {
-    activate(reentry ? parent : interposed);
+    w.sched.become(reentry ? parent : interposed);
     const construct = () => entry.newObj("E$Owner", "(Ljava/lang/Object;)V", facade);
     const object = await (reentry ? construct() : entry.callOn(origin, construct));
     const keptParent = constructorParent === (reentry ? parent : null);

@@ -7,7 +7,6 @@ import { mid } from "../compiler/ids.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { suspending } from "./module.ts";
 import { hostInfo, infoRecord } from "./classes.ts";
 import { hostText } from "./members.ts";
 import { hostObject } from "./annotations.ts";
@@ -52,9 +51,7 @@ export function hostImports(w: World): HostImports {
     fmod: (a: number, b: number) => a % b,
     gap: (id: number) => { lastGap = id; w.onGap(w.numbers.gapList[id]); },
     sync: (op: number, obj: object | null, a: number) => sched.sync(op, obj, a),
-    block: suspending((op: number, obj: object | null, a: number, b: number) => {
-      try { sched.running = sched.current(); return sched.block(op, obj, a, b); } finally { sched.idle(); }
-    }),
+    block: sched.suspending((op: number, obj: object | null, a: number, b: number) => sched.block(op, obj, a, b)),
     hot: (slot: number) => w.tiers.upgrade(slot),
     long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),

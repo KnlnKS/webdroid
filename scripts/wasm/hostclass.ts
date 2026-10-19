@@ -141,8 +141,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   const callback = w.callFn("callback:context", [], "I", (_cx, c) => { c.i32(42); });
   const lock = w.hostFn("callback:lock", [], "L", (cx, c) => cx.emitNew(c, "java/lang/Object"))() as object;
   const owner = w.sched.strand();
-  w.rtImports().sid.value = owner.id;
-  w.sched.onThread?.(owner.thread, false);
+  w.sched.become(owner);
   const caller = rt.cur;
   w.sched.idle(); resumeAs(caller);
   try {

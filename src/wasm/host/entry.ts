@@ -45,36 +45,28 @@ export function wasmEntry(w: World): Entry {
 function makeEntry(w: World): Entry {
   const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
-  const jthreads = new WeakMap<ThreadRec, JThread>(), recs = new WeakMap<JThread, ThreadRec>();
-  const hostStrands = new WeakMap<Strand, HostStrand>(), javaStrands = new WeakMap<HostStrand, Strand>();
+  const recs = new WeakMap<JThread, ThreadRec>(), javaStrands = new WeakMap<HostStrand, Strand>();
   const jthreadOf = (rec: ThreadRec): JThread => {
     if (rec === sched.mainRec) return mainThread;
-    let t = jthreads.get(rec);
-    if (!t) { t = new JThread(); jthreads.set(rec, t); recs.set(t, rec); }
+    let t = rec.host as JThread | null;
+    if (!t) { rec.host = t = new JThread(); recs.set(t, rec); }
     return t;
   };
   /** the Java thread a host thread (a binder thread, a native thread that attached, the JThread of a test) runs Java as: its own, made the first time it enters */
   const recOf = (t: JThread): ThreadRec => {
     if (t === mainThread) return sched.mainRec;
     let rec = recs.get(t);
-    if (!rec) { rec = sched.hostThread(); recs.set(t, rec); jthreads.set(rec, t); }
+    if (!rec) { rec = sched.hostThread(); recs.set(t, rec); rec.host = t; }
     return rec;
   };
   // what the host had as its current thread when it last entered Java from the top level, which it has again when no strand runs
   let hostCurrent = curThread;
   const hostStrandOf = (s: Strand): HostStrand => {
-    let host = hostStrands.get(s);
-    if (!host) { host = new HostStrand(jthreadOf(s.thread)); hostStrands.set(s, host); javaStrands.set(host, s); }
+    let host = s.host as HostStrand | null;
+    if (!host) { s.host = host = new HostStrand(jthreadOf(s.thread)); javaStrands.set(host, s); }
     return host;
   };
-  sched.onThreadEnd = (rec) => threadExit.hook?.(jthreadOf(rec));
   threadContended.hook = (t) => { const rec = t === mainThread ? sched.mainRec : recs.get(t); return !!rec && sched.contended(rec); };
-  let threadName: FieldInfo | undefined;
-  sched.onNamed = (rec) => {
-    threadName ??= prog.require("java/lang/Thread").fields.find((f) => !f.isStatic && f.name === "name");
-    const name = threadName && bridge.toHost((bridge as Bridge).read(threadName, rec.obj));
-    if (typeof name === "string") nameThread(jthreadOf(rec), name);
-  };
   // /proc/self/task: the main thread, the Java threads Thread.start made and the native threads, by their native names
   const tidOf = (t: JThread) => processTid(t, t === mainThread);
   const tasks = (): JThread[] => [mainThread, ...[...sched.started].map(jthreadOf), ...[...cpus].filter((c) => !c.finished).map((c) => c.jthread)];
@@ -82,16 +74,24 @@ function makeEntry(w: World): Entry {
   procTasks.tids = () => [...new Set(tasks().map(tidOf))].sort((a, b) => a - b);
   procTasks.name = (tid) => taskOf(tid)?.jname ?? null;
   procTasks.rename = (tid, name) => { const t = taskOf(tid); if (t) nameThread(t, name); return !!t; };
-  let noted = -1;
-  sched.onThread = (rec, idle) => {
-    const s = sched.current(), now = idle ? 0 : rec === sched.mainRec ? 1 : 2 + s.id;
-    if (now !== noted) { noted = now; note(Ev.Thread, now); }
-    if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(s));
+  let noted = -1, threadName: FieldInfo | undefined;
+  sched.hooks = {
+    switched(rec, idle) {
+      const s = sched.current(), now = idle ? 0 : rec === sched.mainRec ? 1 : 2 + s.id;
+      if (now !== noted) { noted = now; note(Ev.Thread, now); }
+      if (idle) setCurThread(hostCurrent); else resumeAs(hostStrandOf(s));
+    },
+    ended: (rec) => threadExit.hook?.(jthreadOf(rec)),
+    named(rec) {
+      threadName ??= prog.require("java/lang/Thread").fields.find((f) => !f.isStatic && f.name === "name");
+      const name = threadName && bridge.toHost((bridge as Bridge).read(threadName, rec.obj));
+      if (typeof name === "string") nameThread(jthreadOf(rec), name);
+    },
   };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => {
     // the globals name the strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own
-    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : hostStrands.get(s) === rt.cur ? s : null;
+    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s.host === rt.cur ? s : null;
     if (running) return running;
     const captured = javaStrands.get(rt.cur);
     return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
