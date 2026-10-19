@@ -1,7 +1,7 @@
 // java.lang.String over JS string primitives: the methods implemented here, called with the string as `this`, replace their bytecode.
 
 import { rt } from "../runtime.ts";
-import { mangleMethod, charsToString, utf8, stringHash } from "../abi.ts";
+import { mangleMethod, charsToString, utf8 } from "../abi.ts";
 import { encodeString } from "../charset.ts";
 import { once } from "../suspend.ts";
 import { csText } from "./jchars.ts";
@@ -32,16 +32,12 @@ function cpCount(s: string, a: number, b: number): number {
   for (let i = a; i < b - 1; i++) if (isLead(s.charCodeAt(i)) && isTrail(s.charCodeAt(i + 1))) { n--; i++; }
   return n;
 }
-sm("length()I", function () { return this.length; });
-sm("isEmpty()Z", function () { return this.length === 0 ? 1 : 0; });
 sm("charAt(I)C", function (i: number) {
   if (i >>> 0 >= this.length) sioobe(i);
   return this.charCodeAt(i);
 });
 sm("codePointAt(I)I", function (i: number) { return cpAt(this, i); });
 sm("codePointBefore(I)I", function (i: number) { return cpBefore(this, i); });
-sm("hashCode()I", function () { return stringHash(this as string); });
-sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string) === o ? 1 : 0; });
 // Case-insensitive comparison is libcore's (Character.toUpperCase, then toLowerCase, per char); ASCII
 // chars, whose cases are ASCII letters, compare here
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
@@ -54,17 +50,6 @@ sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
   }
   return 1;
 });
-function stringCompare(a: string, b: string): number {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    const d = a.charCodeAt(i) - b.charCodeAt(i);
-    if (d) return d;
-  }
-  return a.length - b.length;
-}
-const compareStrings = function (this: string, o: string) { return stringCompare(this, o); };
-sm("compareTo(Ljava/lang/String;)I", compareStrings);
-sm("compareTo(Ljava/lang/Object;)I", compareStrings);
 /** String.indexOf(int): a char, a surrogate pair for a supplementary code point, never an invalid one.
  *  Short strings (URI and parser delimiter sets) are scanned without allocating the needle. */
 function charIndex(s: string, c: number, from: number): number {
@@ -131,12 +116,6 @@ sm("toLowerCase()Ljava/lang/String;", function () { return caseInDefault(this, f
 sm("toUpperCase()Ljava/lang/String;", function () { return caseInDefault(this, true); });
 sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: object | null) { return caseIn(this, locale, false); });
 sm("toUpperCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: object | null) { return caseIn(this, locale, true); });
-sm("toString()Ljava/lang/String;", function () { return this as string; });
-sm("toCharArray()[C", function () {
-  const a = new Uint16Array(this.length);
-  for (let i = 0; i < this.length; i++) a[i] = this.charCodeAt(i);
-  return a;
-});
 sm("getChars(II[CI)V", function (srcBegin: number, srcEnd: number, dst: Uint16Array, dstBegin: number) {
   if (srcBegin < 0 || srcBegin > srcEnd || srcEnd > this.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `begin ${srcBegin}, end ${srcEnd}, length ${this.length}`);
   if (!dst) rt.npe();
@@ -153,14 +132,6 @@ sm("getBytes(II[BI)V", function (begin: number, end: number, dst: Int8Array, off
   if (dst == null) rt.npe();
   if (offset < 0 || offset + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   for (let i = begin; i < end; i++) dst[offset + i - begin] = this.charCodeAt(i);
-});
-// ART's compact-string internals, which libcore's builders and StringLatin1/StringUTF16 use: coder
-// 0 (LATIN1) holds each char in a byte, coder 1 (UTF16) in two, low byte first; fills start at a byte index
-const NOT_LATIN1 = /[^\x00-\xff]/;
-sm("coder()B", function () { return NOT_LATIN1.test(this) ? 1 : 0; });
-sm("fillBytesLatin1([BI)V", function (dst: Int8Array, at: number) { for (let i = 0; i < this.length; i++) dst[at + i] = this.charCodeAt(i); });
-sm("fillBytesUTF16([BI)V", function (dst: Int8Array, at: number) {
-  for (let i = 0, j = at; i < this.length; i++, j += 2) { const c = this.charCodeAt(i); dst[j] = c; dst[j + 1] = c >> 8; }
 });
 // ART's string allocations, which String's constructors become
 rt.registerJnis("java/lang/StringFactory", {
@@ -180,8 +151,6 @@ sm("replace(CC)Ljava/lang/String;", function (a: number, b: number) {
 sm("replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;", function (a: unknown, b: unknown) {
   return after(csText(a ?? rt.npe()), (target: string) => after(csText(b ?? rt.npe()), (replacement: string) => this.replaceAll(target, () => replacement)));
 });
-sm("concat(Ljava/lang/String;)Ljava/lang/String;", function (s: string) { return (this as string) + s; });
-sm("intern()Ljava/lang/String;", function () { return this as string; });
 sm("regionMatches(ILjava/lang/String;II)Z", function (toff: number, o: string, ooff: number, len: number) {
   if (toff < 0 || ooff < 0 || toff + len > this.length || ooff + len > o.length) return 0;
   return this.substr(toff, len) === o.substr(ooff, len) ? 1 : 0;
@@ -194,7 +163,6 @@ const charStream = (s: string) => intStream(Int32Array.from({ length: s.length }
 const codePointStream = (s: string) => intStream(Int32Array.from(s, (ch) => ch.codePointAt(0)!));
 sm("chars()Ljava/util/stream/IntStream;", function () { return charStream(this); });
 sm("codePoints()Ljava/util/stream/IntStream;", function () { return codePointStream(this); });
-sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return stringMatches(this as string, p); });
 sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, true); });
 sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, false); });
