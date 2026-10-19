@@ -6,7 +6,7 @@ import { mem } from "./mem.ts";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host.ts";
 import { type Cpu, cpuFor, type CallArg } from "./cpu.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
-import { parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
+import { PRIMS, parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
 import { after, curThread } from "../jvm/natives/jentry.ts";
 import { isExternal, isLive, guestAddress } from "../jvm/natives/jmemory.ts";
 import { vm, type JniClass, type JniField } from "./jnivm.ts";
@@ -260,9 +260,9 @@ function envFor(cpu: Cpu): number {
   return cpu.env;
 }
 
-const PRIM = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
-const PRIM_DESC = ["L", "Z", "B", "C", "S", "I", "J", "F", "D", "V"];
-const elemSize: Record<string, number> = { Z: 1, B: 1, C: 2, S: 2, I: 4, J: 8, F: 4, D: 8 };
+/** the types of JNI's per-type functions, in its order: Object, the primitives, Void */
+const PRIM = ["Object", ...Object.values(PRIMS).map((p) => p.title), "Void"];
+const PRIM_DESC = ["L", ...Object.keys(PRIMS), "V"];
 /** the native copies of arrays that Get<Prim>ArrayElements and GetPrimitiveArrayCritical gave out, until released: by pointer, and by array for the call boundaries that sync them */
 const pinned = new Map<number, { arr: unknown; type: string }>();
 const pinsOf = new Map<unknown, number[]>();
@@ -274,7 +274,7 @@ function unpin(p: number, arr: unknown): void {
   if (at.length > 1) at.splice(at.indexOf(p), 1); else pinsOf.delete(arr);
 }
 function pin(arr: unknown, type: string, isCopy: number): number {
-  const n = vm.length(arr), p = mem.malloc(Math.max(1, n * elemSize[type]));
+  const n = vm.length(arr), p = mem.malloc(Math.max(1, n * PRIMS[type].size));
   vm.toGuest(arr, type, 0, n, p);
   pinned.set(p, { arr, type });
   const at = pinsOf.get(arr);

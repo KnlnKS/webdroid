@@ -6,8 +6,7 @@ import { javaName, type JClass, typeName } from "../compiler/program.ts";
 import { idOfClass, fieldId } from "./classes.ts";
 
 import { executableSlot, methodAt } from "./reflect.ts";
-import { BOX } from "../compiler/primitives.ts";
-import { VIEWS } from "../compiler/copy.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
@@ -65,7 +64,7 @@ function make(w: World) {
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
   const aset = fn("an:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
   const box = (letter: string) => {
-    const [cls] = BOX[letter], bits = letter === "J" || letter === "D" ? "J" : "I";
+    const cls = PRIMS[letter].box, bits = letter === "J" || letter === "D" ? "J" : "I";
     return java("an:box:" + letter, [bits], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
   };
   const call = (cls: string, name: string, desc: string, params: ("I" | "J" | "L")[], ret: "I" | "L" | "V") =>
@@ -102,7 +101,7 @@ function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: Enc
   if (desc[0] === "[") {
     const elem = desc.slice(1), items = v as EncVal[];
     // a primitive array is filled on the host and copied in
-    if (elem.length === 1) return w.bridge.toJava(VIEWS[elem].from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
+    if (elem.length === 1) return w.bridge.toJava(PRIMS[elem].array.from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
     const values: unknown[] = [];
     for (const x of items) values.push(yield* valueOf(w, s, strand, dex, x, elem));
     return arrayOf(s, elem, values);

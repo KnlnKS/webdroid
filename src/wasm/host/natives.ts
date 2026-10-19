@@ -11,18 +11,17 @@ import { ACC, kindOf, type MethodInfo } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { mid } from "../compiler/ids.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
+import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
 import { Bridge } from "./bridge.ts";
 import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
-import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy.ts";
+import { SIZE, copyFn } from "../compiler/copy.ts";
 import { emitSave, emitRestored, ROOT } from "../compiler/hostcalls.ts";
 import { crossings } from "./stats.ts";
 
-/** the primitive array classes natives take and return */
-const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
 const OBJECT = "Ljava/lang/Object;", STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
-const isPrimArray = (d: string) => PRIM_ARRAYS.includes(d);
+const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && d[1] in PRIMS;
 const isRef = (d: string) => d[0] === "L" || d[0] === "[";
 const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref)
   : ({ Z: T.i32, B: T.i32, S: T.i32, C: T.i32, I: T.i32, F: T.f32, D: T.f64, J: T.i64 } as Record<string, VT>)[d];
@@ -72,7 +71,7 @@ const resultKind = (p: Plan): string => (p.ret === null ? "v" : p.ret === T.exte
 const settleKey = (p: Plan): string => "settle:" + resultKind(p);
 const landingKey = (p: Plan): string => "land:" + resultKind(p);
 const importKey = (p: Plan): string => p.id + (p.suspends ? p.always ? "#s" : "#p" : "");
-interface Landing { own: [number, View][]; result: View | null; value: unknown; error?: unknown }
+interface Landing { own: [number, PrimArray][]; result: PrimArray | null; value: unknown; error?: unknown }
 
 interface Plan {
   id: string; fn: HostFn; recv: boolean;
@@ -295,7 +294,7 @@ export class Natives implements NativeBinder {
       if (!t) throw e;
       return throwJava(t);
     };
-    const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem.buffer, ptr, len);
+    const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new PRIMS[kind].array(ctx.mem.buffer, ptr, len);
     // `reserve(bytes)`: 8-aligned scratch past the current top
     const reserve = (bytes: number): number => {
       const at = ((ctx.sp.value as number) + 7) & -8, need = at + bytes, have = ctx.mem.buffer.byteLength;
@@ -304,7 +303,7 @@ export class Natives implements NativeBinder {
       return at;
     };
     // a result array is left at the scratch top, which the stub copies out
-    const put = (r: View | null) => {
+    const put = (r: PrimArray | null) => {
       if (r === null) return -1;
       const at = reserve(r.byteLength);
       new (r.constructor as typeof Uint8Array)(ctx.mem.buffer, at, r.length).set(r as never);
@@ -314,7 +313,7 @@ export class Natives implements NativeBinder {
       // Release copied arguments before the native can re-enter Java.
       release: (list) => { for (const [ptr] of list) if (ptr < (ctx.sp.value as number)) ctx.sp.value = ptr; },
       own: (list, kind, ptr, len) => {
-        const v = view(kind, ptr, len) as (View & { slice(): View }) | null;
+        const v = view(kind, ptr, len) as (PrimArray & { slice(): PrimArray }) | null;
         if (v === null) return null;
         const same = list.find(([at, copy]) => at === ptr && copy.constructor === v.constructor && copy.byteLength === v.byteLength);
         if (same) return same[1];
@@ -354,8 +353,8 @@ export class Natives implements NativeBinder {
 }
 
 interface Aux {
-  release(list: [number, View][]): void;
-  own(list: [number, View][], kind: string, ptr: number, len: number): View | null;
+  release(list: [number, PrimArray][]): void;
+  own(list: [number, PrimArray][], kind: string, ptr: number, len: number): PrimArray | null;
   /** a plain native answered a Promise: whether this stack can wait for it, and handing it to the call site to settle */
   canWait?(): boolean;
   /** whether the strand has made so many nested entries that it should wait once (Sched.owes), and handing the call site the Promise to wait for */
@@ -363,7 +362,7 @@ interface Aux {
   yield?(promise: Promise<unknown>): void;
   park?(promise: Promise<unknown>): void;
 }
-type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
+type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: PrimArray | null) => number,
   B: HostBridge, D: string[], RD: string | null, CLS: string | null, X: Aux, S: (e: unknown) => void, K: typeof crossings) => HostFn;
 const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that

@@ -5,16 +5,16 @@
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object a native made (a Struct*) is copied field by field.
 import { failed } from "../compiler/linkage.ts";
-import { demangle, mangleField } from "../../jvm/abi.ts";
+import { PRIMS, demangle, mangleField } from "../../jvm/abi.ts";
 import { rt, JObj } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
-import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import type { ElemKind } from "../compiler/consts.ts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "../link/world.ts";
 import { TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/exc.ts";
 import type { Strand } from "../link/sched.ts";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
-import { VIEWS, SIZE, copyFn } from "../compiler/copy.ts";
+import { copyFn } from "../compiler/copy.ts";
 import { handleViews } from "../../android/handles.ts";
 import { count } from "./stats.ts";
 import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio.ts";
@@ -26,8 +26,6 @@ type HostView = ArrayBufferView & { length: number; BYTES_PER_ELEMENT: number };
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const REF = Symbol("java reference");
 const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Float64Array(1), i64 = new BigInt64Array(f64.buffer);
-/** the primitive array class whose elements a typed array holds */
-const ARRAY_OF: [Function, string][] = [[Int8Array, "[B"], [Uint8Array, "[Z"], [Uint16Array, "[C"], [Int16Array, "[S"], [Int32Array, "[I"], [BigInt64Array, "[J"], [Float32Array, "[F"], [Float64Array, "[D"]];
 
 /** a field value as host code holds it: floats and doubles are numbers, a long a bigint, a boolean 0 or 1 */
 export const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (i32[0] = v as number, f32[0]) : desc === "D" ? (i64[0] = v as bigint, f64[0]) : v;
@@ -147,9 +145,9 @@ export class Bridge implements HostBridge {
     return name.length === 2 ? this.primArray(o, name, range) : this.refArray(o, name);
   }
   private primArray(o: object, name: string, range?: [number, number]): unknown {
-    const len = this.op.alen(o), size = SIZE[elemKindOf(name)];
+    const len = this.op.alen(o), { size, array } = PRIMS[name[1]];
     const [from, count] = range && range[0] >= 0 && range[1] >= 0 && range[0] <= len && range[1] <= len - range[0] ? range : [0, len];
-    const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer);
+    const host = new array(count), bytes = new Uint8Array(host.buffer);
     this.transfer(o, size, from, count, bytes, true);
     this.live.set(o, host); this.owners.set(host, o); this.bases.set(host, from);
     this.copied(o, host, () => this.transfer(o, size, from, count, bytes, false));
@@ -421,7 +419,7 @@ export class Bridge implements HostBridge {
     return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
   }
   private newPrimArray(a: ArrayBufferView & { length: number }): object {
-    const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArrayOf(name)(a.length);
+    const name = "[" + Object.entries(PRIMS).find(([, p]) => a instanceof p.array)![0], j = this.newArrayOf(name)(a.length);
     this.transfer(j, (a as HostView).BYTES_PER_ELEMENT, 0, a.length, new Uint8Array(a.buffer, a.byteOffset, a.byteLength), false);
     return j;
   }

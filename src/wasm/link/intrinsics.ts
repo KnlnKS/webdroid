@@ -5,7 +5,8 @@ import { emitRefCopy, classIntrinsics } from "./classes.ts";
 
 import { unsafeIntrinsics } from "./unsafe.ts";
 import { reflectIntrinsics } from "./reflect.ts";
-import { H, type ElemKind } from "../compiler/consts.ts";
+import { H, elemKindOf, type ElemKind } from "../compiler/consts.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 import { stringIntrinsics } from "./strings.ts";
 import { charIntrinsics } from "./chars.ts";
 import { threadIntrinsics } from "./sched.ts";
@@ -101,10 +102,9 @@ def("java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V", (cx,
   cx.callThrower(c, "ase");
 });
 // the Unchecked forms are called once the range is known good
-const COPY_NAMES = { Z: "Boolean", B: "Byte", C: "Char", S: "Short", I: "Int", F: "Float", J: "Long", D: "Double" };
-for (const [d, k] of [["Z", "i8"], ["B", "i8"], ["C", "i16"], ["S", "i16"], ["I", "i32"], ["F", "i32"], ["J", "i64"], ["D", "i64"]] as const) {
-  def(`java/lang/System.arraycopy${COPY_NAMES[d]}Unchecked([${d}I[${d}II)V`, (cx, m, c) => {
-    const t = cx.tArr[k], a = cx.tData[k];
+for (const [d, { title }] of Object.entries(PRIMS)) {
+  def(`java/lang/System.arraycopy${title}Unchecked([${d}I[${d}II)V`, (cx, m, c) => {
+    const k = elemKindOf("[" + d), t = cx.tArr[k], a = cx.tData[k];
     c.lget(2).refCast(t).structGet(t, 2).lget(3).lget(0).refCast(t).structGet(t, 2).lget(1).lget(4).arrayCopy(a, a);
   });
 }

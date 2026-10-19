@@ -11,9 +11,10 @@ import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import { Info, UInfo } from "../compiler/info.ts";
 import { BOX, WIDEN } from "../compiler/primitives.ts";
+import { PRIMS } from "../../jvm/abi.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
-const LETTERS = Object.keys(WIDEN);
+const LETTERS = Object.keys(PRIMS);
 const code = (l: string) => l.charCodeAt(0);
 /** the wasm kind a field letter is held as: int-like and float bits as I, long and double bits as J */
 const kindOfLetter = (l: string): "I" | "J" => (l === "J" || l === "D" ? "J" : "I");
@@ -89,7 +90,7 @@ rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
 // fbox(letter, bits) -> the wrapper object of a primitive: valueOf of its class
 rt("fbox", ["I", "J"], "L", (cx, c) => {
   for (const l of LETTERS) {
-    const cls = BOX[l][0], vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
+    const cls = PRIMS[l].box, vo = cx.prog.resolve(cls, "valueOf", `(${l})L${cls};`);
     c.lget(0).i32(code(l)).raw(OP.i32_eq).if_();
     if (!vo) cx.gap(c, `${cls}.valueOf`); else { cx.emitEnsure(c, cls); c.lget(1); if (kindOfLetter(l) === "I") c.raw(OP.i32_wrap_i64); cx.callMethod(c, vo); c.ret(); }
     c.end();
@@ -160,7 +161,7 @@ export const fieldIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => fieldIntrinsics.set(`${FIELD}.${key}`, (cx, m, c) => f(cx, c));
 def("get(Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => { c.lget(0).lget(1); cx.callRt(c, "fget"); });
 def("set(Ljava/lang/Object;Ljava/lang/Object;)V", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "fset"); });
-for (const [name, l] of [["Boolean", "Z"], ["Byte", "B"], ["Char", "C"], ["Short", "S"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Double", "D"]] as const) {
+for (const [l, { title: name }] of Object.entries(PRIMS)) {
   const k = kindOfLetter(l);
   def(`get${name}(Ljava/lang/Object;)${l}`, (cx, c) => { c.lget(0).lget(1).i32(code(l)); cx.callRt(c, "fgetp"); if (k === "I") c.raw(OP.i32_wrap_i64); });
   // the value in local 2, as the bits fstore takes: sign-extended for int-like, zero-extended for float
