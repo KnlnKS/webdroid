@@ -1,5 +1,5 @@
 // The page owns system services; application Java runs in its own process realm.
-import { loadFramework, loadPlatformDex } from "../android/framework.ts";
+import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { setProcessIdentity, setProcessName, PROCESS_PID } from "../android/os.ts";
 import { onMain } from "../android/mainloop.ts";
 import { applyDeviceConfiguration } from "../android/resources.ts";
@@ -23,7 +23,7 @@ export function bootSystemOwner(): Promise<void> {
     setProcessName("system_server");
     fixProcessBitness([]);
     await loadTier();
-    await Promise.all([loadFramework(), loadPlatformDex()]);
+    await Promise.all([loadFramework(), mountPlatformJars()]);
     // app processes start meanwhile: their calls to system services wait for its endpoint
     const broker = processBroker();
     broker.registerSystemServer();

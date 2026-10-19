@@ -3,8 +3,9 @@
 import { mark, perf } from "../../perf.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "../link/aotstore.ts";
-import { rt, fieldNames } from "../../jvm/runtime.ts";
-import { useEntry, type Entry } from "../../jvm/natives/jentry.ts";
+import { rt } from "../../jvm/runtime.ts";
+import type { Entry } from "../../jvm/natives/jentry.ts";
+import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import { appArchives } from "../../jvm/natives/jdex.ts";
 import type { TierBackend } from "../../jvm/tier.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex.ts";
@@ -24,8 +25,7 @@ import { endWaits } from "../link/module.ts";
 import { hostNet } from "./inet.ts";
 import { guestMemory } from "./guest.ts";
 import { wasmJni } from "./jni.ts";
-import { useJniVm } from "../../native/jnivm.ts";
-import { wasmBox } from "../../jvm/natives/jbox.ts";
+import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
 import { hostSpec, natives, nativeSource } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
@@ -44,7 +44,7 @@ const TAB_HEAP = 2048 * 1024 * 1024;
 type Asked = Pick<AppCodeRequest, "roots" | "shown" | "status">;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
+export type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
 declare global {
   var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -105,7 +105,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   const install = (made: World) => {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
-    mark("worldMade");
+    useWorld(made); mark("worldMade");
     if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
     return made;
   };
@@ -115,9 +115,9 @@ export async function bootWasmTier(): Promise<TierBackend> {
       else {
         const p = new Program([]);
         p.add([dex], isPlatform ? p.boot : p.root); p.addExterns(externs);
-        useWorld(install(createWorld(p, { dexes })));
+        install(createWorld(p, { dexes }));
       }
-    } };
+    }, ready: Promise.resolve(), beginAppCode() {}, appCode: async () => {}, launched() {}, ahead: async () => {}, status: () => globalThis.__wdWasm };
   }
   // The hooks come first and the build is fetched after them: Java is not run before the tier is ready (the zygote waits for the app's code), and the page fetches the build while it
   // downloads the package
@@ -145,13 +145,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (seen) w.adopt(seen);
     return install(w);
   };
-  let entry: Entry | undefined;
-  const lazyEntry = (name: keyof Entry) => (...args: unknown[]) => ((entry ??= wasmEntry(current()))[name] as (...a: unknown[]) => unknown)(...args);
-  useEntry(Object.fromEntries(ENTRY_NAMES.map((n) => [n, lazyEntry(n)])) as unknown as Entry);
-  useJniVm(lazy(() => wasmJni(current())));
-  let names: ReturnType<typeof fieldNamesOf> | undefined;
-  fieldNames.find = (cls, name) => (names ??= fieldNamesOf(current()))(cls, name);
-  hook(current);
+  usePending(current);
   const [aot, jars] = await opening;
   store = aot;
   seen = await remembered ?? undefined;
@@ -159,9 +153,10 @@ export async function bootWasmTier(): Promise<TierBackend> {
   mark("platformReady");
   return {
     threads,
-    ready: store?.ready,
+    ready: store?.ready ?? Promise.resolve(),
+    status: () => globalThis.__wdWasm,
     loadDex(dex, isPlatform) {
-      if (isPlatform) return;
+      if (isPlatform) throw new Error("a page's platform classes are its build's");
       appDexes.push(dex);
       world?.addDexes([dex]);
     },
@@ -211,24 +206,35 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
   };
 }
-const lazy = <T extends object>(make: () => T): T => { let v: T | undefined; return new Proxy({} as T, { get: (_, k) => ((v ??= make()) as Record<PropertyKey, unknown>)[k] }); };
+/** `make()`'s value, made when a member is first read; `install` puts it where later reads find it without this */
+const lazy = <T extends object>(make: () => T, install?: (v: T) => void): T => {
+  let v: T | undefined;
+  return new Proxy({} as T, { get: (_, k) => { if (!v) { v = make(); install?.(v); } return (v as Record<PropertyKey, unknown>)[k]; } });
+};
 let using: World | undefined;
 /** makes `w` the realm's Java: what jentry, JNI and the runtime's natives reach (JNI once it is first used: a World without the platform has none) */
 export function useWorld(w: World): World {
   if (using === w) return w;
   using = w;
-  useEntry(wasmEntry(w)); useJniVm(lazy(() => wasmJni(w))); fieldNames.find = fieldNamesOf(w);
-  hook(() => w);
+  useJavaHost({ ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w) });
   return w;
 }
-/** the runtime's ways to make Java objects, in the World `world()` answers */
-function hook(world: () => World): void {
-  rt.mkThrowable = hostThrowable;
-  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world(), cls); };
-  rt.classFor = (cls) => world().bridge.toHost(classRef(world(), cls));
-  wasmBox.make = (desc, v) => world().bridge.toHost(boxRef(world(), desc, v));
+/** the realm's Java until its World is made: whatever first reaches Java makes it (`world`), and useWorld installs it in place of this */
+function usePending(world: () => World): void {
+  useJavaHost({
+    ...objectsIn(world),
+    entry: new Proxy({} as Entry, { get: (_, name) => (...args: unknown[]) => (wasmEntry(world())[name as keyof Entry] as Function)(...args) }),
+    jni: lazy(() => { world(); return vm; }),
+    fieldName: (cls, name) => fieldNamesOf(world())(cls, name),
+  });
 }
-const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "linkClass", "initClass", "iof", "classNameOf", "callOn", "after"] as const satisfies readonly (keyof Entry)[];
+/** the Java objects the runtime makes, in the World `world()` answers */
+const objectsIn = (world: () => World): Pick<JavaHost, "throwable" | "make" | "classFor" | "box"> => ({
+  throwable: hostThrowable,
+  make: (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world(), cls); },
+  classFor: (cls) => world().bridge.toHost(classRef(world(), cls)),
+  box: (desc, v) => world().bridge.toHost(boxRef(world(), desc, v)),
+});
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
  *  after its bytes have arrived */

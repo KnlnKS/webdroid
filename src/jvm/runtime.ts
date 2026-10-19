@@ -194,7 +194,7 @@ export class Runtime {
   /** the handle-table owner hook (src/android/handles.ts) */
   claimHandle?: (owner: object, h: bigint) => void;
   /** java.lang.Class object for a class name (set by the Wasm tier's host) */
-  classFor: (name: string) => any = (name) => ({ $classFor: name });
+  classFor: (name: string) => any = (name) => { throw new Error(`no World has the Class of ${name}`); };
 
   /** normalize a thrown JS value to a Java throwable */
   jx(e: unknown): any {

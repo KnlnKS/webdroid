@@ -1,6 +1,7 @@
 // The Wasm tier's host as the places that load code see it: loaded by a dynamic import, so a page opens the tier's build while the rest starts.
 // `JavaClass` is what host code holds of a loaded class.
 import type { DexFile } from "./dex.ts";
+import type { WasmStatus } from "../wasm/host/boot.ts";
 
 /** what an app build starts from: its baseline profile, its manifest, and the classes a launch instantiates first */
 export type AppRoots = { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] };
@@ -9,19 +10,23 @@ export interface ThreadState { name: string; state: string; blocker?: string; ow
 export interface TierBackend {
   threads(): ThreadState[];
   /** settles once the platform modules a start of the process loads are compiled: no Java runs before */
-  ready?: Promise<void>;
+  ready: Promise<void>;
+  /** `dex` joins the realm's classes; `platform`: the boot class path's, which a harness's World takes and a page's has from its build */
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are read while the zygote runs: begin preparing its compiled code; `shown` when the process was launched to show the app */
-  beginAppCode?(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void;
+  beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void;
   /** the app's dex files are all loaded: prepare the compiled code beginAppCode asked for (a build an earlier launch saved) before Java first runs */
-  appCode?(): Promise<void>;
+  appCode(): Promise<void>;
   /** the app has shown its first frame */
-  launched?(): void;
+  launched(): void;
   /** compiles code the app is likely to call soon in slices, while `idle` says the app's main thread still waits */
-  ahead?(idle: () => boolean): Promise<void>;
+  ahead(idle: () => boolean): Promise<void>;
+  /** where the realm's compiled code stands, as a harness reads it */
+  status(): WasmStatus | undefined;
 }
 let backend: TierBackend | undefined;
 export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
+export const tierStatus = (): WasmStatus | undefined => backend?.status();
 let loading: Promise<void> | undefined;
 /** loads the Wasm tier's host. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
 export function loadTier(): Promise<void> {
@@ -45,20 +50,18 @@ export async function usePagePorts(aot: MessagePort, compile: MessagePort, warm:
 }
 
 /** the Wasm tier begins preparing the app's code from its dex files before they are loaded */
-export function beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void { backend?.beginAppCode?.(dexes, roots, shown, status); }
+export function beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void { backend?.beginAppCode(dexes, roots, shown, status); }
 /** the Wasm tier's compiled app code, once the app's dex files are loaded; a process that began none (a system one) waits for the platform's modules */
-export async function loadAppCode(): Promise<void> { await backend?.appCode?.(); }
+export async function loadAppCode(): Promise<void> { await backend?.appCode(); }
 /** settles once the Wasm tier can run Java */
 export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
 /** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
-export function appLaunched(): void { backend?.launched?.(); }
+export function appLaunched(): void { backend?.launched(); }
 /** the main thread has waited a while: spend the time compiling ahead while `idle` holds */
-export function compileAhead(idle: () => boolean): void { void backend?.ahead?.(idle); }
+export function compileAhead(idle: () => boolean): void { void backend?.ahead(idle); }
 
 /** `dex` made known to the one World, whose loaders share a namespace */
 export function loadDex(dex: DexFile, platform = false): void {
-  // the browser's platform classes are the tab's build and Program, not something a World is given, and may be loaded before the tab's build is open
-  if (!backend && platform) return;
   if (!backend) throw new Error("loadTier() has not run");
   backend.loadDex(dex, platform);
 }

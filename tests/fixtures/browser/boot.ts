@@ -2,7 +2,7 @@ import { loadSystemFontMap } from "../../../src/android/fonts.ts";
 import { mountPlatformData } from "../../../src/shell/apex.ts";
 import { preloadPaint } from "../../../src/android/paint.ts";
 import { initDeviceLocales } from "../../../src/android/resnative.ts";
-import { loadPlatformDex } from "../../../src/android/framework.ts";
+import { mountPlatformJars } from "../../../src/android/framework.ts";
 import { JObj, rt } from "../../../src/jvm/runtime.ts";
 import { tierReady } from "../../../src/jvm/tier.ts";
 import { startMainLooper } from "../../../src/android/mainloop.ts";
@@ -11,7 +11,7 @@ import { callOn, mainThread } from "../../../src/jvm/natives/jentry.ts";
 /** the Wasm tier and the platform class path, as a page boots */
 export async function bootPlatform(): Promise<void> {
   await tierReady();
-  await loadPlatformDex();
+  await mountPlatformJars();
   mountPlatformData();
 }
 /** the platform, then the font map the zygote preloads (whose locale scripts are ICU's) and its text paints, as a page boots */
