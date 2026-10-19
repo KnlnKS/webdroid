@@ -26,10 +26,10 @@ const tally = { MATCH: 0, DIFF: 0, BLOCKED: 0 };
 const total = { methods: 0, units: 0, compileMs: 0, instantiateMs: 0, classes: 0, classMs: 0 };
 console.log(`${"workload".padEnd(15)} ${"wasm".padStart(10)} ${"expected".padStart(10)}  status`);
 for (const name of todo) {
-  let got: string, hit: number[] = [];
+  let got: string, hit: string[] = [];
   const want = String(expected[name]);
   const w = world(prog, { natives });
-  w.onGap = (id) => hit.push(id);
+  w.onGap = (gap) => hit.push(gap);
   await startProcess(w);
   const t0 = performance.now();
   try { got = String(await w.entryAsync("Bench", `w_${name}`, "()I")()); } catch (e) {
@@ -41,7 +41,7 @@ for (const name of todo) {
   for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += w.stats[k];
   const status = got === want ? "MATCH" : hit.length ? "BLOCKED" : "DIFF";
   tally[status]++;
-  console.log(`${name.padEnd(15)} ${(status === "BLOCKED" ? "-" : got).padStart(10)} ${want.padStart(10)}  ${status.padEnd(7)} ${String(w.stats.methods).padStart(4)} methods ${ms.toFixed(0).padStart(5)} ms${status === "BLOCKED" ? `  first gap: ${w.gapList[hit[0]]}` : ""}`);
+  console.log(`${name.padEnd(15)} ${(status === "BLOCKED" ? "-" : got).padStart(10)} ${want.padStart(10)}  ${status.padEnd(7)} ${String(w.stats.methods).padStart(4)} methods ${ms.toFixed(0).padStart(5)} ms${status === "BLOCKED" ? `  first gap: ${hit[0]}` : ""}`);
   if (status === "DIFF") process.exitCode = 1;
 }
 console.log(`${tally.MATCH} MATCH, ${tally.DIFF} DIFF, ${tally.BLOCKED} BLOCKED of ${todo.length}`);

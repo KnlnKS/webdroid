@@ -188,7 +188,7 @@ export function classByName(w: World, name: string, scope: unknown, mode: number
 export function dexOpen(w: World, path: unknown, loaderObject: object | null): object | Promise<object> {
   const file = w.hostString(path) as string;
   if (!w.opts.dexes) {
-    w.onGap(w.gapId("DexFile.openDexFileNative: the host has no dex files to open"));
+    w.onGap("DexFile.openDexFileNative: the host has no dex files to open");
     throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative"));
   }
   const dexes = w.opts.dexes(file);

@@ -1,5 +1,6 @@
 // Dalvik opcode table: name + format. Format determines code-unit length & operand decode.
 // https://source.android.com/docs/core/runtime/dalvik-bytecode
+import type { CodeItem } from "./dex.ts";
 
 export type Fmt =
   | "10x" | "12x" | "11n" | "11x" | "10t" | "20t" | "22x" | "21t" | "21s" | "21h"
@@ -113,4 +114,32 @@ export function insnLen(insns: Uint16Array, pc: number): number {
   const entry = OPS[op];
   if (!entry) throw new Error(`bad opcode 0x${op.toString(16)} at pc ${pc}`);
   return FMT_LEN[entry[1]];
+}
+/** the references of a method's code, each with the opcode that makes it (-1 for a catch handler's type) */
+interface RefVisitor {
+  /** an invoke-kind/range instruction's method_id */
+  invoke?(op: number, method: number): void;
+  /** the type_id of const-class, check-cast, instance-of, new-instance, new-array, filled-new-array/range or a catch handler */
+  type?(op: number, type: number): void;
+  /** the field_id of an iget/iput/sget/sput */
+  field?(op: number, field: number): void;
+}
+export function walkRefs(code: CodeItem, v: RefVisitor): void {
+  const insns = code.insns;
+  walkInsns(insns, (op, pc) => {
+    if (op >= 0x6e && op <= 0x78 && op !== 0x73) v.invoke?.(op, insns[pc + 1]);
+    else if (op === 0x1c || op === 0x1f || op === 0x20 || (op >= 0x22 && op <= 0x25)) v.type?.(op, insns[pc + 1]);
+    else if (op >= 0x52 && op <= 0x6d) v.field?.(op, insns[pc + 1]);
+  });
+  if (v.type) for (const t of code.tries) for (const [type] of t.handlers) v.type(-1, type);
+}
+/** every instruction's opcode and pc; one unwalkable instruction must not cost us the rest of the program */
+function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
+  for (let pc = 0; pc < insns.length;) {
+    visit(insns[pc] & 0xff, pc);
+    let len: number;
+    try { len = insnLen(insns, pc); } catch { return; }
+    if (len <= 0) return;
+    pc += len;
+  }
 }

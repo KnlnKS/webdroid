@@ -39,7 +39,7 @@ await mountPlatform(ROOT);   // makes the ICU data resident, which natives canno
 const w = world([join(out, "classes.dex"), ...CORE_PATHS], { natives });
 await startProcess(w);
 const hit: string[] = [];
-w.onGap = (id) => hit.push(w.gapList[id]);
+w.onGap = (gap) => hit.push(gap);
 const names = Object.keys(expected);
 const jdk = onJdk(sh, run, names.map((n) => `Lk.${n}`));
 const catchGone = w.entry("LkX", "catchGone", "()Ljava/lang/String;")();

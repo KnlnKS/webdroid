@@ -1,6 +1,6 @@
 // The Wasm tier's entry (src/jvm/tier.ts loads it). Each realm (the page, every process Worker) has a World over the platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
-import { mark } from "../../perf.ts";
+import { mark, perf } from "../../perf.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "../link/aotstore.ts";
 import { rt, fieldNames } from "../../jvm/runtime.ts";
@@ -18,7 +18,7 @@ import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldSt
 import { World, type WorldOptions } from "../link/world.ts";
 import { objectOfLoader } from "../link/loaders.ts";
 import type { HostLoop } from "../link/sched.ts";
-import type { Numbering } from "../link/aot.ts";
+import type { Numbering } from "../link/numbers.ts";
 import { externs, intrinsics } from "../link/intrinsics.ts";
 import { endWaits } from "../link/module.ts";
 import { hostNet } from "./inet.ts";
@@ -30,17 +30,20 @@ import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } 
 import { hostSpec, natives, nativeSource } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
 import { declareWaiting } from "./suspend.ts";
-import { prepareApp, type AppCode, type Built } from "./appcode.ts";
+import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
 import { openPersist } from "./persist.ts";
 import { COMPILE_WORKER_URL, spawnCompileWorker, type CompileClient } from "./compiler.ts";
 import { onProcessExit, processExited } from "../../process-exit.ts";
+import type { WarmAnswer } from "./warm-worker.ts";
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
+/** what a process asks of its app code: where a build starts, whether the app is shown, and where the launch says what it waits for */
+type Asked = Pick<AppCodeRequest, "roots" | "shown" | "status">;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
-type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; called?: () => string[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
+type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
 declare global {
   var __wdWasm: WasmStatus | undefined;
   /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
@@ -67,7 +70,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = new World(prog, { holdUpgrades: () => starting, answering: () => answeringFor() > 0, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, note: note as (ev: number, arg?: number) => void, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
   globalThis.__wdWasm = { stats: w.stats, demandMark: () => w.demandMark(), demandSince: (mark) => w.demandSince(mark) };
-  w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
+  w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
   // the frames of Java code: a method the host implements is not one
@@ -102,7 +105,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, called: () => made.calledMethods() });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.ranBuildSlots().platform });
     return made;
   };
   if (typeof location === "undefined") {
@@ -119,13 +122,20 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // downloads the package
   const opening = Promise.all([openAot(), fetchPlatformJars()]);
   // What a process numbers before its app's code arrives depends on timing (whether a build module has arrived, or its methods are compiled on demand), and a saved app build continues
-  // exactly that numbering: a process numbers what earlier ones did first, in their order, and adds what it numbers besides
+  // exactly that numbering: a process numbers what earlier ones did first, in their order, and adds what it numbers besides. A device's first process takes what the
+  // profiled launches numbered (scripts/wasm/aot-profile.ts), so its app's build can begin before the zygote has run.
   const persisting = openPersist();
-  const remembered = Promise.all([opening, persisting]).then(([[aot], persist]) => aot && persist?.prefix(aot.key)).catch(() => undefined);
+  const remembered = Promise.all([opening, persisting]).then(async ([[aot], persist]) =>
+    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering)).catch(() => undefined);
   let seen: Numbering | undefined;
+  /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
+  let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
+  const prepare = async (app: Asked, dexes: DexFile[], prefix: Numbering) =>
+    prepareApp({ ...app, dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist: await persisting, spawn: () => spawnCompileWorker(compileHost, COMPILE_WORKER_URL), prefix, signal: lifetime.signal,
+      warm: warmPort && warming() ? (request, transfer) => warmPort!.postMessage(request, transfer ?? []) : undefined });
   // a process that never presents a frame, such as a service's, is launched when the start window ends
-  const launched = () => { starting = false; if (world) code?.watch(world); };
-  setTimeout(launched, START_MS);
+  const launched = () => { clearTimeout(startWindow); starting = false; if (world) code?.watch(world); };
+  const startWindow = setTimeout(launched, START_MS);
   // The World is made when Java is first needed: the zygote's, before the app is known, whose dexes and saved build join it as they arrive
   const current = (): World => {
     if (!platform) throw new Error("the Wasm tier is not ready");
@@ -166,27 +176,26 @@ export async function bootWasmTier(): Promise<TierBackend> {
       try { while (quiet() && world.ahead(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
       catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
     },
-    async warm(stop) {
-      // a build without the list (or the guarded build) leaves the platform's code to its first calls
-      const list = await store?.fetchBytes("warm.json").catch(() => undefined);
-      if (!list) return true;
-      const ids = JSON.parse(new TextDecoder().decode(list)) as string[], w = current();
-      // in slices, so that a package arriving ends it: the code of what its launch runs is compiled as it runs either way
-      let at = 0;
-      for (; at < ids.length && !stop(); await new Promise((resolve) => setTimeout(resolve))) at = w.warm(ids, at, performance.now() + 10);
-      mark("warmed");
-      return at === ids.length;
+    beginAppCode(dexes, roots, shown, status) {
+      asked = { roots, shown, status };
+      // the zygote numbers what earlier processes did (`seen`) unless it needs more, which appCode finds
+      if (code || begun || !store || !seen || !dexes.length) return;
+      begun = { prefix: JSON.stringify(seen), code: prepare(asked, dexes, seen) };
+      begun.code.catch(() => {});
     },
-    async appCode(roots) {
+    async appCode() {
       if (code || !store) return;
       // System realms have no app DEX, but their first Java entry still needs the
       // prefetched platform modules before AOT.ready can mark a module missed.
       if (!appDexes.length) { await store.ready; return; }
+      if (!asked) throw new Error("the app's dexes were loaded without beginAppCode");
       // a saved build continues what the World numbered before the app's dexes arrived
-      const w = current(), prefix = w.since(w.base);
-      if (JSON.stringify(prefix) !== JSON.stringify(seen)) void persisting.then((persist) => persist?.savePrefix(store!.key, prefix)).catch(() => {});
+      const w = current(), prefix = w.numbers.since(w.base), numbered = JSON.stringify(prefix), early = begun;
+      if (numbered !== JSON.stringify(seen)) void persisting.then((persist) => persist?.savePrefix(store!.key, prefix)).catch(() => {});
+      begun = undefined;
       try {
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await persisting, spawn: () => spawnCompileWorker(compileHost, COMPILE_WORKER_URL), roots, prefix, signal: lifetime.signal });
+        if (early?.prefix === numbered) code = await early.code;
+        else { void early?.code.then((c) => c.close(), () => {}); code = await prepare(asked, appDexes, prefix); }
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
@@ -240,10 +249,31 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
   return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
 };
 
-let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined;
-/** a process Worker's store takes its modules from the page's (`serveAot`), and the page's compile host starts its compile workers */
-export function usePagePorts(aot: MessagePort, compile: MessagePort): void { aotPort = aot; compileHost = compile; }
+let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined, warmPort: MessagePort | undefined;
+/** a process Worker's store takes its modules from the page's (`serveAot`), the page's compile host starts its compile workers, and the page's warm Worker
+ *  compiles the build code its launch is about to run (`serveWarm`) */
+export function usePagePorts(aot: MessagePort, compile: MessagePort, warm: MessagePort): void {
+  aotPort = aot; compileHost = compile; warmPort = warm;
+  warm.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
+}
 export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
+const countWarm = ({ warmed, skipped }: WarmAnswer) => { perf.wasmWarmed += warmed; perf.wasmWarmSkipped += skipped; };
+/** where the server and the production build serve warm-worker.ts */
+const WARM_WORKER_URL = "/wasm-warm-worker.js";
+let warmer: Worker | null | undefined;
+/** whether the page runs a warm Worker: where V8 compiles a function on its first call and shares the code between Workers, and the machine has cores to spare */
+const warming = (): boolean => navigator.hardwareConcurrency >= 4 && /Chrome\//.test(navigator.userAgent);
+/** Gives a process Worker's port to the page's warm Worker, made with the first. Until processes ask, it warms what launches of the platform build ran. */
+export function serveWarm(port: MessagePort): void {
+  if (warmer === undefined) {
+    warmer = warming() ? new Worker(WARM_WORKER_URL, { type: "module" }) : null;
+    if (warmer) {
+      warmer.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
+      void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base }); });
+    }
+  }
+  if (warmer) warmer.postMessage({ port }, [port]); else port.close();
+}
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled. Undefined when the
  *  server has no build for the sources, which leaves all code to the on-demand compiler. */

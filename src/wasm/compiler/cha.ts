@@ -48,23 +48,57 @@ class Index {
   }
 }
 
-/** Class-hierarchy analysis over every class the Program knows, so a decision stays valid for classes that are linked later;
- *  a dex added afterwards can still falsify it, which `World.addDexes` checks against the recorded assumptions.
+/** Class-hierarchy analysis over the classes of the platform and the app's dexes from the start, so a decision stays valid for classes linked later, and over
+ *  those of a dex the app loads itself once they are linked. A class joining can still falsify a decision, which the World checks against the recorded assumptions.
  *  The index of a base Program is built once and kept in the Program, which processes share. */
 export class Cha {
   private prog: Program;
   private base: Index[] = [];
-  private own = new Index();
+  private own!: Index;
   /** answers by decl, then name and descriptor */
   private memo = new Map<string, Map<string, MethodInfo[]>>();
+  /** the dexes of loaders other than the app's and the boot class path's (code an app loads itself), whose classes join when they or a subclass are linked, as
+   *  ART's do: a class without instances changes no dispatch, and Firebase's dynamite modules open microG's 38,000 classes for a few */
+  private deferred = new Set<DexFile>();
+  /** the classes of deferred dexes that joined, with the classes their joining made reachable */
+  readonly late = new Set<string>();
   constructor(prog: Program) {
     this.prog = prog;
     for (let p = prog.base; p; p = p.base) this.base.unshift(sharedIndex(p));
-    for (const c of prog.own()) this.own.add(c);
+    this.reindex();
+  }
+  /** indexes the process's classes again, after their supertypes resolved differently */
+  reindex(): void {
+    this.own = new Index(); this.memo.clear();
+    for (const c of this.prog.own()) if (this.joined(c)) this.own.add(c);
+  }
+  defer(dexes: DexFile[]): void { for (const d of dexes) this.deferred.add(d); }
+  private joined(c: JClass): boolean { return !c.dex || !this.deferred.has(c.dex) || this.late.has(c.name); }
+  /** the process's classes in the hierarchy */
+  members(): string[] { return [...this.prog.own()].filter((c) => this.joined(c)).map((c) => c.name); }
+  /** adds the classes of deferred dexes among `name` and its supertypes before `name` is linked, and so before it has instances; the classes that made
+   *  reachable, if any */
+  admit(name: string): Set<string> | undefined {
+    if (!this.deferred.size) return undefined;
+    const found: string[] = [], seen = new Set<string>();
+    const up = (n: string): void => {
+      // the boot class path's classes are the platform's, in the hierarchy from the start
+      const c = this.prog.ownClass(n);
+      if (!c || seen.has(n)) return;
+      seen.add(n);
+      if (!this.joined(c)) found.push(n);
+      for (const s of supertypes(c)) up(s);
+    };
+    up(name);
+    if (!found.length) return undefined;
+    const reached = this.index(found);
+    for (const n of reached) this.late.add(n);
+    return reached;
   }
 
-  /** adds classes: the answers that change are those about their supertypes, and about those of classes already here below them (a class can arrive after its subclasses) */
-  index(names: Iterable<string>): void {
+  /** adds classes: the answers that change are those about their supertypes, and about those of classes already here below them (a class can arrive after its subclasses).
+   *  Returns the classes it made reachable: these and the classes below them. */
+  index(names: Iterable<string>): Set<string> {
     const stale = new Set<string>(), below = new Set<string>();
     const up = (n: string): void => {
       if (stale.has(n)) return;
@@ -76,6 +110,7 @@ export class Cha {
     for (const n of names) this.own.add(this.prog.get(n)!);
     for (const n of names) down(n);
     for (const n of stale) this.memo.delete(n);
+    return below;
   }
   /** the direct subtypes of n, read where they are listed: Object's run to hundreds of thousands in a large app, and a walk takes a few */
   private *subsOf(n: string): Generator<string> {

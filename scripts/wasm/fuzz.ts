@@ -139,7 +139,7 @@ sh(["d8", ...(flag("--debug") ? [] : ["--release"]), "--output", out, join(out, 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);
 const w = world([dex, ...PLATFORM_PATHS.slice(0, 2)], { natives });
-w.onGap = (id) => hit.push(w.gapList[id]);
+w.onGap = (gap) => hit.push(gap);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
 const cyclic = irreducible ? methods.filter((m) => {
   const item = m.dex.code(m.codeOff);

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dexesFrom } from "../dexes.ts";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
+import type { AppCodeRequest } from "../../src/wasm/host/appcode.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../src/jvm/dex.ts";
 import { vfs } from "../../src/shell/vfs.ts";
@@ -14,6 +15,8 @@ import { guestMemory } from "../../src/wasm/host/guest.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { hostLoop, useWorld } from "../../src/wasm/host/boot.ts";
 
+/** the platform build under `key` at `base`, as prepareApp sees it, without its files */
+export const fakeAot = (base: string, key: string): AppCodeRequest["aot"] => ({ base, key, bytes: () => undefined });
 export function loadDexes(path: string) {
   return dexesFrom(new Uint8Array(readFileSync(path)), path);
 }

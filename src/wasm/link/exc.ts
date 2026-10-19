@@ -18,7 +18,7 @@ export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
 /** After the counters, a fixed window the host bridge copies arrays through: growing memory during a native would detach the views it holds of its
  *  arguments. Scratch for natives starts after it. */
 export const TRANSFER_BASE = COUNT_BASE + 4 * COUNT_SLOTS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
-/** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: World.warm calls methods to have the engine compile them. */
+/** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: the warm Worker calls methods to have the engine compile them (warmshim.ts). */
 export const WARM_AT = 0;
 /** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is
  *  its size in the engine's baseline code to within 10% (8,700 frames of 1 parameter (weight 11) or 2,030 of 10 parameters and 20 locals (weight 53) fill node's 984 KB stack: about 100,000).

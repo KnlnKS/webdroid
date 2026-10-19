@@ -7,3 +7,6 @@ export type ElemKind = "i8" | "i16" | "i32" | "i64" | "ref";
 export const elemKindOf = (desc: string): ElemKind => ({ Z: "i8", B: "i8", C: "i16", S: "i16", I: "i32", F: "i32", J: "i64", D: "i64" } as Record<string, ElemKind>)[desc[1]] ?? "ref";
 export function f32bits(x: number): number { const b = new DataView(new ArrayBuffer(4)); b.setFloat32(0, x, true); return b.getInt32(0, true); }
 export function f64bits(x: number): bigint { const b = new DataView(new ArrayBuffer(8)); b.setFloat64(0, x, true); return b.getBigInt64(0, true); }
+/** java.lang.Math's transcendental natives, by arity: the host's Math, imported as they are rather than wrapped as natives */
+export const MATH_ARITY = { acos: 1, asin: 1, atan: 1, cbrt: 1, cos: 1, cosh: 1, exp: 1, expm1: 1, log: 1, log10: 1, log1p: 1, sin: 1, sinh: 1, tan: 1, tanh: 1,
+  atan2: 2, hypot: 2, pow: 2 } as const;

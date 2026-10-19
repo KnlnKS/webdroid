@@ -30,26 +30,18 @@ export class StructStrings {
   }
   /** leaves the vtable of the receiver on the stack (anyref in) of a call declared on `decl` */
   vtab(c: Code, _decl: string): void { c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0); }
-  /** a constant is made on first use and kept in a global of the module that uses it: the interned String of the JS string the engine imports as a constant */
+  /** A constant is made on first use and kept in a global of the module that uses it: the interned String of the JS string the engine imports as a constant.
+   *  The test is inline, as a call of a function per constant costs the engine a compile and its baseline code a call. */
   literal(c: Code, s: string): void {
-    const cx = this.cx;
-    c.call(cx.memo("lit:" + s, () => {
-      const f = cx.mb.reserveFunc(cx.mb.addFuncType([], [T.anyref]), "$lit"), js = s.isWellFormed() ? cx.stringConst(s) : -1, fromJs = this.fromJs(), intern = this.intern();
-      // a defined global's index follows every imported global, so the global, and the body that names it, wait for the module's last import
-      cx.atFinish(() => {
-        const g = cx.mb.addGlobal(T.anyref, true, [0xd0, 0x6e]), b = new Code(0);
-        b.gget(g).refIsNull().if_();
-        if (js >= 0) b.gget(js);
-        else {
-          // a name in an import section is UTF-8, which cannot hold a lone surrogate: the UTF-16 units come from a data segment
-          const units = Uint8Array.from({ length: 2 * s.length }, (_, i) => (s.charCodeAt(i >> 1) >> (8 * (i & 1))) & 255);
-          b.i32(0).i32(s.length).arrayNewData(cx.tData.i16, cx.mb.addDataPassive(units)).i32(0).i32(s.length).call(this.b.fromCharCodeArray);
-        }
-        b.call(fromJs).call(intern).gset(g).end().gget(g);
-        cx.mb.setBody(f, b.finish());
-      });
-      return f;
-    }));
+    const cx = this.cx, g = cx.memo("lit:" + s, () => cx.mb.defineGlobal(T.anyref, true, [0xd0, 0x6e]));
+    c.block(T.anyref).ggetDefined(g).brOnNonNull(0);
+    if (s.isWellFormed()) c.gget(cx.stringConst(s));
+    else {
+      // a name in an import section is UTF-8, which cannot hold a lone surrogate: the UTF-16 units come from a data segment
+      const units = cx.memo("litdata:" + s, () => cx.mb.addDataPassive(Uint8Array.from({ length: 2 * s.length }, (_, i) => (s.charCodeAt(i >> 1) >> (8 * (i & 1))) & 255)));
+      c.i32(0).i32(s.length).arrayNewData(cx.tData.i16, units).i32(0).i32(s.length).call(this.b.fromCharCodeArray);
+    }
+    c.call(this.fn("lit", [T.externref], [T.anyref], (b) => { b.lget(0).call(this.fromJs()).call(this.intern()); })).gsetDefined(g).ggetDefined(g).end();
   }
   /** intern(s) -> the String the host holds for these chars (this one if it has none) */
   intern(): number {

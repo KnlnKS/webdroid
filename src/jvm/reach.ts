@@ -8,7 +8,7 @@
 // the same rule, with no special case.
 
 import { ACC, type DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "./dex.ts";
-import { insnLen } from "./opcodes.ts";
+import { walkRefs } from "./opcodes.ts";
 import { descToName } from "./abi.ts";
 
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */
@@ -139,21 +139,9 @@ export class Program {
 
 const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
 
-const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
-  0x6e: 1, 0x6f: 0, 0x70: 0, 0x71: 0, 0x72: 1,
-  0x74: 1, 0x75: 0, 0x76: 0, 0x77: 0, 0x78: 1,
-};
+/** invoke-virtual and invoke-interface (and their /range forms) dispatch; the other invokes call their target exactly */
+const dispatched = (op: number) => op === 0x6e || op === 0x72 || op === 0x74 || op === 0x78;
 const splitKey = (k: MemberKey): [string, string] => { const i = k.indexOf("."); return [k.slice(0, i), k.slice(i + 1)]; };
-/** every instruction's opcode and pc; one unwalkable instruction must not cost us the rest of the program */
-function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
-  for (let pc = 0; pc < insns.length;) {
-    visit(insns[pc] & 0xff, pc);
-    let len: number;
-    try { len = insnLen(insns, pc); } catch { return; }
-    if (len <= 0) return;
-    pc += len;
-  }
-}
 
 export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []): ReachResult {
   const r: ReachResult = {
@@ -235,29 +223,22 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
     const hit = p.resolve(...splitKey(work.pop()!));
     if (!hit?.m.codeOff) continue;
     const dex = p.dexOf(hit.cls)!;
-    const code = dex.code(hit.m.codeOff);
-    const insns = code.insns;
-    walkInsns(insns, (op, pc) => {
-      const kind = INVOKE[op];
-      if (kind !== undefined) {
-        const mIdx = insns[pc + 1];
+    walkRefs(dex.code(hit.m.codeOff), {
+      invoke(op, mIdx) {
         const owner = typeName(dex.type(dex.method(mIdx).cls));
-        if (owner) (kind ? virtualSite : exactSite)(owner, sigOf(dex, mIdx));
-      } else if (op === 0x22) {                                  // new-instance
-        const t = typeName(dex.type(insns[pc + 1]));
-        if (p.has(t)) instantiate(t); else touchClass(t);
-      } else if (op === 0x23 || op === 0x24 || op === 0x25 ||    // new-array, filled-new-array
-                 op === 0x1c || op === 0x1f || op === 0x20) {    // const-class, check-cast, instance-of
-        touchClass(typeName(dex.type(insns[pc + 1])));
-      } else if (op >= 0x52 && op <= 0x6d) {                     // iget/iput/sget/sput
-        const f = dex.field(insns[pc + 1]);
-        const owner = typeName(dex.type(f.cls));
+        if (owner) (dispatched(op) ? virtualSite : exactSite)(owner, sigOf(dex, mIdx));
+      },
+      type(op, idx) {
+        const t = typeName(dex.type(idx));
+        if (op === 0x22 && p.has(t)) instantiate(t); else touchClass(t);
+      },
+      field(_, idx) {
+        const f = dex.field(idx), owner = typeName(dex.type(f.cls));
         touchClass(owner);
         if (owner) bump(r.fieldAccesses, owner + "." + f.name);
         if (owner && (!p.has(owner) || !p.hasField(owner, f.name))) bump(r.unresolvedFields, owner + "." + f.name);
-      }
+      },
     });
-    for (const t of code.tries) for (const [typeIdx] of t.handlers) touchClass(typeName(dex.type(typeIdx)));
   }
 
   return r;
@@ -287,15 +268,17 @@ export function callClosure(p: Program, roots: MethodRoot[], limit: number): { c
     const level = next;
     next = [];
     for (const { cls, m } of level) {
-      const dex = p.dexOf(cls)!, insns = dex.code(m.codeOff).insns;
+      const dex = p.dexOf(cls)!;
       touch(cls);
-      walkInsns(insns, (op, pc) => {
-        if (INVOKE[op] !== undefined) {
-          const ref = dex.method(insns[pc + 1]), owner = typeName(dex.type(ref.cls));
+      walkRefs(dex.code(m.codeOff), {
+        invoke(op, idx) {
+          const owner = typeName(dex.type(dex.method(idx).cls));
           if (op === 0x71 || op === 0x77) touch(owner);
-          add(owner, sigOf(dex, insns[pc + 1]));
-        } else if (op === 0x22) touch(typeName(dex.type(insns[pc + 1])));
-        else if (op >= 0x60 && op <= 0x6d) touch(typeName(dex.type(dex.field(insns[pc + 1]).cls)));
+          add(owner, sigOf(dex, idx));
+        },
+        type(op, idx) { if (op === 0x22) touch(typeName(dex.type(idx))); },
+        // sget/sput
+        field(op, idx) { if (op >= 0x60) touch(typeName(dex.type(dex.field(idx).cls))); },
       });
     }
   }

@@ -18,7 +18,7 @@ await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "E.expected.txt"));
 
 const w = world([dex, ...jars], { natives }), gaps: string[] = [];
-w.onGap = (id) => gaps.push(w.gapList[id]);
+w.onGap = (gap) => gaps.push(gap);
 const entry = wasmEntry(w);
 const missesBefore = perf.wasmFacadeMisses;
 const wasm = await entryCases();

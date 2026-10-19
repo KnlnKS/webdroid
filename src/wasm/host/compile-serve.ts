@@ -4,9 +4,10 @@
 import { Program, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program.ts";
 import { defineProxy, type ProxyDefinition } from "../link/proxy.ts";
 import { World } from "../link/world.ts";
-import { buildApp, type AppBuild } from "../link/apps.ts";
+import { buildPart, type AppPart } from "../link/apps.ts";
 import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit.ts";
-import type { AppIndex, Demand, Numbering } from "../link/aot.ts";
+import type { AppIndex, Demand } from "../link/aot.ts";
+import type { Numbering } from "../link/numbers.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach.ts";
@@ -14,6 +15,7 @@ import { parseBaselineProfile } from "../../jvm/baselineprof.ts";
 import { rootsOf } from "../../jvm/roots.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
 import { methodOf } from "../compiler/ids.ts";
+import type { AppRoots } from "../../jvm/tier.ts";
 
 /** what the worker's realm provides: the platform's dex files, the registered natives and the intrinsics, which must be the page's for the code to be the page's */
 export interface CompileEnv {
@@ -25,13 +27,14 @@ export interface CompileEnv {
   heapUsed(): number;
   hostWhole?(name: string): boolean;
 }
-/** the methods an app build compiles: the baseline profile's, those of the classes a launch instantiates, those of the manifest's other components, and what these call */
-export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launch: string[]; limit?: number }
+/** the methods an app build compiles: the baseline profile's, then all of the app's when `whole`, else those of the classes a launch instantiates, those of the manifest's
+ *  other components, and what these call, up to `limit` */
+export type BuildRoots = AppRoots & { whole?: boolean; limit?: number };
 /** dex files as they cross to the worker: the archives' bytes (an entry of a stored archive is a view of the whole archive) and their names */
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; prefix?: Numbering; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
+  | { type: "init"; dexes: Containers; aot?: { base: string; index?: Uint8Array; app?: AppIndex }; sync?: Numbering; prefix?: Numbering; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true; shard?: [index: number, shards: number] }
   | { type: "add"; dexes: Containers; loader?: LoaderId; loaders?: LoaderSnapshot }
   | { type: "proxy"; definition: ProxyDefinition; loaders: LoaderSnapshot }
   | { type: "namespaces"; loaders: LoaderSnapshot }
@@ -42,7 +45,7 @@ export type CompileResponse =
   /** the worker is listening: a module worker whose imports await something drops the messages sent before it is, so nothing is sent until this arrives */
   | { type: "loaded" }
   | { type: "ready"; ms: number }
-  | { type: "built"; build: AppBuild; methods: number; ms: number }
+  | { type: "built"; part: AppPart; methods: number; ms: number }
   | { type: "unit"; id: number; result: UnitResult; ms: number }
   | { type: "failed"; id?: number; message: string };
 export interface Port { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent) => void) | null }
@@ -55,10 +58,9 @@ export function serveCompile(port: Port, env: CompileEnv): void {
   const open = (dexes: Containers) => dexes.flatMap(([name, bytes]) => dexesIn(bytes, name));
 
   async function init(req: Extract<CompileRequest, { type: "init" }>): Promise<number> {
-    const t0 = performance.now();
+    const t0 = performance.now(), index = req.aot && (req.aot.index ?? await env.fetchBytes(req.aot.base + "index.json"));
     const platform = new Program(await env.platform());
     platform.addExterns(env.externs); appDexes = open(req.dexes);
-    const index = req.aot ? await env.fetchBytes(req.aot.base + "index.json") : undefined;
     const program = new Program(appDexes, platform);
     // an app build follows the loaders once its World has started, below
     if (!req.build) {
@@ -85,7 +87,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       followLoaders(w, req.loaders);
     }
     if (roots) {
-      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot);
+      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot, req.shard);
       if (req.oneShot) return performance.now() - t0;
     }
     units = new UnitCompiler(w);
@@ -94,10 +96,10 @@ export function serveCompile(port: Port, env: CompileEnv): void {
   }
 
   /** a build that may be refined restores the numbering; a one-shot build's worker is retired after it */
-  function build(demand: Demand, oneShot = false): void {
-    const t0 = performance.now(), methods = select(roots!, demand), built = buildApp(w!, methods, demand), ms = performance.now() - t0;
-    if (!oneShot) w!.rollback(built.index.base);
-    send({ type: "built", build: built, methods: methods.length, ms }, built.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
+  function build(demand: Demand, oneShot = false, [shard, shards] = [0, 1]): void {
+    const t0 = performance.now(), methods = select(roots!, demand), base = w!.numbers.marks(), part = buildPart(w!, methods, demand, shard, shards), ms = performance.now() - t0;
+    if (!oneShot) w!.rollback(base);
+    send({ type: "built", part, methods: methods.length, ms }, part.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
   }
 
   /** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
@@ -118,6 +120,12 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     for (const [name, methods] of (roots.profile && parseBaselineProfile(roots.profile)) || []) {
       const dex = appDexes.find((d) => d.name === name);
       if (dex) for (const m of methods) if (m < dex.methodCount) { take(nameOf(dex, m), dex, m); called.push(rootOf(dex, m)); }
+    }
+    if (roots.whole) {
+      const mine = new Set(appDexes);
+      for (const cls of [roots.launch, [...world.prog.own()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name)].flat())
+        for (const m of world.prog.get(cls)?.methods ?? []) if (m.codeOff || world.intrinsic(m)) out.add(m);
+      return [...out];
     }
     const others = roots.manifest ? rootsOf(roots.manifest, reach).classes.filter((c) => !roots.launch.includes(c)) : [];
     let budget = roots.limit ?? CLOSURE_LIMIT;

@@ -87,7 +87,7 @@ for (const array of [true, false]) memoryIntrinsics.set(`${BUFFER}.${array ? "ar
   const get = (owner: string, name: string, desc: string) => { const st = cx.structFor(owner); c.refCast(st).structGet(st, cx.fieldIndex(owner, cx.prog.resolveField(owner, name, desc)!)); };
   const hb = c.newLocal(T.anyref), address = c.newLocal(T.i32), size = c.newLocal(T.i32), direct = "java/nio/DirectByteBuffer";
   c.lget(0); get(BUFFER, "hb", "[B"); c.ltee(hb).refIsNull().if_();
-  c.lget(0).call(cx.instanceOfFn(direct)).if_();
+  c.lget(0); cx.emitInstanceOf(c, direct); c.if_();
   c.lget(0); get(direct, "memoryRef", `L${MEMORY_REF};`); get(MEMORY_REF, "allocatedAddress", "J"); c.raw(OP.i32_wrap_i64).ltee(address).call(cx.imp.gblock).lset(size);
   c.end();
   c.lget(size).raw(OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/UnsupportedOperationException"); c.end();

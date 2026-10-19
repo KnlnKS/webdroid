@@ -4,25 +4,22 @@ import type { WorkerControl } from "./worker-control.ts";
 import { workerControlMethods } from "./worker-control-methods.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
-import { serveAot, serveCompileWorkers } from "../jvm/tier.ts";
+import { serveAot, serveCompileWorkers, serveWarm } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
 import { displayRate } from "./display-rate.ts";
 import { device } from "./config.ts";
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
-/** whether a Worker's zygote has had the engine compile the platform code launches use: the code is the tab's, so no later Worker warms it again */
-let warmed = false;
-export const platformWarmed = (): boolean => warmed;
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */
 export function spawnProcessWorker(url: string, pid: number): SpareWorker {
-  const worker = new Worker(url, { type: "module" }), clock = createGuestClockPort(pid), aot = new MessageChannel(), jars = new MessageChannel(), compile = new MessageChannel();
+  const worker = new Worker(url, { type: "module" }), clock = createGuestClockPort(pid), aot = new MessageChannel(), jars = new MessageChannel(), compile = new MessageChannel(), warm = new MessageChannel();
   serveAot(aot.port1);
   sendPlatformJars(jars.port1);
   serveCompileWorkers(compile.port1);
+  serveWarm(warm.port1);
   const spare: SpareWorker = { pid, url: new URL(url, location.href).href, worker, release: () => { clock.close(); aot.port1.close(); compile.port1.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
-  worker.addEventListener("message", ({ data }: MessageEvent<{ kind?: string }>) => { if (data.kind === "warmed") warmed = true; });
-  worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2, compile: compile.port2, warm: !warmed }, [aot.port2, jars.port2, compile.port2, ...clock.data.port ? [clock.data.port] : []]);
+  worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2, compile: compile.port2, warm: warm.port2 }, [aot.port2, jars.port2, compile.port2, warm.port2, ...clock.data.port ? [clock.data.port] : []]);
   // the zygote it runs reads the display's rate
   void displayRate().then(() => worker.postMessage({ rate: device.refreshRate }));
   return spare;

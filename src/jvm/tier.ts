@@ -2,6 +2,8 @@
 // `JavaClass` is what host code holds of a loaded class.
 import type { DexFile } from "./dex.ts";
 
+/** what an app build starts from: its baseline profile, its manifest, and the classes a launch instantiates first */
+export type AppRoots = { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] };
 export interface ThreadState { name: string; state: string; blocker?: string; owner?: string; strands?: number[] }
 /** what the Wasm tier's host provides the places that load code */
 export interface TierBackend {
@@ -9,10 +11,10 @@ export interface TierBackend {
   /** settles once the platform modules a start of the process loads are compiled: no Java runs before */
   ready?: Promise<void>;
   loadDex(dex: DexFile, platform: boolean): void;
-  /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
-  appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
-  /** has the engine compile the platform code launches use until `stop` says to: whether it went through all of it (World.warm) */
-  warm?(stop: () => boolean): Promise<boolean>;
+  /** the app's dex files are read while the zygote runs: begin preparing its compiled code; `shown` when the process was launched to show the app */
+  beginAppCode?(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void;
+  /** the app's dex files are all loaded: prepare the compiled code beginAppCode asked for (a build an earlier launch saved) before Java first runs */
+  appCode?(): Promise<void>;
   /** the app has shown its first frame */
   launched?(): void;
   /** compiles code the app is likely to call soon in slices, while `idle` says the app's main thread still waits */
@@ -34,20 +36,24 @@ export function serveAot(port: MessagePort): void {
 export function serveCompileWorkers(port: MessagePort): void {
   void import("../wasm/host/compilehost.ts").then((host) => host.serveCompileWorkers(port));
 }
-export async function usePagePorts(aot: MessagePort, compile: MessagePort): Promise<void> {
-  (await import("../wasm/host/boot.ts")).usePagePorts(aot, compile);
+/** and the page's warm Worker compiles the build code its launches are about to run */
+export function serveWarm(port: MessagePort): void {
+  void import("../wasm/host/boot.ts").then((host) => host.serveWarm(port));
+}
+export async function usePagePorts(aot: MessagePort, compile: MessagePort, warm: MessagePort): Promise<void> {
+  (await import("../wasm/host/boot.ts")).usePagePorts(aot, compile, warm);
 }
 
-/** the Wasm tier's compiled app code, once the app's dex files are loaded */
-export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> { await backend?.appCode?.(roots); }
+/** the Wasm tier begins preparing the app's code from its dex files before they are loaded */
+export function beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void { backend?.beginAppCode?.(dexes, roots, shown, status); }
+/** the Wasm tier's compiled app code, once the app's dex files are loaded; a process that began none (a system one) waits for the platform's modules */
+export async function loadAppCode(): Promise<void> { await backend?.appCode?.(); }
 /** settles once the Wasm tier can run Java */
 export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
 /** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
 export function appLaunched(): void { backend?.launched?.(); }
 /** the main thread has waited a while: spend the time compiling ahead while `idle` holds */
 export function compileAhead(idle: () => boolean): void { void backend?.ahead?.(idle); }
-/** the zygote's warm-up of the platform code launches use */
-export const warmCode = (stop: () => boolean): Promise<boolean> => backend?.warm?.(stop) ?? Promise.resolve(true);
 
 /** `dex` made known to the one World, whose loaders share a namespace */
 export function loadDex(dex: DexFile, platform = false): void {

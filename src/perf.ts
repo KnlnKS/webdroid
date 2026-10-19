@@ -29,6 +29,8 @@ export const perf = {
   // instantiated and their time, platform and app build modules loaded and missed, classes linked, stack switches, and natives called (Java to host)
   wasmMethods: 0, wasmCompileMs: 0, wasmModules: 0, wasmModuleMs: 0, wasmBytes: 0, wasmAotLoaded: 0, wasmAotMissed: 0, wasmAotMs: 0, wasmClasses: 0, wasmSuspensions: 0, wasmCrossings: 0,
   wasmUpgrades: 0, wasmAhead: 0,
+  // build methods the warm Worker had the engine compile ahead of this process (host/warm-worker.ts), and modules it could not instantiate
+  wasmWarmed: 0, wasmWarmSkipped: 0,
   // first-tier units merged away and dropped for collection a batch at a time (World.retire), and those the collector has freed
   wasmRetired: 0, wasmCollected: 0,
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,

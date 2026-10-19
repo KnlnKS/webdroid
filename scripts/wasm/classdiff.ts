@@ -60,14 +60,14 @@ const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ
 const cases = methods.map((m) => ({ m, args: [0n] }));
 const jdk = onJdk(sh, out, cases.map((c) => `C.${c.m.name} 0`));
 let bad = 0;
-const hit: number[] = [];
+const hit: string[] = [];
 for (const [i, c] of cases.entries()) {
-  const w = world(prog, { natives }); w.onGap = (id) => hit.push(id);
+  const w = world(prog, { natives }); w.onGap = (gap) => hit.push(gap);
   const exp = jdk[i], name = `C.${c.m.name}`;
   const got = async (f: () => unknown) => { try { return String(await f()); } catch (e) { if (process.env.J2W_V) console.log(name, e); return "throw"; } };
   const wasm = await got(() => w.entry(c.m.cls, c.m.name, c.m.desc)(0));
   if (wasm !== exp) { bad++; console.log(`MISMATCH ${name}: jdk=${exp} wasm=${wasm}`); }
-  if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].map((g) => w.gapList[g]).join("; ")}`); hit.length = 0; }
+  if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].join("; ")}`); hit.length = 0; }
 }
 {
   const w = world([join(out, "am/classes.dex"), ...jars]);

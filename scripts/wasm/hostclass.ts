@@ -23,7 +23,7 @@ await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 
 const w = addHostClasses(world([dex, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) })), gaps: string[] = [];
-w.onGap = (id) => gaps.push(w.gapList[id]);
+w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);
 

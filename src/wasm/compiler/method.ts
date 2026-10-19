@@ -788,9 +788,9 @@ export class MC {
         if (this.unresolved(dex.type(b))) return;
         const name = dex.typeName(b);
         if (name === "java/lang/Object") { this.copyReference(a); return; }
-        this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
+        this.get("L", a); cx.emitCast(c, name); this.set("L"); return;
       }
-      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(dex.typeName(ins.c))); this.set("I"); return;
+      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, dex.typeName(ins.c)); this.set("I"); return;
       case "array-length": this.arrayLength(b); this.set("I"); return;
       case "new-instance": {
         if (this.unresolved(dex.type(b))) return;

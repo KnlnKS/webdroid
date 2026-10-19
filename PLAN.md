@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-16
+# Webdroid status — 2026-10-17
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -15,14 +15,20 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   system services and natives. 64-bit processes run the reference build's bionic; text measures on HarfBuzz
   (`textcmp` 72/72); Path ops run on Skia.
 - **Every app process runs in its own Worker**; the page realm is `system_server`.
-- **Code delivery:** the platform is compiled at build time; an app's build is compiled in a Worker after its
-  first launch and persisted; bundled builds cover the gate apps; a launch without a saved build compiles likely
-  callees in idle time.
+- **Code delivery:** the platform is compiled at build time. A shown first launch without a saved or bundled build
+  waits for a build of the whole app, made in parallel shards in the compile host's process, as an install compiles an
+  app ahead; an app above 250k method references (TikTok) launches without one, compiling likely callees in idle time,
+  and is built after its launch. Builds after launches refine the app's build and are persisted; bundled builds cover
+  the gate apps; a page Worker warms the engine's code for what launches ran (Chrome).
 - **Latency:** `lat` gates on the first response frame. Every Calculator M, FitNotes and Komikku tap passes the
-  150 ms gate cold and warm by median of three runs (re-measured 2026-10-14). Komikku's cold taps are 36–177 ms per run
-  (medians 45–128), mostly first-tier Java and on-demand compiling; single runs still exceed 150 ms by up to 27 ms. Compile
-  Worker answers wait out the input window. `lat --ecores` measures an about 6× slower device. The 80–170 ms stalls that failed
-  earlier runs were the engine freeing merged-away units in one pause, now released in batches (`World.retire`).
+  150 ms gate cold and warm by median of three runs (2026-10-17). With the install-time build a first launch's taps
+  match warm ones (Calculator M `7` 16 ms against 55 on demand; Komikku's cold medians 16–101 ms against 49–118). The
+  80 ms target holds for every gated tap but Komikku's cold `appearance` (medians 82–91); its `start` met it once large
+  fallback fonts were read ahead while idle (median 66 ms cold, 64 warm, against 87 and 90). First launches take
+  longer (Calculator M 2.36 s, FitNotes 1.99 s, Komikku 6.69 s, against 2.27, 1.58 and 5.97 s); warm launches are
+  unchanged. Compile Worker answers wait out the input window. `lat --ecores` measures an about 6× slower device.
+  The 80–170 ms stalls that failed earlier runs were the engine freeing merged-away units in one pause, now released
+  in batches (`World.retire`).
   With second-tier units adopted again (`8392a936`), Komikku's cold `settings` and `appearance` taps ran 30–40 ms
   slower than without them on a loaded host (history, "Restored units cost Komikku's taps"); unresolved.
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
@@ -41,6 +47,26 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
+
+After the review cleanup (2026-10-19, on `df2c075a`): typecheck passes, 1,169 unit tests and all 16 `wasm all` suites
+pass. After `aot-profile --classes`, `aot` and `aot-profile` (1,103 code modules, 397 startup files, one prefix), the
+`--jobs 1` quick gate reaches 7 of 7 flows in 150 s with no missing APIs, errors, required natives, settle timeouts or
+wedges. Matched cold `lat` passes against the starting commit `d069a6ba`, each side built and profiled the same way
+(three passes, then three more of Komikku): every tap passed the 150 ms gate, and first-frame medians were 2.83 against
+2.86 s (Calculator M), 2.48 against 2.47 s (FitNotes) and 6.48 against 6.47 s (Komikku, whose one 10.4 s branch launch
+did not recur). A five-job gate on an unprofiled build, at loads of about 27, missed every flow on `prefix.json`'s 404
+and on the load signatures recorded below.
+
+With the install-time app build (2026-10-17, on `0cbacf96`): typecheck passes, 1,169 unit tests, all 16 `wasm all`
+suites and 31 of 31 `fwtest` exercises pass. After `aot` (1,103 code and 1,081 class modules, build `4cb15a87`) and
+`aot-profile` (one prefix over every profiled launch, so `prefix.json` ships), the `--jobs 1` quick gate reaches 7 of 7
+flows in 148 s (161 s before) with no missing APIs, errors, required natives, draw errors, settle timeouts or wedges;
+Komikku's only browser errors are SQLite's own query-planner warnings (automatic index, double-quoted literal) for its
+SQL. In the matched `lat` runs (three alternating a side, cold and warm), every tap with the build passed the 150 ms
+gate in every run (highest: Komikku `start` 129 ms); without it, Komikku's cold `start` (179 ms) and `appearance`
+(167 ms) missed once each, and one warm preparation timed out (history, "Compile workers that end or never load").
+A cold `lat` pass on build `4cb15a87` agrees: Calculator M's taps took 8–21 ms, FitNotes' 7–74 ms and Komikku's
+12–77 ms, with first frames at 2.38, 1.99 and 6.58 s.
 
 Rebased onto `knlnks/bytecode-wasm` (`85f08018`) to run on Node, pnpm and Vite+ (2026-10-16, loads of 3–12): typecheck
 passes, 1,169 unit tests pass under Vitest and all 16 `wasm all` suites pass. `aot` makes the same 1,103 code and 1,081
@@ -100,8 +126,9 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
 
 ## Open work, in priority order
 
-1. **Cold taps: fewer, cheaper modules.** A tap without a saved build compiles the methods it first calls, one
-   module per method; compiling ahead covers 16–45% of those links. The compiler takes 52% of `linkSlot`. A
+1. **On demand: fewer, cheaper modules.** Background processes, code outside a build (platform jars outside the
+   platform build, code an app loads itself) and apps above the whole-app limit compile the methods they first call,
+   one module per method; compiling ahead covers 16–45% of those links. The compiler takes 52% of `linkSlot`. A
    Chrome Worker charges about 18.5 µs per module against Node's 4.2 µs, and no V8 flag changes that, so fold
    `linkEnsure` (603 modules) into fewer modules. A callee prediction must hit more than
    about 70% to pay inside a tap (single-target callees hit 64%).
@@ -122,16 +149,19 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    after a full collection against 1.36 GB. On the base, merged-away units drained 32 per collection force full
    collections for external memory. Two of 14 of the branch's cold launches stalled idle on a black window before
    any gate, and none of the base's 12; the cause is open (history, "The branch against its base").
-4. **First-launch compile cost** (Komikku, Feeder, TikTok). Levers: compiler front-end allocation (about 200 MB/s,
-   `Flow` construction 12%); instantiation (code modules import about 172 globals each; cross-module class access
-   could use id-indexed arrays); relocatable numbering (classes, slots, selectors, gaps and links are numbered by the
-   page's World, which blocks any parallel or ahead-of-time compile; seeding app numbers at dex arrival
-   covers 99.9% of Komikku, but attaching a first build mid-session did not pay, see the history). Measure each on Komikku's first launch, three
-   matched runs or more. Without a platform build FitNotes' quick flow takes 144 s against 46 s, so the on-demand
+4. **First-launch build cost** (Komikku 3.0 s, FitNotes 0.5 s, TikTok). A first launch waits for its app's build,
+   so the compiler is now on its path: front-end allocation (about 200 MB/s, `Flow` construction 12%), a shard's fixed
+   cost (its script and jars, about 290 ms) and instantiation (code modules import about 172 globals each;
+   cross-module class access could use id-indexed arrays). Measure each on Komikku's first launch, three matched runs
+   or more. Without a platform build FitNotes' quick flow takes 144 s against 46 s, so the on-demand
    path itself is worth profiling. Building an app's static roots before its first launch and a Zig compiler were
    measured and rejected: the build costs more than the 6–9 s it saves TikTok's signup, and the compiler's profile
    has no phase to move (history, 2026-10-16).
-5. **Application compatibility.**
+5. **Launch reliability and status.** First launches no longer hang on the compile worker script, whose body
+   Chrome stopped delivering in about 1 of 80 (history, "Compile workers that end or never load"). Still open: one
+   first launch that did not wait for a build hung and one launch-only FitNotes run crashed its renderer, neither
+   reproduced; the page shows "Starting app…" through the whole launch, the build's wait included.
+6. **Application compatibility.**
    - *TikTok playback and input:* capture repeatable source media and separate decoded-video, EGL-swap and
      presentation counts; profile dense clips and warmed action latency. Its unchanged ByteVC decoder reached a
      near-30/s cadence on one 30-fps HEVC segment.
@@ -162,13 +192,13 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *`apks/new`:* McDonald's Order tab overlaps because the XAPK ships only the mdpi split. Walmart's Sparky needs
      an on-demand feature split that is not in the XAPK, and microG's SplitInstallService is disabled. Tubi's Widevine
      titles show a DRM error and Snapseed's "Looks" needs GLES 3.1 compute; both need a decision from the user.
-6. **Lower value; only with a new measurement that justifies it.**
+7. **Lower value; only with a new measurement that justifies it.**
    - `system_server` and the broker stores in a system Worker: the broker answers app IPC on the page thread, so
      slow page work starves app queries. Measure page-thread time during app IPC first.
    - Pre-linked images with relocations: direct calls measured neutral, and FitNotes' warm launch would save an
      estimated 100–200 ms; relocation matters mainly as the enabler of ahead-of-time compiles (item 4).
    - Per-signature trampolines in place of the per-name `callFn` and `hostFn` modules (15–30 ms of a launch).
-7. **Cleanup candidates** (confirm with a reference search before deleting): `src/jvm/runtime.ts` is still shaped
+8. **Cleanup candidates** (confirm with a reference search before deleting): `src/jvm/runtime.ts` is still shaped
    around the JS tier in places (`rt.make` gives a carrier of fields that cannot take a virtual call); browser tests
    intermittently fail with "End Of Central Directory signature not found" while reading a jar, still unexplained.
 
@@ -189,8 +219,9 @@ Unranked; each needs a measurement or a check against the current code before wo
 - **Hidden API:** no hidden-API policy is enforced, so reflection reaches `@hide` members that ART denies apps, and an
   app that relies on the denial takes another path (Compose's `findViewByAccessibilityIdTraversal` override recurses).
 - **Transport:** the relay terminates TLS with a leaf from its own CA, so certificate pinning cannot pass.
-- **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand; app code's
-  lazy Liftoff compile (about 107 ms of Calculator's launch) has no idle thread to move to.
+- **Delivery:** the platform build omits the APEX/module jars, so every realm compiles them on demand. In Chrome a
+  page Worker has the engine compile the build code launches ran before a process calls it; processes still compile
+  per-module helpers (`$new:`, `$dispatch:`) and on-demand units on first call, and other engines all of it.
 - **Platform gaps recorded before the Wasm tier:** WebView has no Safe Browsing or saveState, and cross-origin
   WindowProxy navigations hit `frame-src`; IME insets have zero height (the browser keyboard sits outside the
   canvas) and hardware keys beyond Enter are missing; one task per process, no recents, no ANR detection;

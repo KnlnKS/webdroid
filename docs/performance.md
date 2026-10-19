@@ -1,7 +1,7 @@
 # Performance: how to measure, and where the time goes
 
-The targets are in-app latency and frame pacing: launch to first app frame, every gated tap at most 150 ms from
-`pointerup` to the answering frame, and scroll presentation intervals. [PLAN.md](../PLAN.md) ranks the open work;
+The targets are in-app latency and frame pacing: launch to first app frame, every gated tap at most 80 ms from
+`pointerup` to the answering frame (`lat` fails above 150 ms), and scroll presentation intervals. [PLAN.md](../PLAN.md) ranks the open work;
 the [implementation history](implementation-history.md) records each measurement and rejected experiment, so check
 it before retrying an idea.
 
@@ -20,8 +20,8 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
   each gated tap (pointer-up to the intended UI state and response pixels) and a fixed scroll window (`fps` step:
   presentation intervals and page long tasks), on a fixed 1080×2160@480 screen. Scenarios are in `scripts/lat/scenarios/` (calculatorm, fitnotes,
   komikku, mihon; the heavy-app reports youtube, reddit, chatgpt and tiktok carry `"gate": false` and run only when named,
-  without failing the gate). Without `--warm` it measures a launch with no saved app build; `--warm` launches twice in one
-  profile and gates the second. `--gpu` uses the host GPU instead of SwiftShader, `--cpuprofile` profiles every
+  without failing the gate). Without `--warm` it measures a first launch, which waits for the app's install-time build; `--warm` launches
+  twice in one profile, clearing the app's data between, and gates the second. `--gpu` uses the host GPU instead of SwiftShader, `--cpuprofile` profiles every
   Worker, `--timeline` shows the app Worker's startup marks, `--trace` writes a browser-wide trace, and
   `WEBDROID_JS_FLAGS` passes V8 flags; `--engine webkit`, `--json <file>` and `--query <params>` are also
   accepted. For another app, add a temporary scenario and delete it afterwards.
@@ -31,10 +31,11 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
   `pointerdown` reports "did not change outside the pressed view"; time to the settled semantic state, presentation intervals and missed vsyncs are
   reported beside it. The Worker sends ≤ 128 px crops of the response regions with each presentation, and nothing
   probes the app between `pointerdown` and the end of the window. Tap times before 2026-10-13 used an earlier
-  semantic-plus-pixels clock and are not comparable. Each tap and `fps` step also carries the app Worker's
+  semantic-plus-pixels clock and are not comparable. A step starts once the app has been quiet for 600 ms: nothing
+  drawn or queued, no thread but the main one running Java, and no main-looper message due within a second. Each tap and `fps` step also carries the app Worker's
   frame timeline (`src/timeline.ts`: vsyncs, input, doFrame, draw, composite, present, looper idle/wake), read
   after the window. `--ecores` (macOS) runs Chrome on the efficiency cores at background priority, about 6× slower in the page and every Worker alike, for a slower-device pass; CDP CPU throttling is not used because it reaches only the page. `bundles=0` (on by
-  default in `lat`) keeps the bundled app builds out, so a run without `--warm` compiles the app on demand.
+  default in `lat`) keeps the bundled app builds out, so a run without `--warm` measures a first launch with no shipped build.
 - **Claims need matched runs:** the same inputs, serial (`--jobs 1`), nothing else running on the host, at least
   three runs per side, alternating revisions. Compare a failure with the starting commit before calling it a
   regression; Calculator and Lichess are flaky on unchanged code.
@@ -78,6 +79,20 @@ e2e has no profiling switch; use Chrome's remote debugging port:
 
 ## Current numbers
 
+`--gpu`, Worker processes, one job, Apple M4 Pro (14 cores), first response frame, medians of three alternating runs (2026-10-17). First launches wait for the install-time build; warm launches attach the build an earlier launch saved.
+
+| | First launch | Warm |
+|---|---|---|
+| Calculator M launch | 2.36 s (build 0.85 s; 2.27 s on demand) | 1.30 s |
+| FitNotes launch | 1.99 s (build 0.51 s; 1.58 s on demand) | 1.34 s |
+| Komikku launch | 6.69 s (build 3.0 s; 5.97 s on demand) | 2.37 s |
+| Calculator M taps | 12–25 ms (`7` 16; 55 on demand) | 15–30 ms |
+| FitNotes taps | 11–69 ms (`start` 69) | 10–67 ms (`start` 67) |
+| Komikku taps | `next` 16, `start` 101, `more` 52, `settings` 45, `appearance` 82 | `next` 15, `start` 95, `more` 48, `settings` 65, `appearance` 77 |
+| TikTok launch (report) | 11.1 s (above the whole-app limit: no wait) | |
+
+Earlier numbers, before the install-time build:
+
 `--gpu`, Worker processes, one job, Apple M4 Pro, medians or ranges of matched runs (2026-10-12/13). The platform
 build was rebuilt when the JS tier was deleted, so re-measure both sides before claiming a delta against these.
 
@@ -116,7 +131,9 @@ runs each, FitNotes `scroll-legs` p95 is 17.3–17.8 ms and Komikku `scroll-appe
 
 Repeating a tap bounds what a second tier could save (Komikku, back and then Appearance ten times in one session,
 2026-10-14). `appearance` took 167, 93 and 52 ms on its first, second and tenth visits cold, and 82, 64 and 50 ms
-warm. Its compiling fell from 33 ms to 0–6 ms after the first cold visit.
+warm. Its compiling fell from 33 ms to 0–6 ms after the first cold visit. From 2026-10-14 to 2026-10-16 no second-tier
+unit reached an app (history, "Units from the sandboxed frame"); with units and warmed merges, medians over three cold
+runs were 129, 69 and 52 ms on the first, second and tenth visits, against 131, 82 and 58 ms without units.
 
 The Wasm tier against ART (`pnpm ts scripts/wasm/g1art.ts --ref <g1.json>`, the reference AVD, 2026-10-14), steady state:
 
@@ -144,7 +161,11 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
   transition ends; its semantics appear only then. Second-tier planning and adoption take 4–12 ms per tap and
   render replay about 3 ms. V8 tiering is not a lever: a tenth of the default tier-up budget left Komikku's taps
   unchanged.
-- **Cold taps** are mostly on-demand compiling, one module per method. Calculator's first cold tap links 229–342
+- **First visits with a build** run compiled code; what remains is the app's Java and first uses. A platform font
+  file loads whole on first shaping and its CSS face is validated on registration, so the large fallback files (CJK,
+  color emoji, Tibetan) are read ahead while idle after the first frame; a small one costs a few ms on first use.
+- **Cold taps without a build** (a background process, code outside the build) are mostly on-demand compiling, one
+  module per method. Calculator's first cold tap links 229–342
   methods: 57–78 ms compiling and 18–21 ms creating modules. Across a cold launch `linkSlot` is 52% compiler,
   then `WebAssembly.Module` and `Instance`, encoding and import objects. The main process makes about 6,400
   modules (3,953 from `linkSlot`, 911 `buildClasses`, 603 `linkEnsure`, 318 stub pools).
@@ -153,12 +174,23 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
 - **Chrome charges a module about four times what Node does:** 18.5 µs against 4.2 µs per unit module, the same
   with every V8 flag tried, so the lever is fewer modules. Instantiation costs about the same in both and grows
   with exports.
-- **First launches without a saved build** compile broadly: Komikku compiles about 15,600 methods in 3.2 s (emit
+- **First launches** wait for the app's build, in shards (6 for Calculator M and FitNotes, 7 for Komikku on the
+  14-core host): 0.85, 0.51 and 3.0 s. Without it, first launches compile broadly: Komikku compiles about 15,600 methods in 3.2 s (emit
   1.5 s), about 115 µs a method in Node and 200 µs in the browser, into about 17,900 modules, with no single
   hotspot. The compiler front end allocates about 200 MB/s, `Flow` construction the largest share.
 - **Later launches** spend about 280 ms in `loadC` instantiating code modules with about 172 global imports each;
-  most of the rest is `addDexes` and `linkSlot`. FitNotes' warm app thread is busy about 1.3 s (JS 0.7 s, Java
-  0.38 s).
+  most of the rest is `addDexes` and `linkSlot`. In Chrome a page Worker has V8 compile the build code earlier launches
+  ran, so before the first tap the app Worker compiles 6–19k functions (64–480 ms), against 23–55k (300–1,190 ms)
+  before it and the inline literal and cast tests (traced under host load, 2026-10-15). FitNotes' warm app thread
+  is busy about 1.3 s (JS 0.7 s, Java 0.38 s). A warm launch compiles 76 (Calculator M) and 138 (Komikku) methods
+  on demand, mostly host-class natives. Komikku's first content comes at 2.2–2.4 s. Second-tier upgrades and the compile
+  Worker wait for the first frame that composes app content; when its IO coroutine's database build and Firebase's
+  dynamite open still run before that frame, main's page calls wait behind them, about 0.1 s in all.
+  Firebase's dynamite load opens microG's dex in the app process synchronously in 42–51 ms, mostly namespace entries
+  for its 38,000 classes, which join the class hierarchy as they are linked.
+- **Native JIT batches share the app's thread:** emitting a batch, compiling its module and V8's lazy compiles of
+  its functions hold the Worker 8–21 ms, and broker replies wait behind them, so a block is compiled only after 255
+  entries. At 48, Komikku's database startup compiled about 2,100 regions and slipped its first content by 0.8 s.
 - **Process contention:** the broker answers app IPC on the page thread, so slow page work starves app queries
   (the probe's synchronous readbacks once starved Komikku's chapter list). In the trio's gated windows the page
   starts serving a call within 0.3 ms, and the main thread waits at most 7.5 ms a window on broker calls

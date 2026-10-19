@@ -11,6 +11,7 @@
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
 import type { ClassRt, World } from "./world.ts";
+import { sameMarks, type Marks, type Numbering, type Tail } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
 import type { InfoRecord } from "./classes.ts";
 import type { DexFile } from "../../jvm/dex.ts";
@@ -42,7 +43,7 @@ export interface AotIndex {
   /** the other ids, in order: array classes, classes without bytecode */
   extraNames: string[];
   /** slots reserved after the platform classes, in order: [class, size] or a runtime function's name */
-  tail: (string | [string, number])[];
+  tail: Tail[];
   selectors: string[];
   gaps: string[];
   /** the link errors compiled code throws, by index */
@@ -73,8 +74,6 @@ export interface UnitHeader {
   allocs: string[];
   /** classes missing at the build that sites of the module fail on, with the slot of the method they are in */
   missing: [string, number][];
-  /** the gaps its code runs into, by id */
-  gaps: number[];
 }
 export interface CHeader extends UnitHeader {
   classes: number[];
@@ -86,13 +85,6 @@ export interface CHeader extends UnitHeader {
 // Emitted class import names replace type reflection, which can reject valid GC references.
 export const VERSION = 16;
 
-/** the sizes of what a World numbers, which only grow */
-export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
-/** a slot reservation after the platform classes: a block for a class (name, size) or a runtime function's slot (its name) */
-export type Tail = string | [string, number];
-/** what was numbered after `from`, in order: replaying it in a World at `from` numbers everything the same way */
-export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selectors: string[]; gaps: string[]; links: string[] }
-export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 /** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
 function numberingDiff(a: Numbering, b: Numbering): string {
   if (!sameMarks(a.from, b.from)) return `from ${JSON.stringify(a.from)} vs ${JSON.stringify(b.from)}`;
@@ -132,6 +124,8 @@ export interface AppIndex {
   demand: Demand;
   /** the root namespace's library graph its code was compiled under (rootLibraries) */
   libraries?: string;
+  /** tells a build from the others made under its key (apps.ts mergeApp): what a launch ran of it is recorded under it (host/persist.ts LaunchRecord) */
+  id: number;
 }
 /** the module of synthetic functions: what it relies on, and the functions it holds */
 export interface SHeader extends UnitHeader { names: string[] }
@@ -144,7 +138,7 @@ export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHead
   }
   return { version: VERSION, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
     classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions, allocs: [...cx.allocs],
-    missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]), gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)) };
+    missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]) };
 }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
 const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
@@ -245,7 +239,7 @@ export class AotRuntime {
       return i;
     };
     for (let i = 1; i <= this.nSeeded; i++) {
-      const name = w.names[i];
+      const name = w.nameOf(i);
       this.dGroupOf.push(id(dIds, this.dKeys, build.dGroup(name)));
       this.cGroupOf.push(id(cIds, this.cKeys, build.cGroup(name)));
     }
@@ -278,21 +272,19 @@ export class AotRuntime {
       }
     }
     index.selectors.forEach((k) => w.selectorId(k));
-    index.gaps.forEach((g, i) => w.gaps.set(g, i));
-    for (const l of index.linkMessages) w.linkMessages.push(l);
+    index.gaps.forEach((g) => w.gapId(g));
+    for (const l of index.linkMessages) w.linkId(l);
     a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
     index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, `y${module}.wasm`)));
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.cState.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
-    const rest = a.rest;
-    if (rest.length) w.noteLate(rest);
     // a method this World replaces by an intrinsic that the build did not, or the reverse, is not the build's
     const built = new Set(index.intrinsics), now = new Set(w.opts.intrinsics.keys());
     for (const id of [...now].filter((k) => !built.has(k)).concat(index.intrinsics.filter((k) => !now.has(k)))) {
-      const dot = id.indexOf("."), cls = w.ids.get(id.slice(0, dot)), m = w.prog.get(id.slice(0, dot))?.byKey.get(id.slice(dot + 1));
+      const dot = id.indexOf("."), cls = w.numbers.ids.get(id.slice(0, dot)), m = w.prog.get(id.slice(0, dot))?.byKey.get(id.slice(dot + 1));
       if (m && cls !== undefined && cls <= a.nSeeded) a.overridden.add(w.blockBase[cls - 1] + m.index);
     }
-    a.platformMarks = w.numbering();
+    a.platformMarks = w.numbers.marks();
     return a;
   }
 
@@ -330,13 +322,13 @@ export class AotRuntime {
    *  attached, or nothing (a compile worker's World, which takes the prefix), and its Program must have the dexes it was made from after the platform's; false (and nothing changed)
    *  otherwise */
   extend(app: AppIndex, store: AotStore): boolean {
-    const w = this.w, sigs = this.appDexes(app.classes), since = w.since(this.platformMarks);
-    const fresh = sameMarks(since.from, w.numbering());
+    const w = this.w, sigs = this.appDexes(app.classes), since = w.numbers.since(this.platformMarks);
+    const fresh = sameMarks(since.from, w.numbers.marks());
     const rejected = app.version !== APP_VERSION ? "version" : this.rest.length < app.classes ? "classes" : sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) ? "dexes"
       : !(fresh || JSON.stringify(since) === JSON.stringify(app.prefix)) ? `prefix: ${numberingDiff(since, app.prefix)}` : undefined;
     if (rejected) { this.appRejected = rejected; return false; }
     if (fresh && !w.adopt(app.prefix)) { this.appRejected = "prefix not adopted"; return false; }
-    if (!sameMarks(w.numbering(), app.base) || !w.adopt(app.numbering)) { this.appRejected = "numbering"; return false; }
+    if (!sameMarks(w.numbers.marks(), app.base) || !w.adopt(app.numbering)) { this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);
@@ -359,14 +351,14 @@ export class AotRuntime {
   platformModule(b: number): number { return b >= 0 && b < this.nSeeded ? this.cOf[b] : -1; }
   /** the slots of a class compiled on demand although the build numbered it: those the build gave it */
   reservedBase(name: string): number | undefined {
-    const id = this.w.ids.get(name);
+    const id = this.w.numbers.ids.get(name);
     return this.reservedBases.get(name) ?? (id !== undefined && id <= this.nSeeded ? this.w.blockBase[id - 1] : undefined);
   }
 
   // ---- loading
   /** the class module of platform class `name`, if the build has one: its D module is loaded, with those of the classes its vtable needs */
   linkClass(name: string): ClassRt | undefined {
-    const w = this.w, id = w.ids.get(name);
+    const w = this.w, id = w.numbers.ids.get(name);
     if (id === undefined || this.building && id > this.nSeeded) return undefined;
     let base: number, g = 0, app: number | undefined;
     const reserved = this.reservedBases.get(name);
@@ -404,7 +396,7 @@ export class AotRuntime {
   private touch(id: number): void {
     const w = this.w;
     if (id <= this.nSeeded && !this.building && !w.opts.compileOnly && this.loadD(this.dOf[id - 1])) return;
-    w.link(w.names[id]);
+    w.link(w.nameOf(id));
   }
   /** puts a build's code of synthetic function `name` in its slot, with the others of its module; false if the builds have none */
   installSynth(name: string): boolean {
@@ -425,18 +417,17 @@ export class AotRuntime {
     w.instantiate(mod, imports);
     for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
     for (const cls of head.allocs) w.allocated.add(cls);
-    for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
     this.synthState.set(file, LIVE);
     return true;
   }
   /** whether the platform build numbers class `name`: the classes of its jars; those of the other jars of the class path are numbered, like the app's, as they are used */
   seeded(name: string): boolean {
-    const id = this.w.ids.get(name);
+    const id = this.w.numbers.ids.get(name);
     return id !== undefined && id <= this.nSeeded;
   }
   /** whether the module that holds platform class `name` is loaded */
   hasLoaded(name: string): boolean {
-    const id = this.w.ids.get(name);
+    const id = this.w.numbers.ids.get(name);
     return id !== undefined && id <= this.nSeeded && !!this.dExports[this.dOf[id - 1]];
   }
   /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
@@ -467,9 +458,9 @@ export class AotRuntime {
     const base = this.reservedBase(m.cls) ?? this.w.preassigned.get(m.cls);
     if (base !== undefined) this.overridden.add(base + m.index);
   }
-  /** whether method `m` of block `b` was installed by a loaded code module or app patch */
-  installed(b: number, m: MethodInfo): boolean {
-    const c = this.cOf[b], slot = this.w.blockBase[b] + m.index;
+  /** whether a loaded code module or app patch installed the method of `slot` */
+  installed(slot: number): boolean {
+    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (c >= 0 && this.cState[c] === LIVE && this.has(c, slot)) return true;
     for (const p of this.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
     return false;
@@ -480,11 +471,13 @@ export class AotRuntime {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     return c >= 0 && this.cState[c] !== DEAD;
   }
-  /** whether the attached app build has `slot`'s code loaded */
-  fromAppBuild(slot: number): boolean {
+  /** the loaded code module that holds `slot`'s code, or -1 */
+  loadedFrom(slot: number): number {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    return c >= this.appFrom && this.cState[c] === LIVE && this.has(c, slot);
+    return c >= 0 && this.cState[c] === LIVE && this.has(c, slot) ? c : -1;
   }
+  /** whether the attached app build has `slot`'s code loaded */
+  fromAppBuild(slot: number): boolean { return this.loadedFrom(slot) >= this.appFrom; }
   private preparation = new Map<number, Promise<void>>();
   private prepared = new Set<number>();
   private preparationModule(slot: number): number {
@@ -587,7 +580,6 @@ export class AotRuntime {
       const slots = w.absent.get(name) ?? w.absent.set(name, new Set()).get(name)!;
       slots.add(owner);
     }
-    for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
     w.stats.aot.ms += performance.now() - t2;
     // the app build's patches of this module's methods: after its own code, which they replace where they have some
@@ -644,6 +636,6 @@ export class AotRuntime {
     const w = this.w;
     const withCode = [...w.prog.all()].filter((c) => c.dex);
     return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
-      extraNames: w.names.slice(this.nSeeded + 1), tail: w.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths };
+      extraNames: w.numbers.names.slice(this.nSeeded + 1), tail: w.numbers.tail, selectors: w.numbers.selKeys.slice(1), gaps: w.numbers.gapList, linkMessages: w.numbers.links.messages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths };
   }
 }

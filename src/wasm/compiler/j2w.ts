@@ -4,7 +4,7 @@ import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "
 import { Code, OP } from "./code.ts";
 import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
-import { H, elemKindOf, type ElemKind } from "./consts.ts";
+import { H, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import type { PreparedMethod } from "../../jvm/prepared.ts";
 import type { Typing } from "./infer.ts";
@@ -42,10 +42,7 @@ export function declareBase(mb: ModuleBuilder): Base {
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
 export const kindVT = (k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
 
-const D_D = { params: [T.f64], results: [T.f64] }, DD_D = { params: [T.f64, T.f64], results: [T.f64] };
-/** java.lang.Math's transcendental natives: the host's Math, imported as they are rather than wrapped as natives */
-export const MATH_IMPORTS = { acos: D_D, asin: D_D, atan: D_D, cbrt: D_D, cos: D_D, cosh: D_D, exp: D_D, expm1: D_D, log: D_D, log10: D_D,
-  log1p: D_D, sin: D_D, sinh: D_D, tan: D_D, tanh: D_D, atan2: DD_D, hypot: DD_D, pow: DD_D } satisfies Record<string, FunctionType>;
+export const MATH_IMPORTS = Object.fromEntries(Object.entries(MATH_ARITY).map(([f, n]): [string, FunctionType] => [f, { params: Array(n).fill(T.f64), results: [T.f64] }])) as Record<keyof typeof MATH_ARITY, FunctionType>;
 const HOST_IMPORTS = {
   ...MATH_IMPORTS,
   initSignatures: { params: [T.i32], results: [] },
@@ -94,6 +91,8 @@ const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", 
 
 /** the module-local functions of Compiler.local that are the same in every module */
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
+/** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
+export class NeedsNumber extends Error { method?: MethodInfo }
 export class Compiler implements Base {
   w: World;
   mb = new ModuleBuilder();
@@ -283,8 +282,10 @@ export class Compiler implements Base {
     const owner = this.owner, assumer = this.assumer;
     this.codes.set(id, null);
     this.owner = m; this.assumer = this.direct ? this.head : m;
-    const code = compileMethod(this, m);
-    this.owner = owner; this.assumer = assumer;
+    let code: Code | undefined;
+    try { code = compileMethod(this, m); }
+    catch (e) { if (e instanceof NeedsNumber) e.method ??= m; throw e; }
+    finally { this.owner = owner; this.assumer = assumer; }
     this.codes.set(id, code);
     return code;
   }
@@ -444,27 +445,30 @@ export class Compiler implements Base {
       n.gget(this.vtGlobal(desc)).refAsNonNull().i64(0n).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
     }, ref(this.tArr[ek])));
   }
-  /** a function of this module: is its (anyref) argument an instance of class, interface or array `name`? null is not */
-  instanceOfFn(name: string): number {
-    return this.local("instanceof:" + name, ["L"], "I", (c) => {
-      const id = this.idOf(name);
-      if (name === "java/lang/Object") { c.lget(0).refIsNull().raw(OP.i32_eqz); return; }
-      if (name[0] === "[") {
-        if (elemKindOf(name) === "ref") { c.lget(0).i32(id); this.callRt(c, "instArr"); } else c.lget(0).i32(id).i32(1).call(this.helper("iof"));
-        return;
-      }
-      c.lget(0);
-      if (this.prog.get(name)?.isInterface || this.prog.chain(name).length > H.MAXD) c.i32(id).call(this.helper("implements"));
-      else c.i32(id).i32(this.prog.chain(name).length - 1).call(this.helper("iof"));
-    });
+  /** replaces the anyref on the stack with whether it is an instance of class, interface or array `name` (null is not) */
+  emitInstanceOf(c: Code, name: string): void {
+    if (name === "java/lang/Object") { c.refIsNull().raw(OP.i32_eqz); return; }
+    const t = this.typeTest(name);
+    c.i32(t.id);
+    if (t.kind === "refArray") this.callRt(c, "instArr");
+    else if (t.kind === "interface") c.call(this.helper("implements"));
+    else c.i32(t.depth).call(this.helper("iof"));
   }
-  /** a function of this module that returns its argument if it can be cast to `name` (null can) and throws ClassCastException otherwise */
-  castFn(name: string): number {
-    return this.local("cast:" + name, ["L"], "L", (c) => {
-      c.lget(0).refIsNull().raw(OP.i32_eqz).if_().lget(0).call(this.instanceOfFn(name)).raw(OP.i32_eqz).if_();
-      c.lget(0).call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT).i32(this.idOf(name)); this.callThrower(c, "cce");
-      c.end().end().lget(0);
-    });
+  /** leaves the anyref on the stack if it can be cast to `name` (null can) and throws ClassCastException otherwise */
+  emitCast(c: Code, name: string): void {
+    if (name === "java/lang/Object") return;
+    const t = this.typeTest(name);
+    c.i32(t.id);
+    if (t.kind === "refArray") c.call(this.helper("castArr"));
+    else if (t.kind === "interface") c.call(this.helper("castImpl"));
+    else c.i32(t.depth).call(this.helper("cast"));
+  }
+  /** `name`'s class id, and how a value is tested against it: by its depth in the class display (iof), as an interface, or as an array of references */
+  private typeTest(name: string): { id: number; kind: "class"; depth: number } | { id: number; kind: "interface" } | { id: number; kind: "refArray" } {
+    const id = this.idOf(name);
+    if (name[0] === "[") return elemKindOf(name) === "ref" ? { id, kind: "refArray" } : { id, kind: "class", depth: 1 };
+    const depth = this.prog.chain(name).length - 1;
+    return this.prog.get(name)?.isInterface || depth >= H.MAXD ? { id, kind: "interface" } : { id, kind: "class", depth };
   }
 
   // ---------- module-local helpers, defined on first use
@@ -500,6 +504,15 @@ export class Compiler implements Base {
       else c.lget(0).lget(1).raw(gt).if_(T.i32).i32(1).else_().i32(-1).end();
       return c.end().finish();
     }];
+    /** obj when it is null or passes `test` (of obj, class id and any depth), else ClassCastException */
+    const cast = (params: number[], test: (c: Code) => void): [number, () => number[]] => [t([L, T.i32, ...params], [L]), () => {
+      const c = new Code(2 + params.length);
+      c.lget(0).refIsNull().raw(OP.i32_eqz).if_();
+      test(c);
+      c.raw(OP.i32_eqz).if_().lget(0).call(this.helper("vtab")).i32(H.ID).arrayGet(tVT).lget(1); this.callThrower(c, "cce"); c.end();
+      c.end().lget(0);
+      return c.finish();
+    }];
     switch (name) {
       case "idiv": return div(false, false);
       case "irem": return div(false, true);
@@ -509,6 +522,9 @@ export class Compiler implements Base {
       case "cmpgf": return cmp(T.f32, OP.f32_lt, OP.f32_gt, OP.f32_eq, true);
       case "cmpld": return cmp(T.f64, OP.f64_lt, OP.f64_gt, OP.f64_eq, false);
       case "cmpgd": return cmp(T.f64, OP.f64_lt, OP.f64_gt, OP.f64_eq, true);
+      case "cast": return cast([T.i32], (c) => c.lget(0).lget(1).lget(2).call(this.helper("iof")));
+      case "castImpl": return cast([], (c) => c.lget(0).lget(1).call(this.helper("implements")));
+      case "castArr": return cast([], (c) => { c.lget(0).lget(1); this.callRt(c, "instArr"); });
       // iof(obj, class id, depth): obj != null && vt[DEPTH] >= depth && vt[DISPLAY + depth] == id
       case "iof": return [t([L, T.i32, T.i32], [T.i32]), () => {
         const c = new Code(3), vt = c.newLocal(vtR);
@@ -697,26 +713,28 @@ export class Compiler implements Base {
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
   outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
-  private finishing: (() => void)[] = [];
-  /** `f` runs once the module's code is complete, before it is encoded */
-  atFinish(f: () => void): void { this.finishing.push(f); }
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
     const roots = fns.length;
     fns = fns.concat(this.outlines);
-    for (const f of this.finishing.splice(0)) f();
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), new Code(0).finish(), "$start");
     const t0 = performance.now(), bytes = this.mb.build(true);
     this.w.stats.phase.encode += performance.now() - t0;
     const traces = fns.map(({ name, f, code, m }) => {
-      const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;
-      return { name, m, offsets: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => start + code.marks[2 * i]), pcs: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => code.marks[2 * i + 1]) };
+      const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen, n = code.marks.length / 2, offsets = new Int32Array(n), pcs = new Int32Array(n);
+      for (let i = 0; i < n; i++) { offsets[i] = start + code.marks[2 * i]; pcs[i] = code.marks[2 * i + 1]; }
+      return { name, m, offsets, pcs };
     });
-    // AOT traces are keyed by Java slot. Chunk offsets join their owner's trace without changing that format.
+    // AOT traces are keyed by Java slot. Chunk offsets join their owner's trace (method.ts names a chunk `${owner}#loop<label>`) without changing that format.
+    const chunks = new Map<string, FnTrace[]>();
+    for (const t of traces.slice(roots)) {
+      const at = t.name.lastIndexOf("#loop"), owner = t.name.slice(0, at);
+      if (at > 0) (chunks.get(owner) ?? chunks.set(owner, []).get(owner)!).push(t);
+    }
     for (let i = 0; i < roots; i++) {
-      const root = traces[i], parts = traces.slice(roots).filter((t) => t.name.startsWith(root.name + "#loop"));
-      if (!parts.length) continue;
+      const root = traces[i], parts = chunks.get(root.name);
+      if (!parts) continue;
       const pairs: [number, number][] = [];
       for (const t of [root, ...parts]) for (let k = 0; k < t.offsets.length; k++) pairs.push([t.offsets[k], t.pcs[k]]);
       pairs.sort((a, b) => a[0] - b[0]);

@@ -70,7 +70,7 @@ export function sameRuntimePackage(prog: Program, a: string, b: string): boolean
 const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
 
 /** the descriptors of the `changed` names, or undefined when an array or key name leaves every reference suspect */
-const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
+export const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
   [...changed].some(name => name.startsWith("[") || name.includes("@")) ? undefined : new Set([...changed].map(name => `L${name};`));
 
 /** a class of a dex file. Its header (supertypes, flags) is read when asked for and its members are built when the first of them is, so a Program holds
@@ -198,6 +198,12 @@ export function declaredMethod(c: JClass | undefined, key: string, raw = false):
 export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx : -1);
 /** the keys and access flags of the methods a class declares */
 export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
+/** whether a class declares a method that can be overridden (not static, private or a constructor) whose descriptor names one of the class descriptors `types`,
+ *  or an array of one; any such method without `types` */
+export const declaresNaming = (c: JClass, types?: ReadonlySet<string>): boolean => c instanceof DexClass ? c.dex.declaresVirtual(c.idx, types && c.dex.typesNaming(types))
+  : c.methods.some(m => !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.name !== "<init>" && (!types || [...javaName(m.desc).matchAll(/L[^;]+;/g)].some(t => types.has(t[0]))));
+/** whether a class may declare a static field whose type is one of the class descriptors `types` or an array of one */
+export const declaresStaticOf = (c: JClass, types: ReadonlySet<string>): boolean => !(c instanceof DexClass) || c.dex.declaresStaticOf(c.idx, c.dex.typesNaming(types));
 
 export class Program {
   readonly base?: Program;
@@ -367,16 +373,12 @@ export class Program {
   /** the dex files whose references can resolve differently when `changed` names do: those of loaders that see `loader` naming one of them, as an element type or not */
   private resolutionDexes(loader: Loader, changed: ReadonlySet<string>): Map<DexFile, Loader> {
     const affected = this.dependentLoaders(loader), dexes = new Map<DexFile, Loader>(), types = changedTypes(changed);
-    const names = (dex: DexFile) => {
-      for (let i = 0; i < dex.typeCount; i++) if (types!.has(dex.rawType(i).replace(/^\[+/, ""))) return true;
-      return false;
-    };
-    for (const [dex, owner] of this.dexLoader) if (affected.has(owner) && (!types || names(dex))) dexes.set(dex, owner);
+    for (const [dex, owner] of this.dexLoader) if (affected.has(owner) && (!types || dex.typesNaming(types).size)) dexes.set(dex, owner);
     return dexes;
   }
   resolutionClasses(loader: Loader, changed: ReadonlySet<string>): Set<string> {
     const dexes = this.resolutionDexes(loader, changed);
-    return new Set([...this.classes.values()].filter(c => c instanceof DexClass && dexes.has(c.dex)).map(c => c.name));
+    return new Set(dexes.size ? [...this.classes.values()].filter(c => c instanceof DexClass && dexes.has(c.dex)).map(c => c.name) : []);
   }
   private refreshResolution(loader: Loader, changed: ReadonlySet<string>): string[] {
     const dexes = this.resolutionDexes(loader, changed), names: string[] = [], types = changedTypes(changed);
@@ -454,6 +456,8 @@ export class Program {
     this.forget();
   }
   get(name: string): JClass | undefined { return this.classes.get(name) ?? this.base?.get(name); }
+  /** a class this Program adds to its base's */
+  ownClass(name: string): JClass | undefined { return this.classes.get(name); }
   require(name: string): JClass { const c = this.get(name); if (!c) throw new Error("class not found: " + name); return c; }
   /** a class of this Program stands in for one of the base's (a host class over a platform class): the base's answers about implementations are no longer this Program's */
   private shadowing = false;

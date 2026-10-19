@@ -5,13 +5,15 @@ import { note, Ev } from "../../timeline.ts";
 import { answeringFor } from "../../jvm/yield.ts";
 import { compileBytes } from "../link/module.ts";
 import type { CompileService } from "../link/hostapi.ts";
-import type { AppIndex, Marks } from "../link/aot.ts";
+import type { AppIndex } from "../link/aot.ts";
+import type { Marks } from "../link/numbers.ts";
 import type { UpgradeJob } from "../link/unit.ts";
 import type { ProxyDefinition } from "../link/proxy.ts";
 import type { World } from "../link/world.ts";
 import type { Loader, LoaderId, Program } from "../compiler/program.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { CompileRequest, CompileResponse, Containers, Port } from "./compile-serve.ts";
+import type { WarmAnswer } from "./warm-worker.ts";
 
 /** a worker, or anything that serves the protocol */
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
@@ -45,16 +47,19 @@ export function spawnCompileWorker(host: MessagePort | undefined, url: string): 
     terminate: () => { ctl.port1.postMessage(0); data.port1.close(); fetcher.port1.close(); },
   };
   data.port1.onmessage = (e) => worker.onmessage?.(e);
+  // the worker's end of the port closes when it ends, or when its process does without a word (a renderer's crash)
+  data.port1.addEventListener("close", () => worker.onerror?.({ message: "the compile worker ended" } as ErrorEvent));
   data.port1.onmessageerror = () => worker.onerror?.({ message: "a message from the compile worker could not be read" } as ErrorEvent);
   ctl.port1.onmessage = ({ data: message }) => worker.onerror?.({ message } as ErrorEvent);
   return worker;
 }
-/** starts the compile worker of script `url` for `req` in this realm. The compile host's document runs its source, so it uses nothing outside itself. */
-export function startCompileWorker(url: string, req: CompileWorkerRequest, type: WorkerType = "module"): void {
+/** starts the compile worker of script `url` for `req` in this realm, with the platform's `jars` for the compile host's workers to read (compilehost.ts). The compile
+ *  host's document runs its source, so it uses nothing outside itself. */
+export function startCompileWorker(url: string, req: CompileWorkerRequest, type: WorkerType = "module", jars?: Blob[]): void {
   const worker = new Worker(url, { type });
   worker.onerror = (e) => req.ctl.postMessage(e.message || "the compile worker failed");
   req.ctl.onmessage = () => { worker.terminate(); req.ctl.close(); };
-  worker.postMessage({ port: req.port, fetcher: req.fetcher }, [req.port, req.fetcher]);
+  worker.postMessage({ port: req.port, fetcher: req.fetcher, jars }, [req.port, req.fetcher]);
 }
 
 /** `dexes` as the archives they are views of, copied for the worker (the copies are transferred) */
@@ -78,7 +83,8 @@ export function dexesByLoader(prog: Program, keep?: (loader: Loader) => boolean)
 
 export class CompileClient implements CompileService {
   private source: WorkerPort | (() => WorkerPort); private holdMerges: () => boolean;
-  readonly stats = { jobs: 0, adopted: 0, stale: 0, failed: 0, workerMs: 0, adoptMs: 0, startMs: 0 };
+  private warm?: (module: WebAssembly.Module, bytes: Uint8Array) => Promise<WarmAnswer | undefined>;
+  readonly stats = { jobs: 0, adopted: 0, stale: 0, failed: 0, warmed: 0, workerMs: 0, adoptMs: 0, startMs: 0 };
   private state: "idle" | "starting" | "ready" | "retired" = "idle";
   private w?: World;
   /** what the worker has numbered, as numbers of the World's, and whether it kept the numbering of its last unit */
@@ -91,16 +97,26 @@ export class CompileClient implements CompileService {
 
   private port?: WorkerPort;
   private setup?: { aotBase: string | undefined; app: AppIndex | undefined };
-  /** `holdMerges`: whether merges wait, as while another worker's compiling takes the memory */
-  constructor(source: WorkerPort | (() => WorkerPort), holdMerges = () => false) {
-    this.source = source; this.holdMerges = holdMerges;
+  /** `holdMerges`: whether merges wait, as while another worker's compiling takes the memory; `warm` has the page's warm Worker compile a merge's methods */
+  constructor(source: WorkerPort | (() => WorkerPort), { holdMerges = () => false, warm }: { holdMerges?: () => boolean; warm?: (module: WebAssembly.Module, bytes: Uint8Array) => Promise<WarmAnswer | undefined> } = {}) {
+    this.source = source; this.holdMerges = holdMerges; this.warm = warm;
     if (typeof source !== "function") this.attach(source);
   }
   private attach(port: WorkerPort): void {
     this.port = port;
-    port.onmessage = ({ data }: MessageEvent<CompileResponse>) => { note(Ev.Upgrade, this.busy?.slot ?? 0); try { this.receive(data); } finally { note(Ev.Upgraded); } };
+    port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
+      if (data.type !== "unit") { this.take(data); return; }
+      // the engine compiles a unit's bytes off this thread
+      const bytes = data.result.module as Uint8Array, merge = this.busy?.id === data.id && this.busy.job.merge;
+      void compileBytes(bytes).then(async (module) => {
+        data.result.module = module;
+        if (merge && this.warm) this.stats.warmed += (await this.warm(module, bytes))?.warmed ?? 0;
+        this.take(data);
+      }, (e) => this.take({ type: "failed", id: data.id, message: String(e) }));
+    };
     port.onerror = (e) => this.retire(`the compile worker failed: ${e.message}`);
   }
+  private take(m: CompileResponse): void { note(Ev.Upgrade, this.busy?.slot ?? 0); try { this.receive(m); } finally { note(Ev.Upgraded); } }
   get ready(): boolean { return this.state === "ready"; }
   /** the reason the worker stopped serving, if it did */
   retired?: string;
@@ -117,8 +133,8 @@ export class CompileClient implements CompileService {
     const loaders = w.prog.loaderSnapshot(), groups = dexesByLoader(w.prog);
     const scopes: [LoaderId, Containers][] = [...groups].filter(([id]) => id !== 0).map(([id, dexes]) => [id, containers(dexes)]);
     this.state = "starting";
-    const t0 = performance.now(), sync = w.since(w.base), list = containers(groups.get(0) ?? []);
-    this.marks = w.numbering();
+    const t0 = performance.now(), sync = w.numbers.since(w.base), list = containers(groups.get(0) ?? []);
+    this.marks = w.numbers.marks();
     this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, hostClasses: w.hostClassNames(), loaders, scopes, proxies: [...w.proxies.values()] }, [list, ...scopes.map(([, list]) => list)].flatMap(list => list.map(([, b]) => b.buffer as ArrayBuffer)));
     this.stats.startMs = t0;
   }
@@ -166,9 +182,9 @@ export class CompileClient implements CompileService {
     if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.mergeJob(); if (job) this.send(-1, job); }
   }
   private send(slot: number, job: UpgradeJob): void {
-    const w = this.w!, from = w.numbering(), id = this.nextId++;
+    const w = this.w!, from = w.numbers.marks(), id = this.nextId++;
     this.busy = { id, slot, job, epoch: w.epoch, from, sent: performance.now() };
-    this.post({ type: "upgrade", id, keep: this.keep, sync: w.since(this.marks), job });
+    this.post({ type: "upgrade", id, keep: this.keep, sync: w.numbers.since(this.marks), job });
     this.marks = from; this.keep = false;
     this.stats.jobs++;
   }
@@ -201,7 +217,7 @@ export class CompileClient implements CompileService {
     this.stats.adoptMs += performance.now() - t0;
     if (taken) {
       this.stats.adopted++;
-      if (numbered) { this.keep = true; this.marks = w.numbering(); }
+      if (numbered) { this.keep = true; this.marks = w.numbers.marks(); }
     } else this.stats.stale++;
     this.pump();
   }

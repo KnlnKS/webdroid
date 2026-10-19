@@ -56,10 +56,14 @@ export class FetchStore implements AotStore {
       void compileStream(fetch(this.base + f)).then((m) => this.put(f, m), () => this.fail(f)).then(() => { this.active--; this.load([]); });
     }
   }
+  /** the file if it is here, without asking for it */
+  held(file: string): Uint8Array | WebAssembly.Module | undefined { return this.files.get(file); }
   /** adds `file` as the module compiled elsewhere (a worker: host/aotload.ts) */
   put(file: string, module: WebAssembly.Module): void { this.files.set(file, module); this.done(file); }
   fail(file: string): void { this.failed.push(file); this.done(file); }
   private done(file: string): void { this.settle.get(file)?.(); this.settle.delete(file); }
+  /** the bytes of `file` (the index, a list of a start's modules), once fetched */
+  bytes(file: string): Uint8Array | undefined { const b = this.files.get(file); return b instanceof Uint8Array ? b : undefined; }
   /** the module `file`, once arrived */
   module(file: string): WebAssembly.Module | undefined { const m = this.files.get(file); return m instanceof WebAssembly.Module ? m : undefined; }
   /** fetches `file` as bytes: the index and the list of a start's modules */

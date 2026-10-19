@@ -26,6 +26,9 @@ export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued
 const SLICE_MS = 16;
 /** how long the main thread waits before its idle time goes to compiling ahead */
 const AHEAD_QUIET_MS = 100;
+const idleJobs: (() => void)[] = [];
+/** runs `job` once, the next time the main thread has waited AHEAD_QUIET_MS with nothing due, ahead of compiling ahead */
+export const whenMainIdle = (job: () => void): void => { idleJobs.push(job); };
 
 export class NativeLooper {
   readonly thread: JThread;
@@ -71,7 +74,7 @@ export class NativeLooper {
       const timer = timeout > 0 ? setGuestTimeout(() => this.signal(), timeout) : undefined;
       // a main thread that stays waiting has time for code its next messages will want
       const ahead = this === mainLooper && (timeout < 0 || timeout > 2 * AHEAD_QUIET_MS)
-        ? setTimeout(() => compileAhead(() => this.waiter === waiter), AHEAD_QUIET_MS) : undefined;
+        ? setTimeout(() => { const job = idleJobs.shift(); if (job) job(); else compileAhead(() => this.waiter === waiter); }, AHEAD_QUIET_MS) : undefined;
       const waiter = this.waiter = () => { clearGuestTimeout(timer); clearTimeout(ahead); resolve(); };
     });
   }

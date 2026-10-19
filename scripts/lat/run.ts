@@ -35,6 +35,7 @@ import { chromium, webkit, type BrowserContext } from "playwright";
 import { installLatencyObserver } from "./observe.ts";
 import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
 import { consume } from "../args.ts";
+import { Ev } from "../../src/timeline.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
@@ -58,7 +59,7 @@ const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWi
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
-  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead", "wasmRetired", "wasmCollected"];
+  "nativeMs", "nativeInstr", "jitMs", "jitRegions", "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead", "wasmRetired", "wasmCollected"];
 
 /** the first-response clock: pointerup to the first answering frame and to the frame the response settled in,
  *  with the presentation intervals between them */
@@ -67,13 +68,13 @@ type First = { first: number | null; settled: number | null; frames: number; cha
 type Tap = { intended: number | null; response?: First; timeline?: unknown; page?: unknown; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown; demandMark?: number[]; demand?: [string, boolean, boolean, boolean][] | null };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
 type Launch = { demand?: [string, boolean, boolean, boolean][] | null; firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
-  idle: number; perf: Record<string, number>; marks: string[] };
+  idle: number; perf: Record<string, number>; marks: string[]; timeline: number[][] };
 type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number; frames?: any };
 type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: unknown; processesAfter?: unknown;
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation, E: typeof Ev) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
@@ -284,7 +285,6 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
    */
   const frameReport = async (from: number, to: number) => {
     const events: [number, number, number][] = (await w.wd.foregroundTimeline(performance.timeOrigin + from)).map(([t, e, a]: number[]) => [t - performance.timeOrigin, e, a]);
-    const E = { Raf: 1, InputIn: 2, InputDispatch: 4, InputDone: 5, FrameBegin: 6, FrameEnd: 7, DrawBegin: 8, DrawEnd: 9, CompositeBegin: 11, CompositeEnd: 12, Present: 13, LoopIdle: 14, LoopWake: 15 };
     const spans = { doFrame: [] as number[], draw: [] as number[], composite: [] as number[], vsyncToPresent: [] as number[], inputToDispatch: [] as number[], busyAtVsync: [] as number[] };
     let raf = -1, frame = -1, draw = -1, comp = -1, idle = true, wake = from, input = -1, presentedSince = true, drawing = false, missedBusy = 0, missedIdle = 0, vsyncs = 0;
     for (const [t, e, a] of events) {
@@ -341,12 +341,23 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     await sleep(5);
   }
   const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(await snapshot()).filter(([, v]) => v));
+  // the Worker's timeline up to the first frame, as far back as its ring holds
+  const launchTimeline = (await w.wd.foregroundTimeline(performance.timeOrigin) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]);
+  /** waits for 600 ms with nothing drawn or queued, no thread but the main one running Java, and no main-looper message due within a second: an app's
+   *  background work and its own clock (an animation scheduled after a dialog closes) can still change the screen under a tap */
   const idle = async (maxMs = 8000) => {
     const until = performance.now() + maxMs;
-    let quiet = 0, draws = (await app())!.perf.draws;
+    let quiet = 0, draws = (await app())!.perf.draws, seen = performance.now(), due = Infinity;
     while (performance.now() < until) {
       const now = performance.now(), state = (await app())!, cur = state.perf.draws;
-      quiet = state.queued === 0 && cur === draws ? quiet || now : 0;
+      let background = false;
+      for (const [t, e, a] of await w.wd.foregroundTimeline(performance.timeOrigin + seen) as number[][]) {
+        if (e === E.Thread && a >= 2) background = true;
+        else if (e === E.LoopIdle) due = a > 0 ? t - performance.timeOrigin + a : Infinity;
+        else if (e === E.LoopWake) due = Infinity;
+      }
+      seen = now;
+      quiet = state.queued === 0 && cur === draws && !background && due - now > 1000 ? quiet || now : 0;
       if (quiet && now - quiet >= 600) return;
       draws = cur;
       await sleep(100);
@@ -367,7 +378,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`)
     .concat(((await foreground())?.marks ?? []).map(([name, at]: [string, number]) => `app:${name}:${Math.round(at - performance.timeOrigin)}`));
   result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt,
-    idle: Math.round(performance.now()), perf: launchPerf, marks, demand: w.__wdDemand ? await w.wd.foregroundDemandSince([0, 0]) : undefined };
+    idle: Math.round(performance.now()), perf: launchPerf, marks, demand: w.__wdDemand ? await w.wd.foregroundDemandSince([0, 0]) : undefined, timeline: launchTimeline };
   result.processesBefore = await diagnostics();
   if (replay) result.codeReadiness = { phase: "attached", realms: [await workerReadiness(false)] };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
@@ -483,7 +494,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   result.processesAfter = await diagnostics();
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}, ${JSON.stringify(Ev)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
   try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";

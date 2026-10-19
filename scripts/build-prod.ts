@@ -49,6 +49,8 @@ async function copyAot(out: string): Promise<void> {
   await writeFile(join(out, "_headers"), "/aot/*/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 }
 
+const WORKERS = [["src/wasm/host/compile-worker.ts", "wasm-compile-worker.js"], ["src/wasm/host/warm-worker.ts", "wasm-warm-worker.js"], ["src/process-worker.ts", "process-worker.js"]];
+
 export function prodAssets(): Plugin {
   let out = "dist", systemPackages: Promise<string>, emitted: Promise<string[]>;
   return {
@@ -60,17 +62,15 @@ export function prodAssets(): Plugin {
       // they load the runtime) are copied after it. Each failure surfaces where its result is awaited.
       systemPackages = runNode("scripts/system-packages.ts");
       emitted = Promise.all([
-        bundle("src/wasm/host/compile-worker.ts", { minify: true, define: PRODUCTION }),
-        bundle("src/process-worker.ts", { minify: true, define: PRODUCTION }),
+        ...WORKERS.map(([entry]) => bundle(entry, { minify: true, define: PRODUCTION })),
         runNode("scripts/font-index.ts"),
       ]);
       for (const pending of [systemPackages, emitted]) pending.catch(() => {});
     },
     async generateBundle() {
-      const [compileWorker, processWorker, fontIndex] = await emitted;
-      this.emitFile({ type: "asset", fileName: "wasm-compile-worker.js", source: compileWorker });
-      this.emitFile({ type: "asset", fileName: "process-worker.js", source: processWorker });
-      this.emitFile({ type: "asset", fileName: "font-index.json", source: fontIndex });
+      const sources = await emitted;
+      WORKERS.forEach(([, fileName], i) => this.emitFile({ type: "asset", fileName, source: sources[i] }));
+      this.emitFile({ type: "asset", fileName: "font-index.json", source: sources[WORKERS.length] });
     },
     async closeBundle(error) {
       if (error) return;

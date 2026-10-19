@@ -37,7 +37,7 @@ const dex = join(out, "classes.dex");
 }
 await mountPlatform(ROOT);
 const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
-w.onGap = (id) => hit.push(w.gapList[id]);
+w.onGap = (gap) => hit.push(gap);
 await startProcess(w);
 const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
 (globalThis as any).__dbgw = w;
@@ -59,13 +59,13 @@ if (wideCases.length) {
   const wideEntry = wide.entryAsync.bind(wide);
   const a = wide.idOf("java/util/ArrayList"), b = wide.idOf("java/util/HashMap"), low = wide.selectorId("hashCode()I");
   if (b !== a + 1) throw new Error("full-width dispatch fixture requires adjacent class IDs");
-  while (wide.selKeys.length < low + 65536) wide.selectorId("reserved" + wide.selKeys.length + "()I");
+  while (wide.numbers.selKeys.length < low + 65536) wide.selectorId("reserved" + wide.numbers.selKeys.length + "()I");
   const high = wide.selectorId("size()I");
   wide.host.imtMiss(a, high);
   const expected = wide.slotOf(wide.prog.implFor("java/util/HashMap", "hashCode", "()I")!);
   if (wide.host.imtMiss(b, low) !== expected) { dispatchBad++; console.log("MISMATCH full-width interface dispatch cache"); }
   else console.log("full-width interface dispatch cache: distinct class/selector pairs remain distinct");
-  while (wide.names.length < 65536) wide.idOf("reflection/reserved/" + wide.names.length);
+  while (wide.numbers.names.length < 65536) wide.idOf("reflection/reserved/" + wide.numbers.names.length);
   for (const i of wideCases) {
     const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));
     if (String(got) !== jdk[i]) { wideBad++; console.log(`MISMATCH full-width reflection ${m.name}: ${got} vs ${jdk[i]}`); }

@@ -81,7 +81,7 @@ const TH: Record<string, HostFn> = {
   "viaJs(I)I": (x: number) => w.entry("Th", "trap", "(I)I")(x),
 };
 const gaps: string[] = [];
-w.onGap = (id) => gaps.push(w.gapList[id]);
+w.onGap = (gap) => gaps.push(gap);
 await mountPlatform(ROOT);
 await startProcess(w);
 const callbackEntry = wasmEntry(w);

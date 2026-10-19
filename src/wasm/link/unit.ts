@@ -4,7 +4,8 @@
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (World.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/ids.ts";
-import { unitHeader, type Marks, type Numbering, type UnitHeader } from "./aot.ts";
+import { unitHeader, type UnitHeader } from "./aot.ts";
+import type { Marks, Numbering } from "./numbers.ts";
 import type { World } from "./world.ts";
 
 /** the second-tier compile of a method, as World.upgradeJob describes it */
@@ -41,12 +42,12 @@ export class UnitCompiler {
   private w: World;
   /** the numbering the World compiled for had when the last job arrived */
   private known: Marks;
-  constructor(w: World) { this.w = w; this.known = w.numbering(); }
+  constructor(w: World) { this.w = w; this.known = w.numbers.marks(); }
   /** follows the World compiled for: `keep` says it took the numbering of the previous unit (otherwise that is forgotten first), and `sync` is what it numbered since; false if the two do not line up */
   sync(sync: Numbering, keep: boolean): boolean {
     if (!keep) this.w.rollback(this.known);
     if (!this.w.adopt(sync)) return false;
-    this.known = this.w.numbering();
+    this.known = this.w.numbers.marks();
     return true;
   }
   /** the unit for `job`: an error message if the job does not follow this World */
@@ -72,7 +73,7 @@ export class UnitCompiler {
     w.beginTouch();
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
     const touch = w.endTouch();
-    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), module: bytes,
+    return { header: unitHeader(w, cx, touch), numbering: w.numbers.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
   }
 }

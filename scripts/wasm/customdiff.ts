@@ -187,7 +187,7 @@ if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,me
   probe.host.info = (...args: [number, number, number]) => { calls++; return info(...args); };
   const lookup = probe.hostFn("unsafe:cache", ["I", "I", "I"], "I", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "ufield"); });
   probe.host.link(probe.synthSlotOf("ufield")!);
-  const mark = probe.numbering();
+  const mark = probe.numbers.marks();
   let first = 0, cookie = 0;
   for (const [kind, name] of ["i", "l", "s"].entries()) {
     const offset = fieldCookie(probe, (id << 12) | fields.findIndex(f => f.name === name));
@@ -222,7 +222,7 @@ const invokeBridge = w.host.mhInvoke;
 w.host.mhInvoke = (...args: unknown[]) => { bridgeCalls++; return invokeBridge(...args); };
 assertEagerFieldAccessors(w);
 await startProcess(w);
-w.onGap = (id) => hit.push(w.gapList[id]);
+w.onGap = (gap) => hit.push(gap);
 const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
   ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], tCustomRangeNull: [0, 3], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };

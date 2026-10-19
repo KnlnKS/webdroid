@@ -74,9 +74,10 @@ const releaseFrame = (f: Frame | null) => { if (f && !(f instanceof OffscreenCan
 const roots = new Set<Layer>();
 
 // ── composition
-let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void; transparent: boolean } | null = null;
-/** where the display composes: the realm's frame, and what shows it */
-export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void, transparent = target?.transparent ?? false): void { target = { ctx, present, transparent }; }
+type Present = (content: boolean) => void;
+let target: { ctx: OffscreenCanvasRenderingContext2D; present: Present; transparent: boolean } | null = null;
+/** where the display composes: the realm's frame, and what shows it, told whether a producer's buffer composed */
+export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: Present, transparent = target?.transparent ?? false): void { target = { ctx, present, transparent }; }
 let composing = false;
 /** compose the display once the current turn's transactions and draws are done */
 export function scheduleComposite(): void {
@@ -97,12 +98,13 @@ function composite(): void {
   if (target.transparent) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   placed.clear();
+  content = false;
   for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);
   ctx.restore();
   placeFunctors(placed);
   perf.drawMs += performance.now() - t0;
   note(Ev.CompositeEnd);
-  target.present();
+  target.present(content);
 }
 const byZ = (a: Layer, b: Layer) => a.z - b.z;
 /** Layer::traverseInZOrder: the children and the layers relative to this one, by Z, those below
@@ -144,12 +146,15 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   } else {
     const buffer = layer.buffer!, dest = layer.dest;
+    content = true;
     if (dest) ctx.drawImage(buffer, dest.l, dest.t, dest.r - dest.l, dest.b - dest.t);
     else ctx.drawImage(buffer, 0, 0);
   }
   ctx.restore();
 }
 
+/** whether this composition drew a buffer, not only window colors */
+let content = false;
 /** WebView functors shown this composition, at their display rects */
 const placed = new Map<number, Rect>();
 /** web content is DOM over the display, so content composed over a functor hides it; the functors

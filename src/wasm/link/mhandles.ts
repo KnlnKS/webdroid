@@ -192,7 +192,7 @@ function emitBoxedInvoke(mc: MC, ins: Ins, proto: number, firstReg: number, hand
   emitInvokeImport(cx, c, handle, () => c.lget(arr), site, mode);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
-  else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
+  else { cx.emitCast(c, descToName(ret)); mc.finishResult(ins, "L"); }
 }
 
 export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args: () => void, site: string, mode: number): void {
@@ -324,7 +324,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
       return (put ? r instanceof Promise ? r.then(() => null) : null : r) as Answer;
     }
   }
-  w.onGap(w.gapId(`MethodHandle invocation kind ${kind}`));
+  w.onGap(`MethodHandle invocation kind ${kind}`);
   return fail(w, "java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
 }
 
@@ -363,7 +363,7 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
       const storage = w.classNameOf(handle);
       if (storage === "java/lang/invoke/ByteArrayViewVarHandle" || storage === "java/lang/invoke/ByteBufferViewVarHandle") return invokeVarHandleView(w, handle, args, storage, mode, actual.params, actual.ret, parent);
       if (storage !== "java/lang/invoke/FieldVarHandle" && storage !== "java/lang/invoke/StaticFieldVarHandle" && storage !== "java/lang/invoke/ArrayElementVarHandle") {
-        w.onGap(w.gapId(`VarHandle storage ${storage}`));
+        w.onGap(`VarHandle storage ${storage}`);
         fail(w, "java/lang/UnsatisfiedLinkError", `VarHandle storage ${storage}`);
       }
       return handleThunk(w, `mh:varHandleAccess:${mode}:(${actual.params.join("")})${actual.ret}`, ["L"], "L", (cx, c, arg) => {

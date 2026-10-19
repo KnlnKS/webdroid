@@ -21,23 +21,24 @@ sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...fil
 
 const suite = checker(), { check } = suite;
 
-// ---- CHA under open-world loading
-{
-  const w = world([join(out, "classes.dex"), ...jars]);
+// ---- CHA under open-world loading: the app's dexes join the hierarchy as they are added, another loader's classes once they are linked
+for (const own of [false, true]) {
+  const w = world([join(out, "classes.dex"), ...jars]), loader = own ? w.prog.newLoader(w.prog.root, null) : w.prog.root;
   check("Lz.test before", w.entry("Lz", "test", "()I")(), 11);
   const t = w.stats.units;
   check("Lz.test again compiles nothing", (w.entry("Lz", "test", "()I")(), w.stats.units - t), 0);
-  w.addDexes(loadDexes(join(out, "out2/classes.dex")));
-  check("Lz2.test after", w.entry("Lz2", "test", "()I")(), 12);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")), loader);
+  check(`Lz2.test after${own ? " in its own loader" : ""}`, w.entry(own ? `Lz2@${loader.id}` : "Lz2", "test", "()I")(), 12);
   check("Lz.test after", w.entry("Lz", "test", "()I")(), 11);
 }
 
-for (const hot of [false, true]) {
+for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   let loading = !hot;
   const late = Object.assign(() => {
     if (!loading) return w.entry("Lz", "first", "()LLz$A;")();
-    w.addDexes(loadDexes(join(out, "out2/classes.dex")));
-    return w.entry("Lz2", "make", "()LLz$A;")();
+    const loader = own ? w.prog.newLoader(w.prog.root, null) : w.prog.root;
+    w.addDexes(loadDexes(join(out, "out2/classes.dex")), loader);
+    return w.entry(own ? `Lz2@${loader.id}` : "Lz2", "make", "()LLz$A;")();
   }, { javaValues: true });
   const w = world([join(out, "classes.dex"), ...jars], { natives: new Natives({
     find: (cls, key) => cls === "Lz" && key === "late()LLz$A;" ? late : undefined,
@@ -51,7 +52,7 @@ for (const hot of [false, true]) {
     check("active frame's method was promoted", w.table.get(slot) !== initial, true);
     loading = true;
   }
-  check(`${hot ? "hot" : "cold"} active frame sees a native-loaded override`, call(), 2);
+  check(`${hot ? "hot" : "cold"} active frame sees a native-loaded override${own ? " of its own loader" : ""}`, call(), 2);
 }
 
 // ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
@@ -89,7 +90,7 @@ for (const hot of [false, true]) {
   check("array under it", call("oom", "(I)I", 1 << 20), 1 << 20);
   check("allocation-budget loop without a heap check failing", call("churn", "(I)I", 40), 40);
   check("instance-of past the fixed display depth", [call("deepTypes", "(I)I", 0), call("deepTypes", "(I)I", 1)].join(), "15,12");
-  check("no stray gaps", w.gapList.filter((g) => !g.endsWith("static string value")).join("; "), "");
+  check("no stray gaps", w.numbers.gapList.filter((g) => !g.endsWith("static string value")).join("; "), "");
 }
 // ---- the heap check at the end of each allocation window decides an OutOfMemoryError
 {
@@ -118,7 +119,7 @@ for (const hot of [false, true]) {
   check("frames after the second tier", where(w.stackTrace(backtrace(callA(1) as object) as object)), where(frames));
   let top: unknown;
   try { top = w.entry("Ex", "top", "([Ljava/lang/StackTraceElement;)I")(w.entry("java/lang/Throwable", "nativeGetStackTrace", "(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;")(state)); }
-  catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.gapList.join("; "); }
+  catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.numbers.gapList.join("; "); }
   check("getStackTrace builds StackTraceElements", top, 15);
 }
 // ---- stack overflow: V8 will not let Wasm catch it, so it surfaces as a StackOverflowError at the edge of the Java world

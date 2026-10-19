@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
+import { WarmWorld, type WarmCall } from "../../src/wasm/link/warmshim.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { buildApp } from "../../src/wasm/link/apps.ts";
@@ -37,6 +38,13 @@ const containsInstalled = (w: ReturnType<typeof world>) => { const s = w.slotAt(
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
   check("it relies on no hierarchy decision", w.assumptions.has(key), false);
+  // the warm Worker mirrors a module's imports from its bytes and compiles its methods by calling them into the warm trap
+  const warm = new WarmWorld(), mirrored = w.aot!.loaded.filter((f) => /^c\d+\.wasm$/.test(f)).map((f) => warm.load(compileModule(fileOf(f)), fileOf(f)));
+  check("the warm shim mirrors every loaded code module", mirrored.filter((m) => typeof m === "string").join(), "");
+  const [, method, args] = (mirrored as WarmCall[][]).flat()[0];
+  let trapped = false;
+  try { method(...args); } catch (e) { trapped = e instanceof WebAssembly.RuntimeError; }
+  check("a warmed method traps as it is entered", trapped, true);
   const library = w.prog.newLoader(w.prog.root, null);
   w.addDexes(loadDexes(join(out, "classes.dex")), library);
   w.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);
@@ -69,7 +77,7 @@ const modules = /^[cd]\d+\.wasm$/;
   let withheld = "", available = false;
   const requested = new Set<string>();
   const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
-  const block = w.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
+  const block = w.numbers.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
   const c = w.aot!.platformModule(block), head = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(`c${c}.wasm`)), "aot")[0]))) as CHeader;
   withheld = `d${head.mods[0].slice(1)}.wasm`;
   check("preflight D miss leaves C pending", w.aot!.install(slot), false);
@@ -131,7 +139,7 @@ const modules = /^[cd]\d+\.wasm$/;
     },
   };
   const make = () => world([join(out, "classes.dex"), ...jars], { natives, aot: store });
-  const w = make(), block = w.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
+  const w = make(), block = w.numbers.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
   const cfile = `c${w.aot!.platformModule(block)}.wasm`;
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(cfile)), "aot")[0]))) as CHeader;
   held.add(cfile); held.add(`d${head.mods[0].slice(1)}.wasm`);
@@ -207,7 +215,7 @@ const modules = /^[cd]\d+\.wasm$/;
   const misses = w.stats.aot.missed;
   available = true;
   check("late C installs against original D", w.aot!.install(slot), true);
-  check("late C installed method", w.aot!.installed(w.blockOf(slot), m), true);
+  check("late C installed method", w.aot!.installed(slot), true);
   check("late C counts first miss once", w.stats.aot.missed, misses);
   check("late C retains original globals", w.link("java/util/ArrayList").exports, globals);
   check("late C Java result", w.entry("Aot", "plain", "()I")(), 0);

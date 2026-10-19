@@ -241,6 +241,32 @@ export class DexFile {
   /** binary names of `type(i)` and `rawType(i)`, kept so lookups by them hash each name once */
   typeName(i: number): string { return this.typeNames.get(i) ?? this.typeNames.set(i, this.resolveType ? descToName(this.type(i)) : this.rawTypeName(i)); }
   rawTypeName(i: number): string { return this.rawTypeNames.get(i) ?? this.rawTypeNames.set(i, descToName(this.peekString(this.view.getUint32(this.typeIdsOff + i * 4, true)))); }
+  /** the last answer of `typesNaming`: a rebind asks each dex about the same descriptors for every class it checks, through sets its callers build apart */
+  private typesNamed?: { descs: ReadonlySet<string>; found: ReadonlySet<number> };
+  /** the type_ids naming a class descriptor in `descs` or an array of one; type_ids sort by descriptor, so each class is a binary search */
+  typesNaming(descs: ReadonlySet<string>): ReadonlySet<number> {
+    const last = this.typesNamed;
+    if (last && (last.descs === descs || last.descs.size === descs.size && [...descs].every((d) => last.descs.has(d)))) { last.descs = descs; return last.found; }
+    const v = this.view, at = (i: number) => v.getUint32(this.typeIdsOff + i * 4, true), found = new Set<number>();
+    this.typesNamed = { descs, found };
+    if (!descs.size) return found;
+    for (const d of descs) {
+      const s = this.findString(d);
+      if (s < 0) continue;
+      let lo = 0, hi = this.typeCount;
+      while (lo < hi) { const mid = (lo + hi) >>> 1; if (at(mid) < s) lo = mid + 1; else hi = mid; }
+      if (lo < this.typeCount && at(lo) === s) found.add(lo);
+    }
+    // array descriptors sort together, from "[" up to "\\"
+    for (let i = this.typesFrom("["), end = this.typesFrom("\\"); i < end; i++) if (descs.has(this.rawType(i).replace(/^\[+/, ""))) found.add(i);
+    return found;
+  }
+  /** the first type whose descriptor does not sort below `s` */
+  private typesFrom(s: string): number {
+    let lo = 0, hi = this.typeCount;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (this.rawType(mid) < s) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
 
   proto(i: number): ProtoRef {
     let p = this.protoCache.get(i);
@@ -353,20 +379,23 @@ export class DexFile {
     }
     return { typeIdx: v.getUint32(off, true), flags: v.getUint32(off + 4, true), superIdx: v.getUint32(off + 8, true), interfaces };
   }
+  /** a reader at class_def i's class_data_item (its four member counts first), if it has members */
+  private classData(i: number): Reader | undefined {
+    const off = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
+    return off ? new Reader(this.bytes, off) : undefined;
+  }
   /** how many methods class_def i declares */
   declaredMethodCount(i: number): number {
-    const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
-    if (!classDataOff) return 0;
-    const r = new Reader(this.bytes, classDataOff);
+    const r = this.classData(i);
+    if (!r) return 0;
     r.uleb(); r.uleb();
     return r.uleb() + r.uleb();
   }
 
   /** how class_def `i` declares method_id `methodIdx` (its position among the direct then virtual methods), if it does */
   declaredAt(i: number, methodIdx: number): EncodedMethod & { index: number } | undefined {
-    const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
-    if (!classDataOff) return undefined;
-    const r = new Reader(this.bytes, classDataOff);
+    const r = this.classData(i);
+    if (!r) return undefined;
     const nf = r.uleb() + r.uleb(), nd = r.uleb(), nv = r.uleb();
     for (let j = 0; j < nf; j++) { r.uleb(); r.uleb(); }
     let index = 0;
@@ -376,6 +405,35 @@ export class DexFile {
       if (idx === methodIdx) return { methodIdx, flags, codeOff, index };
     }
     return undefined;
+  }
+  /** whether class_def `i` declares a static field of a type among type_ids `types` */
+  declaresStaticOf(i: number, types: ReadonlySet<number>): boolean {
+    const r = this.classData(i);
+    if (!r) return false;
+    const ns = r.uleb();
+    r.uleb(); r.uleb(); r.uleb();
+    for (let j = 0, idx = 0; j < ns; j++) {
+      idx += r.uleb(); r.uleb();
+      if (types.has(this.view.getUint16(this.fieldIdsOff + idx * 8 + 2, true))) return true;
+    }
+    return false;
+  }
+  /** whether class_def `i` declares a virtual method (in DEX, one neither static, private nor a constructor), with a parameter or return type among
+   *  type_ids `types` if given */
+  declaresVirtual(i: number, types?: ReadonlySet<number>): boolean {
+    const r = this.classData(i);
+    if (!r) return false;
+    const nf = r.uleb() + r.uleb(), nd = r.uleb(), nv = r.uleb(), v = this.view;
+    if (!types) return nv > 0;
+    for (let j = 0; j < nf; j++) { r.uleb(); r.uleb(); }
+    for (let j = 0; j < nd; j++) { r.uleb(); r.uleb(); r.uleb(); }
+    for (let j = 0, idx = 0; j < nv; j++) {
+      idx += r.uleb(); r.uleb(); r.uleb();
+      const proto = this.protoIdsOff + v.getUint16(this.methodIdsOff + idx * 8 + 2, true) * 12, params = v.getUint32(proto + 8, true);
+      if (types.has(v.getUint32(proto + 4, true))) return true;
+      for (let k = 0, n = params ? v.getUint32(params, true) : 0; k < n; k++) if (types.has(v.getUint16(params + 4 + k * 2, true))) return true;
+    }
+    return false;
   }
   /** the method_id of class `typeIdx` named `name` with descriptor `desc`, or -1. method_ids sort by class, then name, then proto */
   findMethod(typeIdx: number, name: string, desc: string, raw = false): number {

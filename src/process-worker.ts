@@ -14,7 +14,7 @@ globalThis.addEventListener("unhandledrejection", event => {
   logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
 });
 
-type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: boolean };
+type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort; compile: MessagePort; warm: MessagePort };
 let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
@@ -27,12 +27,12 @@ async function prepare({ clock, aot, jars, compile, warm }: Prestart) {
     import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
-  await tier.usePagePorts(aot, compile);
+  await tier.usePagePorts(aot, compile, warm);
   const runtime = Promise.all([skia.loadSkia(), tier.loadTier()]);
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
   jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
-  void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }), warm ? () => globalThis.postMessage({ kind: "warmed" }) : undefined)).catch(() => {});
+  void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
   return { control, port, core, packages, device, config, runtime };
 }
 

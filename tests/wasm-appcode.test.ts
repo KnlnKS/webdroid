@@ -1,7 +1,6 @@
 import { expect, test, vi } from 'vite-plus/test';
 import { prepareApp } from '../src/wasm/host/appcode.ts';
 import type { WorkerPort } from '../src/wasm/host/compiler.ts';
-import type { FetchStore } from '../src/wasm/link/aotstore.ts';
 import type { World } from '../src/wasm/link/world.ts';
 import { Persist, memoryBackend } from '../src/wasm/host/persist.ts';
 import type { CompileRequest } from '../src/wasm/host/compile-serve.ts';
@@ -23,7 +22,7 @@ Object.defineProperty(navigator, 'locks', {value: undefined, configurable: true}
 test('app code death closes its builder, rejects its build and prevents late restart', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
   const ports: CompilePort[] = [], signal = new AbortController();
-  const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-close.invalid/', key: 'platform'} as FetchStore,
+  const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-close.invalid/', key: 'platform', bytes: () => undefined},
     spawn: () => { const port = new CompilePort(); ports.push(port); return port; }, persist: new Persist(memoryBackend()), roots: {launch: []}, signal: signal.signal});
   expect(ports).toHaveLength(0);
   const timers: (() => void)[] = [];
@@ -55,7 +54,7 @@ test('death reentering builder creation closes its newly returned port', async (
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
   const signal = new AbortController(), ports: CompilePort[] = [];
   try {
-    const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-reentrant.invalid/', key: 'platform'} as FetchStore,
+    const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-reentrant.invalid/', key: 'platform', bytes: () => undefined},
       spawn: () => { const port = new CompilePort(); ports.push(port); if (ports.length === 1) signal.abort(); return port; },
       roots: {launch: []}, signal: signal.signal});
     code.watch(world);

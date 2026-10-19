@@ -1,6 +1,6 @@
 // Profiles every process World through first frames.
 // --classes records called classes with platform code withheld; rebuild AOT to group those classes.
-// Then run without --classes to record startup modules and the methods a zygote warms, and export saved app builds.
+// Then run without --classes to record startup modules and the platform slots the page's warm Worker compiles ahead, and export saved app builds.
 // WEBDROID_URL=http://localhost:4090 pnpm wasm aot-profile [--classes] [apk ...]
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
@@ -21,8 +21,10 @@ const byUse = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map
 const { key } = await (await fetch(new URL("/aot/current.json", BASE))).json() as { key: string };
 const ordered = new Set<string>();
 const uses = { linked: new Map<string, number>(), called: new Map<string, number>() };
-/** the platform methods the launches' realms ran: what a zygote has the engine compile ahead (World.warm) */
-const warm = new Set<string>();
+/** the platform build slots the launches' realms ran: what the page's warm Worker has the engine compile ahead (src/wasm/host/warm-worker.ts) */
+const warm = new Set<number>();
+/** what each launch's first process numbered before its app's code arrived: a device's first process numbers it ahead when every launch agreed (src/wasm/host/boot.ts) */
+const prefixes = new Set<string>();
 const failures: string[] = [];
 for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon-v0.20.4.apk"]) {
   const profile = mkdtempSync(join(tmpdir(), "wdprof-"));
@@ -57,7 +59,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       });
       await page.waitForTimeout(SETTLE_MS);
       const {processes,profiles} = await collectLaunch(page, deadline, errors);
-      for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const id of await realm.evaluate(() => globalThis.__wdWasm?.called?.() ?? []).catch(() => [] as string[])) warm.add(id);
+      for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const slot of await realm.evaluate(() => globalThis.__wdWasm?.ran?.() ?? []).catch(() => [] as number[])) warm.add(slot);
       console.log(`${apk} ${launch}: ${processes.length} healthy process diagnostics, ${url.href}`);
       const wanted = [...new Set(profiles.flatMap(profile => profile.wanted))];
       const used = profiles.flatMap(profile => profile.worlds);
@@ -66,6 +68,8 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       for (const f of wanted) ordered.add(f);
       const mb = (kind: string) => (wanted.filter((f) => f[0] === kind).reduce((n, f) => n + statSync(join(AOT_ROOT, key, f)).size, 0) / 1e6).toFixed(1);
       console.log(`${apk} ${launch}: ${wanted.length} files wanted (C ${wanted.filter((f) => f[0] === "c").length}, ${mb("c")} MB; D ${wanted.filter((f) => f[0] === "d").length}, ${mb("d")} MB), ${ordered.size - before} new`);
+      if (launch === "cold") prefixes.add(await page.evaluate(async ([store, file]) =>
+        (await (await (await (await navigator.storage.getDirectory()).getDirectoryHandle(store)).getFileHandle(file)).getFile()).text(), [COMPILED_CODE_DIR, `prefix-${key}.json`] as const));
       if (launch === "settled") { await settleBuilds(page); await exportBundles(page); }
       await page.close();
     }
@@ -87,8 +91,10 @@ if (classes) {
   writeFileSync(join(AOT_ROOT, "hot.json"), JSON.stringify({ linked: byUse(uses.linked), called: hot.called }));
   const files = [...ordered].filter((f) => /^[cd]\d+\.wasm$/.test(f));
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
-  writeFileSync(join(AOT_ROOT, key, "warm.json"), JSON.stringify([...warm]));
-  console.log(`${files.length} files in ${key}/startup.json, ${warm.size} methods in warm.json`);
+  writeFileSync(join(AOT_ROOT, key, "warm.json"), JSON.stringify([...warm].sort((a, b) => a - b)));
+  console.log(`${files.length} files in ${key}/startup.json, ${warm.size} slots in warm.json`);
+  if (prefixes.size === 1) writeFileSync(join(AOT_ROOT, key, "prefix.json"), [...prefixes][0]);
+  else { rmSync(join(AOT_ROOT, key, "prefix.json"), { force: true }); console.log(`${prefixes.size} different prefixes: no prefix.json`); }
 }
 
 /** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */
@@ -105,16 +111,23 @@ async function settleBuilds(page: import("playwright").Page): Promise<void> {
 /** the app builds in the page's store, written beside the platform build's modules */
 async function exportBundles(page: import("playwright").Page): Promise<void> {
   const dir = join(AOT_ROOT, key);
-  const listing = await page.evaluate(async (name) => {
+  // meta.json, like the files below, may be mid-write by another realm, and is read again
+  let listing: Record<string, string[]> | "changed" = "changed";
+  for (let attempt = 0; listing === "changed" && attempt < 5; attempt++) listing = await page.evaluate(async (name) => {
     let text: string;
     try {
       const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
       text = await (await (await store.getFileHandle("meta.json")).getFile()).text();
-    } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return {}; throw error; }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotFoundError") return {};
+      if (error instanceof DOMException && error.name === "NotReadableError") { await new Promise((resolve) => setTimeout(resolve, 1000)); return "changed" as const; }
+      throw error;
+    }
     const meta = JSON.parse(text) as { entries: Record<string, { files: Record<string, number> }> };
     // launch module lists share the store
     return Object.fromEntries(Object.entries(meta.entries).filter(([, e]) => "index.json" in e.files).map(([k, e]) => [k, Object.keys(e.files)]));
   }, COMPILED_CODE_DIR);
+  if (listing === "changed") throw new Error("app build store: meta.json still changing after 5 reads");
   if (!Object.keys(listing).length) console.log("no app build was kept");
   for (const [entry, names] of Object.entries(listing)) {
     // the realms of a tab share the store's meta.json without a lock: an entry another realm evicted meanwhile is skipped, and one it is

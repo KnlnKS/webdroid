@@ -18,7 +18,7 @@ await mountPlatform(ROOT);
 const jars = [0, 1, 2, 3, 4, 12, 18].map((i) => PLATFORM_PATHS[i]);
 // the runner's own output (60 MB of test names for the largest class, two bytes a char here) is far over ART's 512 MB limit with the suite's objects: the limit is raised
 const w = world([...dexFiles, ...jars], { heapLimit: 3 * 2 ** 30, natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
-w.onGap = (id) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + w.gapList[id]); };
+w.onGap = (gap) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + gap); };
 addHostClasses(w);
 if (existsSync(join(dexDir, "resources.jar"))) {
   // the suite's resources are read from this jar by the boot class loader, which the classes of a Program without loaders of its own ask

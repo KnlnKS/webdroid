@@ -1,7 +1,8 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, VERSION, type AotStore, type AppIndex, type Numbering, type UnitHeader } from "../link/aot.ts";
+import { APP_VERSION, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot.ts";
+import type { Numbering } from "../link/numbers.ts";
 import { compileBytes } from "../link/module.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { COMPILED_CODE_DIR } from "../../shell/hostfs.ts";
@@ -89,7 +90,8 @@ export class SavedBuild implements AotStore {
     let build: SavedBuild;
     try {
       const index = JSON.parse(new TextDecoder().decode(raw)) as AppIndex;
-      if (index.version !== APP_VERSION) return undefined;
+      // a build made before builds had ids is made again
+      if (index.version !== APP_VERSION || !index.id) return undefined;
       build = new SavedBuild(index);
       await Promise.all([...files].filter(([name]) => name.endsWith(".wasm")).map(async ([name, bytes]) => {
         const mod = await compileBytes(bytes);
@@ -106,7 +108,35 @@ export class SavedBuild implements AotStore {
 }
 
 /** the files to keep of a build: its index and its modules */
-export const buildFiles = (build: { index: AppIndex; files: [string, Uint8Array][] }): [string, Uint8Array][] => [["index.json", new TextEncoder().encode(JSON.stringify(build.index))], ...build.files];
+export const buildFiles = (build: { index: AppIndex; files: [string, Uint8Array][] }): [string, Uint8Array][] =>
+  [["index.json", new TextEncoder().encode(JSON.stringify(build.index))], ...build.files];
+
+/** What the launches of an app recorded for the next, under its key + "-launch": the platform modules they loaded (files.json, in the order a launch wanted them), and the
+ *  slots of build code they ran (ran.bin: the id of the app build that numbered them, 0 for none, then the slots) */
+export class LaunchRecord {
+  files: string[];
+  slots: Int32Array;
+  private persist: Persist | undefined; private key: string; private build: number | undefined;
+  private constructor(persist: Persist | undefined, key: string, files: string[], ran: Int32Array | undefined) {
+    this.persist = persist; this.key = key; this.files = files; this.build = ran?.[0]; this.slots = ran?.subarray(1) ?? new Int32Array();
+  }
+  static async load(persist: Persist | undefined, appKey: string): Promise<LaunchRecord> {
+    const key = appKey + "-launch", saved = await persist?.load(key).catch(() => undefined), files = saved?.get("files.json"), ran = saved?.get("ran.bin");
+    return new LaunchRecord(persist, key, files ? JSON.parse(new TextDecoder().decode(files)) : [], ran && new Int32Array(ran.buffer, ran.byteOffset, ran.byteLength >> 2));
+  }
+  /** the slots launches ran of build `id`, if they were recorded under it */
+  ran(id: number): Int32Array | undefined { return id === this.build ? this.slots : undefined; }
+  /** adds the platform modules among `loaded` and the slots a launch ran of build `id`, and keeps the record if that is more; slots of another build are dropped */
+  add(loaded: string[], id: number, ran: number[]): void {
+    const before = this.ran(id) ?? new Int32Array(), had = new Set(before), known = new Set(this.files);
+    const modules = loaded.filter((f) => /^[cd]\d+\.wasm$/.test(f)), slots = ran.filter((s) => !had.has(s));
+    if (modules.every((f) => known.has(f)) && !slots.length) return;
+    const files = [...new Set([...modules, ...this.files])], next = new Int32Array(1 + before.length + slots.length);
+    next[0] = id; next.set(before, 1); next.set(slots, 1 + before.length);
+    void this.persist?.save(this.key, [["files.json", new TextEncoder().encode(JSON.stringify(files))], ["ran.bin", new Uint8Array(next.buffer)]])
+      .then((kept) => { if (kept) { this.files = files; this.build = id; this.slots = next.subarray(1); } }, () => {});
+  }
+}
 
 export const memoryBackend = (): FileBackend & { files: Map<string, Uint8Array> } => {
   const files = new Map<string, Uint8Array>();

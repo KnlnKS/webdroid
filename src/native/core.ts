@@ -164,7 +164,7 @@ let syncCompile: boolean | null = null;
 /** the linked batches, oldest first, each with the table slots it holds */
 const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
 /** entries of a block before the JIT takes it (jit.zig) */
-export const JIT_HEAT = 48;
+export const JIT_HEAT = 255;
 export const jitStats = {
   get regions(): number { return core.jit_stat(); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
 };

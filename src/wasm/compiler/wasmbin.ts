@@ -62,10 +62,16 @@ type TypeDef =
   | { k: "struct"; fields: FieldT[]; sup?: number; final?: boolean }
   | { k: "array"; elem: FieldT; sup?: number; final?: boolean };
 
-// Function-index immediates are tracked independently of DEX stack-trace offsets.
-export type FuncBytes = number[] & { functionRefs?: number[] };
+// Function-index immediates are tracked independently of DEX stack-trace offsets, and so are those of defined globals, whose indices follow every
+// imported global's: the module's `k`th defined global is three bytes (V8 takes at most 1,000,000 globals) that ModuleBuilder.build fills in once the
+// imports are known.
+export type FuncBytes = number[] & { functionRefs?: number[]; globalRefs?: number[] };
 export function functionIndex(index: number, out: FuncBytes): void {
   (out.functionRefs ??= []).push(out.length); uleb(index, out);
+}
+export function definedGlobal(k: number, out: FuncBytes): void {
+  (out.globalRefs ??= []).push(out.length);
+  out.push((k & 0x7f) | 0x80, ((k >>> 7) & 0x7f) | 0x80, k >>> 14);
 }
 function readIndex(bytes: number[], at: number): number {
   let value = 0, shift = 0, b: number;
@@ -129,7 +135,9 @@ export class ModuleBuilder {
   reserveFunc(type: number, nm = ""): number { return this.addFunc(type, [], nm); }
   setBody(idx: number, body: number[]): void { this.bodies[idx - this.nImportedFuncs] = body; }
   addTable(elem: VT, min: number): number { const d: number[] = []; vt(elem, d); d.push(0); uleb(min, d); this.tables.push(d); return this.nImportedTables + this.tables.length - 1; }
-  addGlobal(t: VT, mut: boolean, init: number[]): number { const d: number[] = []; vt(t, d); d.push(mut ? 1 : 0); d.push(...init, 0x0b); this.globals.push(d); return this.nImportedGlobals + this.globals.length - 1; }
+  addGlobal(t: VT, mut: boolean, init: number[]): number { return this.nImportedGlobals + this.defineGlobal(t, mut, init); }
+  /** a global defined before the module's imports are all known: code names it as `definedGlobal(k)` with the `k` this returns */
+  defineGlobal(t: VT, mut: boolean, init: number[]): number { const d: number[] = []; vt(t, d); d.push(mut ? 1 : 0); d.push(...init, 0x0b); this.globals.push(d); return this.globals.length - 1; }
   addTag(type: number): number { const d: number[] = [0]; uleb(type, d); this.tags.push(d); return this.nImportedTags + this.tags.length - 1; }
   export(nm: string, kind: "func" | "table" | "memory" | "global" | "tag", idx: number): void { this.exports.push({ name: nm, kind: { func: 0, table: 1, memory: 2, global: 3, tag: 4 }[kind], idx }); }
   /** active element segment writing funcs at table[offset...] */
@@ -190,6 +198,7 @@ export class ModuleBuilder {
     let size = 8;
     const put = (a: ArrayLike<number>) => {
       if (moved.has(a as FuncBytes)) for (const at of (a as FuncBytes).functionRefs!) fixes.push(size + at, index(readIndex(a as FuncBytes, at)));
+      for (const at of (a as FuncBytes).globalRefs ?? []) fixes.push(size + at, this.nImportedGlobals + readIndex(a as FuncBytes, at));
       parts.push(a); size += a.length;
     };
     /** a section: its id, the length of its parts, then the parts */

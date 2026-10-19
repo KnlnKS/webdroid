@@ -94,7 +94,7 @@ const fontIndexJson = memo(() => runNode("scripts/font-index.ts"));
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
 const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(`${apkDirectory}/${apk}`))).zip);
-/** a worker (src/wasm/host/compile-worker.ts, src/process-worker.ts) bundled for the page, until a source changes */
+/** a worker (src/wasm/host/compile-worker.ts, src/wasm/host/warm-worker.ts, src/process-worker.ts) bundled for the page, until a source changes */
 const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
 const compileWorker = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 
@@ -111,6 +111,7 @@ const ROUTES: [RegExp, Route][] = [
     return Response.json(`${url.protocol}//*.localhost:${url.port}`);
   }],
   [/^\/wasm-compile-worker\.js$/, () => compileWorker("src/wasm/host/compile-worker.ts")],
+  [/^\/wasm-warm-worker\.js$/, () => compileWorker("src/wasm/host/warm-worker.ts")],
   [/^\/process-worker\.js$/, () => compileWorker("src/process-worker.ts")],
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
   [/^\/webview-worker\.js$/, () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } })],

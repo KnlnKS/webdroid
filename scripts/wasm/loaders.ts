@@ -113,7 +113,7 @@ const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", 
   "a method of the other loader's types is not found", "return types and receivers", "array classes", "loader identity and parent", "exceptions of a loader's own classes"];
 let failed = 0;
 const gaps = new Set<string>();
-w.onGap = (id) => gaps.add(w.gapList[id]);
+w.onGap = (gap) => gaps.add(gap);
 let got: number;
 try { got = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number; } catch (e) {
   const t = w.throwable(e);
@@ -377,14 +377,15 @@ if (wasmDelegate !== 31) { failed++; console.log(`FAIL actual delegate-last init
   const epoch = cache.epoch;
   cache.initiateClass(child, "Shared", key);
   const sub = p.definedBy(child, "Sub")!;
-  if (!cache.lateSubtypes(key).includes(sub) || cache.lateSubtypes("Shared").includes(sub)) throw new Error("initiated superclass identity retained stale subtype relationships");
+  if (!p.isSubclass(sub, key) || p.isSubclass(sub, "Shared")) throw new Error("initiated superclass identity retained stale subtype relationships");
   if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) throw new Error("initiating identity retained stale DEX/member caches");
-  const priorLate = cache.lateSubtypes("NamespaceFace").join();
+  const implementors = () => [...p.own()].filter(c => p.isSubclass(c.name, "NamespaceFace")).map(c => c.name).join();
+  const prior = implementors();
   cache.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
-  if (cache.lateSubtypes("NamespaceFace").join() !== priorLate) throw new Error("descriptor-only initiation changed subtype relationships");
+  if (implementors() !== prior) throw new Error("descriptor-only initiation changed subtype relationships");
   const face = p.definedBy(child, "NamespaceFace")!;
   cache.initiateClass(child, "NamespaceFace", face);
-  if (!cache.lateSubtypes(face).includes(key) || cache.lateSubtypes("NamespaceFace").includes(key)) throw new Error("initiated interface identity retained stale subtype relationships");
+  if (!p.isSubclass(key, face) || p.isSubclass(key, "NamespaceFace")) throw new Error("initiated interface identity retained stale subtype relationships");
   cache.link(key);
   try { cache.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
@@ -648,17 +649,17 @@ async function hotRefreshControl(): Promise<void> {
   const page = world(files, { natives, holdUpgrades: () => true }), worker = world(files, { compileOnly: true }), uc = new UnitCompiler(worker);
   const run = page.entryAsync("HotRefresh", "run", "(Z)I"), slot = page.slotOf(page.prog.resolve("HotRefresh", "run", "(Z)I")!);
   check("worker seed", await run(0), expected[0]);
-  const job = page.upgradeJob(slot)!, marks = page.numbering(), epoch = page.epoch;
-  check("worker numbering sync", uc.sync(page.since(page.base), true), true);
+  const job = page.upgradeJob(slot)!, marks = page.numbers.marks(), epoch = page.epoch;
+  check("worker numbering sync", uc.sync(page.numbers.since(page.base), true), true);
   const result = uc.upgrade(job);
   if (typeof result === "string") throw new Error(result);
   check("resolve before worker publication", await run(1), expected[1]);
   check("publish after readiness", page.adoptUnit(slot, job, result, epoch), true);
   const n = result.numbering, keep = !!(n.names.length + n.tail.length + n.selectors.length + n.gaps.length + n.links.length);
-  const syncFrom = keep ? page.numbering() : marks;
+  const syncFrom = keep ? page.numbers.marks() : marks;
   const refresh = page.upgradeJob(slot)!;
   if (refresh?.refresh === undefined) throw new Error("worker publication missed prior readiness");
-  check("refresh worker numbering sync", uc.sync(page.since(syncFrom), keep), true);
+  check("refresh worker numbering sync", uc.sync(page.numbers.since(syncFrom), keep), true);
   const refreshed = uc.upgrade(refresh);
   if (typeof refreshed === "string") throw new Error(refreshed);
   check("worker refresh adopted", page.adoptUnit(slot, refresh, refreshed, page.epoch), true);

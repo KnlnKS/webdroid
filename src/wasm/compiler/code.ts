@@ -1,4 +1,4 @@
-import { T, sleb, uleb, vt, type VT, type FuncBytes, functionIndex } from "./wasmbin.ts";
+import { T, sleb, uleb, vt, type VT, type FuncBytes, definedGlobal, functionIndex } from "./wasmbin.ts";
 /** The global a call through the slot table (table 0) first sets to the slot it calls, which a lazy-link stub serving every slot of its signature reads:
  *  global 0 of every module with such calls */
 export const CALLEE = 0;
@@ -53,6 +53,9 @@ export class Code {
   ltee(i: number): this { return this.local(0x22, i, true); }
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
+  /** global.get and global.set of the module's `k`th defined global (ModuleBuilder.defineGlobal) */
+  ggetDefined(k: number): this { this.b.push(0x23); definedGlobal(k, this.b); return this; }
+  gsetDefined(k: number): this { this.b.push(0x24); definedGlobal(k, this.b); return this; }
   private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
   /** the functions called directly, and the number of calls through a table or a reference: what a body may run besides its own instructions */
   targets: number[] = [];
@@ -109,6 +112,7 @@ export class Code {
   refIsNull(): this { this.b.push(0xd1); return this; }
   refEq(): this { this.b.push(0xd3); return this; }
   refAsNonNull(): this { this.b.push(0xd4); return this; }
+  brOnNonNull(d: number): this { this.b.push(0xd6); uleb(d, this.b); return this; }
   refFunc(f: number): this { this.b.push(0xd2); functionIndex(f, this.b); return this; }
   gc(sub: number, ...imm: number[]): this { this.b.push(0xfb); uleb(sub, this.b); for (const i of imm) uleb(i, this.b); return this; }
   structNew(t: number): this { return this.gc(0, t); }
@@ -133,20 +137,20 @@ export class Code {
   materialize(): void {
     if (!this.deferred.length) return;
     this.materializing = true;
-    const old = this.b, marks = this.marks, refs = old.functionRefs ?? [];
-    this.b = []; this.b.functionRefs = []; this.marks = [];
-    let from = 0, mi = 0, ri = 0;
-    for (const { at, emit } of this.deferred) {
-      const offset = this.b.length - from;
-      while (ri < refs.length && refs[ri] < at) this.b.functionRefs.push(refs[ri++] + offset);
-      while (mi < marks.length && marks[mi] < at) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
-      for (let i = from; i < at; i++) this.b.push(old[i]);
-      emit(this); from = at;
-    }
-    const offset = this.b.length - from;
-    while (ri < refs.length) this.b.functionRefs.push(refs[ri++] + offset);
-    while (mi < marks.length) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
-    for (let i = from; i < old.length; i++) this.b.push(old[i]);
+    const old = this.b, marks = this.marks, fRefs = old.functionRefs ?? [], gRefs = old.globalRefs ?? [], b: FuncBytes = this.b = [];
+    b.functionRefs = []; b.globalRefs = []; this.marks = [];
+    let from = 0, mi = 0, fi = 0, gi = 0;
+    /** the old bytes up to `to`, and what points into them */
+    const copy = (to: number) => {
+      const offset = b.length - from;
+      while (fi < fRefs.length && fRefs[fi] < to) b.functionRefs!.push(fRefs[fi++] + offset);
+      while (gi < gRefs.length && gRefs[gi] < to) b.globalRefs!.push(gRefs[gi++] + offset);
+      while (mi < marks.length && marks[mi] < to) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
+      for (let i = from; i < to; i++) b.push(old[i]);
+      from = to;
+    };
+    for (const { at, emit } of this.deferred) { copy(at); emit(this); }
+    copy(old.length);
     this.deferred = [];
     this.materializing = false;
   }
@@ -166,6 +170,7 @@ export class Code {
     for (let i = 0; i < b.length; i++) out.push(b[i]);
     out.push(0x0b);
     out.functionRefs = (this.b.functionRefs ?? []).map(at => at + this.prefixLen);
+    if (this.b.globalRefs) out.globalRefs = this.b.globalRefs.map(at => at + this.prefixLen);
     return out;
   }
 }

@@ -6,14 +6,13 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
-import type { FetchStore } from "../../src/wasm/link/aotstore.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { prepareApp, type AppCode } from "../../src/wasm/host/appcode.ts";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
 import type { WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { loadDexes, world } from "./lib.ts";
+import { fakeAot, loadDexes, world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
 
@@ -31,7 +30,7 @@ const spawn = (): WorkerPort => {
   return { postMessage: (m, t) => port1.postMessage(m, t as never), set onmessage(f) { port1.onmessage = f as never; }, get onmessage() { return port1.onmessage as never; },
     onerror: null, terminate: () => { port1.close(); port2.close(); } };
 };
-const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key } as unknown as FetchStore, persist, spawn, roots: { launch: [] } };
+const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, key), persist, spawn, roots: { launch: [] } };
 /** a launch as the page makes one: the app over the platform's Program, the saved build attached, the host's classes */
 const launch = (code: AppCode): World => addHostClasses(world(new Program(app, platform), { natives, app: code.saved }));
 const run = async (w: World, reps: number) => {

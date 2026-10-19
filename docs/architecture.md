@@ -99,9 +99,10 @@ is how host code calls Java.
 **Code delivery.**
 - **Platform:** compiled at build time (`pnpm aot`, `scripts/wasm/aot-build.ts`) into class-data ("D") and code
   ("C") modules under `vendor/wasm-aot/`, numbered so that they link into any World. The build is keyed by every
-  file under `src/` and the AOT scripts. A page streams and compiles it in Workers (`host/aotload.ts`). A zygote
-  warms the platform code while the package downloads (`src/shell/device.ts`), and a spare process Worker stands
-  ready for the next launch (`src/shell/processes.ts`).
+  file under `src/` and the AOT scripts. A page streams and compiles it in Workers (`host/aotload.ts`). A warm
+  Worker of the page has the engine compile the build code launches ran before a process calls it
+  (`host/warm-worker.ts` over `link/warmshim.ts`), and a spare process Worker stands ready for the next launch
+  (`src/shell/processes.ts`).
 - **App:** after a first launch, a compile Worker builds the methods the app ran, ordered by the APK's own ART
   baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`src/jvm/reach.ts`), and persists the
   build (`host/appcode.ts`, `host/persist.ts`); the first process of an app to launch makes it. Bundled builds cover the gate apps

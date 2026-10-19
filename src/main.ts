@@ -7,7 +7,7 @@ import { mountSystemCertificates } from "./shell/cacerts.ts";
 import { mountPlatformData } from "./shell/apex.ts";
 
 import { newObj, vcall, scall } from "./jvm/natives/jentry.ts";
-import { fetchPlatformJars, loadFramework } from "./android/framework.ts";
+import { platformJarBlobs, loadFramework } from "./android/framework.ts";
 import { loadSkia } from "./android/skia.ts";
 import type { Mirror } from "./shell/frame-port.ts";
 import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device.ts";
@@ -62,7 +62,7 @@ setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
-void fetchPlatformJars();
+void platformJarBlobs();
 void loadTier().then(() => mark("tierLoaded"), () => {});
 // the next app's process loads its runtime while the page waits for a package to open, as a device's zygote waits forked
 processBroker().prestartWorker();

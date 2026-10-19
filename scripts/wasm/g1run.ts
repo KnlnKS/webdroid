@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { FetchStore } from "../../src/wasm/link/aotstore.ts";
 import { compileBytes } from "../../src/wasm/link/module.ts";
-import { loadDexes, world } from "./lib.ts";
+import { fakeAot, loadDexes, world } from "./lib.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
@@ -68,7 +68,7 @@ function workloadProgram(cfg: G1Config) {
 async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: () => Promise<void> }> {
   const { dexes, prog } = workloadProgram(cfg), key = aotDir!.split("/").pop()!, persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
-  const code = await prepareApp({ dexes, aot: { base: `/aot/${key}/`, key } as unknown as FetchStore, persist, roots: { launch: [] },
+  const code = await prepareApp({ dexes, aot: fakeAot(`/aot/${key}/`, key), persist, roots: { launch: [] },
     spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return spawnCompileWorker(undefined, "/wasm-compile-worker.js"); } });
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
@@ -104,7 +104,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   }
   out.worldSetupMs = performance.now() - setupAt;
   const gaps: string[] = [], b0 = performance.now();
-  w.onGap = id => gaps.push(w.gapList[id]);
+  w.onGap = gap => gaps.push(gap);
   try { await startProcess(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); }
   out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats);
   out.prestartedWorker = !!startWorker;

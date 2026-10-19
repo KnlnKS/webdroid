@@ -47,23 +47,28 @@ export function mountPlatformJar(bytes: Uint8Array, i: number): void {
   }
 }
 
-let jars: Promise<Uint8Array[]> | null = null;
+let blobs: Promise<Blob[]> | null = null, jars: Promise<Uint8Array[]> | null = null;
 /** the page's copy, which a process Worker takes rather than fetching its own behind the page's other requests */
 export function sendPlatformJars(port: MessagePort): void {
-  void fetchPlatformJars().then((list) => port.postMessage(list), () => port.postMessage(null)).finally(() => port.close());
+  void platformJarBlobs().then((list) => port.postMessage(list), () => port.postMessage(null)).finally(() => port.close());
 }
 export function receivePlatformJars(port: MessagePort): void {
-  jars = new Promise<Uint8Array[] | null>((resolve) => { port.onmessage = ({ data }) => { port.close(); resolve(data); }; })
-    .then((list) => list ?? (jars = null, fetchPlatformJars()));
+  blobs = new Promise<Blob[] | null>((resolve) => { port.onmessage = ({ data }) => { port.close(); resolve(data); }; })
+    .then((list) => list ?? (blobs = null, platformJarBlobs()));
 }
 export const platformJarUrl = (jar: string): string => `/vendor/aosp/${jar}`;
-/** start fetching the platform jars, ahead of the app they are indexed behind */
-export function fetchPlatformJars(): Promise<Uint8Array[]> {
-  return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
+/** The platform jars as the browser holds them: a Blob crosses to another realm as a handle, where bytes are copied for each realm on the sender's thread
+ *  (43 MB to each process Worker and compile worker). */
+export function platformJarBlobs(): Promise<Blob[]> {
+  return blobs ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
     const res = await fetch(platformJarUrl(jar));
     if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: pnpm gen-framework`);
-    return new Uint8Array(await res.arrayBuffer());
+    return res.blob();
   }));
+}
+/** start fetching the platform jars, ahead of the app they are indexed behind */
+export function fetchPlatformJars(): Promise<Uint8Array[]> {
+  return jars ??= platformJarBlobs().then((list) => Promise.all(list.map(async (blob) => new Uint8Array(await blob.arrayBuffer()))));
 }
 
 /** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.

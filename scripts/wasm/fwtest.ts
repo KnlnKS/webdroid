@@ -15,7 +15,7 @@ const { PLATFORM_PATHS, ROOT } = await import("./paths.ts");
 await mountPlatform(ROOT);
 const w = world(PLATFORM_PATHS, { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 const gaps = new Set<string>();
-w.onGap = (id) => gaps.add(w.gapList[id]);
+w.onGap = (gap) => gaps.add(gap);
 const hosted = new Set<string>();
 /** the classes the host implements that have been registered since: the exercises' modules register more as they load, each when it does */
 const addHostClasses = () => { for (const spec of natives.source!.hostSpecs!()) if (!hosted.has(spec.name)) { hosted.add(spec.name); w.addHostClass(spec); } };

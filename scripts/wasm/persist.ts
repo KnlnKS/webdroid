@@ -9,25 +9,25 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
-import { APP_VERSION, VERSION, packModule, sameMarks } from "../../src/wasm/link/aot.ts";
+import { APP_VERSION, VERSION, packModule } from "../../src/wasm/link/aot.ts";
+import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { UnitCompiler } from "../../src/wasm/link/unit.ts";
-import { buildApp } from "../../src/wasm/link/apps.ts";
+import { buildApp, buildPart, mergeApp } from "../../src/wasm/link/apps.ts";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { fetchBundle } from "../../src/wasm/host/bundle.ts";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { current, loadDexes } from "./lib.ts";
+import { current, fakeAot, loadDexes } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { checker, filesIn, shellIn } from "./tools.ts";
-import type { FetchStore } from "../../src/wasm/link/aotstore.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;
@@ -104,8 +104,8 @@ const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsi
   const initial = await run(false, true), once = await run(true), bad = await run(true, false, false);
   const builds = initial.filter((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
   const one = once.find((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
-  const equalBuild = (a: typeof one, b: typeof one) => !!a && !!b && a.methods === b.methods && JSON.stringify(a.build.index) === JSON.stringify(b.build.index)
-    && a.build.files.length === b.build.files.length && a.build.files.every(([name, bytes], i) => name === b.build.files[i][0] && Buffer.compare(bytes, b.build.files[i][1]) === 0);
+  const equalBuild = (a: typeof one, b: typeof one) => !!a && !!b && a.methods === b.methods && "index" in a.part && "index" in b.part && JSON.stringify(a.part.index) === JSON.stringify(b.part.index)
+    && a.part.files.length === b.part.files.length && a.part.files.every(([name, bytes], i) => name === b.part.files[i][0] && Buffer.compare(bytes, b.part.files[i][1]) === 0);
   check("one-shot build equals refine-capable payload", equalBuild(builds[0], one), true);
   check("refine-capable worker remains usable", builds.length, 2);
   check("refine-capable init retains ready", initial.filter(r => r.type === "ready").length, 1);
@@ -131,6 +131,20 @@ const answers = (w: World) => {
 };
 const expected = answers(world(app));
 check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
+
+// A build made in shards, each World compiling its share with the numbering they share frozen, runs as the app does.
+{
+  const part = (shard: number) => {
+    const w = world(app, { compileOnly: true });
+    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], infos: [] }, shard, 3);
+  };
+  const [lead, ...rest] = [0, 1, 2].map(part);
+  if (!("index" in lead)) throw new Error("the first shard made no index");
+  const built = mergeApp(lead, rest), files = new Map(built.files), w = world(app, { app: { index: built.index, store: { get: (f) => files.get(f) } } });
+  check("a build made in shards attaches", w.appAttached, true);
+  check("and answers as without", answers(w).join(), expected.join());
+  check("with another shard's code loaded", rest.flatMap((p) => p.files).some(([name]) => w.aot!.loaded.includes(name)), true);
+}
 
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
@@ -170,11 +184,11 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   page.prog.dynamicRoot = worker.prog.dynamicRoot = true;
   page.entry("Pst", "hot", "(I)I")(10);
   const uc = new UnitCompiler(worker);
-  check("the worker is where the page started", sameMarks(worker.numbering(), page.base), true);
-  check("it follows the page's numbering", uc.sync(page.since(page.base), true), true);
-  check("and then numbers the same", sameMarks(worker.numbering(), page.numbering()), true);
+  check("the worker is where the page started", sameMarks(worker.numbers.marks(), page.base), true);
+  check("it follows the page's numbering", uc.sync(page.numbers.since(page.base), true), true);
+  check("and then numbers the same", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!);
-  const job = page.upgradeJob(slot)!, from = page.numbering();
+  const job = page.upgradeJob(slot)!, from = page.numbers.marks();
   check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
   if (job.prepared?.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
@@ -196,11 +210,11 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     check("it was numbered from the page's state", sameMarks(unit.numbering.from, from), true);
     page.selectorId("pst.other()V");        // the page numbered something meanwhile
     check("a unit that numbered something is not taken after the page did", page.adoptUnit(slot, job, unit, page.epoch), false);
-    check("and the page's numbering is untouched", page.selKeys.at(-1), "pst.other()V");
+    check("and the page's numbering is untouched", page.numbers.selKeys.at(-1), "pst.other()V");
     // the worker forgets its numbering and follows the page: the next unit is made over the page's state
-    check("the worker takes the page's numbering after dropping its own", uc.sync(page.since(from), false), true);
-    check("it forgot the selector it numbered", worker.selectors.has("pst.extra()V"), false);
-    check("and has the page's", sameMarks(worker.numbering(), page.numbering()), true);
+    check("the worker takes the page's numbering after dropping its own", uc.sync(page.numbers.since(from), false), true);
+    check("it forgot the selector it numbered", worker.numbers.selectors.has("pst.extra()V"), false);
+    check("and has the page's", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
     const next = page.upgradeJob(slot)!, again = uc.upgrade(next);
     if (typeof again !== "string") {
       check("a worker unit without a stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
@@ -212,7 +226,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 {
   const page = world(app), worker = world(app, { compileOnly: true }), uc = new UnitCompiler(worker);
   page.entry("Pst", "hot", "(I)I")(10);
-  uc.sync(page.since(page.base), true);
+  uc.sync(page.numbers.since(page.base), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.upgradeJob(slot)!, unit = uc.upgrade(job);
   page.addDexes([]);
   check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.adoptUnit(slot, job, unit, page.epoch - 1), false);
@@ -337,7 +351,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // ---- the app build
 let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefined;
 {
-  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
+  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, "platform"), persist, spawn,
     roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } };
   const t0 = performance.now(), first = await prepareApp(request);
   check("no build is saved for the app at first", first.hit, false);
@@ -349,7 +363,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
   const second = await prepareApp(request);
   check("a second launch finds it", second.hit, true);
   check("under a key made of the dex files and the platform build", await appKey(app, "platform") === await appKey(app, "platform") && await appKey(app, "platform") !== await appKey(app, "other") && await appKey(late, "platform") !== await appKey(app, "platform"), true);
-  check("and a different platform build finds none", (await prepareApp({ ...request, aot: { base: BASE, key: "other" } as unknown as FetchStore })).hit, false);
+  check("and a different platform build finds none", (await prepareApp({ ...request, aot: fakeAot(BASE, "other") })).hit, false);
   second.compiler.close();
   first.close();
   savedFiles = (await persist.load(await appKey(app, "platform")))!;
@@ -404,8 +418,8 @@ if (saved) {
 
 // ---- what a launch builds on demand goes into the next build
 {
-  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
-    roots: { launch: ["Pst"] } };
+  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, "platform"), persist, spawn,
+    roots: { launch: ["Pst"], whole: false, limit: 500 } };
   const first = await prepareApp(request);
   first.watch(hosted(app, { app: first.saved, compiler: first.compiler }));
   await first.made!;
@@ -427,9 +441,9 @@ if (saved) {
 
 // ---- a build the platform build ships
 {
-  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: "https://shipped.invalid/", key: "platform" } as unknown as FetchStore, persist, spawn, roots: { launch: ["Pst"] } };
+  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot("https://shipped.invalid/", "platform"), persist, spawn, roots: { launch: ["Pst"] } };
   const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
-  const made = await prepareApp({ ...request, persist: origin, aot: { base: BASE, key: "platform" } as unknown as FetchStore });
+  const made = await prepareApp({ ...request, persist: origin, aot: fakeAot(BASE, "platform") });
   made.watch(hosted(app, { app: made.saved, compiler: made.compiler }));
   await made.made!;
   const files = (await origin.load(key))!, realFetch = globalThis.fetch, requests: string[] = [];

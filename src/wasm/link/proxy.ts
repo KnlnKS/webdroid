@@ -93,7 +93,7 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
   // an exception the handler raised: unchecked ones and those the method declares pass, others are wrapped
   const UTE = "java/lang/reflect/UndeclaredThrowableException", rethrow = () => { c.lget(e).throw_(cx.tag); };
   c.lset(e);
-  for (const unchecked of ["java/lang/RuntimeException", "java/lang/Error"]) { c.lget(e).call(cx.instanceOfFn(unchecked)).if_(); rethrow(); c.end(); }
+  for (const unchecked of ["java/lang/RuntimeException", "java/lang/Error"]) { c.lget(e); cx.emitInstanceOf(c, unchecked); c.if_(); rethrow(); c.end(); }
   const list = c.newLocal(refNull(cx.tData.ref)), i = c.newLocal(T.i32);
   c.i32(declared).tableGet(NM_TABLE).anyConvertExtern().refCast(wrapper).structGet(wrapper, 2).lset(list);
   c.block().loop().lget(i).lget(list).refAsNonNull().arrayLen().raw(OP.i32_ge_s).brIf(1);
@@ -110,6 +110,6 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
   if (BOX[m.ret]) {
     const [cls, unbox, desc] = BOX[m.ret];
     c.lget(result).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-    c.lget(result).call(cx.castFn(cls)); cx.callMethod(c, prog.resolve(cls, unbox, desc)!);
-  } else c.lget(result).call(cx.castFn(m.ret[0] === "L" ? descToName(m.ret) : m.ret));
+    c.lget(result); cx.emitCast(c, cls); cx.callMethod(c, prog.resolve(cls, unbox, desc)!);
+  } else { c.lget(result); cx.emitCast(c, descToName(m.ret)); }
 }

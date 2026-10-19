@@ -141,7 +141,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
     const sig = signature();
     return handleThunk(w, `custom:validate:${sig}:${w.epoch}`, ["L"], "L", (cx, c, arg) => {
       arg(0); c.refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned null"); c.end();
-      arg(0); c.call(cx.castFn(CS)); const local = c.newLocal(T.anyref); c.lset(local);
+      arg(0); cx.emitCast(c, CS); const local = c.newLocal(T.anyref); c.lset(local);
       const field = cx.prog.resolveField(CS, "target", `L${MH};`)!, st = cx.structFor(CS);
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(CS, field));
       const target = c.newLocal(T.anyref); c.lset(target).lget(target).refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned a CallSite with a null target"); c.end();

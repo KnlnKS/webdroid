@@ -6,7 +6,9 @@
 
 import { instanceFace } from "./harfbuzz.ts";
 import { type FvarAxis, faceCount, sfntFace } from "./sfnt.ts";
-import { type NativeFont, type FakedFont, WGHT, ITAL, pending } from "./fonts.ts";
+import { type NativeFont, type FakedFont, type NativeTypeface, WGHT, ITAL, pending, isPlatformFont, resolveDefault, withFonts } from "./fonts.ts";
+import { whenMainIdle } from "./mainloop.ts";
+import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
 
 /** the value Chrome gives an axis on a canvas with a normal stretch and style */
 const chromeAxis = (a: FvarAxis) => a.tag === WDTH ? 100 : a.tag === SLNT ? 0 : a.tag === OPSZ ? NaN : a.def;
@@ -24,6 +26,19 @@ export function cssFace(f: FakedFont): string {
   const made = registerCss(font, ital).then((name) => { byItal!.set(ital, name); return name; });
   byItal.set(ital, made);
   return pending(made);
+}
+/** a fallback font file this large holds up the frame that first draws text in it: Komikku's 32 MB CJK collection took a 23–51 ms read and a 10–16 ms FontFace */
+const READ_AHEAD_BYTES = 1 << 20;
+/** Reads the default typeface's large fallback font files while the main thread is idle, as a device has them on disk, and registers the CSS face of the first
+ *  family drawing from each, which text in them would otherwise wait for */
+export function readAheadFonts(): void {
+  const seen = new Set<string>(), typeface: NativeTypeface | undefined = resolveDefault(null);
+  for (const family of typeface?.collection.families ?? []) {
+    const f = family.match(400, false), path = f.font.path;
+    if (seen.has(path) || !isPlatformFont(path) || PLATFORM_DATA[path] < READ_AHEAD_BYTES) continue;
+    seen.add(path);
+    whenMainIdle(() => void f.font.file.load().then(() => whenMainIdle(() => void withFonts(() => cssFace(f)))).catch(() => {}));
+  }
 }
 async function registerCss(font: NativeFont, ital: number): Promise<string> {
   await font.file.load();

@@ -99,7 +99,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
   if (!ctor && !m.isStatic) {
     c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-    if (wrap) { c.lget(0).call(cx.instanceOfFn(m.cls)).raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
+    if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
     const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
@@ -107,7 +107,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     if (BOX[p]) { c.i32(p.charCodeAt(0)).i32(i).i32(ty); cx.callRt(c, "argp"); if (kindOf(p) === "I") c.raw(OP.i32_wrap_i64); }
     else if (wrap && p !== "Ljava/lang/Object;") {
       const a = c.newLocal(T.anyref);
-      c.lset(a).lget(a).refIsNull().raw(OP.i32_eqz).if_().lget(a).call(cx.instanceOfFn(p[0] === "L" ? descToName(p) : p)).raw(OP.i32_eqz).if_();
+      c.lset(a).lget(a).refIsNull().raw(OP.i32_eqz).if_().lget(a); cx.emitInstanceOf(c, descToName(p)); c.raw(OP.i32_eqz).if_();
       c.i32(i).i32(ty).lget(a); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
       c.lget(a);
     }

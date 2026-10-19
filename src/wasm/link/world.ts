@@ -9,7 +9,7 @@ import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../c
 import { compileSymbolicSite } from "../compiler/symbolic.ts";
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb, type FunctionType } from "../compiler/wasmbin.ts";
 import { CALLEE, Code, OP } from "../compiler/code.ts";
-import { type Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { type Program, ACC, kindOf, changedTypes, declaredMethod, declaresNaming, declaresStaticOf, methodAt, methodCount, javaName, methodKinds, type Kinds, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts.ts";
 import { Compiler, MATH_IMPORTS, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
@@ -26,7 +26,7 @@ import { hostObject } from "./annotations.ts";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders.ts";
 import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution.ts";
 import { hasSignatureConstraints, validateSignatures } from "./signatures.ts";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SCRATCH_BASE, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc.ts";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SCRATCH_BASE, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, excMessage, throwerBody, javaFrames, isStackOverflow, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc.ts";
 import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen } from "../../jvm/opcodes.ts";
 import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
@@ -34,7 +34,8 @@ import { mid, methodOf } from "../compiler/ids.ts";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage.ts";
 import { NO_INDEX, type DexFile } from "../../jvm/dex.ts";
 import { compileModule, suspending } from "./module.ts";
-import { AotRuntime, VERSION, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot.ts";
+import { AotRuntime, VERSION, type AotBuild, type AotStore, type AppIndex } from "./aot.ts";
+import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import type { UnitResult, UpgradeJob } from "./unit.ts";
 import { HotUnits } from "./hotunits.ts";
 
@@ -127,11 +128,9 @@ export class World {
   prog: Program;
   cha: Cha;
   table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
-  /** constructs the compiler has no translation for: each compiles to host.gap(id) and a throw, never to a guess */
-  gaps = new Map<string, number>();
-  /** the gaps of the code in this World by id; precompiled code numbers all of its gaps, but only those of modules that are loaded are listed */
-  gapList: string[] = [];
-  onGap: (id: number) => void = () => {};
+  readonly numbers = new Numbers();
+  /** a gap (Numbers.gapList) ran */
+  onGap: (what: string) => void = () => {};
   /** a site naming a class, method or field the loaded classes lack ran (linkage.ts): ART's message, and the class when that is what is missing */
   onUnresolved: (message: string, cls: string | undefined) => void = () => {};
   /** the gap site that ran last, which the UnsatisfiedLinkError the code throws next names */
@@ -147,10 +146,6 @@ export class World {
   private classes = new Map<string, ClassRt>();
   /** what this World built because no saved code had it: the methods compiled at their first call and the classes whose modules it made, in order (an app build made later includes them) */
   readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], infos: [] as InfoRecord[] };
-  ids = new Map<string, number>();
-  names = [""];
-  selectors = new Map<string, number>();
-  selKeys = [""];
   private vslotCache = new Map<string, string[]>();
   traces = new Map<string, FnTrace>();
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
@@ -161,8 +156,6 @@ export class World {
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
   absent = new Map<string, Set<number>>();
-  /** the messages of the link errors (linkage.ts) compiled code throws, by index */
-  linkMessages: string[] = [];
   /** the Method objects of proxy classes, which their compiled code reads by index (proxy.ts) */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
@@ -183,8 +176,6 @@ export class World {
   aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
-  /** the slot reservations after the platform classes, in order */
-  tail: Tail[] = [];
   /** the blocks of classes a replayed numbering (`adopt`) gave slots before their modules were made */
   preassigned = new Map<string, number>();
   /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
@@ -203,7 +194,7 @@ export class World {
     this.cha = new Cha(prog);
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
     const heap = opts.heapUsed, heapBase = heap(), limit = opts.heapLimit ?? HEAP_LIMIT;
-    const names = (id: number) => javaName(this.names[id]);
+    const names = (id: number) => javaName(this.numbers.names[id]);
     // a host call whose answer is pending parks the strand, which annotationWait settles with the answer
     const park = (value: unknown, none: null | 0): unknown => {
       if (!(value instanceof Promise)) return value;
@@ -212,7 +203,7 @@ export class World {
     this.host = {
       ...Object.fromEntries(Object.keys(MATH_IMPORTS).map((f) => [f, Math[f as keyof typeof MATH_IMPORTS]])),
       fmod: (a: number, b: number) => a % b,
-      gap: (id: number) => { this.lastGap = id; this.onGap(id); },
+      gap: (id: number) => { this.lastGap = id; this.onGap(this.numbers.gapList[id]); },
       link: (slot: number) => this.linkSlot(slot),
       linkDue: (slot: number) => +(this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
       linkWait: suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))),
@@ -256,7 +247,7 @@ export class World {
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => {
-        const message = this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id]);
+        const message = this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.numbers.gapList[this.lastGap] : this.numbers.links.message(id)!);
         if (message !== null && (kind === SLOT.ncdfr || kind === SLOT.nsme || kind === SLOT.nsfer)) this.onUnresolved(message, kind === SLOT.ncdfr ? unresolvedClass(message) : undefined);
         return message;
       },
@@ -288,7 +279,7 @@ export class World {
     this.host.initSignatures = (id: number) => this.synchronous(() => signatures(id));
     this.host.initSignaturesWait = this.sched.suspending(signatures);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
-    this.base = this.numbering();
+    this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }
   /** whether an app build is in use */
@@ -296,43 +287,24 @@ export class World {
   /** uses `app`, an app build, if this World can (AotRuntime.extend): before the app's code first runs */
   attachApp(app: NonNullable<WorldOptions["app"]>): boolean {
     if (this.appAttached || !this.aot?.extend(app.index, app.store)) return false;
-    this.base = this.numbering();
+    this.base = this.numbers.marks();
     return this.appAttached = true;
   }
 
   // ---------- numbering
-  /** the sizes of everything numbered so far */
-  numbering(): Marks { return { names: this.names.length, tail: this.tail.length, selectors: this.selKeys.length, gaps: this.gaps.size, links: this.linkMessages.length }; }
-  /** what was numbered after `m` */
-  since(m: Marks): Numbering {
-    return { from: m, names: this.names.slice(m.names), tail: this.tail.slice(m.tail), selectors: this.selKeys.slice(m.selectors), gaps: [...this.gaps.keys()].slice(m.gaps), links: this.linkMessages.slice(m.links) };
-  }
   /** numbers what `n` numbered, in its order; false, and nothing changed, unless this World has numbered exactly what `n` started from */
   adopt(n: Numbering): boolean {
-    if (!sameMarks(this.numbering(), n.from)) return false;
-    for (const name of n.names) this.idOf(name);
-    for (const t of n.tail) {
-      if (typeof t === "string") this.reserveSynth(t); else this.preassigned.set(t[0], this.addBlock(t[0], t[1]));
-      this.tail.push(t);
-    }
-    n.selectors.forEach((k) => this.selectorId(k));
-    n.gaps.forEach((g) => this.gapId(g));
-    n.links.forEach((m) => this.linkId(m));
+    if (!this.numbers.adopt(n)) return false;
+    for (const t of n.tail) if (typeof t === "string") this.reserveSynth(t); else this.preassigned.set(t[0], this.addBlock(t[0], t[1]));
     return true;
   }
   /** forgets what was numbered after `m` (a compile worker drops the numbering of a unit its caller did not take) */
   rollback(m: Marks): void {
     this.rt.unsafeSlots.value = null;
-    for (let i = this.names.length - 1; i >= m.names; i--) { this.ids.delete(this.names[i]); this.classes.delete(this.names[i]); }
-    this.names.length = m.names;
-    for (let i = this.selKeys.length - 1; i >= m.selectors; i--) this.selectors.delete(this.selKeys[i]);
-    this.selKeys.length = m.selectors;
-    [...this.gaps.keys()].slice(m.gaps).forEach((g) => this.gaps.delete(g));
-    this.gapList.length = Math.min(this.gapList.length, m.gaps);
-    this.linkMessages.length = m.links;
+    const { names, tail } = this.numbers.rollback(m);
+    for (const name of names) this.classes.delete(name);
     let top = this.slots.length;
-    while (this.tail.length > m.tail) {
-      const t = this.tail.pop()!;
+    for (const t of tail.reverse()) {
       if (typeof t === "string") {
         top = this.synth.get(t)!;
         this.synth.delete(t); this.stubbed.delete(top);
@@ -384,32 +356,15 @@ export class World {
     const i = slot - this.blockBase[b];
     if (i === this.blockSize[b] - 1) return this.slots[slot] = { k: "ensure" };
     const m = methodAt(this.prog.get(this.blockClass[b])!, i)!;
-    return this.slots[slot] = { k: "method", m, done: !!this.aot?.installed(b, m) };
+    return this.slots[slot] = { k: "method", m, done: !!this.aot?.installed(slot) };
   }
 
   // ---------- ids, selectors, vtable layout
-  nameOf(id: number): string { return this.names[id]; }
-  idOf(name: string): number {
-    let id = this.ids.get(name);
-    if (id === undefined) { this.ids.set(name, id = this.names.length); this.names.push(name); }
-    return id;
-  }
-  selectorId(key: string): number {
-    key = javaName(key);
-    let s = this.selectors.get(key);
-    if (!s) { this.selectors.set(key, s = this.selKeys.length); this.selKeys.push(key); }
-    return s;
-  }
-  linkId(message: string): number {
-    const id = this.linkMessages.indexOf(message);
-    return id >= 0 ? id : this.linkMessages.push(message) - 1;
-  }
-  gapId(what: string): number {
-    let id = this.gaps.get(what);
-    if (id === undefined) this.gaps.set(what, id = this.gaps.size);
-    this.gapList[id] ??= what;
-    return id;
-  }
+  nameOf(id: number): string { return this.numbers.names[id]; }
+  idOf(name: string): number { return this.numbers.idOf(name); }
+  selectorId(key: string): number { return this.numbers.selectorId(key); }
+  linkId(message: string): number { return this.numbers.linkId(message); }
+  gapId(what: string): number { return this.numbers.gapId(what); }
   /** the String objects made of JS strings, which are the constants and what String.intern answers */
   private interned = new Map<string, object>();
   /** a value a host function answers, as a Java value: a JS string becomes a String */
@@ -433,7 +388,7 @@ export class World {
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
   /** the init word of the class with id `id` (0 before its module is built) */
-  initWord(id: number): number { const rt = this.loadedClass(this.names[id]); return rt ? (rt.exports[id + ":init"] as WebAssembly.Global).value as number : 0; }
+  initWord(id: number): number { const rt = this.loadedClass(this.nameOf(id)); return rt ? (rt.exports[id + ":init"] as WebAssembly.Global).value as number : 0; }
   /** whether class initialization has finished, for a class whose module is already built */
   initialized(n: string): boolean { const rt = this.loadedClass(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** the record of a class whose module is built or loaded; a platform module loaded for the classes beside it gives its other classes theirs here */
@@ -502,7 +457,7 @@ export class World {
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
     if (!arr) keys.forEach((key, i) => {
-      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? targets[i] : undefined;
+      const sel = this.numbers.selectors.get(dispatchMethodKey(key)), target = sel ? targets[i] : undefined;
       if (!sel || !target || !failed(target) && !(target.flags & ACC.PUBLIC)) return;
       const s = sel % H.IMT_N, f = this.dispatchSlot(key, target);
       if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
@@ -521,7 +476,7 @@ export class World {
     if (!cache) this.imtCache.set(cls, cache = new Map());
     let slot = cache.get(sel);
     if (slot === undefined) {
-      const key = this.selKeys[sel], name = this.names[cls];
+      const key = this.numbers.selKeys[sel], name = this.nameOf(cls);
       const receiver = name[0] === "[" ? "java/lang/Object" : name, at = key.indexOf("(");
       let m: MethodInfo | undefined;
       for (const owner of this.prog.chain(receiver)) {
@@ -549,7 +504,7 @@ export class World {
   synthSlot(name: string, d: Synth, eager = false): number {
     this.touching?.add("!" + name);
     let slot = this.synth.get(name);
-    if (slot === undefined) { this.synth.set(name, slot = this.reserveSlots(1)); this.tail.push(name); }
+    if (slot === undefined) { this.numbers.reserve(name); this.synth.set(name, slot = this.reserveSlots(1)); }
     if (this.stubbed.has(slot)) return slot;
     this.stubbed.add(slot);
     this.slots[slot] = { k: "synth", name, d, done: false };
@@ -727,12 +682,14 @@ export class World {
     this.touching?.add(name);
     let rt = this.classes.get(name);
     if (rt) return rt;
+    const late = this.cha.admit(name);
+    if (late) this.joined(late);
     const aot = this.aot?.linkClass(name);
     if (aot) { this.classes.set(name, aot); this.repairVtable(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
-    if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.tail.push([name, methods.length + 1]); }
+    if (slotBase === undefined) { this.numbers.reserve([name, methods.length + 1]); slotBase = this.addBlock(name, methods.length + 1); }
     if (this.aot?.building || this.opts.compileOnly) {
       this.classes.set(name, rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
       return rt;
@@ -1221,7 +1178,7 @@ export class World {
   private received(result: UnitResult) {
     const head = result.header, n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return undefined;
-    for (const id of head.touch) this.link(this.names[id]);
+    for (const id of head.touch) this.link(this.nameOf(id));
     for (const name of head.synth) this.ensureSynth(name);
     const target = (cls: string, key: string) => (cls ? this.prog.get(cls)?.byKey.get(key) : undefined);
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
@@ -1244,9 +1201,10 @@ export class World {
     // one function of each unit holds its instance, and so its module
     this.retire(liveGroups.map((g) => this.table.get(g[0]) as Function));
     const kept = job.installed.map((id) => this.slotOf(methodOf(this.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.table.get(at)] as const);
-    this.instantiateUnit(r.unit, r.imports, r.built, live[0], clock);
-    for (const [at, f] of kept) this.table.set(at, f);
-    for (const at of live) this.groupOf.set(at, [at]);
+    this.instantiateUnit(r.unit, r.imports, r.built, live[0], clock, () => {
+      for (const [at, f] of kept) this.table.set(at, f);
+      for (const at of live) this.groupOf.set(at, [at]);
+    });
     this.stats.merged += live.length;
     return true;
   }
@@ -1271,13 +1229,12 @@ export class World {
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
   private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
     const s = this.slotAt(slot)!;
-    let exports: Record<string, any>;
-    try { exports = this.instantiateUnit(cx, imports, built, slot, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
-    const set = (at: number, name: string) => {
-      (this.slotAt(at) as Exclude<Slot, { k: "ensure" }>).done = true;
-      this.table.set(at, exports[name]);
-    };
-    if (s.k === "method" || s.k === "ensure") {
+    const place = (exports: Record<string, any>) => {
+      const set = (at: number, name: string) => {
+        (this.slotAt(at) as Exclude<Slot, { k: "ensure" }>).done = true;
+        this.table.set(at, exports[name]);
+      };
+      if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return; }
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) this.counts()[x] = 0; }
       if (hot) {
         const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
@@ -1285,28 +1242,35 @@ export class World {
         for (const name of unit?.sites ?? []) if (this.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
       } else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.table.set(slot, exports["m" + slot]); }
-    } else set(slot, "m");
+    };
+    try { this.instantiateUnit(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
   }
   private unitClock(): Clock { return { start: performance.now(), accounted: this.stats.compileMs }; }
-  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock): Record<string, any> {
+  /** instantiates a built unit, has `place` put its functions where they are called, then records what their code relies on */
+  private instantiateUnit<T>(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.accountCompilation(clock);
     const exports = this.instantiate(built.bytes, imports).exports;
     if (cx instanceof Compiler) for (const [key, sig] of cx.sharedOut) if (!this.sharedHelpers.has(key)) { this.sharedHelpers.set(key, sig); this.sharedFns[key] = exports[key] as Function; }
+    const placed = place(exports);
     this.recordUnit(cx, built.traces, slot);
-    return exports;
+    return placed;
   }
   private accountCompilation(clock: Clock): void {
     this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
   }
   private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot?: number): void {
     for (const t of traces) if (t.m) this.traces.set(t.name, t);
+    // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
+    const late = this.cha.late.size && cx.assumptions.length ? this.lateBy(new Set(cx.assumptions.map(([decl]) => decl)), this.cha.late) : undefined;
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const at = owner ? this.slotOf(owner) : slot;
       if (at === undefined) throw new Error("compiled assumption has no invalidation owner");
+      const tc = target?.cls ?? "", tk = target?.key ?? "", by = late?.get(decl);
+      if (by && !this.holds({ name, desc, tc, tk }, by)) { this.invalidate(at); continue; }
       const key = `${decl}.${name}${desc}`;
       let a = this.assumptions.get(key);
-      if (!a) this.assumptions.set(key, a = { decl, name, desc, tc: target?.cls ?? "", tk: target?.key ?? "", slots: new Set() });
+      if (!a) this.assumptions.set(key, a = { decl, name, desc, tc, tk, slots: new Set() });
       a.slots.add(at);
     }
     for (const [name, owner] of cx.absent) {
@@ -1323,8 +1287,8 @@ export class World {
     for (const [module, name] of required) {
       if (given.has(module)) continue;
       // module c<id> names one class linked on demand: its holder's exports serve all of it
-      if (module[0] === "c") { imports[module] = this.link(this.names[+module.slice(1)]).exports; given.add(module); continue; }
-      (imports[module] ??= {})[name] = this.link(this.names[+name.slice(0, name.indexOf(":"))]).exports[name];
+      if (module[0] === "c") { imports[module] = this.link(this.nameOf(+module.slice(1))).exports; given.add(module); continue; }
+      (imports[module] ??= {})[name] = this.link(this.nameOf(+name.slice(0, name.indexOf(":")))).exports[name];
     }
   }
   /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
@@ -1379,12 +1343,13 @@ export class World {
       })));
       const imports = this.unitImports(cx); imports.symbolic = binding;
       this.stats.units++;
-      const exports = this.instantiateUnit(cx, imports, built, this.slotOf(pending[0].method), clock);
+      this.instantiateUnit(cx, imports, built, this.slotOf(pending[0].method), clock, (exports) => {
+        for (const { name, slot } of pending) {
+          this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot) });
+          this.symbolicTable.set(slot, exports[name] as Function);
+        }
+      });
       this.symbolicStubModules++;
-      for (const { name, slot } of pending) {
-        this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot) });
-        this.symbolicTable.set(slot, exports[name] as Function);
-      }
     }
     for (const [name] of sites) out[name] = this.symbolicSites.get(name)!.slot;
     return out;
@@ -1407,7 +1372,7 @@ export class World {
         else {
           const { cx, built } = compileSymbolicSite(this, method, ins, inputs, output);
           this.stats.units++;
-          operation = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock).m as Function;
+          operation = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock, (e) => e.m as Function);
           const mb = cx.mb;
           if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
             || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.tags.length || mb.elems.length || mb.datas.length) {
@@ -1434,7 +1399,7 @@ export class World {
   private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;
   private hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), sched: this.sched, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(what), sched: this.sched, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises one */
@@ -1533,16 +1498,15 @@ export class World {
     if (this.countView?.buffer !== this.mem.buffer) this.countView = new Int32Array(this.mem.buffer, COUNT_BASE, COUNT_SLOTS);
     return this.countView;
   }
-  /** the platform build's methods that have run here (a method's count restarts once a unit replaces its code): what a zygote has the engine compile before an
-   *  app needs them (warm) */
-  calledMethods(): string[] {
-    const counts = this.counts(), out: string[] = [];
-    for (let slot = 0; slot < COUNT_SLOTS; slot++) {
-      if (!counts[slot] && !this.groupOf.has(slot)) continue;
-      const s = this.slotAt(slot);
-      if (s?.k === "method" && this.aot?.seeded(s.m.cls)) out.push(mid(s.m));
-    }
-    return out;
+  /** the slots whose code from a loaded build module has run here (a method's count restarts once a unit replaces its code), the platform build's and the app
+   *  build's apart: what a later launch has the engine compile ahead (host/warm-worker.ts) */
+  ranBuildSlots(): { platform: number[]; app: number[] } {
+    const aot = this.aot, counts = this.counts(), ran = { platform: [] as number[], app: [] as number[] };
+    if (!aot) return ran;
+    const add = (slot: number) => { if (aot.loadedFrom(slot) >= 0) (aot.fromAppBuild(slot) ? ran.app : ran.platform).push(slot); };
+    for (let slot = 0; slot < COUNT_SLOTS; slot++) if (counts[slot]) add(slot);
+    for (const slot of this.groupOf.keys()) if (slot < COUNT_SLOTS && !counts[slot]) add(slot);
+    return ran;
   }
   /** where the demand and the linked classes stand, for demandSince; then the linked classes' methods with code that have no code yet, how many were compiled ahead, and the call frontier's sizes */
   demandMark(): number[] {
@@ -1573,29 +1537,6 @@ export class World {
     const before = new Set<string>();
     for (const name of this.classes.keys()) { if (before.size >= classes) break; before.add(name); }
     return [...this.demand.methods].slice(methods).map((m) => [mid(m), before.has(m.cls), this.markFrontier.has(m), this.markSingle.has(m)]);
-  }
-  /** Has the engine compile the build's code of methods `ids` before they first run, as a zygote does with what launches use: each is installed and called
-   *  while the warm word makes first-tier code trap on entry, before it does anything. Methods whose code is elsewhere are left to their first call. Goes from `ids[from]` until `until`
-   *  and returns where it stopped. */
-  warm(ids: string[], from = 0, until = Infinity): number {
-    const word = new Int32Array(this.mem.buffer, WARM_AT, 1), zero = (k: Kind) => k === "J" ? 0n : k === "L" ? null : 0;
-    let n = from;
-    word[0] = 1;
-    try {
-      for (; n < ids.length && performance.now() < until; n++) {
-        const id = ids[n];
-        const m = methodOf(this.prog, id);
-        if (!m?.codeOff || !this.aot?.seeded(m.cls) || this.intrinsic(m)) continue;
-        const slot = this.slotOf(m), s = this.slotAt(slot);
-        // only first-tier code counts its calls, and with them traps on entry
-        if (slot >= COUNT_SLOTS || s?.k !== "method" || s.hot || !this.aot.install(slot) || !s.done) continue;
-        const f = this.table.get(slot) as ((...args: unknown[]) => unknown) | null;
-        if (!f) continue;
-        try { f(...(m.isStatic ? [] : [null]), ...m.params.map((p) => zero(kindOf(p)))); } catch (e) { if (e instanceof WebAssembly.RuntimeError) continue; throw e; }
-        throw new Error(`warming ${id} ran it`);
-      }
-    } finally { word[0] = 0; }
-    return n;
   }
   // ---------- compiling ahead of the first call, in idle time
   /** methods that ran, the latest last, then methods compiled ahead: what is compiled ahead are the methods they call */
@@ -1778,16 +1719,17 @@ export class World {
   }
   /** applies `change`, which resolves the `changed` names differently, unless that would change linked dispatch or hierarchy */
   private rebindResolution(loader: Loader, changed: ReadonlySet<string>, change: () => string[], undo: () => string[], reason: string, keepApp = () => false): void {
-    // The graph still changes what later definitions resolve to, in the compile worker too.
-    if (!changed.size) { change(); this.opts.compiler?.namespaces(); return; }
+    // Inherited dispatch also depends on interfaces that have not themselves been linked.
+    const changing = changed.size ? this.prog.resolutionClasses(loader, changed) : undefined;
+    // With no class resolving through the loader yet (one binding its libraries before it opens its dexes), the graph still changes what later definitions
+    // resolve to, in the compile worker too.
+    if (!changing?.size) { change(); this.opts.compiler?.namespaces(); return; }
     const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
     for (const a of this.assumptions.values()) {
       const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
       const declared = this.prog.resolve(a.decl, a.name, a.desc);
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
-    // Inherited dispatch also depends on interfaces that have not themselves been linked.
-    const changing = this.prog.resolutionClasses(loader, changed);
     const dependentOn = (changed: Set<string>) => {
       const affected = new Map<string, boolean>();
       const depends = (name: string): boolean => {
@@ -1799,7 +1741,7 @@ export class World {
       };
       return depends;
     };
-    const exact = ![...changed].some(name => name.startsWith("[") || name.includes("@"));
+    const types = changedTypes(changed), exact = !!types;
     const mentions = (descriptor: string) => !exact || [...javaName(descriptor).matchAll(/L([^;]+);/g)].some(m => changed.has(m[1]));
     const depends = dependentOn(changing);
     // Changed identities affect dispatch through matching signatures or inherited types, including unlinked interfaces.
@@ -1812,14 +1754,17 @@ export class World {
     const mentioned = (name: string): boolean => {
       let hit = chainMentions.get(name); if (hit !== undefined) return hit;
       const c = this.prog.get(name);
-      hit = !!c && (!!c.sup && mentioned(c.sup) || !c.isInterface && declaredMethods(c).some(([key, flags]) => !(flags & (ACC.STATIC | ACC.PRIVATE)) && !key.startsWith("<init>") && mentions(key)));
+      hit = !!c && (!!c.sup && mentioned(c.sup) || !c.isInterface && declaresNaming(c, types));
       chainMentions.set(name, hit); return hit;
     };
     const dispatch = [...this.classes.keys()].filter(name => depends(name) && (hierarchy(name) || mentioned(name))).map(name => ({ name, methods: this.vslots(name).map(key => {
       return symbolicDispatchFor(this.prog, name, key);
     }) }));
     // Only the classes of the dexes that resolve through the changed loader have their types rewritten.
-    const existing = [...this.classes].filter(([name]) => changing.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
+    const existing = [...this.classes].filter(([name]) => changing.has(name)).map(([name, rt]) => {
+      const c = this.prog.get(name)!, statics = !types || declaresStaticOf(c, types) ? c.fields.filter(f => f.isStatic) : [];
+      return { name, rt, sup: c.sup, ifaces: [...c.ifaces], statics: statics.map(field => ({ field, desc: field.desc })) };
+    });
     const names = change();
     if (!names.length) return;
     this.vslotCache.clear();
@@ -1847,14 +1792,14 @@ export class World {
     }
     // A class's globals keep the names its module gave them: an app build made under the new graph has them already.
     for (const old of existing) {
-      for (const { field, desc } of old.fields) if (field.isStatic && desc !== field.desc) {
+      for (const { field, desc } of old.statics) if (desc !== field.desc) {
         const oldKey = `${old.rt.id}:s:${field.name}:${desc}`, newKey = `${old.rt.id}:s:${field.name}:${field.desc}`;
         if (oldKey in old.rt.exports && !(newKey in old.rt.exports)) old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
       }
     }
     this.epoch++;
     this.opts.compiler?.namespaces();
-    this.cha = new Cha(this.prog); this.implemented.clear(); this.allocatedIndex = undefined;
+    this.cha.reindex(); this.implemented.clear(); this.allocatedIndex = undefined;
     this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
@@ -1865,8 +1810,8 @@ export class World {
       for (let i = 0; i < this.methodsIn(b); i++) if (!kept || !builtUnder(this.blockBase[b] + i)) this.invalidate(this.blockBase[b] + i);
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !kept) this.aot?.unbindApp();
-    this.noteLate([...this.prog.own()].map(c => c.name));
-    const lateBy = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)));
+    let lateBy: Map<string, string[]> | undefined;
+    const subtypesOf = (decl: string) => (lateBy ??= this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)), this.cha.members())).get(decl) ?? [];
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
       for (const slot of a.slots) {
@@ -1880,7 +1825,7 @@ export class World {
       const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
       const narrow = !mentions(a.desc), cache = narrow ? hierarchySubtypes : changedSubtypes;
       let by = cache.get(a.decl);
-      if (!by) cache.set(a.decl, by = (lateBy.get(a.decl) ?? []).filter(narrow ? hierarchy : depends));
+      if (!by) cache.set(a.decl, by = subtypesOf(a.decl).filter(narrow ? hierarchy : depends));
       if (sameTarget && samePrototype && this.holds(a, by)) continue;
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
@@ -1894,6 +1839,8 @@ export class World {
     const added = this.prog.add(dexes, loader);
     this.epoch++;
     this.opts.compiler?.added(dexes, loader);
+    if (loader === this.prog.root || loader === this.prog.boot) this.joined(this.cha.index(added));
+    else this.cha.defer(dexes);
     this.loaded(added);
     return added;
   }
@@ -1943,32 +1890,34 @@ export class World {
     if (proxy) {
       this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
     } else if (!this.settlingHosts) this.opts.compiler?.added(null);
+    this.joined(this.cha.index([jc.name]));
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
     this.implemented.clear(); this.allocatedIndex = undefined;
-    this.cha.index(added);
-    // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
-    this.noteLate(added);
-    const now = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)), added);
+    if (this.absent.size) for (const name of added) {
+      const slots = this.absent.get(name);
+      if (!slots) continue;
+      for (const slot of slots) this.invalidate(slot);
+      this.absent.delete(name);
+    }
+    this.settlingHosts = true;
+    try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
+  }
+  /** undoes the decisions a concrete class among `reached`, which joining the class hierarchy made reachable, falsifies */
+  private joined(reached: Set<string>): void {
+    // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl that has one becomes reachable
+    const now = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)), reached);
     for (const [key, a] of this.assumptions) {
       const by = now.get(a.decl);
       if (!by || this.holds(a, by)) continue;
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
     }
-    for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
-    for (const name of added) this.absent.delete(name);
-    this.settlingHosts = true;
-    try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
   }
-  /** the classes added since compiled code was made */
-  private lateKnown = new Set<string>();
-  noteLate(added: string[]): void { for (const n of added) if (this.prog.get(n)) this.lateKnown.add(n); }
-  /** the concrete classes among `names` (the late ones by default) by each of their supertypes in `decls`, themselves included. Only the
-   *  supertypes an assumption names are asked about, so no index of every late class by every supertype is kept: an app's classes number
-   *  in the hundreds of thousands, each with dozens of supertypes. */
-  private lateBy(decls: ReadonlySet<string>, names: Iterable<string> = this.lateKnown): Map<string, string[]> {
+  /** the concrete classes among `names` by each of their supertypes in `decls`, themselves included. Only the supertypes an assumption names are asked
+   *  about, so no index of every class by every supertype is kept: an app's classes number in the hundreds of thousands, each with dozens of supertypes. */
+  private lateBy(decls: ReadonlySet<string>, names: Iterable<string>): Map<string, string[]> {
     const out = new Map<string, string[]>(), memo = new Map<string, readonly string[]>(), none: readonly string[] = [];
     // most classes reach no decl or the decls of one supertype only: those share an array
     const within = (n: string): readonly string[] => {
@@ -1994,8 +1943,6 @@ export class World {
     }
     return out;
   }
-  /** the concrete late classes that are subtypes of `decl` */
-  lateSubtypes(decl: string): string[] { return this.lateBy(new Set([decl])).get(decl) ?? []; }
   /** whether the implementation code relied on for decl.name+desc (`tc`'s method `tk`, none if empty) stands once the concrete classes `by`, all subtypes of decl, exist */
   holds(a: { name: string; desc: string; tc: string; tk: string }, by: string[]): boolean {
     const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
@@ -2008,7 +1955,8 @@ export class World {
     const helper = this.helperInvalidations.get(slot);
     if (helper) { helper(); this.stats.invalidated++; return; }
     for (const x of this.groupOf.get(slot) ?? [slot]) {
-      const s = this.slotAt(x);
+      // a slot without state holds compiled code only if a loaded build module installed it
+      const s = this.peek(x) ?? (this.aot?.installed(x) ? this.slotAt(x) : undefined);
       if (s?.k === "ensure" || !s?.done || !this.restoreStub(x, s)) continue;
       s.done = false; if (s.k === "method") s.hot = false; this.stats.invalidated++;
       this.groupOf.delete(x);
@@ -2055,7 +2003,7 @@ export class World {
   /** the Wasm exception that throws Java throwable `t` */
   exception(t: object): WebAssembly.Exception { return new WebAssembly.Exception(this.rt.tag, [t]); }
   /** the class of a Java object that crossed to JS */
-  classNameOf(obj: object): string { return this.names[this.rt.classId(obj)]; }
+  classNameOf(obj: object): string { return this.nameOf(this.rt.classId(obj)); }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
    *  becomes the StackOverflowError a handler above this call would have received */
   boundary(e: unknown): unknown {
@@ -2114,24 +2062,20 @@ export class World {
   // Private helper owners do not consume method-table numbering shared with compile workers.
   private helperSlots: (Function | undefined)[] = [];
   private helperInvalidations = new Map<number, () => void>();
-  private rawHelper(raw: Function): () => Function { return () => raw; }
   private helperGetter(slot: number, rebuild: (slot: number) => Function): () => Function {
     let dirty = false;
     this.helperInvalidations.set(slot, () => { dirty = true; });
     return () => {
-      if (dirty) { this.helperSlots[-slot - 1] = rebuild(slot); dirty = false; }
+      // an invalidation while it rebuilds holds for the next call
+      if (dirty) { dirty = false; this.helperSlots[-slot - 1] = rebuild(slot); }
       return this.helperSlots[-slot - 1]!;
     };
   }
   private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
     const dependent = cx.assumptions.some(a => !a[4]) || cx.absent.some(a => !a[1]);
-    if (slot !== undefined || !dependent) {
-      const raw = this.instantiateUnit(cx, imports, built, slot, clock).m as Function;
-      return { get: this.rawHelper(raw), raw };
-    }
-    slot = -this.helperSlots.push(undefined);
-    this.helperSlots[-slot - 1] = this.instantiateUnit(cx, imports, built, slot, clock).m as Function;
-    return { get: this.helperGetter(slot, rebuild) };
+    if (slot !== undefined || !dependent) return this.instantiateUnit(cx, imports, built, slot, clock, (e) => { const raw = e.m as Function; return { get: () => raw, raw }; });
+    const at = -this.helperSlots.push(undefined);
+    return this.instantiateUnit(cx, imports, built, at, clock, (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; });
   }
   private hostRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (slot: number) => Function {
     return slot => this.buildHostFn(name, params, ret, body, prepare, slot).get();

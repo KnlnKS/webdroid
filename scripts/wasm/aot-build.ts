@@ -164,7 +164,7 @@ dGroups.forEach((blocks, k) => {
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module, and the runtime functions the modules name, which a World would
 // otherwise make a module for each of, a few; building either can name more of both
-const extraNames = () => w.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
+const extraNames = () => w.numbers.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
 let extras: number, xbytes: Uint8Array, xtouch: Set<string>, synths: string[][], nSynths: number, yBytes: number;
 do {
   yBytes = 0;

@@ -53,7 +53,7 @@ for (const target of targets) {
   }
   console.log(`${target}: ${total} methods with code (${bodyless} without), ${clean} validate clean, ${total - clean} fail in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
   if (linked.size) console.log(`  ${[...linked.values()].reduce((a, b) => a + b, 0)} methods throw a link error at a site, as ART does (${[...linked].map(([t, n]) => `${t} ${n}`).join(", ")}), counted as validated`);
-  if (verbose) for (const msg of w.linkMessages) console.log("    link error: " + msg);
+  if (verbose) for (const msg of w.numbers.links.messages) console.log("    link error: " + msg);
   for (const [cause, ms] of [...causes].sort((a, b) => b[1].length - a[1].length)) {
     const known = KNOWN.some((k) => k.test(cause));
     if (!known) unexplained += ms.length;

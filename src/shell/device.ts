@@ -3,7 +3,7 @@
 
 import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex.ts";
 import { rt } from "../jvm/runtime.ts";
-import { appLaunched, loadAppCode, loadDex, tierReady, warmCode } from "../jvm/tier.ts";
+import { appLaunched, beginAppCode, loadAppCode, loadDex, tierReady } from "../jvm/tier.ts";
 import { vfs, apkPath } from "./vfs.ts";
 import { inflateTree } from "../jvm/natives/jzip.ts";
 import type { Install } from "./install.ts";
@@ -25,6 +25,7 @@ import { filePathTransport } from "./file-path.ts";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os.ts";
 import { packageUid, packages, usesSdk } from "../android/packages.ts";
 import { onMain, postMain } from "../android/mainloop.ts";
+import { readAheadFonts } from "../android/cssfonts.ts";
 import { after, mainThread } from "../jvm/natives/jentry.ts";
 import { deliverVsync } from "../android/vsync.ts";
 import { mark, perf } from "../perf.ts";
@@ -60,10 +61,13 @@ export function setScreenCanvas(c: HTMLCanvasElement): void {
 }
 /** System windows compose over app process canvases rather than an opaque app background. */
 export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present, true); }
-function present(): void {
+let launched = false;
+/** the first frame presents window colors; the launch ends with the first that composes the app's content */
+function present(content: boolean): void {
   if (!screen) return;
   screen(fb.transferToImageBitmap());
-  if (!perf.presentations++) { mark("firstPresented"); appLaunched(); }
+  if (!perf.presentations++) { mark("firstPresented"); readAheadFonts(); }
+  if (content && !launched) { launched = true; appLaunched(); }
   notePresent();
 }
 
@@ -108,18 +112,12 @@ function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: s
 /** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
-let zygote: Promise<void> | null = null, booting = false;
+let zygote: Promise<void> | null = null;
 /** What a device's zygote holds before it forks an app: the framework package and the boot class
  *  path indexed. It needs no app, so a page starts it while the app downloads. `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
-export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promise<void> {
+export function startZygote(host?: Promise<unknown>): Promise<void> {
   return zygote ??= (async () => {
     await Promise.all([loadFramework(), loadPlatformDex()]);
-    // the platform code launches use is compiled while the zygote waits, once per tab: a package arriving
-    // stops it, and the spare that replaces a Worker taken early (processes.ts launch) goes through it
-    if (warmed) {
-      await tierReady();
-      if (await warmCode(() => booting)) warmed();
-    }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await Promise.all([processBitness, host, tierReady()]);
@@ -131,7 +129,7 @@ export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promi
 export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<void> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  mark("bootApk"); onStatus("Reading package…"); booting = true;
+  mark("bootApk"); onStatus("Reading package…");
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
@@ -146,11 +144,16 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
   // The World is the zygote's, and the app code a previous launch saved continues what the zygote numbered (host/appcode.ts): the app's dex files and its code
   // join the World once the zygote has run, before any of the app's Java
+  // the dexes inflate, and the app's code is prepared from them, while the zygote runs
+  const dexes = inflateTree(zip, isDexEntry).then(() => {
+    const read = dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], name));
+    beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName, onStatus);
+    return read;
+  });
   await startZygote();
-  await inflateTree(zip, isDexEntry);
-  for (const name of dexEntryNames(Object.keys(zip))) for (const d of dexesIn(zip[name], name)) loadDex(d);
+  for (const d of await dexes) loadDex(d);
   mark("dexLoaded");
-  await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
+  await loadAppCode();
   applicationNightOverride = nightOverride(await getPrefs(pkg, "__system_uimode").get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
   await deviceNightMode(device.night);

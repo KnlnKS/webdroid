@@ -4,37 +4,57 @@
 // the next find it too. A compile worker for the launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only
 // while it has numbered what it had when the app's dexes arrived, as when the build was made (the zygote's numbering).
 import type { World, WorldOptions } from "../link/world.ts";
-import type { Demand, Numbering } from "../link/aot.ts";
+import type { Demand } from "../link/aot.ts";
+import type { Numbering } from "../link/numbers.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { FetchStore } from "../link/aotstore.ts";
-import { buildFiles, appKey, SavedBuild, type Persist } from "./persist.ts";
+import { buildFiles, appKey, LaunchRecord, SavedBuild, type Persist } from "./persist.ts";
 import { fetchBundle } from "./bundle.ts";
 import { switchOn } from "../../switches.ts";
-import { prefetchInWorker } from "./aotload.ts";
 import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./compiler.ts";
-import type { BuildRoots, CompileResponse, Containers } from "./compile-serve.ts";
-import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program.ts";
+import type { WarmAnswer, WarmRequest } from "./warm-worker.ts";
+import type { BuildRoots, CompileRequest, CompileResponse, Containers } from "./compile-serve.ts";
+import { mergeApp } from "../link/apps.ts";
+import type { Loader, LoaderId, LoaderSnapshot, MethodInfo } from "../compiler/program.ts";
 
 export interface AppCodeRequest {
   /** the app's dex files */
   dexes: DexFile[];
   /** the platform build the code is made against */
-  aot: FetchStore;
+  aot: Pick<FetchStore, "base" | "key" | "bytes">;
+  /** fetches the platform modules earlier launches loaded (aotload.ts prefetchInWorker) */
+  prefetch?(files: string[]): Promise<void>;
   persist?: Persist;
   spawn(): WorkerPort;
-  /** where an app build starts, for a launch without a saved one */
+  /** where an app build starts, for a launch without a saved one; whether it takes all of the app is decided here unless `whole` says */
   roots: BuildRoots;
   /** what the World had numbered after the platform build when the app's dexes arrived (nothing by default): where a build's numbering starts */
   prefix?: Numbering;
   signal?: AbortSignal;
+  /** has the warm Worker compile build code the launch is about to run (warm-worker.ts) */
+  warm?(request: WarmRequest, transfer?: Transferable[]): void;
+  /** the process was launched to show the app, whose taps wait on its code */
+  shown?: boolean;
+  /** says what the launch waits for */
+  status?(text: string): void;
 }
+/** a merge waits this long at most for the warm Worker */
+const WARM_WAIT_MS = 1000;
+/** has the warm Worker compile a merged unit's methods, which replace code the engine had compiled, before the World takes it (CompileClient) */
+const warmMerge = (warm: NonNullable<AppCodeRequest["warm"]>) => (module: WebAssembly.Module, bytes: Uint8Array) => new Promise<WarmAnswer | undefined>((resolve) => {
+  const { port1, port2 } = new MessageChannel(), timer = setTimeout(() => done(), WARM_WAIT_MS);
+  const done = (answer?: WarmAnswer) => { clearTimeout(timer); port1.close(); resolve(answer); };
+  port1.onmessage = ({ data }: MessageEvent<WarmAnswer>) => done(data);
+  warm({ modules: [[module, bytes]], all: true, answer: port2 }, [bytes.buffer, port2]);
+});
 export interface AppCode {
   /** whether a saved build was found and its modules compiled */
   hit: boolean;
   /** settles once the platform modules earlier launches of the app loaded are compiled, which no Java should run before */
   launchReady: Promise<void>;
-  source: "persist" | "bundle" | "none";
+  /** where the build came from: saved by an earlier launch, shipped with the platform build, or made before this launch */
+  source: "persist" | "bundle" | "built" | "none";
   persisted: Promise<boolean>;
   /** the saved build, for the World to attach */
   saved?: NonNullable<WorldOptions["app"]>;
@@ -55,6 +75,22 @@ export interface AppCode {
   close(): void;
 }
 export interface Built { kept: boolean; methods: number; modules: number; ms: number }
+/** a build's files, and whether they were kept */
+type Made = { files: Map<string, Uint8Array>; kept: Promise<boolean>; methods: number; ms: number };
+const NO_DEMAND: Demand = { methods: [], classes: [], infos: [] };
+
+/** The shards of a build a launch waits for: one per two logical cores (11 shards on 14 cores, efficiency cores among them, took FitNotes 1.14 s against 0.85 s for 6),
+ *  one per SHARD_METHODS method references of the app, and as many as fit in 3/8 of the device's memory up to SHARD_BUDGET_MB. A shard holds a Program and World over
+ *  the platform and the app; its heap peaks at about SHARD_BASE_MB and a MB per SHARD_REFS_PER_MB references (FitNotes' 26k: 134–147 MB each; Komikku's 157k: 330–
+ *  510 MB, less the more run). Komikku's first frame came at 6.3, 5.5, 5.4 and 5.0 s with 4, 6, 8 and 10 shards, which took the compile host to 1.8, 2.5, 2.9 and 3.5 GB. */
+const SHARD_BASE_MB = 96, SHARD_REFS_PER_MB = 500, SHARD_BUDGET_MB = 3072, SHARD_METHODS = 5_000;
+/** the method references of an app whose builds take all its methods: a build of this many takes a few seconds in a few shards */
+const WHOLE_LIMIT = 250_000;
+function shardCount(refs: number): number {
+  const nav = globalThis.navigator as { hardwareConcurrency?: number; deviceMemory?: number } | undefined;
+  const memory = Math.min(SHARD_BUDGET_MB, (nav?.deviceMemory ?? 4) * 384);
+  return Math.max(1, Math.min((nav?.hardwareConcurrency ?? 4) >> 1, Math.floor(memory / (SHARD_BASE_MB + refs / SHARD_REFS_PER_MB)), Math.ceil(refs / SHARD_METHODS)));
+}
 
 /** the least new on-demand work that is worth a new build, how often the launch is looked at, and for how long */
 const MIN_FRESH = 8;
@@ -62,26 +98,56 @@ const MIN_FRESH = 8;
 const REFINE_SHARE = 1 / 8;
 const TICK_MS = 2000, WATCH_MS = 120_000, MAX_REFINES = 3;
 
+/** a build a launch found to start from */
+interface Found { files: Map<string, Uint8Array>; saved: SavedBuild; source: Exclude<AppCode["source"], "none">; persisted: Promise<boolean>; made?: Made }
+/** The build a launch starts from: the one an earlier launch saved, or one the platform build ships for the app, which this device keeps for the launches after;
+ *  without either, `make`'s, which a launch waits for */
+async function findBuild(req: AppCodeRequest, key: string, stored: Map<string, Uint8Array> | undefined, make: () => Promise<Made> | undefined): Promise<Found | undefined> {
+  const open = async (files: Map<string, Uint8Array> | undefined, source: Found["source"], persisted: () => Promise<boolean>, made?: Made): Promise<Found | undefined> => {
+    const saved = files && await SavedBuild.open(files);
+    return saved ? { files: files!, saved, source, persisted: persisted(), made } : undefined;
+  };
+  const bundle = async () => {
+    // `?bundles=0` measures a first launch as one of an app the platform build ships nothing for
+    const files = switchOn("bundles", true) ? await fetchBundle(req.aot.base, key) : undefined;
+    return open(files, "bundle", () => req.persist?.save(key, [...files!]).catch(() => false) ?? Promise.resolve(false));
+  };
+  const built = async () => {
+    const made = await make()?.catch((e) => { console.warn("[webdroid] the app build failed", e); });
+    return made ? open(made.files, "built", () => made.kept, made) : undefined;
+  };
+  return await open(stored, "persist", async () => true) ?? await bundle() ?? await built();
+}
+
 export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
+  const key = await appKey(req.dexes, req.aot.key);
   // a store that fails is a store without the build
-  const key = await appKey(req.dexes, req.aot.key), launchKey = key + "-launch";
-  let [files, launch] = await Promise.all([req.persist?.load(key).catch(() => undefined), req.persist?.load(launchKey).catch(() => undefined)]);
-  const launchFiles: string[] = launch?.has("files.json") ? JSON.parse(new TextDecoder().decode(launch.get("files.json"))) : [];
-  const launchReady = launchFiles.length ? prefetchInWorker(req.aot, launchFiles) : Promise.resolve();
-  let source: AppCode["source"] = files ? "persist" : "none";
-  // `?bundles=0` measures a first launch as one of an app the platform build ships nothing for
-  if (!files && switchOn("bundles", true)) {
-    // the platform build may ship a build for this app; this device keeps it for the launches after
-    files = await fetchBundle(req.aot.base, key);
-    if (files) source = "bundle";
-  }
-  const saved = files && await SavedBuild.open(files);
-  if (!saved) source = "none";
-  const persisted = saved && source === "persist" ? Promise.resolve(true)
-    : saved && files && req.persist ? req.persist.save(key, [...files]).catch(() => false) : Promise.resolve(false);
+  const [stored, record] = await Promise.all([req.persist?.load(key).catch(() => undefined), LaunchRecord.load(req.persist, key)]);
+  const launchReady = record.files.length && req.prefetch ? req.prefetch(record.files) : Promise.resolve();
+  req.warm?.({ files: record.files, slots: record.slots });
+  const refs = req.dexes.reduce((n, d) => n + d.methodCount, 0), roots = { whole: refs <= WHOLE_LIMIT, ...req.roots };
+  const builder = new Builder(req, key, roots), builds: Built[] = [];
+  // a shown launch without a build waits for one of the whole app, as an install compiles an app ahead (dex2oat): its first taps run compiled code. A larger app's
+  // build covers too little of its launch to wait for (TikTok waited 14 s for its roots' closure and still compiled 60k methods on demand)
+  const found = await findBuild(req, key, stored, () => {
+    if (!req.shown || !roots.whole) return undefined;
+    req.status?.("Optimizing app…");
+    return builder.build(NO_DEMAND, undefined, undefined, shardCount(refs));
+  });
+  const saved = found?.saved, source = found?.source ?? "none", persisted = found?.persisted ?? Promise.resolve(false);
+  if (found?.made) { const { methods, files, ms } = found.made, modules = files.size - 1; void persisted.then((kept) => builds.unshift({ kept, methods, modules, ms })); }
+  // once kept, the modules' bytes are the warm Worker's; a build the slots were not recorded against is warmed whole, in the order the app wants its methods, when
+  // the app is shown: a background process's whole build is CPU taken from the launch it serves
+  const warmAll = !!saved && !record.ran(saved.index.id);
+  if (found && req.warm && (req.shown || !warmAll)) void persisted.then(() => {
+    const modules = [...found.files].filter(([name]) => /^a\d+\.wasm$/.test(name)).map(([name, bytes]): [WebAssembly.Module, Uint8Array] => [found.saved.get(name)!, bytes]);
+    // the transfer detaches the files' bytes
+    found.files.clear();
+    req.warm!({ modules, all: warmAll }, [...new Set(modules.map(([, bytes]) => bytes.buffer))]);
+  });
   req.signal?.throwIfAborted();
   // merges wait for the launch's first frame, and leave the memory to a build while one is made
-  const compiler = new CompileClient(() => req.spawn(), () => !watching || builder.busy), builder = new Builder(req, key);
+  const compiler = new CompileClient(() => req.spawn(), { holdMerges: () => !watching || builder.busy, warm: req.warm && warmMerge(req.warm) });
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined, release = () => {};
   const close = () => {
     if (closed) return;
@@ -100,7 +166,6 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), infos: new Map(initial?.infos.map((r) => [r.join("\0"), r])) };
   const size = () => merged.methods.size + merged.classes.size + merged.infos.size;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
-  const builds: Built[] = [];
   const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, saved: saved ? { index: saved.index, store: saved } : undefined, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => {
       if (closed || watching) return;
@@ -124,14 +189,15 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     }).catch(() => {});
   }
 
-  /** how much `world` built on demand that the saved build lacks */
+  /** how much `world` built on demand that the saved build lacks and a build could hold: methods of the platform (its own Program's root), the app's loader and its libraries */
   function fresh(world: World): number {
     world.noteAheadRuns();
-    const d = world.demand;
+    const d = world.demand, prog = world.prog, libraries = libraryLoaders(prog);
+    const buildable = (m: MethodInfo) => { const l = m.dex && prog.loaderOfDex(m.dex); return !!l && (l === prog.boot || l === prog.root || l === prog.base?.root || libraries.has(l)); };
     if (seen.world !== world) seen = { world, methods: 0, classes: 0, infos: 0 };
     if (d.methods.size > seen.methods) {
       let i = 0;
-      for (const m of d.methods) if (i++ >= seen.methods && (m.codeOff || world.intrinsic(m))) merged.methods.add(mid(m));
+      for (const m of d.methods) if (i++ >= seen.methods && (m.codeOff || world.intrinsic(m)) && buildable(m)) merged.methods.add(mid(m));
       seen.methods = d.methods.size;
     }
     for (; seen.classes < d.classes.length; seen.classes++) merged.classes.add(d.classes[seen.classes]);
@@ -139,7 +205,10 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     return size() - covered;
   }
   async function rebuild(world: World): Promise<Built> {
-    const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
+    // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
+    const ran = !saved ? [] : world.ranBuildSlots().app.flatMap((s) => { const e = world.slotAt(s); return e?.k === "method" ? [mid(e.m)] : []; });
+    const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
+    const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);
     if (built.kept) covered = at;
     return built;
@@ -153,14 +222,10 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     while (builder.busy && !closed) await new Promise((r) => setTimeout(r, 100));
     return refine(world, 1);
   }
-  /** keeps the platform modules this launch loaded for the next one, once they include any the last launch did not */
+  /** keeps the platform modules this launch loaded and the build code it ran for the next one */
   function recordLaunch(world: World): void {
-    const aot = world.aot;
-    if (!aot) return;
-    const known = new Set(launchFiles), loaded = [...aot.loaded, ...aot.missed].filter((f) => /^[cd]\d+\.wasm$/.test(f));
-    if (loaded.every((f) => known.has(f))) return;
-    const merged = [...new Set([...loaded, ...launchFiles])];
-    void req.persist?.save(launchKey, [["files.json", new TextEncoder().encode(JSON.stringify(merged))]]).then((kept) => { if (kept) launchFiles.splice(0, Infinity, ...merged); }, () => {});
+    const ran = world.ranBuildSlots();
+    if (world.aot) record.add([...world.aot.loaded, ...world.aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
@@ -172,8 +237,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       if (performance.now() > until && !building && !builder.busy) { builder.close(undefined, false); release(); return; }
       if (building || builder.busy) { again(); return; }
       const now = fresh(world);
-      // the launch has gone quiet: what it compiled since the last look is all there is for now
-      if (now === last) recordLaunch(world);
+      // the launch has gone quiet: what it compiled since the last look is all there is for now, and what it ran is kept, unless it is answering input
+      if (now === last && !world.opts.answering?.()) recordLaunch(world);
       if (now >= Math.max(MIN_FRESH, covered * REFINE_SHARE) && now === last) {
         building = true;
         refine(world, 1).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
@@ -189,15 +254,20 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
 }
 
 type RootLibraries = { loaders: LoaderSnapshot; scopes: [LoaderId, Containers][] };
-/** The libraries the app's loader searches, which code built for it resolves through: the loader numbering, their graph and their dexes. */
-function rootLibraries(world: World): RootLibraries | undefined {
-  const prog = world.prog, closure = new Set<Loader>();
+/** the loaders of the libraries the app's loader searches, and theirs */
+function libraryLoaders(prog: World["prog"]): Set<Loader> {
+  const closure = new Set<Loader>();
   const add = (l: Loader) => {
     if (l === prog.boot || closure.has(l)) return;
     closure.add(l);
     for (const library of [...l.before ?? [], ...l.after ?? []]) add(library);
   };
   for (const library of [...prog.root.before ?? [], ...prog.root.after ?? []]) add(library);
+  return closure;
+}
+/** The libraries the app's loader searches, which code built for it resolves through: the loader numbering, their graph and their dexes. */
+function rootLibraries(world: World): RootLibraries | undefined {
+  const prog = world.prog, closure = libraryLoaders(prog);
   if (!closure.size) return undefined;
   const groups = dexesByLoader(prog, (l) => closure.has(l));
   const ids = new Set<LoaderId>([0, ...[...closure].map(l => prog.loaderId(l))]), snapshot = prog.loaderSnapshot();
@@ -205,63 +275,66 @@ function rootLibraries(world: World): RootLibraries | undefined {
     scopes: [...groups].map(([id, dexes]) => [id, containers(dexes)]) };
 }
 
-/** A build owns a fresh numbering context; its worker is retired after transferring the result. */
+/** A build owns fresh numbering contexts, one per shard; each worker is retired once it has transferred its part. A build nobody waits for has one, leaving the other
+ *  cores to the app. */
 class Builder {
-  private req: AppCodeRequest; private key: string;
+  private req: AppCodeRequest; private key: string; private roots: BuildRoots;
   private closed = false;
-  private port?: WorkerPort;
-  private waiting?: { resolve(built: Built): void; reject(error: Error): void };
+  /** the build being made: its workers, and how to fail it */
+  private running?: { ports: WorkerPort[]; fail(error: Error): void };
   private lease?: AbortController;
-  constructor(req: AppCodeRequest, key: string) { this.req = req; this.key = key; }
-  get busy(): boolean { return !!this.waiting; }
+  constructor(req: AppCodeRequest, key: string, roots: BuildRoots) { this.req = req; this.key = key; this.roots = roots; }
+  get busy(): boolean { return !!this.running; }
   /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
-  build(demand: Demand, hostClasses?: string[], libraries?: RootLibraries): Promise<Built> {
+  build(demand: Demand, hostClasses?: string[], libraries?: RootLibraries, shards = 1): Promise<Made> {
     if (this.closed) return Promise.reject(new Error("App code closed"));
-    if (this.waiting) return Promise.reject(new Error("An app build is already pending"));
-    const result = new Promise<Built>((resolve, reject) => {
-      this.waiting = { resolve: (built) => { this.waiting = undefined; resolve(built); }, reject: (error) => { this.waiting = undefined; reject(error); } };
-    });
-    const pending = this.waiting;
-    const start = () => {
-      if (this.waiting !== pending || this.closed) return result.catch(() => {});
-      try {
-        const port = this.req.spawn();
-        if (this.closed) { port.terminate(); return result.catch(() => {}); }
-        this.port = port;
-        const list = containers(this.req.dexes);
-        port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
-          if (this.closed || this.port !== port) return;
-          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, prefix: this.req.prefix, hostClasses, build: this.req.roots, demand, oneShot: true, ...libraries },
-            [list, ...libraries?.scopes.map(([, dexes]) => dexes) ?? []].flatMap(dexes => dexes.map(([, b]) => b.buffer as ArrayBuffer)));
-          if (data.type === "failed") this.close(new Error(data.message), false);
-          if (data.type !== "built") return;
-          const pending = this.waiting;
-          this.stopWorker();
-          const kept = !!await this.req.persist?.save(this.key, buildFiles(data.build)).catch(() => false);
-          if (!this.closed && this.waiting === pending) pending?.resolve({ kept, methods: data.methods, modules: data.build.files.length, ms: data.ms });
-        };
-        port.onerror = (e) => this.close(new Error(e.message), false);
-      } catch (error) { this.close(error instanceof Error ? error : new Error(String(error)), false); }
-      return result.catch(() => {});
+    if (this.running) return Promise.reject(new Error("An app build is already pending"));
+    let fail!: (error: Error) => void;
+    const failed = new Promise<never>((_, reject) => { fail = reject; }), run = this.running = { ports: [] as WorkerPort[], fail };
+    failed.catch(() => {});
+    const make = async (): Promise<Made> => {
+      if (this.running !== run) throw new Error("App code closed");
+      const t0 = performance.now(), init = (shard: number): [CompileRequest, Transferable[]] => {
+        const dexes = containers(this.req.dexes), scopes = libraries?.scopes.map(([id, dexes]): [LoaderId, Containers] => [id, dexes.map(([name, bytes]) => [name, bytes.slice()])]);
+        return [{ type: "init", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, build: this.roots, demand, oneShot: true,
+          shard: [shard, shards], ...libraries && { loaders: libraries.loaders, scopes } }, [dexes, ...scopes?.map(([, dexes]) => dexes) ?? []].flatMap((dexes) => dexes.map(([, b]) => b.buffer as ArrayBuffer))];
+      };
+      const [lead, ...rest] = await Promise.race([Promise.all(Array.from({ length: shards }, (_, shard) => this.runShard(run, init(shard)))), failed]);
+      if (!("index" in lead.part)) throw new Error("the first shard's part has no index");
+      const files = buildFiles(mergeApp(lead.part, rest.map((r) => r.part))), kept = this.req.persist?.save(this.key, files).then(Boolean, () => false) ?? Promise.resolve(false);
+      return { files: new Map(files), kept, methods: lead.methods, ms: performance.now() - t0 };
     };
-    // All process Workers share this origin's lock. Acquire before constructing their
-    // duplicate Program/World, and retain the lease until the worker has been retired.
-    const locks = globalThis.navigator?.locks;
-    if (locks) {
-      const lease = this.lease = new AbortController();
-      void locks.request("webdroid:wasm-app-build", { signal: lease.signal }, start)
-        .catch(error => { if (this.lease === lease) this.close(error instanceof Error ? error : new Error(String(error)), false); });
-    } else void start();
-    return result;
+    // All process Workers share this origin's lock. Acquire before constructing their duplicate Program/World, and retain the lease until the worker has been retired.
+    const locks = globalThis.navigator?.locks, lease = this.lease = locks && new AbortController();
+    const made = locks ? Promise.race([locks.request("webdroid:wasm-app-build", { signal: lease!.signal }, make), failed]) : make();
+    return made.finally(() => { this.stop(run); if (this.running === run) this.running = undefined; });
   }
-  private stopWorker(): void {
-    if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
+  /** has a worker of its own make a shard's part from `init` */
+  private runShard(run: NonNullable<Builder["running"]>, [init, transfer]: [CompileRequest, Transferable[]]): Promise<Extract<CompileResponse, { type: "built" }>> {
+    return new Promise((resolve, reject) => {
+      const port = this.req.spawn();
+      run.ports.push(port);
+      port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
+        if (!run.ports.includes(port)) return;
+        if (data.type === "loaded") port.postMessage(init, transfer);
+        else if (data.type === "failed") reject(new Error(data.message));
+        else if (data.type === "built") { this.stop(run, [port]); resolve(data); }
+      };
+      port.onerror = (e) => reject(new Error(e.message));
+    });
+  }
+  /** retires `run`'s workers, or those of `ports` */
+  private stop(run: NonNullable<Builder["running"]>, ports = run.ports): void {
+    for (const port of ports) { port.onmessage = null; port.onerror = null; port.terminate(); }
+    run.ports = run.ports.filter((port) => !ports.includes(port));
   }
   close(error = new Error("App code closed"), terminal = true): void {
     if (this.closed) return;
     this.closed = terminal;
-    const lease = this.lease; this.lease = undefined; lease?.abort();
-    this.stopWorker();
-    this.waiting?.reject(error);
+    const run = this.running;
+    this.running = undefined;
+    run?.fail(error);
+    this.lease?.abort(); this.lease = undefined;
+    if (run) this.stop(run);
   }
 }
