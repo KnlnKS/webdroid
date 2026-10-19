@@ -9,7 +9,7 @@ import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import type { Compiler } from "./j2w.ts";
 import type { Code } from "./code.ts";
 import type { MC } from "./method.ts";
-import { emitHandleCall } from "../link/mhandles.ts";
+import { emitHandleCall } from "./handles.ts";
 import { Info, UInfo } from "./info.ts";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;

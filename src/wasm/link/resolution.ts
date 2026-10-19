@@ -7,8 +7,9 @@ import type { World } from "./world.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, resolveHandleMember, type SignatureType } from "./mhandles.ts";
+import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, type SignatureType } from "./mhandles.ts";
 import { THROWERS } from "../compiler/exc.ts";
+import { resolveHandleMember } from "../compiler/handles.ts";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
   const next = (at: number): void | Promise<void> => {
@@ -25,7 +26,7 @@ export function resolveSignatureTypes(w: World, types: SignatureType[], owner: S
 export function resolveHandleReference(w: World, method: MethodInfo, index: number, owner: Strand): void | Promise<void> {
   const ready = resolveType(w, w.prog.loaderOf(method.cls), handleMemberOwner(method, index), owner);
   const signature = () => {
-    const member = resolveHandleMember(w, method, index);
+    const member = resolveHandleMember(w.prog, method, index);
     if ("thrower" in member || "errorClass" in member) {
       throw w.exception(w.makeThrowable("thrower" in member ? THROWERS[member.thrower].cls : member.errorClass, member.message));
     }

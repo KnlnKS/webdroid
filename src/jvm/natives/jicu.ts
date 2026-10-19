@@ -65,7 +65,7 @@ export function uchar(name: string, desc: string): (...args: unknown[]) => unkno
     (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
 /** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. The rest
- *  are Wasm intrinsics (src/wasm/compiler/chars.ts). */
+ *  are Wasm intrinsics (src/wasm/link/chars.ts). */
 function characterNatives(): Record<string, (...args: never[]) => unknown> {
   const hasProperty = uchar("hasBinaryProperty", "(II)Z"), numeric = uchar("getUnicodeNumericValue", "(I)D");
   return {

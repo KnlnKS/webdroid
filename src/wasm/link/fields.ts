@@ -2,24 +2,18 @@
 // (class id << 12 | index in the class's fields, classes.ts mkField); the host hands out a generated accessor slot per field and operation
 // (unsafe.ts), for static fields as well, so the natives only choose the accessor by the field's type letter. Primitive reads and writes widen
 // as the language does (a getLong of an int field, a setInt of a long field is not allowed), and a receiver, access or final check precedes them.
-import { OP } from "./code.ts";
-import { T } from "./wasmbin.ts";
-import { ACC } from "./program.ts";
-import { fieldId } from "../link/classes.ts";
-import { rt } from "./rtfns.ts";
-import type { Code } from "./code.ts";
-import type { Compiler, Intrinsic } from "./j2w.ts";
-import { Info, UInfo } from "./info.ts";
+import { OP } from "../compiler/code.ts";
+import { T } from "../compiler/wasmbin.ts";
+import { ACC } from "../compiler/program.ts";
+import { fieldId } from "./classes.ts";
+import { rt } from "../compiler/rtfns.ts";
+import type { Code } from "../compiler/code.ts";
+import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { Info, UInfo } from "../compiler/info.ts";
+import { BOX, WIDEN } from "../compiler/primitives.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
-/** the field letters a value of each type may be assigned to, which is also what a get of each may be read as */
-export const WIDEN: Record<string, string> = { Z: "Z", B: "BSIJFD", C: "CIJFD", S: "SIJFD", I: "IJFD", J: "JFD", F: "FD", D: "D" };
 const LETTERS = Object.keys(WIDEN);
-export const BOX: Record<string, [string, string, string]> = {
-  Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
-  S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
-  F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
-};
 const code = (l: string) => l.charCodeAt(0);
 /** the wasm kind a field letter is held as: int-like and float bits as I, long and double bits as J */
 const kindOfLetter = (l: string): "I" | "J" => (l === "J" || l === "D" ? "J" : "I");

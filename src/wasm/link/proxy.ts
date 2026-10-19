@@ -7,7 +7,7 @@
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program.ts";
-import { BOX } from "../compiler/fields.ts";
+import { BOX } from "../compiler/primitives.ts";
 import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";

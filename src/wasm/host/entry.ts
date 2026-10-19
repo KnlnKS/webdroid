@@ -19,7 +19,7 @@ import { OP, type Code } from "../compiler/code.ts";
 import { fromBits, refOf, toBits, type Bridge } from "./bridge.ts";
 import { failed } from "../compiler/linkage.ts";
 import { UInfo } from "../compiler/info.ts";
-import { box } from "../link/mhandles.ts";
+import { box } from "../compiler/primitives.ts";
 import { count } from "./stats.ts";
 import { note, Ev } from "../../timeline.ts";
 import { procTasks, processTid } from "../../shell/procfs.ts";

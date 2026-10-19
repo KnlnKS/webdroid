@@ -432,6 +432,8 @@ export class Compiler implements Base {
   /** call the method of `cls` that `name` and `desc` resolve to */
   callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
   /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+  /** the element array of the array object on the stack */
+  arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
   vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
   /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
   emitStoreCheck(c: Code, arr: number, value: () => void): void {

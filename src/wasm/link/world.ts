@@ -20,6 +20,7 @@ import { hostInfo, infoRecord, replayInfo, type InfoRecord } from "./classes.ts"
 
 import { HostClasses } from "./hostclass.ts";
 import { mhInvoke } from "./mhandles.ts";
+import type { InvokeMode } from "../compiler/handles.ts";
 import { hostText } from "./members.ts";
 import { ASYNC } from "./inet.ts";
 import { generateProxy, type ProxyDefinition } from "./proxy.ts";
@@ -227,8 +228,8 @@ export class World {
       proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
       net: (node: unknown, family: number, flags: number) => opts.net ? opts.net(this, this.hostString(node) as string, family, flags) : ASYNC,
       netByte: (found: number[][], i: number, j: number) => j < 0 ? found[i].length : found[i][j],
-      mhInvoke: (mh: object, args: object, site: string, exact: number) => {
-        const value = mhInvoke(this, mh, args, site, exact);
+      mhInvoke: (mh: object, args: object, site: string, mode: InvokeMode) => {
+        const value = mhInvoke(this, mh, args, site, mode);
         return park(value instanceof Promise ? value.then((v) => this.javaValue(v)) : this.javaValue(value), null);
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),

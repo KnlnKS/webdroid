@@ -10,7 +10,7 @@ import { descToName } from "../../jvm/abi.ts";
 import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
-import { WIDEN, BOX } from "../compiler/fields.ts";
+import { WIDEN, BOX } from "../compiler/primitives.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";

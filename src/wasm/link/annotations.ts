@@ -6,7 +6,7 @@ import { javaName, type JClass, typeName } from "../compiler/program.ts";
 import { idOfClass, fieldId } from "./classes.ts";
 
 import { executableSlot, methodAt } from "./reflect.ts";
-import { BOX } from "../compiler/fields.ts";
+import { BOX } from "../compiler/primitives.ts";
 import { VIEWS } from "../compiler/copy.ts";
 import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";

@@ -10,7 +10,7 @@ import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type Pr
 import { type Flow, Go, structureAny } from "../../jvm/structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
-import { emitCustom, emitHandleConstant, emitTypeConstant } from "../link/mhandles.ts";
+import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts.ts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";

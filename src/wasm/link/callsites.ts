@@ -1,11 +1,11 @@
 // ART interpreter_common.cc DoResolveCallSite: cache successes, allow bootstrap races, and use the first published candidate.
-import { WIDEN, BOX } from "../compiler/fields.ts";
+import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import type { Program } from "../compiler/program.ts";
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
-import { box, chain, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, methodTypeSignatureTypes, mhInvoke, resolveHandleMember } from "./mhandles.ts";
+import { chain, handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
 import type { DexFile, EncVal } from "../../jvm/dex.ts";
 import type { Compiler } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
@@ -14,6 +14,7 @@ import type { World } from "./world.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
 import { typeName } from "../compiler/program.ts";
+import { InvokeMode, emitHandleValue, emitTypeValue, emitInvokeImport, resolveHandleMember } from "../compiler/handles.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
@@ -94,7 +95,7 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
   if (values[0].type !== 0x16 || first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
   return chain(resolveHandleReference(w, referrer, first.idx, parent), () => {
-    const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w, referrer, first.idx);
+    const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w.prog, referrer, first.idx);
     const target = "method" in member && h.type === 4 ? member.method : undefined;
     const invalid = target ? bootstrapFailure(w.prog, target, values) : undefined;
     const emit = () => handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
@@ -115,7 +116,7 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
         c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i);
         if (!argument(cx, c, referrer, type, value)) return; c.arraySet(cx.tData.ref); params.push(scalarType[type]);
       }
-      emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, 0);
+      emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, InvokeMode.Invoke);
     }, parent)() as object | Promise<object>;
     return !target || invalid ? emit() : chain(resolveBootstrapArguments(w, referrer, index, parent), emit);
   });
@@ -134,7 +135,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
   const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
   const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
-  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), 1, parent);
+  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), InvokeMode.Exact, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
   const validate = (candidate: object | null): object | Promise<object> => {
     const sig = signature();
