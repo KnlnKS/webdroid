@@ -93,8 +93,8 @@ if (classes) {
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
   writeFileSync(join(AOT_ROOT, key, "warm.json"), JSON.stringify([...warm].sort((a, b) => a - b)));
   console.log(`${files.length} files in ${key}/startup.json, ${warm.size} slots in warm.json`);
-  if (prefixes.size === 1) writeFileSync(join(AOT_ROOT, key, "prefix.json"), [...prefixes][0]);
-  else { rmSync(join(AOT_ROOT, key, "prefix.json"), { force: true }); console.log(`${prefixes.size} different prefixes: no prefix.json`); }
+  writeFileSync(join(AOT_ROOT, key, "prefix.json"), prefixes.size === 1 ? [...prefixes][0] : "null");
+  if (prefixes.size !== 1) console.log(`${prefixes.size} different prefixes: prefix.json is null`);
 }
 
 /** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */

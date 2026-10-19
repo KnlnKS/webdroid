@@ -185,6 +185,9 @@ const index = aot.finish(synths);
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
 writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 writeFileSync(join(out, "apps.json"), "[]");
+// what profiled launches add (aot-profile.ts): until they run, no numbering prefix and no slots to warm
+writeFileSync(join(out, "prefix.json"), "null");
+writeFileSync(join(out, "warm.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);

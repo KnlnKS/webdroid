@@ -124,10 +124,10 @@ export async function bootWasmTier(): Promise<TierBackend> {
   const opening = Promise.all([openAot(), fetchPlatformJars()]);
   // What a process numbers before its app's code arrives depends on timing (whether a build module has arrived, or its methods are compiled on demand), and a saved app build continues
   // exactly that numbering: a process numbers what earlier ones did first, in their order, and adds what it numbers besides. A device's first process takes what the
-  // profiled launches numbered (scripts/wasm/aot-profile.ts), so its app's build can begin before the zygote has run.
+  // profiled launches numbered (scripts/wasm/aot-profile.ts; null when they disagree or none ran), so its app's build can begin before the zygote has run.
   const persisting = openPersist();
   const remembered = Promise.all([opening, persisting]).then(async ([[aot], persist]) =>
-    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering)).catch(() => undefined);
+    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering | null)).catch(() => null);
   let seen: Numbering | undefined;
   /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
   let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
@@ -154,7 +154,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   hook(current);
   const [aot, jars] = await opening;
   store = aot;
-  seen = await remembered;
+  seen = await remembered ?? undefined;
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   mark("platformReady");
   return {
