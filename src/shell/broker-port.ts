@@ -16,7 +16,7 @@ import { rt } from "../jvm/runtime.ts";
 import { canonicalAccountCommands } from "./accounts.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
-import { canonicalFilePaths, isMutablePath } from "./file-path.ts";
+import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
 import { serveCalls } from "./process-port.ts";
 import { permissionDenied, unawaited, type BrokerCalls, type ProcessBroker } from "./processes.ts";
@@ -48,10 +48,8 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const preferences = canonicalPreferenceCommands(broker.preferences, authorizePreference);
   const authorizePath = (path: string): number => {
     broker.entry(pid);
-    const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/([^/]+)(?:\/|$)/.exec(path);
-    const external = /^\/sdcard\/Android\/data\/([^/]+)(?:\/|$)/.exec(path);
-    const owner = privatePath?.[1] ?? external?.[1];
-    return owner && packages.get(owner)?.uid !== caller.uid && !privileged ? 13 : 0;
+    const owner = packageOfPath(path);
+    return owner?.private && !sameUidOrSystem(caller.uid, packages.get(owner.pkg)?.uid) ? 13 : 0;
   };
   const paths = canonicalFilePaths(authorizePath, caller.uid);
   const descriptors = broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid);
