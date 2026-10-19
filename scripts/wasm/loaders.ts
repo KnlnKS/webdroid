@@ -297,7 +297,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     try { w.unwound(() => helper()); } catch (error) { checkMissing(error); syncFailed = true; }
     const strand = w.sched.strand();
     try { await waitingHelper(strand); } catch (error) { checkMissing(error); asyncFailed = true; } finally { strand.end(); }
-    if (!syncFailed || !asyncFailed || w.absent.get(later)?.size !== 2) throw new Error("helper dependencies lack invalidation slots");
+    if (!syncFailed || !asyncFailed || w.assumptions.absent.get(later)?.size !== 2) throw new Error("helper dependencies lack invalidation slots");
     w.addClass({ name: later, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, new Map());
     const resumed = w.sched.strand();
     try {
@@ -374,19 +374,19 @@ if (wasmDelegate !== 31) { failed++; console.log(`FAIL actual delegate-last init
   const type = cls.dex!.proto(cls.dex!.method(self.methodIdx).proto).ret;
   if (cls.dex!.type(type) !== "LShared;" || peer.desc !== "LShared;") throw new Error("fixture did not warm the parent resolution");
   const epoch = cache.epoch;
-  cache.initiateClass(child, "Shared", key);
+  cache.namespaces.initiateClass(child, "Shared", key);
   const sub = p.definedBy(child, "Sub")!;
   if (!p.isSubclass(sub, key) || p.isSubclass(sub, "Shared")) throw new Error("initiated superclass identity retained stale subtype relationships");
   if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) throw new Error("initiating identity retained stale DEX/member caches");
   const implementors = () => [...p.own()].filter(c => p.isSubclass(c.name, "NamespaceFace")).map(c => c.name).join();
   const prior = implementors();
-  cache.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
+  cache.namespaces.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
   if (implementors() !== prior) throw new Error("descriptor-only initiation changed subtype relationships");
   const face = p.definedBy(child, "NamespaceFace")!;
-  cache.initiateClass(child, "NamespaceFace", face);
+  cache.namespaces.initiateClass(child, "NamespaceFace", face);
   if (!p.isSubclass(key, face) || p.isSubclass(key, "NamespaceFace")) throw new Error("initiated interface identity retained stale subtype relationships");
   cache.link(key);
-  try { cache.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }
+  try { cache.namespaces.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
 }
 for (const asynchronous of [false, true]) {
@@ -548,7 +548,7 @@ async function interfaceSuperControl(): Promise<void> {
     p.addClass({ name: "Outside", sup: "java/lang/Object", ifaces: [face], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, p.root);
     target.link("Outside");
     if ((target as any).classes.has(face)) throw Error("dependency control interface already linked");
-    try { target.initiateClass(loader, "InterfaceSuper$B", replacement); throw Error("changed inherited default accepted"); }
+    try { target.namespaces.initiateClass(loader, "InterfaceSuper$B", replacement); throw Error("changed inherited default accepted"); }
     catch (error) { const t = target.throwable(error); if (!t || target.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(loader, "InterfaceSuper$B") !== "InterfaceSuper$B") throw error; }
     console.log("scoped rebinding retains outside-loader dispatch guard through an unlinked interface");
   }
@@ -614,7 +614,7 @@ async function hotRefreshControl(): Promise<void> {
     const built = cx.buildUnit(job.installed.map(id => method(id)!), { copies: job.copies.map(id => method(id)!), hot: true, seq: job.unit });
     if (!cx.symbolicImports.size) throw new Error("hot refresh seed lost the unused later reference");
     // Install the actual compiled unit with the same canonical publication path as inline promotion.
-    w.tiers.install(job.installed.map(id => w.slotOf(method(id)!)), true, cx, w.unitImports(cx), built, slot, w.unitClock());
+    w.tiers.install(job.installed.map(id => w.slotOf(method(id)!)), true, cx, w.units.of(cx), built, slot, w.units.clock());
     const before = w.table.get(slot), deopts = w.stats.invalidated;
     check("copied callee resolves later reference", await run(1), expected[1]);
     check("hold preserves hot unit", w.table.get(slot), before);
@@ -675,11 +675,11 @@ async function hotRefreshPendingControl(files: string[], late: string): Promise<
     return { w, run, slot };
   };
   const build = (w: ReturnType<typeof world>, slot: number) => {
-    const clock = w.unitClock(), job = w.tiers.upgradeJob(slot);
+    const clock = w.units.clock(), job = w.tiers.upgradeJob(slot);
     if (!job) throw new Error("pending control has no real compilation job");
     const cx = new Compiler(w), methods = job.installed.map(id => methodOf(w.prog, id)!);
     const built = cx.buildUnit(methods, { copies: job.copies.map(id => methodOf(w.prog, id)!), hot: true, seq: job.unit });
-    return () => w.tiers.install(methods.map(m => w.slotOf(m)), true, cx, w.unitImports(cx), built, slot, clock);
+    return () => w.tiers.install(methods.map(m => w.slotOf(m)), true, cx, w.units.of(cx), built, slot, clock);
   };
   const state = (w: ReturnType<typeof world>, slot: number) => w.slots.peek(slot) as { pending?: boolean; hot?: boolean };
   const connect = (w: ReturnType<typeof world>) => {

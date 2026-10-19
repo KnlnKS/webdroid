@@ -65,7 +65,7 @@ export class UnitCompiler {
       const cls = w.prog.get(key);
       if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
     }
-    for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
+    for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
     const cx = new Compiler(w), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.beginTouch();

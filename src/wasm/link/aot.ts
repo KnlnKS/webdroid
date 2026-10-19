@@ -407,12 +407,12 @@ export class AotRuntime {
     this.synthState.set(file, LOADING);
     if (!mod) return dead();
     const head = header<SHeader>(mod);
-    if (head.version !== VERSION || !head.natives.every((id) => w.nativeBound(id))) return dead();
+    if (!w.units.admits(head)) return dead();
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
     for (const s of head.synth) if (this.synthIn.get(s) !== file) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolic.symbolicImports(head.symbols ?? []) };
-    w.classImports(head.classImports, imports);
+    const imports = w.units.ofHeader(head);
+    w.units.classImports(head.classImports, imports);
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
     if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
     w.instantiate(mod, imports);
@@ -491,7 +491,7 @@ export class AotRuntime {
     // Byte stores are already local. Only asynchronously compiled modules need a delivery wait.
     if (ArrayBuffer.isView(mod)) return [];
     const head = header<CHeader>(mod);
-    if (head.version !== VERSION || !head.natives.every(id => this.w.nativeBound(id))) return [];
+    if (!this.w.units.admits(head)) return [];
     const files: string[] = [];
     for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1))) {
       const file = `d${m.slice(1)}.wasm`;
@@ -545,7 +545,7 @@ export class AotRuntime {
     const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, mod = this.module(file);
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
-    if (head.version !== VERSION || !head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!w.units.admits(head)) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
     let dataReady = true;
     for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1)) && !this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
@@ -561,11 +561,11 @@ export class AotRuntime {
     if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolic.symbolicImports(head.symbols ?? []) };
+    const imports = w.units.ofHeader(head);
     // Retired data groups bind each class's published globals instead of creating another owner.
     let bindClasses = app;
     for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) imports[m] = ex; else bindClasses = true; }
-    if (bindClasses) w.classImports(head.classImports, imports);
+    if (bindClasses) w.units.classImports(head.classImports, imports);
     w.instantiate(mod, imports);
     w.stats.aot.c++;
     const t2 = performance.now();
@@ -578,8 +578,7 @@ export class AotRuntime {
     // a site that fails because a class was not there is undone if it is now
     for (const [name, owner] of head.missing) {
       if (w.prog.get(name)) { w.invalidate(owner); continue; }
-      const slots = w.absent.get(name) ?? w.absent.set(name, new Set()).get(name)!;
-      slots.add(owner);
+      w.assumptions.absentAt(name, owner);
     }
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
     w.stats.aot.ms += performance.now() - t2;
@@ -627,7 +626,7 @@ export class AotRuntime {
       const z = unleb(b, at); pcs[i] = p += (z >>> 1) ^ -(z & 1);
     }
     const t = { name, m, offsets, pcs };
-    this.w.traces.set(name, t);
+    this.w.stacks.traces.set(name, t);
     return t;
   }
 

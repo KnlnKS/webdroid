@@ -99,7 +99,7 @@ export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
 export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
   | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
-  | "needsSymbolicSite" | "guestShared" | "sharedHelpers">;
+  | "needsSymbolicSite" | "guestShared" | "units">;
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** how Compiler.buildUnit compiles its methods */
@@ -213,10 +213,10 @@ export class Compiler implements Base {
     return f;
   }
   /** Shares the helpers that are the same in every module with other first-tier units: each costs the engine about as much in every module as the
-   *  unit's own code. A helper an earlier unit exports is imported (World.sharedHelpers); one none does is defined here and exported */
+   *  unit's own code. A helper an earlier unit exports is imported (Units.sharedHelpers); one none does is defined here and exported */
   shareHelpers(): void {
     const imports = new Map<string, number>();
-    for (const [key, sig] of this.w.sharedHelpers) imports.set(key, this.mb.importFunc("h", key, sig));
+    for (const [key, sig] of this.w.units.sharedHelpers) imports.set(key, this.mb.importFunc("h", key, sig));
     this.sharing = { imports, out: [] };
   }
   get sharedOut(): readonly [string, FunctionType][] { return this.sharing?.out ?? []; }

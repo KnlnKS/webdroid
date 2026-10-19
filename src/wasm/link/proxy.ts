@@ -48,7 +48,7 @@ export function generateProxy(w: World, name: string, interfaces: object, object
   }
   defineProxy(w, { name: internal, loader: loader === w.prog.boot ? "boot" : loader.id,
     ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))), methods: [...entries.values()] }, loader);
-  w.initiateClass(loader, binary, internal);
+  w.namespaces.initiateClass(loader, binary, internal);
   return r.classOf(w.idOf(internal));
 }
 

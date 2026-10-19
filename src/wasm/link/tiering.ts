@@ -6,7 +6,6 @@ import type { SymbolicSite } from "../compiler/sites.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import { COUNT_BASE, COUNT_SLOTS, THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
 import { mid, methodOf } from "../compiler/ids.ts";
-import { VERSION } from "./aot.ts";
 import { HotUnits } from "./hotunits.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
@@ -81,7 +80,7 @@ export class Tiering {
     this.loose.push(...this.merging.filter((g) => this.mergeable(g)));
     this.merging = [];
     if (this.loose.length < this.mergeAt) return undefined;
-    const clock = this.w.unitClock(), groups: number[][] = [];
+    const clock = this.w.units.clock(), groups: number[][] = [];
     let n = 0, size = 0;
     for (; n < this.loose.length && size < MERGE_MAX; n++) {
       const g = this.loose[n];
@@ -90,7 +89,7 @@ export class Tiering {
     this.loose.splice(0, n);
     const units = groups.map((g) => g.map((at) => this.w.slots.peekMethod(at)!.m)), refs = this.jobRefs(units), taken = new Set(refs.units);
     groups.forEach((g, i) => (taken.has(units[i]) ? this.merging : this.loose).push(g));
-    this.w.accountCompilation(clock);
+    this.w.units.account(clock);
     // what is not ready waits for more units to be linked
     if (!refs.units.length) { this.mergeAt = this.loose.length + MERGE_AT / 4; return undefined; }
     this.mergeAt = MERGE_AT;
@@ -170,12 +169,12 @@ export class Tiering {
    *  in their slots, or in `slot`; first-tier units share helpers. The slots it installed, or undefined if `admit` turned the built unit down. */
   compileUnit(slot: number, hot: boolean, build: (cx: Compiler, seq: number) => { methods: MethodInfo[]; copies?: number; built: Built },
     admit?: (cx: Compiler) => boolean): number[] | undefined {
-    const clock = this.w.unitClock(), cx = new Compiler(this.w);
+    const clock = this.w.units.clock(), cx = new Compiler(this.w);
     if (!hot) cx.shareHelpers();
     const { methods, copies = 0, built } = build(cx, this.unitSeq++);
     this.w.stats.units++; this.w.stats.methods += methods.length + copies;
-    const group = methods.map((m) => this.w.slotOf(m)), imports = this.w.unitImports(cx);
-    if (admit && !admit(cx)) { this.w.accountCompilation(clock); return undefined; }
+    const group = methods.map((m) => this.w.slotOf(m)), imports = this.w.units.of(cx);
+    if (admit && !admit(cx)) { this.w.units.account(clock); return undefined; }
     this.install(group, hot, cx, imports, built, slot, clock);
     return group;
   }
@@ -227,10 +226,10 @@ export class Tiering {
     const s = this.w.slots.at(slot);
     const refresh = this.hotUnits.get(slot);
     if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.w.table)))) return undefined;
-    const clock = this.w.unitClock(), members = s.hot ? refresh!.slots.map(at => this.w.slots.peekMethod(at)!.m) : undefined;
+    const clock = this.w.units.clock(), members = s.hot ? refresh!.slots.map(at => this.w.slots.peekMethod(at)!.m) : undefined;
     const { installed, copies, plan } = this.w.planner.group(s.m, members);
     const refs = this.jobRefs([[...installed, ...copies]]);
-    this.w.accountCompilation(clock);
+    this.w.units.account(clock);
     return refs.units.length ? this.job(installed, copies, refs, plan, s.hot ? refresh!.generation : undefined) : undefined;
   }
   private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, plan: CallPlan, refresh?: number, merge?: boolean): UpgradeJob {
@@ -288,7 +287,7 @@ export class Tiering {
    *  is this World's (it was numbered from `result.numbering.from`) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     if (job.merge) return this.adoptMerged(job, result, epoch);
-    const s = this.w.slots.at(slot), head = result.header, clock = this.w.unitClock();
+    const s = this.w.slots.at(slot), head = result.header, clock = this.w.units.clock();
     this.release(slot);
     const refresh = this.hotUnits.get(slot);
     if (!this.sound(result, epoch) || s?.k !== "method" || !s.done) return false;
@@ -319,7 +318,7 @@ export class Tiering {
   /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
   private sound(result: UnitResult, epoch: number): boolean {
     const head = result.header;
-    return head.version === VERSION && epoch === this.w.epoch && head.natives.every((id) => this.w.nativeBound(id));
+    return epoch === this.w.epoch && this.w.units.admits(head);
   }
   /** takes the numbering of a worker's unit and links what it names; its module and imports, undefined if the numbering does not follow this World's */
   private received(result: UnitResult) {
@@ -331,15 +330,15 @@ export class Tiering {
     const owner = (at: number) => this.w.slots.method(at)!.m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
-    const imports: Record<string, any> = { rt: this.w.rtImports(), host: this.w.host, n: this.w.nativeImports(head.natives), symbolic: this.w.symbolic.symbolicImports(head.symbols ?? []) };
-    this.w.classImports(head.classImports, imports);
+    const imports = this.w.units.ofHeader(head);
+    this.w.units.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.w.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.w.allocated.add(c);
     return { unit, imports, built: { bytes: result.module, traces } };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
-    const groups = this.merging, clock = this.w.unitClock();
+    const groups = this.merging, clock = this.w.units.clock();
     this.merging = [];
     const r = this.sound(result, epoch) ? this.received(result) : undefined;
     if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
@@ -348,7 +347,7 @@ export class Tiering {
     // one function of each unit holds its instance, and so its module
     this.retire(liveGroups.map((g) => this.w.table.get(g[0]) as Function));
     const kept = job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.w.table.get(at)] as const);
-    this.w.instantiateUnit(r.unit, r.imports, r.built, live[0], clock, () => {
+    this.w.units.instantiate(r.unit, r.imports, r.built, live[0], clock, () => {
       for (const [at, f] of kept) this.w.table.set(at, f);
       for (const at of live) this.groupOf.set(at, [at]);
     });
@@ -388,7 +387,7 @@ export class Tiering {
       } else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
     };
-    try { this.w.instantiateUnit(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
+    try { this.w.units.instantiate(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }

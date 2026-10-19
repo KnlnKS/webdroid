@@ -203,12 +203,12 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     // The boot namespace and the host's startup namespace have no Java loader peer yet.
     const key = w.prog.lookup(loader, name);
     if (!key) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", name));
-    w.initiateClass(loader, name, key);
+    w.namespaces.initiateClass(loader, name, key);
     return key;
   }
   const native = nativeClassLookup(w, loader, name);
   if (native) {
-    w.initiateClass(loader, name, native);
+    w.namespaces.initiateClass(loader, name, native);
     return prepareDefinition(w, native, owner);
   }
   const method = w.prog.implFor(w.classNameOf(object), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
@@ -224,7 +224,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     const winner = w.prog.initiatedBy(loader, name);
     if (winner) return prepareDefinition(w, winner, owner);
     if (javaName(key) !== name) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `${name} (wrong name: ${javaName(key)})`));
-    w.initiateClass(loader, name, key);
+    w.namespaces.initiateClass(loader, name, key);
     return prepareDefinition(w, key, owner);
   };
   const failed = (error: unknown): string | Promise<string> => {

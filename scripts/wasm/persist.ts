@@ -293,7 +293,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const w = hosted(app, { compiler: client, holdUpgrades: () => true });
   const first = w.prog.newLoader(w.prog.root, null), second = w.prog.newLoader(w.prog.boot, null);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), first);
-  w.bindLibraries(second, [w.prog.root], []);
+  w.namespaces.bindLibraries(second, [w.prog.root], []);
   client.start(w, BASE, undefined);
   const key = (id: number) => `Pst2@${id}`;
   check("initial namespaced DEX executes", await w.entryAsync(key(first.id), "sub", "()I")(), 500);
@@ -304,13 +304,13 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   initializing.resolve();
   await until("namespaced worker starts", () => client.ready || !!client.retired);
   const third = w.prog.newLoader(w.prog.boot, null);
-  w.bindLibraries(third, [], [w.prog.root]);
+  w.namespaces.bindLibraries(third, [], [w.prog.root]);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), third);
   for (const loader of [second, third]) {
     const call = w.entryAsync(key(loader.id), "sub", "()I");
     check("namespaced source result", await call(), 500);
     if (loader === second) {
-      w.bindLibraries(second, [], [w.prog.root]);
+      w.namespaces.bindLibraries(second, [], [w.prog.root]);
       await until("a linked namespace change reaches the worker", () => received.includes("namespaces"));
       check("source result after library rebinding", await call(), 500);
     }

@@ -37,7 +37,7 @@ const containsInstalled = (w: ReturnType<typeof world>) => { const s = w.slots.a
   check("the build is attached", !!w.aot, true);
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
-  check("it relies on no hierarchy decision", w.assumptions.has(key), false);
+  check("it relies on no hierarchy decision", w.assumptions.decisions.has(key), false);
   // the warm Worker mirrors a module's imports from its bytes and compiles its methods by calling them into the warm trap
   const warm = new WarmWorld(), mirrored = w.aot!.loaded.filter((f) => /^c\d+\.wasm$/.test(f)).map((f) => warm.load(compileModule(fileOf(f)), fileOf(f)));
   check("the warm shim mirrors every loaded code module", mirrored.filter((m) => typeof m === "string").join(), "");
@@ -47,7 +47,7 @@ const containsInstalled = (w: ReturnType<typeof world>) => { const s = w.slots.a
   check("a warmed method traps as it is entered", trapped, true);
   const library = w.prog.newLoader(w.prog.root, null);
   w.addDexes(loadDexes(join(out, "classes.dex")), library);
-  w.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);
+  w.namespaces.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);
   check("a descriptor-only rebind keeps the result", w.entry("Aot", "plain", "()I")(), 0);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a subclass overriding indexOf takes effect", w.entry("Aot2", "sub", "()I")(), 1);
@@ -283,7 +283,7 @@ const modules = /^[cd]\d+\.wasm$/;
   const bind = (w: ReturnType<typeof world>) => {
     const library = w.prog.newLoader(w.prog.boot, null);
     w.addDexes(loadDexes(join(out, "lib3/classes.dex")), library);
-    w.bindLibraries(w.prog.root, [library], []);
+    w.namespaces.bindLibraries(w.prog.root, [library], []);
   };
   const producer = world(new Program(app(), platform), { natives, compileOnly: true });
   bind(producer);

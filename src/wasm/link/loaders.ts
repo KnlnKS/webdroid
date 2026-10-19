@@ -166,7 +166,7 @@ export function classByName(w: World, name: string, scope: unknown, mode: number
     const key = mode === Lookup.Defined ? prog.initiatedBy(loader, cls) ?? (object ? nativeClassLookup(w, loader, cls) : undefined)
       : mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
     if (key === undefined || cookie && !cookie.dexes.includes(prog.get(key)!.dex!)) return undefined;
-    w.initiateClass(loader, cls, key);
+    w.namespaces.initiateClass(loader, cls, key);
     return key;
   };
   const e = n.replace(/^\[+/, "");
@@ -212,8 +212,8 @@ function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): obj
   if (binding) s.appLoader = loaderObject;
   if (loaderObject) {
     const [before, after] = librariesOf(w, loaderObject);
-    if (binding && !standardPath(w, loaderObject)) w.dynamicRoot();
-    w.bindLibraries(loader, before, after);
+    if (binding && !standardPath(w, loaderObject)) w.namespaces.dynamicRoot();
+    w.namespaces.bindLibraries(loader, before, after);
     dexes = dexes.map(d => {
       const owner = w.prog.loaderOfDex(d);
       if (!owner || owner === loader) return d;

@@ -28,18 +28,18 @@ export class HostFunctions {
   }
   private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
     const dependent = cx.assumptions.some(a => !a[4]) || cx.absent.some(a => !a[1]);
-    if (slot !== undefined || !dependent) return this.w.instantiateUnit(cx, imports, built, slot, clock, (e) => { const raw = e.m as Function; return { get: () => raw, raw }; });
+    if (slot !== undefined || !dependent) return this.w.units.instantiate(cx, imports, built, slot, clock, (e) => { const raw = e.m as Function; return { get: () => raw, raw }; });
     const at = -this.helperSlots.push(undefined);
-    return this.w.instantiateUnit(cx, imports, built, at, clock, (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; });
+    return this.w.units.instantiate(cx, imports, built, at, clock, (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; });
   }
   private hostRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (slot: number) => Function {
     return slot => this.buildHostFn(name, params, ret, body, prepare, slot).get();
   }
   private buildHostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void, slot?: number) {
-    const clock = this.w.unitClock(), cx = new Compiler(this.w); prepare?.(cx);
+    const clock = this.w.units.clock(), cx = new Compiler(this.w); prepare?.(cx);
     const built = cx.buildSynthetic(name, params, c => body(cx, c), ret);
     this.w.stats.units++;
-    return this.helperUnit(cx, this.w.unitImports(cx), built, clock, this.hostRebuilder(name, params, ret, body, prepare), slot);
+    return this.helperUnit(cx, this.w.units.of(cx), built, clock, this.hostRebuilder(name, params, ret, body, prepare), slot);
   }
   /** a helper callable from the host: its function, or one that follows its rebuilds */
   private synchronousHelper({ get, raw: fixed }: { get: () => Function; raw?: Function }): Function {
@@ -83,7 +83,7 @@ export class HostFunctions {
     return slot => this.buildCallFn(name, params, ret, body, prepare, state, slot).get();
   }
   private buildCallFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void, state?: { d: WebAssembly.Global; v: WebAssembly.Global; thr: WebAssembly.Global }, slot?: number) {
-    const clock = this.w.unitClock(), cx = new Compiler(this.w), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(ret);
+    const clock = this.w.units.clock(), cx = new Compiler(this.w), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(ret);
     prepare?.(cx);
     const d = state?.d ?? new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = state?.thr ?? new WebAssembly.Global({ value: "externref", mutable: true }, null);
     const v = state?.v ?? new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
@@ -99,7 +99,7 @@ export class HostFunctions {
       c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
     this.w.stats.units++;
-    const { get, raw } = this.helperUnit(cx, { ...this.w.unitImports(cx), call: { d, v, x: thr } }, built, clock, this.callRebuilder(name, params, ret, body, prepare, { d, v, thr }), slot);
+    const { get, raw } = this.helperUnit(cx, { ...this.w.units.of(cx), call: { d, v, x: thr } }, built, clock, this.callRebuilder(name, params, ret, body, prepare, { d, v, thr }), slot);
     return { get, raw, d, v, thr };
   }
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the

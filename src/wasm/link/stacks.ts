@@ -1,6 +1,7 @@
 // Java stack traces read from the engine's stacks: V8 names Wasm frames by function, and a function's trace maps its offsets back to dex pcs.
 import type { Strand } from "./sched.ts";
 import { javaFrames, deepStack, type JavaFrame } from "../compiler/exc.ts";
+import type { FnTrace } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
@@ -9,7 +10,9 @@ export class StackTraces {
   private readonly w: World;
   constructor(w: World) { this.w = w; }
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
-  private frameTraces = { get: (name: string) => this.w.traces.get(name) ?? this.w.aot?.trace(name) };
+  /** the traces of the functions compiled here, by name; a build's are read from its modules as stacks need them (AotRuntime.trace) */
+  readonly traces = new Map<string, FnTrace>();
+  private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.w.aot?.trace(name) };
   private captured = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
   private javaStack(stack: string, count = Infinity, lines = true): JavaFrame[] {

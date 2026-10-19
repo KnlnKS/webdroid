@@ -22,7 +22,7 @@ export class SymbolicSites {
     const out: Record<string, unknown> = { table: this.symbolicTable };
     const fresh = sites.filter(([name]) => !this.symbolicSites.has(name));
     if (fresh.length) {
-      const clock = this.w.unitClock();
+      const clock = this.w.units.clock();
       const cx = new Compiler(this.w), table = cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
@@ -41,9 +41,9 @@ export class SymbolicSites {
           params.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(params, output), table);
         },
       })));
-      const imports = this.w.unitImports(cx); imports.symbolic = binding;
+      const imports = this.w.units.of(cx); imports.symbolic = binding;
       this.w.stats.units++;
-      this.w.instantiateUnit(cx, imports, built, this.w.slotOf(pending[0].method), clock, (exports) => {
+      this.w.units.instantiate(cx, imports, built, this.w.slotOf(pending[0].method), clock, (exports) => {
         for (const { name, slot } of pending) {
           this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot) });
           this.symbolicTable.set(slot, exports[name] as Function);
@@ -58,21 +58,21 @@ export class SymbolicSites {
   private symbolicResolver(method: MethodInfo, pc: number, slot: number, inputs: SymbolicSite[4], output: SymbolicSite[5]) {
     const run = () => {
       this.symbolicResolutions++;
-      const owner = this.w.sched.current(), clock = this.w.unitClock(), ins = decodeInstruction(method.dex.code(method.codeOff).insns, pc);
-      this.w.accountCompilation(clock);
+      const owner = this.w.sched.current(), clock = this.w.units.clock(), ins = decodeInstruction(method.dex.code(method.codeOff).insns, pc);
+      this.w.units.account(clock);
       const install = () => {
-        const clock = this.w.unitClock();
+        const clock = this.w.units.clock();
         const initiated = initiatedInstruction(this.w, method, ins);
         let key = initiated ? symbolicOperationKey(method, ins, inputs, output) : undefined;
         let operation = key === undefined ? undefined : this.symbolicOperations.get(key);
         if (operation) {
           this.symbolicOperations.delete(key!);
-          this.w.accountCompilation(clock);
+          this.w.units.account(clock);
         }
         else {
           const { cx, built } = compileSymbolicSite(this.w, method, ins, inputs, output);
           this.w.stats.units++;
-          operation = this.w.instantiateUnit(cx, this.w.unitImports(cx), built, this.w.slotOf(method), clock, (e) => e.m as Function);
+          operation = this.w.units.instantiate(cx, this.w.units.of(cx), built, this.w.slotOf(method), clock, (e) => e.m as Function);
           const mb = cx.mb;
           if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
             || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.tags.length || mb.elems.length || mb.datas.length) {
