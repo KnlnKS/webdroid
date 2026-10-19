@@ -100,7 +100,7 @@ for (const id of ["sun/misc/Unsafe.setMemory(JJB)V","android/os/SharedMemory.nCr
 /** what a native that can answer a Promise has in its body: it waits for something (`await`, a Promise, `after`, `awaited`), reads memory that pages in (`external`, `pagesIn`, `memoryAt`,
  *  `guestAddress`), or hands on the result of a call into Java, which is a Promise when that call waits. The build lists the natives this holds for (`waitingNatives`), as the page
  *  cannot read it from minified code. A native with arrays needs it: it cannot be settled where it was called (natives.ts `parkable`). */
-const WAITS = /\b(after|awaited|pagesIn|external|externalRead|externalWrite|writeAt|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
+const WAITS = /\b(after|awaited|pagesIn|external|externalRead|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
 /** a generator native (`driven`) or an async function, which always runs as Suspending */
 const declaredAsync = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction;
 export const mayWait = (fn: HostFn): boolean => declaredAsync(fn) || WAITS.test(Function.prototype.toString.call(fn));

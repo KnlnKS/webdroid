@@ -109,9 +109,6 @@ export async function mapRemote(remote: RemoteDescriptor, offset: number, size: 
   await mapLease(BigInt(va), lease, offset, prot);
   return BigInt(va);
 }
-/** jnio's checks for a mapping read through its owner, which none is now (isLiveBuffer, force0) */
-export const forceExternal = (_address: bigint): void => {};
-export const isLive = (_address: bigint): boolean => false;
 export function unmapExternal(address: bigint): void | Promise<void> {
   const n = regionNumber(address), region = regions[n];
   if (region?.guest) mem.unmapVa(region.guest, region.size);

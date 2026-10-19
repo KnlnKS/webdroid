@@ -17,7 +17,7 @@ import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, makeFifo, openFd } from "../src/native/fs.ts";
+import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaLseekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, makeFifo, openFd } from "../src/native/fs.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
@@ -64,7 +64,7 @@ describe("file-descriptor", () => {
     const shared = await newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
     const call = clients[1].fileDescriptor;
     try {
-      javaSeekFd(fd,23,0);
+      javaLseekFd(fd,23,0);
       const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
       expect(await call({kind:"take",fd:token})).toBe(0);
       const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3});
@@ -562,7 +562,7 @@ describe("file-input-descriptor", () => {
       expect([...dst]).toEqual([0, 2, 3, 4, 0]);
       expect(await vcall(owner, "read", "()I")).toBe(-1);
       await vcall(borrowed, "close", "()V");
-      expect(javaSeekFd(fdInt(fd), 0, 0)).toBe(0);
+      expect(javaLseekFd(fdInt(fd), 0, 0)).toBe(0);
       expect(await vcall(owner, "read", "()I")).toBe(1);
       await rejectsJava(vcallAsync(borrowed, "read", "()I"), "java/io/IOException");
       await vcall(channel, "close", "()V");
@@ -646,14 +646,14 @@ describe("parcel-file", () => {
     const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
     const fd = await vcall(pfd, "getFd", "()I");
     expect(fd).toBeGreaterThanOrEqual(0);
-    expect(javaSeekFd(fd, 0, 2)).toBe(3);
+    expect(javaLseekFd(fd, 0, 2)).toBe(3);
     const duplicate = await vcall(pfd, "dup", "()Landroid/os/ParcelFileDescriptor;");
     await vcall(pfd, "close", "()V");
     await expect(vcallAsync(pfd, "getFd", "()I")).rejects.toBeDefined();
     const copyFd = await vcall(duplicate, "detachFd", "()I");
-    expect(javaSeekFd(copyFd, 0, 1)).toBe(3);
+    expect(javaLseekFd(copyFd, 0, 1)).toBe(3);
     await vcall(duplicate, "close", "()V");
-    expect(javaSeekFd(copyFd, 0, 0)).toBe(0);
+    expect(javaLseekFd(copyFd, 0, 0)).toBe(0);
     javaCloseFd(copyFd);
   });
   test("an imported writable descriptor writes back once its reader closes", async () => {

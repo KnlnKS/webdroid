@@ -338,8 +338,6 @@ export function javaLseekFd(fd: number, off: number, whence: number): number | P
   const remote = fds.get(fd)?.remote;
   return remote ? remote.seek(off, whence) : fdSeek(null, fd, off, whence);
 }
-/** lseek of a descriptor whose file this realm holds (hostnatives' resident read) */
-export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number, cloexec = false): number => fdDup(null, fd, 0, cloexec);
 export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
 export const javaIsSocketFd = (fd: number): boolean => !!fds.get(fd)?.socket;

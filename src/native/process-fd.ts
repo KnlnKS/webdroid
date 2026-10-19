@@ -1,5 +1,5 @@
 import { E } from "./abi.ts";
-import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaReadFd, javaFdBytes,
+import { fdBase, installFile, openFd, javaOpenFd, javaCloseFd, javaFdBytes,
   O_ACCMODE, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG, openRemoteFifo, type FdStat, type OpenFile } from "./fs.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { isMutablePath, type AttributeChange } from "../shell/file-path.ts";
@@ -127,8 +127,6 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
   if (fd < 0) return null;
   try { return await javaFdBytes(fd); } finally { await javaCloseFd(fd); }
 }
-/** hostnatives' name for javaReadFd, which reads every kind of open file */
-export const processReadFd = javaReadFd;
 
 /** An owner's lease on a range of a file, which outlives the descriptor that took it; `region` names the file. */
 export type ProcessMapping = { size: number; region: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
