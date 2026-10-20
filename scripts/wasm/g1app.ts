@@ -12,7 +12,8 @@ import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve
 import type { WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { fakeAot, loadDexes, world } from "./lib.ts";
+import { fakeAot, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
 

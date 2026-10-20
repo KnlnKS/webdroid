@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { loadDexes, world } from "./lib.ts";
+import { world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";

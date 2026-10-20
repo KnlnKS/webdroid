@@ -7,7 +7,8 @@ import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { WarmWorld, type WarmCall } from "../../src/wasm/link/warmshim.ts";
-import { loadDexes, program, world } from "./lib.ts";
+import { program, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { buildApp } from "../../src/wasm/link/apps.ts";
 import { natives } from "./harness.ts";

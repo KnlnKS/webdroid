@@ -1,5 +1,5 @@
 // Walk every method body in the given APKs; histogram opcodes; validate the walker.
-import { openDexes } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 import { OPS, insnLen } from "../src/jvm/opcodes.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import type { DexFile } from "../src/jvm/dex.ts";
@@ -21,7 +21,7 @@ function scanCallSites(dex: DexFile) {
   }
 }
 for (const path of process.argv.slice(2)) {
-  for (const dex of await openDexes(path)) {
+  for (const dex of loadDexes(path)) {
     const name = dex.name;
     let bodies = 0, units = 0;
     for (let i = 0; i < dex.classDefCount; i++) {

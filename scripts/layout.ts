@@ -4,7 +4,7 @@ import { openApk, dumpXml } from "./lib.ts";
 import { parseAXML, type XmlNode } from "../src/android/axml.ts";
 
 const [apk, target] = process.argv.slice(2);
-const zip = await openApk(apk);
+const zip = openApk(apk);
 const wantId = target.startsWith("0x") ? parseInt(target, 16) : 0;
 
 function has(n: XmlNode, id: number): boolean {

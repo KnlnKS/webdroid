@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { openApk, openDexes, dexesOf } from "../lib.ts";
+import { openApk } from "../lib.ts";
+import { loadDexes } from "../dexes.ts";
+import { dexesOfZip } from "../../src/jvm/dex.ts";
 import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import { Program, reach } from "../../src/jvm/reach.ts";
@@ -19,7 +21,7 @@ export async function inventory(args: string[]): Promise<void> {
   if (!Number.isInteger(sdk) || sdk < 1) throw new Error("--sdk must be a positive integer");
   const cached = `fuzz-cache/android-${sdk}/framework.jar`;
   const frameworkPath = option(args, "--framework", existsSync(cached) ? cached : "vendor/aosp/framework.jar")!;
-  const xml = sdkApiXml(sdk), frameworkDexes = await openDexes(frameworkPath);
+  const xml = sdkApiXml(sdk), frameworkDexes = loadDexes(frameworkPath);
   let catalog = buildCatalog({ sdk, xml, runtime: rt, frameworkDexes });
   if (!args.includes("--no-reached")) {
     const reached: ReachedSurface = { classes: new Map(), methods: new Map(), fields: new Map() };
@@ -28,7 +30,7 @@ export async function inventory(args: string[]): Promise<void> {
     };
     const apks = readdirSync("apks").filter((file) => /\.x?apk$/i.test(file)).sort();
     for (const file of apks) {
-      const zip = await openApk(`apks/${file}`), dexes = dexesOf(zip), program = new Program();
+      const zip = openApk(`apks/${file}`), dexes = dexesOfZip(zip), program = new Program();
       for (const dex of dexes) program.add(dex);
       for (const dex of frameworkDexes) program.add(dex);
       const services: Record<string, string> = {};

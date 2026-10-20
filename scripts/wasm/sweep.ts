@@ -3,7 +3,8 @@
 // Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: pnpm wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
-import { loadDexes, world } from "./lib.ts";
+import { world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";

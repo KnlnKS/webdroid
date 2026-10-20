@@ -25,7 +25,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 import { unzipSync } from "fflate";
-import { constObject, openDexes, writeGenerated } from "./lib.ts";
+import { constObject, writeGenerated } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 import { mountLocalPlatformData, platformJarBytes } from "./aosp.ts";
 import "../src/natives.ts";
 import { loadTier } from "../src/jvm/tier.ts";
@@ -257,7 +258,7 @@ async function recordSettings() {
   }
   const named = new Set<string>();
   const CONFIG_READERS = new Set(["Landroid/provider/DeviceConfig;", "Landroid/provider/DeviceConfigInterface;", "Landroid/provider/Settings$Config;"]);
-  for (const jar of PLATFORM_JARS) for (const dex of await openDexes(`${OUT}/${jar}`)) for (let i = 0; i < dex.classDefCount; i++) {
+  for (const jar of PLATFORM_JARS) for (const dex of loadDexes(`${OUT}/${jar}`)) for (let i = 0; i < dex.classDefCount; i++) {
     const def = dex.classDef(i), strings: string[] = [];
     let reads = false;
     for (const m of [...def.directMethods, ...def.virtualMethods]) {
@@ -314,7 +315,7 @@ async function recordInputDevices() {
 }
 
 // --- verify: every id the framework's own R classes name must resolve in the paired table ---
-const jarDexes = await openDexes(JAR);
+const jarDexes = loadDexes(JAR);
 console.log(`${JAR}: ${jarDexes.length} dex, ${jarDexes.reduce((n, d) => n + d.classDefCount, 0)} classes`);
 
 const tableOf = async (apk: string) =>

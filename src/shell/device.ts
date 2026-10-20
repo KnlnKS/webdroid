@@ -1,7 +1,7 @@
 // Device shell: APK boot, display and configuration, input. AOSP's ActivityThread runs the app over
 // the hosted system services; SurfaceFlinger (surfaceflinger.ts) composes the display.
 
-import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex.ts";
+import { dexesOfZip, isDexEntry } from "../jvm/dex.ts";
 import { rt } from "../jvm/runtime.ts";
 import { appLaunched, beginAppCode, loadAppCode, loadDex, tierReady } from "../jvm/tier.ts";
 import { vfs, apkPath } from "./vfs.ts";
@@ -145,7 +145,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // join the World once the zygote has run, before any of the app's Java
   // the dexes inflate, and the app's code is prepared from them, while the zygote runs
   const dexes = inflateTree(zip, isDexEntry).then(() => {
-    const read = dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], name));
+    const read = dexesOfZip(zip);
     beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName, onStatus);
     return read;
   });

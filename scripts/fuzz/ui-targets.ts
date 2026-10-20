@@ -24,7 +24,7 @@ type Adb = (...args: string[]) => Promise<Buffer>;
 export async function inspectUiApp(apkArg: string): Promise<UiApp> {
   const apk = existsSync(apkArg) ? apkArg : `apks/${apkArg}`;
   if (!existsSync(apk)) throw new Error(`missing APK ${apkArg}`);
-  const manifest = (await openApk(apk))["AndroidManifest.xml"];
+  const manifest = openApk(apk)["AndroidManifest.xml"];
   if (!manifest) throw new Error(`${apk} has no AndroidManifest.xml`);
   const root = parseAXML(manifest), pkg = attrStr(root, "package");
   const application = root.children.find((node) => node.name === "application");

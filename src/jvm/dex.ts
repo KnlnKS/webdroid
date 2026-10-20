@@ -726,3 +726,7 @@ export class DexFile {
     return shift > 0n ? BigInt.asIntN(64, x << shift) >> shift : BigInt.asIntN(64, x);
   }
 }
+
+/** the dex files of a zip tree's classes*.dex entries, in load order; `label` (the archive's path) prefixes their names */
+export const dexesOfZip = (zip: Record<string, Uint8Array>, label?: string): DexFile[] =>
+  dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], label ? `${label}:${name}` : name));

@@ -1,13 +1,14 @@
-import { openApk, dexesOf, dumpXml } from "./lib.ts";
+import { openApk, dumpXml } from "./lib.ts";
+import { dexesOfZip } from "../src/jvm/dex.ts";
 import { parseAXML } from "../src/android/axml.ts";
 import { need } from "./args.ts";
 
 const [path] = need("pnpm inspect <apk>");
-const zip = await openApk(path);
+const zip = openApk(path);
 
 console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 3).join("\n"));
 
-for (const dex of dexesOf(zip)) {
+for (const dex of dexesOfZip(zip)) {
   const name = dex.name;
   const t0 = performance.now();
   const classes: string[] = [];

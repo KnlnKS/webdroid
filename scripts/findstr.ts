@@ -1,9 +1,9 @@
 // pnpm findstr <apk> <needle> — grep an APK's dex string pools.
-import { openDexes } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 
 const [apk, needle] = process.argv.slice(2);
 if (!apk || !needle) { console.error("usage: pnpm findstr <apk> <needle>"); process.exit(2); }
-for (const d of await openDexes(apk)) {
+for (const d of loadDexes(apk)) {
   for (let i = 0; i < d.stringCount; i++) {
     const s = d.string(i);
     if (s.includes(needle)) console.log(`${d.name} #${i}: ${JSON.stringify(s).slice(0, 200)}`);

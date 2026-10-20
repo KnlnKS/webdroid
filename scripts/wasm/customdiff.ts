@@ -3,7 +3,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { loadDexes, program, world } from "./lib.ts";
+import { program, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { ACC, Program } from "../../src/wasm/compiler/program.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { caseLine, compare, genCases } from "./cases.ts";

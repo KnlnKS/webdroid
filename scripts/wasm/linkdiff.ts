@@ -3,7 +3,8 @@
 // common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: pnpm wasm linkdiff
 import { copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadDexes, world } from "./lib.ts";
+import { world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";

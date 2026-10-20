@@ -5,7 +5,8 @@
 //
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
-import { openApk, dexesOf } from "./lib.ts";
+import { openApk } from "./lib.ts";
+import { dexesOfZip } from "../src/jvm/dex.ts";
 import { mountLocalPlatformData } from "./aosp.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import { loadDex, loadTier } from "../src/jvm/tier.ts";
@@ -22,9 +23,9 @@ import { perf } from "../src/perf.ts";
 
 const args = process.argv.slice(2);
 const [apk, lib] = args.filter((a) => !a.startsWith("--"));
-const zip = await openApk(apk);
+const zip = openApk(apk);
 await loadTier();
-for (const dex of dexesOf(zip)) loadDex(dex);
+for (const dex of dexesOfZip(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
 mountLocalPlatformData();

@@ -6,11 +6,12 @@
 // and interface sites. With --framework the AOSP dex joins the program and the report becomes
 // the native methods this apk would need if those classes ran as AOSP bytecode.
 import { globSync, readFileSync, writeFileSync } from "node:fs";
-import { openApk, openDexes, dexesOf } from "./lib.ts";
+import { openApk } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
+import { dexesOfZip, type DexFile } from "../src/jvm/dex.ts";
 import { argv } from "./args.ts";
 import { Program, reach } from "../src/jvm/reach.ts";
 import { rootsOf, reflectiveRoots } from "../src/jvm/roots.ts";
-import type { DexFile } from "../src/jvm/dex.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import "../src/natives.ts";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";
@@ -22,15 +23,15 @@ if (!apk) throw new Error("usage: pnpm run audit <apk> [--framework] [--all] [--
 const limit = parseInt(opt("--limit", "40")!);
 
 const t0 = performance.now();
-const zip = await openApk(apk);
-const appDexes = dexesOf(zip);
+const zip = openApk(apk);
+const appDexes = dexesOfZip(zip);
 const p = new Program();
 for (const d of appDexes) p.add(d);
 const appClasses = p.size;
 
 let fwDexes: DexFile[] = [];
 if (flag("--framework")) {
-  fwDexes = await openDexes("vendor/aosp/framework.jar");
+  fwDexes = loadDexes("vendor/aosp/framework.jar");
   for (const d of fwDexes) p.add(d);
 }
 

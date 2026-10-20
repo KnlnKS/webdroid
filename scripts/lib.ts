@@ -1,8 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { DexFile } from "../src/jvm/dex.ts";
-import { dexesFrom } from "./dexes.ts";
 import { writeWhole } from "./generated.ts";
-export { dexesOf } from "./dexes.ts";
 import { openInstall } from "../src/shell/install.ts";
 import type { XmlNode } from "../src/android/axml.ts";
 
@@ -10,12 +7,8 @@ type Zip = Record<string, Uint8Array>;
 
 /** an apk or a split install, as the one merged tree the shell boots — entries materialise on
  *  read, so there is nothing for a caller to filter down to */
-export async function openApk(path: string): Promise<Zip> {
+export function openApk(path: string): Zip {
   return openInstall(new Uint8Array(readFileSync(path))).zip;
-}
-
-export async function openDexes(path: string): Promise<DexFile[]> {
-  return dexesFrom(new Uint8Array(readFileSync(path)), path);
 }
 
 export function dumpXml(n: XmlNode, maxDepth = Infinity, depth = 0, out: string[] = []): string[] {
