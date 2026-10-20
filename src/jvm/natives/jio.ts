@@ -10,8 +10,11 @@ import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal
 import { addressSize } from "./jvmruntime.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared, trackSharedMap } from "../../native/mappings.ts";
-import { openFd as openFile, javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
-  javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fs.ts";
+import { fdFile } from "../../native/fs.ts";
+import { openFd as openFile, javaFdSource, javaIsSocketFd, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
+  javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fd.ts";
+import { inoOf } from "../../native/kernel.ts";
+import { fdLease } from "../../android/fd-scope.ts";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));

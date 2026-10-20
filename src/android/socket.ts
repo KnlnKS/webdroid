@@ -5,17 +5,16 @@ import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { jarray, u8 } from "../jvm/abi.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os.ts";
-import { E, ERRSTR } from "../native/abi.ts";
-import { javaDup2Fd, readSocket, dropFile, socketOf, POLLIN, POLLERR } from "../native/fs.ts";
+import { E, ERRSTR, POLLIN, POLLERR } from "../native/abi.ts";
+import { javaDup2Fd, dropFile } from "../native/fd.ts";
 import { pollEntries, type PollEntry } from "../native/poll.ts";
 import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../native/socket/abi.ts";
-import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, type Socket, type Received, type Accepted } from "../native/socket/core.ts";
+import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, socketOf, type Socket, type Received, type Accepted } from "../native/socket/core.ts";
 import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet.ts";
 import { socketCreate, socketPair } from "../native/socket/syscalls.ts";
 import {
-  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv6, type Endpoint,
+  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv4, parseIpv6, type Endpoint,
 } from "../native/net-address.ts";
-import { parseIpv4 } from "../shell/relay.ts";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";

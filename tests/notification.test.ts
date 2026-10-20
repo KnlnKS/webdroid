@@ -12,7 +12,8 @@ import { NotificationStore, notificationStore, useNotificationStore, notificatio
 import { PROCESS_PID } from "../src/android/os.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
-import { javaOpenFd, javaReadFd, openFd } from "../src/native/fs.ts";
+import { javaOpenFd } from "../src/native/fs.ts";
+import { javaReadFd, openFd } from "../src/native/fd.ts";
 import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
 import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";

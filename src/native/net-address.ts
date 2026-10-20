@@ -1,5 +1,5 @@
 // Address parsing, host resolution and interfaces shared by sockets, libcore and netd.
-import { syntheticAddress, syntheticHost, nameExists, ipv4Text, parseIpv4 } from "../shell/relay.ts";
+import { syntheticAddress, syntheticHost, nameExists } from "../shell/relay.ts";
 import { sameBytes } from "../jvm/abi.ts";
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
@@ -25,6 +25,19 @@ export const isAny = (a: ArrayLike<number>): boolean => { for (let i = 0; i < a.
 export const isLoopback = (a: ArrayLike<number>): boolean => a.length === 4 ? a[0] === 127 : sameBytes(a, V6_LOOPBACK);
 export const isMulticast = (a: ArrayLike<number>): boolean => a.length === 4 ? a[0] >= 224 && a[0] < 240 : a[0] === 0xff;
 export const addressKey = (a: ArrayLike<number>) => Array.from(a).join(".");
+/** an address's family: AF_INET for 4 bytes, AF_INET6 for 16 */
+export const familyOf = (a: ArrayLike<number>): number => a.length === 4 ? AF_INET : AF_INET6;
+
+export type Ipv4 = [number, number, number, number];
+/** inet_pton(AF_INET): dotted-decimal, 4 bytes, or null */
+export function parseIpv4(text: string): Ipv4 | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (!match) return null;
+  const bytes: Ipv4 = [+match[1], +match[2], +match[3], +match[4]];
+  return bytes.every((byte) => byte <= 255) ? bytes : null;
+}
+export const ipv4Key = (bytes: ArrayLike<number>): number => ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
 
 /** RFC 5952 text: lower-case hex, the longest run of two or more zero groups as "::" */
 function ipv6Text(b: ArrayLike<number>): string {

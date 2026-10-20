@@ -5,7 +5,8 @@ import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { lookupHost } from "./host.ts";
 import { mem } from "./mem.ts";
-import { javaBytesFd, javaCloseFd } from "./fs.ts";
+import { javaBytesFd } from "./fs.ts";
+import { javaCloseFd } from "./fd.ts";
 import { mediaInit } from "./media.ts";
 
 // 0.3 seconds of 32x32 red H.264 (10 fps, key interval 2, no B frames) and 8 kHz AAC.

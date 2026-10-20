@@ -5,7 +5,7 @@ import { after, callOn, scall, vcall, JThread } from "../jvm/natives/jentry.ts";
 import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { processExited } from "../process-exit.ts";
 import { binderThread } from "./binder.ts";
-import { javaFdSource } from "../native/fs.ts";
+import { javaFdSource } from "../native/fd.ts";
 import { SliceFile, type FileSource } from "../shell/lazyfile.ts";
 import { postMain } from "./mainloop.ts";
 

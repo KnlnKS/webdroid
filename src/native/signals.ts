@@ -7,7 +7,7 @@
 import { mem } from "./mem.ts";
 import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
-import { fail } from "./libc.ts";
+import { fail, wrapped } from "./kernel.ts";
 import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu.ts";
 import { tidOf } from "./pthread.ts";
 import { dieOfSignal } from "./crash.ts";
@@ -61,9 +61,9 @@ interface SigactionLayout { size: number; handler: number; mask: number; flags: 
 const SIGACTION: SigactionLayout = { size: 16, handler: 0, mask: 4, flags: 8, wideMask: false };
 const SIGACTION64: SigactionLayout = { size: 20, handler: 0, mask: 4, flags: 12, wideMask: true };
 /** one signal's handler exchanged through a struct sigaction laid out as given */
-function exchangeAction(cpu: Cpu, a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
+function exchangeAction(a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
   const sig = a.i(), act = a.p(), old = a.p(), prev = dispositions.get(sig);
-  if (sig < 1 || sig > 64 || act && (sig === SIGKILL || sig === SIGSTOP)) return fail(cpu, E.INVAL);
+  if (sig < 1 || sig > 64 || act && (sig === SIGKILL || sig === SIGSTOP)) return -E.INVAL;
   if (old) {
     mem.memset(old, 0, size);
     stp(old + handlerAt, handlerAddress(sig));
@@ -77,8 +77,8 @@ function exchangeAction(cpu: Cpu, a: ArgReader, { size, handler: handlerAt, flag
 }
 
 /** kill/tgkill/raise: signal 0 only probes the target */
-export function signalThread(cpu: Cpu, target: Cpu, sig: number): number {
-  if (sig < 0 || sig > 64) return fail(cpu, E.INVAL);
+export function signalThread(target: Cpu, sig: number): number {
+  if (sig < 0 || sig > 64) return -E.INVAL;
   if (sig) target.kill(sig);
   return 0;
 }
@@ -98,12 +98,12 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
     stWord(old + sizeAt, previous.size);
   }
   if (!next) return 0;
-  if (cpu.alternateActive) return fail(cpu, E.PERM);
+  if (cpu.alternateActive) return -E.PERM;
   const flags = mem.ld32(next + PTR) >>> 0;
-  if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return fail(cpu, E.INVAL);
+  if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return -E.INVAL;
   if (flags === SS_DISABLE) { cpu.alternateStack = { sp: 0n, size: 0n, flags }; return 0; }
   const size = ldWord(next + sizeAt);
-  if (size < 2048n) return fail(cpu, E.NOMEM);
+  if (size < 2048n) return -E.NOMEM;
   const sp = ldWord(next);
   cpu.alternateStack = { sp, size, flags };
   return 0;
@@ -117,22 +117,22 @@ export const killLog: string[] = [];
  *  boundary when it is running */
 export const SIGNAL_SYSCALLS: Record<string, HostFn> = {
   // the raw syscall's struct sigaction is the kernel's (handler, flags, restorer, mask), not bionic's
-  rt_sigaction: (cpu, a) => exchangeAction(cpu, a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true }),
-  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); return signalThread(cpu, t, sig); },
-  kill: (cpu, a) => { a.i(); return signalThread(cpu, cpu, a.i()); },
-  sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
+  rt_sigaction: (_c, a) => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true }),
+  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return -E.SRCH; return signalThread(t, sig); },
+  kill: (cpu, a) => { a.i(); return signalThread(cpu, a.i()); },
+  sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(-E.INTR); }; }); },
   sigaltstack,
 };
 /** the ARM32 libc's own signal functions */
 export const SIGNAL_LIBC: Record<string, HostFn> = {
   // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
   __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
-  sigaction: (cpu, a) => exchangeAction(cpu, a, SIGACTION),
-  sigaction64: (cpu, a) => exchangeAction(cpu, a, SIGACTION64),
+  sigaction: wrapped((_c, a) => exchangeAction(a, SIGACTION)),
+  sigaction64: wrapped((_c, a) => exchangeAction(a, SIGACTION64)),
   // bionic's signal(): sigaction with SA_RESTART; SIG_ERR and EINVAL for SIGKILL, SIGSTOP or a bad number
   signal: (cpu, a) => {
     const sig = a.i(), fn = a.p(), prev = handlerAddress(sig);
-    if (sig < 1 || sig > 64 || sig === SIGKILL || sig === SIGSTOP) { fail(cpu, E.INVAL); return -1; }
+    if (sig < 1 || sig > 64 || sig === SIGKILL || sig === SIGSTOP) return fail(cpu, E.INVAL);
     dispose(sig, fn, SA_RESTART, 0n);
     return prev;
   },
@@ -144,7 +144,7 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
     if (r === 0 && sig) t!.kill(sig);
     return r;
   },
-  raise: (cpu, a) => signalThread(cpu, cpu, a.i()),
+  raise: wrapped((cpu, a) => signalThread(cpu, a.i())),
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
   sigwait: () => new Promise<never>(() => {}),

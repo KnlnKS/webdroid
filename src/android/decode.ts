@@ -12,7 +12,7 @@ import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio.ts";
 import { fdInt, readStreamFully } from "../jvm/natives/jio.ts";
 import { u8, concat, unshared } from "../jvm/abi.ts";
-import { javaFdBytes, javaLseekFd } from "../native/fs.ts";
+import { javaFdBytes, javaLseekFd } from "../native/fd.ts";
 import { assetBytes } from "./assetmanager.ts";
 import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL, type RGBA } from "./bitmap.ts";
 import { decodeHeif } from "./heif.ts";

@@ -11,7 +11,7 @@ import { hostStub } from "./binder.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { uuidDefault } from "./os.ts";
 import { packages } from "./packages.ts";
-import { logLine } from "../native/libc.ts";
+import { logLine } from "../native/kernel.ts";
 
 const SHARED = "/sdcard", USER = 0;
 const VI = "android/os/storage/VolumeInfo";

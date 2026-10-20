@@ -5,7 +5,7 @@ import { createCodec, type Codec, type Info } from "../android/media-codec.ts";
 import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { javaCloseFd, javaDupFd } from "./fs.ts";
+import { javaCloseFd, javaDupFd } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
 import { windowOf } from "./libandroid.ts";
 import { mem, anchor } from "./mem.ts";

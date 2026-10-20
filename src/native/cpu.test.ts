@@ -200,8 +200,7 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
     savedSp = BigInt(cpu.sp >>> 0);
     expect(cpu.signalInterrupt).not.toBeNull();
     cpu.kill(12);
-    expect(await result).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(4);
+    expect(await result).toBe(-4);
     expect(order).toEqual(["wait", "handler"]);
     expect(contextSp).toBe(savedSp);
     expect(contextPc).toBe(BigInt(RET_SENTINEL));
@@ -406,8 +405,7 @@ test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signa
     expect(await cpu.call(entry, [set, info, timeout, 8])).toBe(12);
     expect(mem.ld32(info)).toBe(12);
     expect(mem.ld64(timeout)).toBe(0n);
-    expect(await cpu.call(entry, [set, 0, timeout, 8])).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    expect(await cpu.call(entry, [set, 0, timeout, 8])).toBe(-E.AGAIN);
     mem.memset(info, 0, 128);
     const waiting = cpu.call(entry, [set, info, 0, 8]);
     expect(cpu.sigQueued).not.toBeNull();

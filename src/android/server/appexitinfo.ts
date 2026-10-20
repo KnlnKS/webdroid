@@ -8,7 +8,7 @@ import { PROCESS_PID, PROCESS_UID, processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { foreground } from "./atm.ts";
-import { logLine } from "../../native/libc.ts";
+import { logLine } from "../../native/kernel.ts";
 import { persisted } from "../../shell/device-storage.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 

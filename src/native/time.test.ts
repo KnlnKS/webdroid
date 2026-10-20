@@ -3,8 +3,9 @@ import { mainThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { defineHost, ldp, stp } from "./host.ts";
 import { libCalls } from "./calls.testkit.ts";
-import { libcInit, TM, readTs, writeTs } from "./libc.ts";
-import { KLAYOUT, kernelInit } from "./syscall.ts";
+import { libcInit, TM } from "./libc.ts";
+import { KLAYOUT, readTs, writeTs } from "./kernel.ts";
+import { kernelInit } from "./syscall.ts";
 import { mem } from "./mem.ts";
 
 test("native time fields preserve signed longs and the process ABI width", async () => {

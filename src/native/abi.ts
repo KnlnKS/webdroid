@@ -36,3 +36,9 @@ export const ERRSTR: Record<number, string> = {
 };
 /** strerror(3): bionic's text for errno `e` */
 export const strerror = (e: number): string => ERRSTR[e] ?? `Unknown error ${e}`;
+
+// open(2), poll(2) and stat(2)'s flags, as the kernel's uapi spells them for ARM
+export const O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800;
+export const O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000, AT_FDCWD = -100;
+export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
+export const S_IFMT = 0xf000, S_IFSOCK = 0xc000, S_IFREG = 0x8000, S_IFDIR = 0x4000, S_IFCHR = 0x2000, S_IFIFO = 0x1000;

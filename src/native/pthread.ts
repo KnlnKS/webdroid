@@ -12,8 +12,8 @@ import { RET_SENTINEL, E } from "./abi.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { logUncaught, dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { threadExit } from "../jvm/natives/jentry.ts";
-import { readTs, fail, clockTime, utf8 } from "./libc.ts";
-import { KLAYOUT } from "./syscall.ts";
+import { readTs, fail, clockTime, KLAYOUT } from "./kernel.ts";
+import { utf8 as codec } from "../jvm/abi.ts";
 import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock.ts";
 
 /** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
@@ -139,7 +139,7 @@ const fstat = (cpu: Cpu, k: string) => { let r = futexStats.get(cpu.name); if (!
 export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number): number | Promise<number> {
   const cmd = op & 0x7f;
   if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
-    if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return fail(cpu, E.AGAIN); }
+    if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return -E.AGAIN; }
     const ms = timed(!ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - clockTime(op & 256 ? 0 : 1));
     const q = futexes.ensure(addr, () => []);
     fstat(cpu, ms === null ? "wait" : "timedwait");
@@ -155,8 +155,8 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
         if (cpu.signalInterrupt === interrupt) cpu.signalInterrupt = previous;
         r(result);
       };
-      const w = (woken: boolean) => { fstat(cpu, woken ? "woken" : "timeout"); finish(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
-      const interrupt = () => { fstat(cpu, "interrupted"); finish(fail(cpu, E.INTR)); };
+      const w = (woken: boolean) => { fstat(cpu, woken ? "woken" : "timeout"); finish(woken ? 0 : -E.TIMEDOUT); };
+      const interrupt = () => { fstat(cpu, "interrupted"); finish(-E.INTR); };
       cpu.signalInterrupt = interrupt;
       q.push(w);
       const id = ms === null ? undefined : parkTimeout(() => w(false), Math.max(0, ms));
@@ -169,7 +169,7 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
     while (q?.length && n < val) { q.shift()!(true); n++; }
     return n;
   }
-  return fail(cpu, E.NOSYS);
+  return -E.NOSYS;
 }
 
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
@@ -256,8 +256,8 @@ const CLONE_THREAD = 0x10000, CLONE_SETTLS = 0x80000, CLONE_PARENT_SETTID = 0x10
  *  process, so fork, vfork and posix_spawn (and popen and system over them) fail as at the
  *  kernel's process limit: EAGAIN. */
 export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: number, tls: bigint, ctid: number): number {
-  if (!(flags & CLONE_THREAD)) return fail(parent, E.AGAIN);
-  if (!stack) return fail(parent, E.INVAL);
+  if (!(flags & CLONE_THREAD)) return -E.AGAIN;
+  if (!stack) return -E.INVAL;
   const cpu = newThread(parent);
   cpu.forkFrom(parent, stack);
   if (flags & CLONE_SETTLS) { cpu.tlsVa = tls; cpu.libc = "guest"; }
@@ -325,7 +325,7 @@ export function pthreadInit(): void {
     pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
     pthread_setname_np: (_c, a) => {
       const handle = a.p(), name = a.str();
-      if (utf8(name).length >= 16) return E.RANGE;
+      if (codec.enc.encode(name).length >= 16) return E.RANGE;
       const thread = cpuByTid(tidOf(handle));
       if (!thread) return E.SRCH;
       nameThread(thread.jthread, name);
@@ -336,7 +336,7 @@ export function pthreadInit(): void {
       if (size < 16) return E.RANGE;
       const thread = cpuByTid(tidOf(handle));
       if (!thread) return E.SRCH;
-      const name = utf8(thread.name).subarray(0, 15);
+      const name = codec.enc.encode(thread.name).subarray(0, 15);
       mem.write(out, name); mem.st8(out + name.length, 0);
       return 0;
     },

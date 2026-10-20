@@ -9,7 +9,8 @@ import { netInit, socketCreate } from "./socket/syscalls.ts";
 import type { Socket, Accepted } from "./socket/core.ts";
 import { SOL_SOCKET, type SocketAddress } from "./socket/abi.ts";
 import { E } from "./abi.ts";
-import { javaCloseFd, readSocket, socketOf } from "./fs.ts";
+import { javaCloseFd } from "./fd.ts";
+import { readSocket, socketOf } from "./socket/core.ts";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address.ts";
 import { loopbackFetch } from "../shell/devicefetch.ts";
 import { kernelCalls, libCalls } from "./calls.testkit.ts";
@@ -112,8 +113,7 @@ test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and r
     mem.st32(length, 16);
     expect(await call("getsockname", receiver, sockaddr, length)).toBe(0);
     message(0, 0, data, 4);
-    expect(await call("recvmsg", receiver, msg, 0)).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    expect(await call("recvmsg", receiver, msg, 0)).toBe(-E.AGAIN);
     mem.write(data, [9, 8, 7, 6]);
     message(sockaddr, 16, data, 4);
     expect(await call("sendmsg", sender, msg, 0)).toBe(4);
@@ -157,13 +157,12 @@ test("AF_UNIX passes descriptors and credentials, times out receives and breaks 
     // SO_RCVTIMEO: EAGAIN once it passes
     mem.st64(option, 0n); mem.st64(option + 8, 20_000n);
     expect(await call("setsockopt", b, 1, 20 /* SO_RCVTIMEO */, option, 16)).toBe(0);
-    expect(await call("read", b, data, 4)).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    expect(await call("read", b, data, 4)).toBe(-E.AGAIN);
     // EPIPE once the reader is gone, raising SIGPIPE (blocked, so pending) unless MSG_NOSIGNAL
     expect(await call("close", b)).toBe(0);
-    expect(await call("sendto", a, data, 1, 0x4000 /* MSG_NOSIGNAL */, 0, 0)).toBe(-1);
-    expect([mem.ld32(cpu.errnoAddr), cpu.signals.has(13)]).toEqual([E.PIPE, false]);
-    expect(await call("write", a, data, 1)).toBe(-1);
+    expect(await call("sendto", a, data, 1, 0x4000 /* MSG_NOSIGNAL */, 0, 0)).toBe(-E.PIPE);
+    expect(cpu.signals.has(13)).toBe(false);
+    expect(await call("write", a, data, 1)).toBe(-E.PIPE);
     expect(cpu.signals.has(13)).toBe(true);
     for (const fd of [a, readEnd, received]) expect(await call("close", fd)).toBe(0);
   } finally { mem.free(scratch); cpu.dispose(); setA64(false); }

@@ -10,7 +10,7 @@ import { mem } from "./mem.ts";
 import { NativeFault, BadAddress } from "./core.ts";
 import { core, jitDrain, TLS_KEYS } from "./core.ts";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host.ts";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
+import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
 import { perf } from "../perf.ts";
 import { answeringFor, yieldToLoop } from "../jvm/yield.ts";
 import { procIdentity, processTid } from "../shell/procfs.ts";
@@ -730,13 +730,11 @@ export class Cpu {
   /** a system call's access through a bad user pointer fails as copy_from_user does */
   private copyFault(e: unknown): HostRet {
     if (!(e instanceof BadAddress)) throw e;
-    return onBadAddress(this, e, true);
+    return -E.FAULT;
   }
-  /** the kernel's convention: the result in x0/r0, a failure as -errno (the wrapper bodies
-   *  answer -1 with errno set, which is turned back into what the kernel would have said) */
+  /** the kernel's convention: the result in x0/r0, a failure as -errno */
   private syscallReturn(ret: HostRet): void {
-    let v: number | bigint = typeof ret === "number" || typeof ret === "bigint" ? ret : 0;
-    if (v === -1 || v === -1n) { const e = mem.ld32(this.errnoAddr); if (e) v = -e; }
+    const v = typeof ret === "number" || typeof ret === "bigint" ? ret : 0;
     if (typeof v === "bigint") { this.w[0] = Number(v & 0xffffffffn) | 0; this.w[1] = Number((v >> 32n) & 0xffffffffn) | 0; }
     else { this.w[0] = v | 0; this.w[1] = v < 0 ? -1 : 0; }
   }

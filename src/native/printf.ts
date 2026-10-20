@@ -1,6 +1,8 @@
 // C99 printf/scanf formatting over an ArgReader (registers+stack, a va_list, or a JS array in tests).
 
 import type { ArgReader } from "./host.ts";
+import { mem } from "./mem.ts";
+import { utf8 } from "../jvm/abi.ts";
 
 function pad(s: string, width: number, left: boolean, zero: boolean): string {
   if (s.length >= width) return s;
@@ -210,4 +212,26 @@ export function scan(input: string, fmt: string, out: ScanSink): number {
     return count;
   }
   return count;
+}
+
+/** `s` as snprintf leaves it in the `n` bytes at `d`; its whole length */
+export function snprintfInto(d: number, n: number, s: string): number {
+  const b = utf8.enc.encode(s);
+  if (n > 0) { const k = Math.min(b.length, n - 1); mem.write(d, b.subarray(0, k)); mem.st8(d + k, 0); }
+  return b.length;
+}
+/** where scanf's conversions land: the next pointer argument each */
+export function scanSink(a: { p(): number }) {
+  return (kind: string, v: unknown): number => {
+    const dst = a.p();
+    if (!dst) return 0;
+    if (kind === "i" || kind === "n") mem.st32(dst, v as number);
+    else if (kind === "h") mem.st16(dst, v as number);
+    else if (kind === "b") mem.st8(dst, v as number);
+    else if (kind === "l") mem.st64(dst, v as bigint);
+    else if (kind === "f") mem.stf32(dst, v as number);
+    else if (kind === "d") mem.stf64(dst, v as number);
+    else if (kind === "s") mem.putCstr(dst, v as string);
+    return 0;
+  };
 }

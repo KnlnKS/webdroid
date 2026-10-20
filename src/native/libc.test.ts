@@ -95,8 +95,7 @@ test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", 
   const cpu = new Cpu(new JThread(), "syncfs-test");
   try {
     expect(await cpu.call(syscall, [267, 0])).toBe(0);
-    expect(await cpu.call(syscall, [267, -1])).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(9);
+    expect(await cpu.call(syscall, [267, -1])).toBe(-9);
   } finally { cpu.dispose(); setA64(false); }
 });
 
@@ -104,8 +103,7 @@ test("ARM64 wait4 reports that no guest child exists", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "wait4-test");
   try {
-    expect(await cpu.call(syscall, [260, -1, 0, 0, 0])).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(10);
+    expect(await cpu.call(syscall, [260, -1, 0, 0, 0])).toBe(-10);
   } finally { cpu.dispose(); setA64(false); }
 });
 

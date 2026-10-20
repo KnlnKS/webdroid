@@ -1,12 +1,13 @@
 // The socket core every address family shares (inet.ts, unix.ts). A socket is the open file behind
-// its descriptors (fs.ts), as Linux's struct socket is, so dup, close, fcntl, poll, epoll and
+// its descriptors (fd.ts), as Linux's struct socket is, so dup, close, fcntl, poll, epoll and
 // SCM_RIGHTS treat it as any other. Its operations answer -errno and take JS values; the kernel's
 // socket calls (syscalls.ts) and libcore's (android/socket.ts) adapt them.
 
-import { E } from "../abi.ts";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock.ts";
-import type { OpenFile } from "../fs.ts";
-import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
+import { E, O_CLOEXEC, O_NONBLOCK, O_RDWR, S_IFSOCK } from "../abi.ts";
+import { guestNow } from "../../guest-clock.ts";
+import { ANON, dropFile, installFile, newFile, openFd, type FileOps, type OpenFile } from "../fd.ts";
+import { msLeft, waitUntil } from "../poll.ts";
+import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, MSG_DONTWAIT, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
 
 export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8, SO_LINGER = 13, SO_PASSCRED = 16;
 export const SO_PEERCRED = 17, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, SO_BINDTODEVICE = 25, SO_ACCEPTCONN = 30, SO_PROTOCOL = 38, SO_DOMAIN = 39;
@@ -220,19 +221,56 @@ export abstract class Socket {
 
 /** Wait until `attempt` answers (anything but null), the socket's `timeoutOption` (SO_RCVTIMEO or
  *  SO_SNDTIMEO) elapses (EAGAIN) or the descriptor waited on stops naming it (EBADF). */
-export function block<T>(socket: Socket, named: () => boolean, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
-  return new Promise((resolve) => {
-    const ms = socket.option(SOL_SOCKET, timeoutOption);
-    let timer: GuestTimer | undefined, unsubscribe: (() => void) | undefined;
-    const done = (value: T | number) => { clearGuestTimeout(timer); unsubscribe?.(); resolve(value); };
-    const retry = () => {
-      unsubscribe?.(); unsubscribe = undefined;
-      if (!named()) return done(-E.BADF);
-      const result = attempt();
-      if (result !== null) return done(result);
-      unsubscribe = socket.watch(retry);
-    };
-    if (ms > 0) timer = setGuestTimeout(() => done(-E.AGAIN), ms);
-    unsubscribe = socket.watch(retry);
-  });
+export async function block<T>(socket: Socket, named: () => boolean, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
+  const ms = socket.option(SOL_SOCKET, timeoutOption), timeout = ms > 0 ? ms : -1, deadline = guestNow() + timeout;
+  const subscribe = (wake: () => void) => socket.watch(wake);
+  for (;;) {
+    if (!await waitUntil(subscribe, msLeft(timeout, deadline))) return -E.AGAIN;
+    if (!named()) return -E.BADF;
+    const result = attempt();
+    if (result !== null) return result;
+  }
+}
+
+/** a received message's bytes alone, the open files it passed dropped */
+const lengthOf = (r: Received | number): number => {
+  if (typeof r === "number") return r;
+  r.rights.forEach(dropFile);
+  return r.length;
+};
+/** a socket's open file: read(2) and write(2) are receive and send without addresses */
+const SOCKET: FileOps = {
+  ...ANON,
+  mode: S_IFSOCK | 0o777,
+  read(f, target, at, n, _off, fd) {
+    const socket = f.socket!, now = socket.receive(fd, target.subarray(at, at + n), MSG_DONTWAIT) as Received | number;
+    if (now !== -E.AGAIN || socket.nonblock) return lengthOf(now);
+    const into = new Uint8Array(n);
+    return Promise.resolve(socket.receive(fd, into, 0)).then((r) => typeof r === "number" ? r : into.subarray(0, lengthOf(r)));
+  },
+  write: (f, bytes) => f.socket!.send(bytes, null, null),
+  poll: (f, events) => f.socket!.poll(events),
+  watch: (f, wake) => f.socket!.watch(wake),
+  available: (f) => f.socket!.available(),
+  close: (f) => f.socket!.close(),
+};
+/** a new socket's descriptor, the lowest free; `flags` SOCK_NONBLOCK and SOCK_CLOEXEC */
+export function installSocket(socket: Socket, flags: number): number {
+  socket.file = newFile(SOCKET, "socket", O_RDWR | flags & O_NONBLOCK);
+  socket.file.socket = socket;
+  return installFile(socket.file, !!(flags & O_CLOEXEC));
+}
+/** the socket `fd` names, or EBADF, or ENOTSOCK for another open file */
+export function socketOf(fd: number): Socket | number {
+  const f = openFd(fd);
+  return f?.socket ?? (f ? -E.NOTSOCK : -E.BADF);
+}
+/** while descriptor `fd` names `socket`: what a socket call waiting on it checks */
+export const naming = (fd: number, socket: Socket) => (): boolean => openFd(fd)?.socket === socket;
+/** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
+export function readSocket(fd: number, target: Uint8Array, flags = 0): number | Promise<number> {
+  const s = socketOf(fd);
+  if (typeof s === "number") return s;
+  const r = s.receive(fd, target, flags);
+  return r instanceof Promise ? r.then(lengthOf) : lengthOf(r);
 }

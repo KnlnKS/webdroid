@@ -4,7 +4,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
 import type { RawData, WebSocket } from "ws";
-import { parseIpv4 } from "./src/shell/relay.ts";
+import { parseIpv4 } from "./src/native/net-address.ts";
 import { tcpReady, type TcpTarget } from "./src/shell/serve-routes.ts";
 
 const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;

@@ -17,7 +17,9 @@ import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaLseekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, renamePath, makeFifo, openFd } from "../src/native/fs.ts";
+import { FS_SYSCALLS, javaOpenFd } from "../src/native/fs.ts";
+import { javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, openFd } from "../src/native/fd.ts";
+import { FdScope } from "../src/android/fd-scope.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
@@ -26,7 +28,7 @@ import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descrip
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { descriptorTransport, isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
-import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path.ts";
+import { canonicalFilePaths, filePathTransport, renamePath, makeFifo } from "../src/shell/file-path.ts";
 
 
 describe("android-pfd", () => {
@@ -56,6 +58,9 @@ describe("android-pfd", () => {
 });
 
 describe("file-descriptor", () => {
+  /** descriptor `token` of session `from` passed to session `to`, as a Parcel stages and receives it */
+  const pass = async (kernel: FileDescriptors, calls: DescriptorCalls, from: number, token: number, to: number) =>
+    kernel.receive(from, await calls.fileDescriptor({kind:"stage",fd:token}) as number, to);
   const FD = "()Ljava/io/FileDescriptor;";
 
   test("canonical mapping leases retain live ashmem aliases, protection and independent FD lifetime", async () => {
@@ -72,7 +77,7 @@ describe("file-descriptor", () => {
       const a = acquired.lease;
       expect(await vcall(shared,"setProtect","(I)Z",1)).toBe(1);
       expect(await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3})).toBe(-E.PERM);
-      const duplicate = await kernel.duplicateTo(1002,token,1002);
+      const duplicate = await pass(kernel,clients[1],1002,token,1002);
       const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1});
       if (typeof alias === "number") throw new Error(`mappingAcquire: ${alias}`);
       const b = alias.lease;
@@ -266,11 +271,11 @@ describe("file-descriptor", () => {
       expect(await b({kind:"open",path,flags:2})).toBe(-E.ACCES);
       const fd = (await a({kind:"open",path,flags:2}) as {token: number}).token;
       expect(await owner.receive(1001,fd,1002)).toBe(-E.BADF);
-      const copy = await owner.duplicateTo(1001,fd,1001);
+      const copy = await pass(owner,source,1001,fd,1001);
       await a({kind:"fcntl",fd:copy,command:2,arg:1});
       expect(await a({kind:"fcntl",fd:copy,command:1,arg:0})).toBe(1);
       expect(await a({kind:"fcntl",fd,command:1,arg:0})).toBe(0);
-      const passed = await owner.duplicateTo(1001,copy,1002);
+      const passed = await pass(owner,source,1001,copy,1002);
       expect(passed).toBeGreaterThan(0);
       expect(await b({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(1));
       expect(await a({kind:"read",fd,length:1})).toEqual(Uint8Array.of(2));
@@ -324,13 +329,13 @@ describe("file-descriptor", () => {
     const a = owner.session(1001,() => 0), b = owner.session(1002,() => 0);
     try {
       const fd = (await a.fileDescriptor({kind:"open",path,flags:0}) as {token: number}).token;
-      const passed = await owner.duplicateTo(1001,fd,1002);
+      const passed = await pass(owner,a,1001,fd,1002);
       const staged = await a.fileDescriptor({kind:"stage",fd});
       const read = a.fileDescriptor({kind:"read",fd,length:2});
       await started;
       const receive = owner.receive(1001,staged,1002);
       const position = b.fileDescriptor({kind:"seek",fd:passed,offset:0,whence:1});
-      const duplicate = owner.duplicateTo(1002,passed,1002);
+      const duplicate = pass(owner,b,1002,passed,1002);
       owner.close(1001); release();
       expect(await read).toBe(-E.BADF);
       expect(await receive).toBe(-E.BADF);
@@ -735,10 +740,12 @@ describe("rename", () => {
     test("Java and native renames carry directory entries", async () => {
       vfs.write("/data/t/old/sub/x", new Uint8Array([4]));
       vfs.mkdir("/data/t/old/empty");
+      const made = vfs.mtime("/data/t/old/empty");
       expect(await vcall(await newFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", await newFile("/data/t/new"))).toBe(1);
       expect(vfs.exists("/data/t/old")).toBe(false);
       expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
       expect(vfs.isDir("/data/t/new/empty")).toBe(true);
+      expect(vfs.mtime("/data/t/new/empty")).toBe(made);
       expect(renamePath("/data/t/new", "/data/t/new/inner")).toBe(-E.INVAL);
     });
   });

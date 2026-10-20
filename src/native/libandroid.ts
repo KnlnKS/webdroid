@@ -11,11 +11,12 @@ import type { Cpu } from "./cpu.ts";
 import { onMain } from "../android/mainloop.ts";
 import { after, mainThread } from "../jvm/natives/jentry.ts";
 import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
-import { nativePoll } from "./poll.ts";
+import { msLeft, pollEntries, type PollEntry } from "./poll.ts";
+import { guestNow } from "../guest-clock.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 import { nativeAssets } from "../android/res.ts";
 import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os.ts";
-import { kernelResult } from "./libc.ts";
+import { kernelResult } from "./kernel.ts";
 
 // ── ANativeWindow: window.h's struct per surface, as a library built against <system/window.h> calls its function pointers
 // (Filament's perform(NATIVE_WINDOW_GET_NEXT_FRAME_ID)). The window has no buffers to dequeue: its frames come from EGL or lock/unlockAndPost.
@@ -166,17 +167,17 @@ const looperEvents = (events: number) => (events & 1) | ((events & (4 | 8 | 16 |
 async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint, dataOut: bigint, main = false): Promise<number> {
   const l = loopers[looperOf.get(cpu) ?? 0];
   if (!l) return -4;
-  const entries = [...l.fds].filter(([, entry]) => !main || entry.callback), pollfds = mem.malloc(Math.max(8, entries.length * 8));
+  const entries = [...l.fds].filter(([, entry]) => !main || entry.callback);
+  const polled: PollEntry[] = entries.map(([fd, entry]) => ({ fd, events: pollEvents(entry.events), revents: 0 }));
   try {
-    for (let i = 0; i < entries.length; i++) { mem.st32(pollfds + i * 8, entries[i][0]); mem.st16(pollfds + i * 8 + 4, pollEvents(entries[i][1].events)); }
     l.wake = new AbortController();
-    await nativePoll(cpu, pollfds, entries.length, l.woken ? 0 : ms, l.wake.signal);
+    await pollEntries(polled, l.woken ? 0 : ms, l.wake.signal);
     l.wake = null;
     const woken = l.woken;
     l.woken = false;
     let callbacks = false;
     for (let i = 0; i < entries.length; i++) {
-      const [fd, entry] = entries[i], events = looperEvents(mem.ld16u(pollfds + i * 8 + 6));
+      const [fd, entry] = entries[i], events = looperEvents(polled[i].revents);
       if (!events || l.fds.get(fd) !== entry) continue;
       if (entry.callback) {
         callbacks = true;
@@ -189,7 +190,7 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint
     }
     if (callbacks) return -2;
     for (let i = 0; i < entries.length; i++) {
-      const [fd, entry] = entries[i], events = looperEvents(mem.ld16u(pollfds + i * 8 + 6));
+      const [fd, entry] = entries[i], events = looperEvents(polled[i].revents);
       if (!events || entry.callback || l.fds.get(fd) !== entry) continue;
       if (fdOut) mem.st32(mem.txVa(fdOut), fd);
       if (eventsOut) mem.st32(mem.txVa(eventsOut), events);
@@ -197,7 +198,7 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint
       return entry.ident;
     }
     return woken ? -1 : -3;
-  } finally { l.wake = null; mem.free(pollfds); }
+  } finally { l.wake = null; }
 }
 function pumpMainLooper(l: Looper): void {
   if (l.cpu.jthread !== mainThread || l.pumping) return;
@@ -210,12 +211,10 @@ function pumpMainLooper(l: Looper): void {
   })();
 }
 const poll = (all: boolean): HostFn => async (cpu, a) => {
-  const ms = a.i(), fd = a.va(), events = a.va(), data = a.va(), deadline = performance.now() + ms;
-  let remaining = ms;
-  for (;;) {
+  const ms = a.i(), fd = a.va(), events = a.va(), data = a.va(), deadline = guestNow() + ms;
+  for (let remaining = ms; ; remaining = msLeft(ms, deadline)) {
     const result = await pollLooper(cpu, remaining, fd, events, data);
     if (!all || result !== -2) return result;
-    remaining = ms < 0 ? -1 : Math.max(0, deadline - performance.now());
   }
 };
 

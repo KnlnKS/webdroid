@@ -5,7 +5,9 @@ import { Cpu, setA64 } from "./cpu.ts";
 import { lookupHost, stp } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
-import { fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, renamePath } from "./fs.ts";
+import { fdFile, javaOpenFd } from "./fs.ts";
+import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd } from "./fd.ts";
+import { renamePath } from "../shell/file-path.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
 

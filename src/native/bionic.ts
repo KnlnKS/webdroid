@@ -11,8 +11,8 @@ import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } fr
 import { setThreadHooks, type Cpu } from "./cpu.ts";
 import { setAbortMessage } from "./crash.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi.ts";
-import { auxv, fail } from "./libc.ts";
-import { memcpyChk } from "./proc.ts";
+import { fail } from "./kernel.ts";
+import { auxv, memcpyChk } from "./proc.ts";
 import type { Module } from "./elf.ts";
 import { processEnv } from "../shell/environment.ts";
 import { procIdentity } from "../shell/procfs.ts";
