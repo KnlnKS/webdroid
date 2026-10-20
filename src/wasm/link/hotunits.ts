@@ -12,6 +12,8 @@ export class HotUnits {
   private slots = new Map<number, HotUnit>();
   private sites = new Map<string, Set<HotUnit>>();
   private dirty = new Set<HotUnit>();
+  /** the symbolic sites that have resolved to an initialized target: a unit published later that calls through one is compiled again at once */
+  private resolvedSites = new Set<string>();
 
   get(slot: number): HotUnit | undefined { return this.slots.get(slot); }
   hasPending(): boolean { return this.dirty.size !== 0; }
@@ -40,10 +42,13 @@ export class HotUnits {
     for (const name of sites) {
       const owners = this.sites.get(name) ?? this.sites.set(name, new Set()).get(name)!;
       owners.add(unit);
+      if (this.resolvedSites.has(name)) unit.ready.add(name);
     }
+    if (unit.ready.size) this.dirty.add(unit);
     return unit;
   }
   resolved(name: string): void {
+    this.resolvedSites.add(name);
     for (const unit of this.sites.get(name) ?? []) {
       unit.ready.add(name);
       this.dirty.add(unit);

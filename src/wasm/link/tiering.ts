@@ -9,7 +9,7 @@ import { mid, methodOf } from "../compiler/ids.ts";
 import { HotUnits } from "./hotunits.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
-import type { MethodSlot } from "./slots.ts";
+import type { Slot } from "./slots.ts";
 import type { UnitHeader } from "./aot.ts";
 import { hasHierarchy, type UnitResult, type UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
@@ -24,22 +24,25 @@ const MERGE_AT = 1024, MERGE_MAX = 512;
 const RETIRE_BATCH = 32, RETIRE_MAX = 512, RETIRE_WAIT_MS = 5000;
 /** a small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
 const LEAF_WAITS = 3;
+/** a slot's tier state, by bit: second-tier code is in it, a compile worker has the second-tier compile of its method, and its method has asked for the
+ *  second tier; from bit LEAF_SHIFT up, the budgets a leaf method has waited (at most LEAF_WAITS) */
+const HOT = 1, PENDING = 2, REQUESTED = 4, LEAF_SHIFT = 3;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
  *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
 const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
 
 export class Tiering {
   private readonly w: World;
-  /** the slots of the methods compiled in one unit, by slot: they call each other directly, so they are reset together */
-  readonly groupOf = new Map<number, number[]>();
-  readonly hotUnits = new HotUnits();
+  /** the slots of the methods compiled in one unit, by slot: they call each other directly, so they are reset together. A merge compares a unit's list with
+   *  the one its slots have now */
+  private readonly groupOf = new Map<number, number[]>();
+  /** each slot's tier state (HOT and the bits beside it), grown as slots are */
+  private state = new Uint8Array(1 << 16);
+  private readonly hotUnits = new HotUnits();
   hotRefreshes = 0;
   private refreshing = false;
-  /** the methods that have asked for the second tier */
-  readonly requested = new Set<number>();
   /** the methods refused a second-tier compile, longest waiting first, with how often */
   private refused = new Map<number, number>();
-  private leafWaits = new Map<number, number>();
   /** when the second tier was first asked for, and the time spent compiling it since */
   private hotSince?: number;
   private upgradeMs = 0;
@@ -53,6 +56,18 @@ export class Tiering {
   private initializing: [number, string, number][] = [];
   private countView?: Int32Array;
   constructor(w: World) { this.w = w; }
+  private is(slot: number, bits: number): boolean { return slot < this.state.length && (this.state[slot] & bits) !== 0; }
+  private set(slot: number, bits: number): void {
+    if (slot >= this.state.length) { const grown = new Uint8Array(Math.max(slot + 1, 2 * this.state.length)); grown.set(this.state); this.state = grown; }
+    this.state[slot] |= bits;
+  }
+  private clear(slot: number, bits: number): void { if (slot < this.state.length) this.state[slot] &= ~bits; }
+  /** whether second-tier code is in `slot` */
+  hot(slot: number): boolean { return this.is(slot, HOT); }
+  /** whether a compile worker has the second-tier compile of the method in `slot` */
+  pending(slot: number): boolean { return this.is(slot, PENDING); }
+  /** whether the method in `slot` has asked for the second tier, or runs it */
+  asked(slot: number): boolean { return this.is(slot, HOT | REQUESTED); }
   /** host.link: compile what `slot` stands for and put it in the table. A method is compiled alone, cheaply, and counts its calls and loop
    *  iterations; `upgrade` recompiles the hot ones with their small callees. */
   linkSlot(slot: number): void {
@@ -74,7 +89,7 @@ export class Tiering {
     }
   }
   private mergeable(g: number[]): boolean {
-    return g.every((at) => { const s = this.w.slots.peek(at); return s?.k === "method" && s.done && !s.hot && !s.pending && this.groupOf.get(at) === g; });
+    return g.every((at) => { const s = this.w.slots.peek(at); return s?.k === "method" && s.done && !this.is(at, HOT | PENDING) && this.groupOf.get(at) === g; });
   }
   /** the oldest loose units, merged into one module by a compile worker; the merged code calls through the table, so each method can be reset alone */
   mergeJob(): UpgradeJob | undefined {
@@ -115,26 +130,42 @@ export class Tiering {
       done.push(this.w.table.get(slot) as Function);
       this.w.table.set(slot, this.w.rt.nop);
       const s = at < 0 ? undefined : this.w.slots.at(at);
-      if (s?.k === "method" && s.done && this.w.stubs.restoreStub(at, s)) { s.done = false; s.hot = false; this.groupOf.delete(at); this.hotUnits.forget(at); }
+      if (s?.k === "method" && s.done && this.unlink(at, s)) this.hotUnits.forget(at);
       return false;
     });
     if (done.length) this.retire(done);
   }
+  /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
+  invalidate(slot: number): void {
+    const w = this.w;
+    this.hotUnits.forget(slot);
+    if (w.helpers.invalidate(slot)) { w.stats.invalidated++; return; }
+    for (const x of this.groupOf.get(slot) ?? [slot]) {
+      // a slot without state holds compiled code only if a loaded build module installed it
+      const s = w.slots.peek(x) ?? (w.aot?.installed(x) ? w.slots.at(x) : undefined);
+      if (s?.k !== "ensure" && s?.done && this.unlink(x, s)) w.stats.invalidated++;
+    }
+  }
+  /** puts the stub back in `slot`, which holds compiled code, and forgets the code's tier and unit; whether the slot has a stub to put back */
+  private unlink(slot: number, s: Slot): boolean {
+    if (!this.w.stubs.restoreStub(slot, s)) return false;
+    s.done = false; this.clear(slot, HOT); this.groupOf.delete(slot);
+    return true;
+  }
+  /** the symbolic site `name` resolved to an initialized target: the hot units that call through it can call the target directly */
+  resolved(name: string): void { this.hotUnits.resolved(name); }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   upgrade(slot: number): void {
     this.refreshHotUnits();
     const s = this.w.slots.at(slot);
-    if (s?.k !== "method" || !s.done || s.hot) return;
-    this.requested.add(slot);
+    if (s?.k !== "method" || !s.done || this.is(slot, HOT)) return;
+    this.set(slot, REQUESTED);
     // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
     const reset = () => { this.counts()[slot] = 0; };
-    if (s.pending) { reset(); return; }
+    if (this.is(slot, PENDING)) { reset(); return; }
     // a small method without a loop is worth most copied into the units of the callers that run it in their loops: alone it waits a few budgets for them
-    if (this.w.planner.leaf(s.m)) {
-      const waited = this.leafWaits.get(slot) ?? 0;
-      if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
-    }
-    if (this.w.opts.holdUpgrades?.() || this.offload(slot, s)) { reset(); return; }
+    if (this.w.planner.leaf(s.m) && this.state[slot] >> LEAF_SHIFT < LEAF_WAITS) { this.state[slot] += 1 << LEAF_SHIFT; reset(); return; }
+    if (this.w.opts.holdUpgrades?.() || this.offload(slot)) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
     // else to the one that has waited longest and asked again since, so it is still hot
@@ -152,9 +183,9 @@ export class Tiering {
     this.upgradeMs += performance.now() - t0;
   }
   /** hands the second-tier compile of the method in `slot` to a compile worker; whether it was taken, or is to be asked for later */
-  private offload(slot: number, s: MethodSlot): boolean {
+  private offload(slot: number): boolean {
     const taken = this.w.opts.compiler?.submit(this.w, slot);
-    if (taken === true) s.pending = true;
+    if (taken === true) this.set(slot, PENDING);
     return !!taken;
   }
   /** compiles and installs the second-tier unit of `m` in `slot`, with `members` installed beside it (a refresh's), unless `admit` turns the built unit down */
@@ -188,12 +219,12 @@ export class Tiering {
     if (!this.hotUnits.hasPending() || this.refreshing || !this.w.instantiates || this.w.opts.holdUpgrades?.()) return;
     for (const unit of this.hotUnits.pending()) {
       const slot = unit.slots[0], s = this.w.slots.peekMethod(slot);
-      if (!this.hotUnits.live(unit, this.w.table) || !s?.done || !s.hot) { this.hotUnits.forget(slot); continue; }
-      if (s.pending) continue;
+      if (!this.hotUnits.live(unit, this.w.table) || !s?.done || !this.is(slot, HOT)) { this.hotUnits.forget(slot); continue; }
+      if (this.is(slot, PENDING)) continue;
       this.refreshing = true;
       let start: number | undefined;
       try {
-        if (this.offload(slot, s)) return;
+        if (this.offload(slot)) return;
         start = performance.now();
         if (!this.upgradeAllowed(start)) return;
         const epoch = this.w.epoch, members = unit.slots.map(at => this.w.slots.peekMethod(at)!.m);
@@ -221,17 +252,17 @@ export class Tiering {
     return found;
   }
   /** whether the method in `slot` runs first-tier code and no second-tier unit for it is on its way */
-  private waits(slot: number): boolean { const s = this.w.slots.at(slot); return s?.k === "method" && s.done && !s.hot && !s.pending; }
+  private waits(slot: number): boolean { const s = this.w.slots.at(slot); return s?.k === "method" && s.done && !this.is(slot, HOT | PENDING); }
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
-    const s = this.w.slots.at(slot);
+    const s = this.w.slots.at(slot), hot = this.is(slot, HOT);
     const refresh = this.hotUnits.get(slot);
-    if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.w.table)))) return undefined;
-    const clock = this.w.units.clock(), members = s.hot ? refresh!.slots.map(at => this.w.slots.peekMethod(at)!.m) : undefined;
+    if (s?.k !== "method" || !s.done || (hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.w.table)))) return undefined;
+    const clock = this.w.units.clock(), members = hot ? refresh!.slots.map(at => this.w.slots.peekMethod(at)!.m) : undefined;
     const { installed, copies, plan } = this.w.planner.group(s.m, members);
     const refs = this.jobRefs([[...installed, ...copies]]);
     this.w.units.account(clock);
-    return refs.units.length ? this.job(installed, copies, refs, plan, s.hot ? refresh!.generation : undefined) : undefined;
+    return refs.units.length ? this.job(installed, copies, refs, plan, hot ? refresh!.generation : undefined) : undefined;
   }
   private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, plan: CallPlan, refresh?: number, merge?: boolean): UpgradeJob {
     this.w.stats.units++;
@@ -277,7 +308,7 @@ export class Tiering {
     return { units: taken, resolved, prepared };
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
-  release(slot: number): void { const s = this.w.slots.at(slot); if (s?.k === "method") s.pending = false; }
+  release(slot: number): void { this.clear(slot, PENDING); }
   /** A failed optional refresh keeps its hot code and stops tracking that generation. */
   failedRefresh(slot: number, generation: number): void {
     const unit = this.hotUnits.get(slot);
@@ -292,7 +323,7 @@ export class Tiering {
     this.release(slot);
     const refresh = this.hotUnits.get(slot);
     if (!this.sound(result, epoch) || s?.k !== "method" || !s.done) return false;
-    if (job.refresh === undefined ? s.hot : !s.hot || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.w.table)) return false;
+    if (job.refresh === undefined ? this.is(slot, HOT) : !this.is(slot, HOT) || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.w.table)) return false;
     if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
     if (job.refresh !== undefined) {
       const installed = new Set(job.installed);
@@ -372,12 +403,9 @@ export class Tiering {
         this.w.table.set(at, exports[name]);
       };
       if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return; }
-      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); this.w.slots.method(x)!.hot = hot; if (x < COUNT_SLOTS) this.counts()[x] = 0; }
-      if (hot) {
-        const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
-        const unit = this.hotUnits.publish(group, names, this.w.table);
-        for (const name of unit?.sites ?? []) if (this.w.symbolic.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
-      } else group.forEach(at => this.hotUnits.forget(at));
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); if (hot) this.set(x, HOT); else this.clear(x, HOT); if (x < COUNT_SLOTS) this.counts()[x] = 0; }
+      if (hot) this.hotUnits.publish(group, cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name), this.w.table);
+      else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
     };
     try { this.w.units.instantiate(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }

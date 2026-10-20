@@ -27,7 +27,7 @@ export class AheadCompiler {
     for (const at of this.unran) {
       const s = this.w.slots.peek(at);
       if (s?.k !== "method" || !s.done) { this.unran.delete(at); continue; }
-      if (!s.hot && !this.w.tiers.requested.has(at) && !(at < COUNT_SLOTS && this.w.tiers.counts()[at])) continue;
+      if (!this.w.tiers.asked(at) && !(at < COUNT_SLOTS && this.w.tiers.counts()[at])) continue;
       this.unran.delete(at);
       this.w.demand.methods.add(s.m);
       this.noteRun([s.m]);
@@ -38,7 +38,7 @@ export class AheadCompiler {
     const rt = this.w.classes.get(t.cls);
     if (!rt || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) return -1;
     const slot = rt.slotBase + t.index, s = this.w.slots.at(slot);
-    return s?.k !== "method" || s.done || s.pending || this.w.aot?.holds(slot) ? -1 : slot;
+    return s?.k !== "method" || s.done || this.w.tiers.pending(slot) || this.w.aot?.holds(slot) ? -1 : slot;
   }
   /** Idle time: compiles the first-tier code of the methods that the methods that ran call when the call has one target, then what those call, in units of AHEAD_UNIT,
    *  until `until`, so that an interaction's first calls find their code rather than compile it. Whether any is left. */

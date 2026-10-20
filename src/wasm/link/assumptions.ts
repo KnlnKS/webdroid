@@ -49,7 +49,7 @@ export class Assumptions {
   /** code in slot `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
   private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: number, late: Map<string, string[]> | undefined): void {
     const by = late?.get(decl);
-    if (by && !this.holds({ name, desc, tc, tk }, by)) { this.w.invalidate(at); return; }
+    if (by && !this.holds({ name, desc, tc, tk }, by)) { this.w.tiers.invalidate(at); return; }
     const key = `${decl}.${name}${desc}`;
     let a = this.decisions.get(key);
     if (!a) this.decisions.set(key, a = { decl, name, desc, tc, tk, slots: new Set() });
@@ -65,7 +65,7 @@ export class Assumptions {
     for (let i = 0; i < todo.length; i++) {
       const by = this.holders.get(todo[i]);
       if (by) { this.holders.delete(todo[i]); todo.push(...by); }
-      this.w.invalidate(todo[i]);
+      this.w.tiers.invalidate(todo[i]);
     }
   }
   /** the code of `slot` fails a site because class `name` is not loaded */
@@ -127,7 +127,7 @@ export class Assumptions {
     this.absent.clear();
   }
   private undo(key: string, a: Assumption): void {
-    for (const slot of a.slots) this.w.invalidate(slot);
+    for (const slot of a.slots) this.w.tiers.invalidate(slot);
     this.decisions.delete(key);
   }
   private decls(): Set<string> { return new Set([...this.decisions.values()].map((a) => a.decl)); }

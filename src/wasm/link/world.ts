@@ -365,18 +365,6 @@ export class World {
     this.settlingHosts = true;
     try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
   }
-  /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
-  invalidate(slot: number): void {
-    this.tiers.hotUnits.forget(slot);
-    if (this.helpers.invalidate(slot)) { this.stats.invalidated++; return; }
-    for (const x of this.tiers.groupOf.get(slot) ?? [slot]) {
-      // a slot without state holds compiled code only if a loaded build module installed it
-      const s = this.slots.peek(x) ?? (this.aot?.installed(x) ? this.slots.at(x) : undefined);
-      if (s?.k === "ensure" || !s?.done || !this.stubs.restoreStub(x, s)) continue;
-      s.done = false; if (s.k === "method") s.hot = false; this.stats.invalidated++;
-      this.tiers.groupOf.delete(x);
-    }
-  }
 
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
