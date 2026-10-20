@@ -5,7 +5,7 @@
 
 import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording.ts";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster.ts";
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
 import { NativePath, inversePath, pathAt } from "./path.ts";
@@ -474,20 +474,19 @@ function intersectClip(subject: number[], shape: number[]): number[] {
   return out;
 }
 // ── the Java side: one bridge, and the peers TS makes ──
-let wrapperField = "";
-const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", "mNativeCanvasWrapper");
+const CANVAS = "android/graphics/Canvas", wrapper = peerField<bigint>(CANVAS, "mNativeCanvasWrapper");
 /** the native state behind a Java canvas, which TS takes to draw through */
-export const canvasOf = (c: object): NativeCanvas => drawingCanvas((c as Record<string, bigint>)[wrapper()]);
+export const canvasOf = (c: object): NativeCanvas => drawingCanvas(wrapper(c));
 const peers = new FinalizationRegistry<bigint>(release);
 /** A Java Canvas drawing straight into `ctx`: AOSP's Canvas over a native canvas, or when `accelerated` a RecordingCanvas of its size (what a hardware window hands
  *  its views) whose native canvas is that one */
 export async function canvasOver(ctx: Ctx2D, w: number, h: number, accelerated = false): Promise<JavaCanvas> {
   const ptr = handle(NativeCanvas.over(ctx, w, h));
   if (!accelerated) return newObj("android/graphics/Canvas", "(J)V", ptr);
-  const c: JavaCanvas & Record<string, bigint> = await scall("android/graphics/RecordingCanvas", "obtain", "(Landroid/graphics/RenderNode;II)Landroid/graphics/RecordingCanvas;",
+  const c: JavaCanvas = await scall("android/graphics/RecordingCanvas", "obtain", "(Landroid/graphics/RenderNode;II)Landroid/graphics/RecordingCanvas;",
     await newObj("android/graphics/RenderNode", "(Ljava/lang/String;)V", null), w, h);
-  release(c[wrapper()]);
-  c[wrapper()] = ptr;
+  release(wrapper(c));
+  setDeclared(c, CANVAS, { mNativeCanvasWrapper: ptr });
   peers.register(c, ptr);
   return c;
 }

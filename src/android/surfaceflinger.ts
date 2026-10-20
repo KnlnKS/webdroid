@@ -4,7 +4,7 @@
 // frame an EGL swap or a decoder produced; queueing it latches the buffer on its layer, and the
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, type JObj, peerField } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { asSystem } from "./binder.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
@@ -351,18 +351,16 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   if (sync) {
     if (q.acquireSingle) q.sync = null;
     return after(newObj("android/view/SurfaceControl$Transaction"), (t) => {
-      tx((t as Record<string, bigint>)[transactionField()]).ops.push(...latch.ops);
+      tx(transactionField(t)).ops.push(...latch.ops);
       return vcall(sync, "accept", "(Ljava/lang/Object;)V", t);
     });
   }
   applyOps(latch);
 }
-let txField: string | null = null;
-const transactionField = () => txField ??= declaredField("android/view/SurfaceControl$Transaction", "mNativeObject");
-let sfField = "";
-const surfaceField = () => sfField ||= declaredField("android/view/Surface", "mNativeObject");
+const transactionField = peerField<bigint>("android/view/SurfaceControl$Transaction", "mNativeObject");
+const surfaceField = peerField<bigint>("android/view/Surface", "mNativeObject");
 export const nativeSurface = (javaSurface: JObj | null): Surface | null => {
-  const h = javaSurface ? (javaSurface as Record<string, bigint>)[surfaceField()] : 0n;
+  const h = javaSurface ? surfaceField(javaSurface) : 0n;
   return h ? deref<Surface>(h) : null;
 };
 /** the surface EGL and media producers draw: on a queue, sized by it, each frame queued as its next
@@ -401,7 +399,7 @@ rt.registerJnis("android/graphics/BLASTBufferQueue", {
   },
   "nativeGatherPendingTransactions(JJ)Landroid/view/SurfaceControl$Transaction;": async (h: bigint) => {
     const t = await newObj("android/view/SurfaceControl$Transaction", "()V");
-    tx((t as Record<string, bigint>)[transactionField()]).ops.push(...queue(h).pending.splice(0).flatMap((p) => p.ops));
+    tx(transactionField(t)).ops.push(...queue(h).pending.splice(0).flatMap((p) => p.ops));
     return t;
   },
   "nativeGetLastAcquiredFrameNum(J)J": (h: bigint) => queue(h).frame,

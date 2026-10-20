@@ -4,7 +4,7 @@
 // Transformation's) can be the array behind a Java Matrix. A 2D context holds only the affine
 // part: [a, b, c, d, e, f] = [M0, M3, M1, M4, M2, M5].
 
-import { rt, declaredField } from "../jvm/runtime.ts";
+import { rt, peerField } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import type { Ctx2D, Mat2D } from "./recording.ts";
 import { edges, setEdges } from "./graphics.ts";
@@ -63,8 +63,7 @@ export function mapPoint(m: Mat, x: number, y: number): [number, number] {
 }
 export const isIdentity = (m: Mat) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 0 && m[4] === 1 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1;
 
-let nativeInstance = "";
-const instanceOf = (m: object) => (m as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Matrix", "native_instance")];
+const instanceOf = peerField<bigint>("android/graphics/Matrix", "native_instance");
 /** the 3x3 behind a Java Matrix */
 export const matrixOf = (m: object): Mat => deref<Mat>(instanceOf(m));
 // A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is

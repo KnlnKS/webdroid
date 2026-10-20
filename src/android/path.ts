@@ -5,7 +5,7 @@
 // into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
 // which is what iteration, measurement, bounds and every non-native Path2D build read.
 
-import { rt, declaredField } from "../jvm/runtime.ts";
+import { rt, peerField } from "../jvm/runtime.ts";
 import { deref, handle, release } from "./handles.ts";
 import { type Mat, mapPoint, snap } from "./matrix.ts";
 import { after } from "../jvm/natives/jentry.ts";
@@ -469,10 +469,9 @@ const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: tr
 export const walkPath = (path: NativePath, sink: Sink) => walkOps(path.ops, new Pen(sink));
 
 export const pathAt = (h: bigint) => deref<NativePath>(h);
-let mNativePath = "";
+const mNativePath = peerField<bigint>("android/graphics/Path", "mNativePath");
 /** the geometry behind a Java Path */
-export const nativePathOf = (p: object): NativePath =>
-  pathAt((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
+export const nativePathOf = (p: object): NativePath => pathAt(mNativePath(p));
 
 // ── Path.op: SkPathOps, through the tab's CanvasKit
 /** the path as CanvasKit's commands */

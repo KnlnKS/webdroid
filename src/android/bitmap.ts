@@ -11,7 +11,7 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { awaited, rt, type JObj, declaredField, driven, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, peerField, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
@@ -342,9 +342,9 @@ const spaceOf = (h: bigint): NativeColorSpace | null => { const s = h ? deref<Na
 
 // ── the Java object
 const BITMAP = "android/graphics/Bitmap";
-let ptrField = "";
+const nativePtr = peerField<bigint>(BITMAP, "mNativePtr");
 /** the native state behind a Java Bitmap */
-export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>((b as Record<string, bigint>)[ptrField ||= declaredField(BITMAP, "mNativePtr")]);
+export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>(nativePtr(b));
 /** bitmap::createBitmap: the Java Bitmap around `b`; a density below 0 is Bitmap.getDefaultDensity */
 export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): object | Promise<object> {
   return newObj(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);

@@ -4,7 +4,7 @@
 // shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
-import { awaited, declaredField, type Gen, type JObj } from "../jvm/runtime.ts";
+import { awaited, peerField, type Gen, type JObj } from "../jvm/runtime.ts";
 import { scall, vcall, after, newObj, initClass } from "../jvm/natives/jentry.ts";
 import { mkFd } from "../jvm/natives/jio.ts";
 import { ashmemFd } from "./os.ts";
@@ -192,16 +192,13 @@ export class NativeFamily {
   get supportedAxes(): readonly number[] { return this.axisTags ??= [...new Set(this.fonts.flatMap((f) => f.supportedAxes))]; }
 }
 
-let familyPtr = "", axisTag = "", axisValue = "";
+const familyPtr = peerField<bigint>("android/graphics/fonts/FontFamily", "mNativePtr");
+const axisTag = peerField<number>("android/graphics/fonts/FontVariationAxis", "mTag");
+const axisValue = peerField<number>("android/graphics/fonts/FontVariationAxis", "mStyleValue");
 /** the native family behind a Java FontFamily */
-export const familyOf = (f: object): NativeFamily =>
-  deref<NativeFamily>((f as Record<string, bigint>)[familyPtr ||= declaredField("android/graphics/fonts/FontFamily", "mNativePtr")]);
+export const familyOf = (f: object): NativeFamily => deref<NativeFamily>(familyPtr(f));
 /** Java FontVariationAxis objects as the axes minikin receives */
-function axesOf(a: ArrayLike<object>): Axis[] {
-  axisTag ||= declaredField("android/graphics/fonts/FontVariationAxis", "mTag");
-  axisValue ||= declaredField("android/graphics/fonts/FontVariationAxis", "mStyleValue");
-  return Array.from(a, (x) => ({ tag: (x as Record<string, number>)[axisTag], value: (x as Record<string, number>)[axisValue] }));
-}
+const axesOf = (a: ArrayLike<object>): Axis[] => Array.from(a, (x) => ({ tag: axisTag(x), value: axisValue(x) }));
 
 // ── hwui's Typeface
 /** minikin's FontCollection: families in fallback order */
@@ -263,10 +260,9 @@ let systemDefault: NativeTypeface | undefined;
 export const setDefaultTypeface = (t: NativeTypeface) => { systemDefault = t; };
 /** Typeface::resolveDefault: null is the default */
 export const resolveDefault = (t: NativeTypeface | null): NativeTypeface => t ?? systemDefault!;
-let nativeInstance = "";
+const typefaceInstance = peerField<bigint>("android/graphics/Typeface", "native_instance");
 /** the native typeface behind a Java Typeface, the default for null */
-export const typefaceOf = (t: object | null): NativeTypeface =>
-  resolveDefault(t && deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]));
+export const typefaceOf = (t: object | null): NativeTypeface => resolveDefault(t && deref<NativeTypeface>(typefaceInstance(t)));
 
 /** the zygote's share of text: the platform font index and HarfBuzz loaded, and Typeface's preloaded
  *  class initialized (its default fonts read ahead). The system font map is the application's, from

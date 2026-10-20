@@ -3,7 +3,7 @@
 // (touching spans merged, vertically adjacent bands with the same spans merged, no empty band),
 // so iteration, equality, toString and the boundary path all see the rectangles a device does.
 
-import { declaredField } from "../jvm/runtime.ts";
+import { peerField } from "../jvm/runtime.ts";
 import { deref } from "./handles.ts";
 import { type NativePath, type Sink, walkPath } from "./path.ts";
 import type { Box } from "./graphics.ts";
@@ -441,7 +441,6 @@ function scan(path: NativePath, clip: Box): Band[] {
   return out;
 }
 
-let mNativeRegion = "";
+const mNativeRegion = peerField<bigint>("android/graphics/Region", "mNativeRegion");
 /** the area behind a Java Region */
-export const nativeRegionOf = (r: object): NativeRegion =>
-  deref<NativeRegion>((r as Record<string, bigint>)[mNativeRegion ||= declaredField("android/graphics/Region", "mNativeRegion")]);
+export const nativeRegionOf = (r: object): NativeRegion => deref<NativeRegion>(mNativeRegion(r));
