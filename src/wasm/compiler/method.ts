@@ -16,7 +16,7 @@ import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
 import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
-import { Outliner } from "./outline.ts";
+import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
 import { KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
@@ -176,6 +176,7 @@ export class MC {
     lap("flow");
     this.known = new MethodFacts(this);
     lap("facts");
+    if (cx.counting || cx.w.longLoops.has(mid(m))) { const loops = new Outliner(this); if (loops.any) { this.loops = loops; this.root = this.code = new OutlinedCode(this.code.nparams); } }
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // Floating parameters arrive as bits and are copied into typed locals once.
@@ -192,7 +193,7 @@ export class MC {
     this.allocateWebs();
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    if (cx.counting || cx.w.longLoops.has(mid(m))) { const loops = new Outliner(this); if (loops.any) (this.loops = loops).declare(); }
+    this.loops?.declare();
     if (this.loops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);

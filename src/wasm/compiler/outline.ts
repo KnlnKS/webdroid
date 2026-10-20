@@ -5,7 +5,7 @@
 // a short loop costs neither the state of an activation nor the engine's compiling of two more functions. The second tier runs code that has
 // already been hot: its loops stay in the method, unless the first tier saw one run LONG_ROUNDS chunks in one entry (World.longLoops).
 import { Code, OP } from "./code.ts";
-import { T, ref, refNull, type VT } from "./wasmbin.ts";
+import { T, ref, refNull, uleb, type VT } from "./wasmbin.ts";
 import { kindOf } from "./program.ts";
 import { type Flow, Go } from "./structure.ts";
 import { mid } from "./ids.ts";
@@ -23,7 +23,42 @@ const ChunkStatus = { Done: 0, Again: 1, Return: 2, Throw: 3, Exit: 4 } as const
 
 type Region = Flow["regions"][number];
 type Scope = Region["scopes"][number];
-interface Chunk { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] }
+/** the body of a method whose loops run in chunks: its locals may live in their state struct, so one of a non-null type is declared nullable and made
+ *  non-null where it is read, and the locals the body uses are kept */
+export class OutlinedCode extends Code {
+  readonly locals = new Set<number>();
+  readonly nonNullLocals: Set<number>;
+  constructor(nparams: number, nonNullLocals = new Set<number>()) { super(nparams); this.nonNullLocals = nonNullLocals; }
+  override newLocal(t: VT): number {
+    const i = this.nparams + this.localTypes.length;
+    if (typeof t !== "number" && !t.nullable) { this.nonNullLocals.add(i); t = { ...t, nullable: true }; }
+    this.localTypes.push(t); return i;
+  }
+  override lget(i: number, nonNull = true): this { return this.access(0x20, i, nonNull); }
+  override lset(i: number): this { return this.access(0x21, i, false); }
+  override ltee(i: number): this { return this.access(0x22, i, true); }
+  protected access(op: number, i: number, nonNull: boolean, index = i): this {
+    this.locals.add(i);
+    this.b.push(op); uleb(index, this.b);
+    if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull();
+    return this;
+  }
+}
+/** a chunk's body, sharing the method's locals: they are numbered once its state is laid out (Outliner.build), so each access waits for materialize */
+class ChunkCode extends OutlinedCode {
+  localMap = new Map<number, number>();
+  private materializing = false;
+  constructor(root: OutlinedCode) { super(root.nparams, root.nonNullLocals); this.localTypes = root.localTypes; }
+  protected override access(op: number, i: number, nonNull: boolean): this {
+    if (!this.materializing) { this.locals.add(i); this.defer(() => { this.access(op, i, nonNull); }); return this; }
+    const index = this.localMap.get(i);
+    if (index === undefined) throw new Error(`Unmapped outlined local ${i}`);
+    return super.access(op, i, nonNull, index);
+  }
+  override materialize(): void { this.materializing = true; super.materialize(); this.materializing = false; }
+}
+
+interface Chunk { code: ChunkCode; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] }
 
 export class Outliner {
   /** the dispatch cycle of each region in one: each runs in one chunk with a dispatch of its own */
@@ -48,7 +83,6 @@ export class Outliner {
   /** the locals with which the method's own code calls its chunks */
   declare(): void {
     const mc = this.mc, c = mc.code;
-    c.nullableLocals = true;
     this.controlLocal = c.newLocal(T.i32);
     if (mc.m.ret !== "V") this.resultLocal = c.newLocal(mc.cx.vtOf(kindOf(mc.m.ret)));
     if (!mc.tries) mc.excLocal = c.newLocal(T.anyref);
@@ -175,8 +209,8 @@ export class Outliner {
   }
   /** a function of its own for what `emit` emits, which answers a status (call) and takes and leaves the method's locals in the state struct */
   private body(label: string, emit: () => void, cycle?: number[]): Chunk {
-    const mc = this.mc, root = mc.root, parent = mc.code, nest = mc.nest, outer = this.chunk;
-    const body = new Code(root.nparams); body.localTypes = root.localTypes; body.nullableLocals = true; body.nonNullLocals = root.nonNullLocals; body.compactLocals = true;
+    const mc = this.mc, root = mc.root as OutlinedCode, parent = mc.code as OutlinedCode, nest = mc.nest, outer = this.chunk;
+    const body = new ChunkCode(root);
     body.defer((c) => {
       // the chunk's own parameter, the state struct, which no local of the method maps to
       c.raw(0x20, 0).lset(this.stateLocal);
