@@ -49,8 +49,8 @@ export function emitTypeConstant(mc: MC, index: number): void {
   if (emitTypeValue(mc.cx, mc.code, mc.dex, index)) mc.set("L");
 }
 export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number): boolean {
-  const p = dex.proto(index);
-  return emitType(cx, c, dex.type(p.ret), p.params.map(t => dex.type(t)));
+  const p = dex.proto(index), types = cx.prog.typesOf(dex);
+  return emitType(cx, c, types.type(p.ret), p.params.map(t => types.type(t)));
 }
 
 /** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
@@ -73,7 +73,7 @@ export function resolveHandleMember(prog: Program, referrer: MethodInfo, index: 
     if ((h.type === MethodHandleType.StaticPut || h.type === MethodHandleType.InstancePut) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
     return { field: f };
   }
-  const mr = dex.method(h.idx), cls = dex.typeName(mr.cls), desc = dex.methodDesc(h.idx);
+  const mr = dex.method(h.idx), types = prog.typesOf(dex), cls = types.typeName(mr.cls), desc = types.methodDesc(h.idx);
   let invoke: Invoke = h.type === MethodHandleType.InvokeStatic ? Invoke.Static : h.type === MethodHandleType.InvokeInterface ? Invoke.Interface : h.type === MethodHandleType.InvokeConstructor ? Invoke.Direct : Invoke.Virtual;
   if (h.type === MethodHandleType.InvokeDirect) {
     const target = resolveInvoke(prog, Invoke.Direct, cls, mr.name, desc, referrer.cls);
@@ -101,7 +101,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
     art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
   } else {
-    const { method: m, cls, invoke } = member, desc = dex.methodDesc(h.idx);
+    const { method: m, cls, invoke } = member, desc = prog.typesOf(dex).methodDesc(h.idx);
     const sig = parseMethodDesc(desc);
     if (h.type === MethodHandleType.InvokeConstructor) {
       if (!emitType(cx, c, sig.ret, sig.params, false)) return false;
@@ -125,7 +125,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
 export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: string): void {
   const c = mc.code, handle = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
-  emitBoxedInvoke(mc, ins, ins.c, 1, () => c.lget(handle), (accessMode ? accessMode + "@" : "") + mc.dex.protoDesc(ins.c), accessMode ? InvokeMode.VarHandle : exact ? InvokeMode.Exact : InvokeMode.Invoke);
+  emitBoxedInvoke(mc, ins, ins.c, 1, () => c.lget(handle), (accessMode ? accessMode + "@" : "") + mc.types.protoDesc(ins.c), accessMode ? InvokeMode.VarHandle : exact ? InvokeMode.Exact : InvokeMode.Invoke);
 }
 /** invoke-custom: the site's arguments, boxed, for the target of the CallSite its own bootstrap links (callsites.ts) */
 export function emitCustom(mc: MC, ins: Ins): void {
@@ -134,7 +134,7 @@ export function emitCustom(mc: MC, ins: Ins): void {
 /** a dispatcher import invoked with the arguments of `proto` from register `firstReg` boxed into an
  *  Object[], its Object result dropped, unboxed or cast to the proto's return type */
 function emitBoxedInvoke(mc: MC, ins: Ins, proto: number, firstReg: number, handle: () => void, site: string, mode: InvokeMode): void {
-  const { cx, code: c } = mc, { params, ret } = mc.dex.protoTypes(proto), arr = c.newLocal(T.anyref);
+  const { cx, code: c } = mc, { params, ret } = mc.types.protoTypes(proto), arr = c.newLocal(T.anyref);
   cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
   argRegisters(ins, params, firstReg).forEach((r, i) => {
     const p = params[i];

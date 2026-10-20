@@ -47,8 +47,7 @@ export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type
 }
 
 export function emitPolymorphic(mc: MC, ins: Ins): void {
-  const { dex } = mc;
-  const mr = dex.method(ins.b), cls = dex.typeName(mr.cls), mode = mr.name;
+  const mr = mc.dex.method(ins.b), cls = mc.types.typeName(mr.cls), mode = mr.name;
   if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
   if (cls !== VH || varHandleValues(mode) === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
   if (!emitExactAccess(mc, ins, mode)) return emitHandleCall(mc, ins, false, mode);
@@ -56,7 +55,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
 
 /** Compare the live libcore accessor classes, including defining loader identity, before using unboxed storage. */
 function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
-  const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => dex.type(t)), ret = dex.type(proto.ret);
+  const { cx, code: c, dex, types } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => types.type(t)), ret = types.type(proto.ret);
   const nv = varHandleValues(mode)!;
   if (params.length < nv) return false;
   const coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);

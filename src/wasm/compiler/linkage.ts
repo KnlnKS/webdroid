@@ -40,9 +40,8 @@ const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
 export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
-  const m = c.method(name + desc);
   // the file's own spelling differs only where a loader qualifies a type, in the query or the class's dex
-  return m || c.dex && !c.dex.resolveType && !desc.includes("@") ? m : c.method(name + javaName(desc), true);
+  return c.method(name + desc) ?? c.method(name + javaName(desc), true);
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
@@ -159,8 +158,8 @@ export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, 
 
 /** the field an iget/iput/sget/sput names, or why it does not resolve */
 export function resolveFieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
-  const fr = dex.field(idx), decl = dex.typeName(fr.cls), type = dex.rawType(fr.type);
-  if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + dex.type(fr.cls), decl);
+  const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
+  if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
   const f = resolveSymbolicField(prog, decl, fr.name, type);
   if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);
   if (f.isStatic !== isStatic) {

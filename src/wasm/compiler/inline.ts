@@ -49,7 +49,7 @@ function check(m: MethodInfo, p0: number, insns: PreparedInstruction[]): Trivial
 /** static field reads, reads and stores of parameters' fields, at most one call, and a return of a parameter, a constant or a step's value */
 function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstruction[]): Seq | undefined {
   // what each register holds, and whether it is the first of a pair
-  const regs = new Map<number, [Val, boolean]>(), steps: Step[] = [];
+  const regs = new Map<number, [Val, boolean]>(), steps: Step[] = [], types = prog.typesOf(m.dex);
   let r = p0, n = 0, ret: Val | undefined, done = false, called = false, justCalled = false;
   const define = (reg: number, wide: boolean, v: Val) => {
     for (const [at, [, w]] of regs) if (at <= reg + (wide ? 1 : 0) && reg <= at + (w ? 1 : 0)) regs.delete(at);
@@ -80,9 +80,9 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
       if (!v || !fits(v, f.f.desc)) return;
       steps.push({ pc: x.pc, put: f, obj, v });
     } else if (kind === Invoke.Super || kind === Invoke.Direct || kind === Invoke.Static) {
-      const ref = m.dex.method(x.b), declared = m.dex.typeName(ref.cls);
+      const ref = m.dex.method(x.b), declared = types.typeName(ref.cls);
       if (called || declared[0] === "[") return;
-      const t = resolveInvoke(prog, kind, declared, ref.name, m.dex.methodDesc(x.b), m.cls);
+      const t = resolveInvoke(prog, kind, declared, ref.name, types.methodDesc(x.b), m.cls);
       if (failed(t) || t.cls === STRING || !t.isStatic && (m.isStatic || paramIn(x.regs[0]) !== 0)) return;
       const args: Val[] = t.isStatic ? [] : [{ p: 0 }], regs = argRegisters(x, t.params, args.length);
       for (let i = 0; i < regs.length; i++) { const v = val(regs[i]); if (!v || !fits(v, t.params[i])) return; args.push(v); }

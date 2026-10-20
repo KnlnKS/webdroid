@@ -95,7 +95,7 @@ function seedApp(w: World, methods: MethodInfo[]): void {
   const REF = { call: 0, iface: 1 << 16, type: 2 << 16, field: 3 << 16 };
   for (const m of methods) {
     if (!m.codeOff) continue;
-    const dex = m.dex;
+    const dex = m.dex, types = prog.typesOf(dex);
     let done = seen.get(dex);
     if (!done) seen.set(dex, done = new Set());
     const first = (ref: number) => !done.has(ref) && !!done.add(ref);
@@ -103,14 +103,14 @@ function seedApp(w: World, methods: MethodInfo[]): void {
       invoke(op, idx) {
         const iface = op === 0x72 || op === 0x78;
         if (!first((iface ? REF.iface : REF.call) | idx)) return;
-        const ref = dex.method(idx), cls = descToName(dex.type(ref.cls)), desc = dex.methodDesc(idx), key = ref.name + desc;
+        const ref = dex.method(idx), cls = types.typeName(ref.cls), desc = types.methodDesc(idx), key = ref.name + desc;
         link(cls);
         const target = cls[0] === "[" ? undefined : prog.resolve(cls, ref.name, desc);
         if (target) w.link(target.cls);
         if ((iface || prog.get(cls)?.isInterface) && !object.byKey.has(key)) w.selectorId(key);
       },
-      type(_, idx) { if (first(REF.type | idx)) type(dex.type(idx)); },
-      field(_, idx) { if (first(REF.field | idx)) link(descToName(dex.type(dex.field(idx).cls))); },
+      type(_, idx) { if (first(REF.type | idx)) type(types.type(idx)); },
+      field(_, idx) { if (first(REF.field | idx)) link(types.typeName(dex.field(idx).cls)); },
     });
   }
   // the classes the host implements, which a call can be devirtualized to

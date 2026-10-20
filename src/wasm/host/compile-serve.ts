@@ -114,8 +114,8 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       const m = world.prog.get(cls)?.methods.find((x) => x.dex === dex && x.methodIdx === methodIdx);
       if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
     };
-    const nameOf = (dex: DexFile, idx: number) => dex.typeName(dex.method(idx).cls);
-    const rootOf = (dex: DexFile, idx: number): MethodRoot => ({ cls: nameOf(dex, idx), sig: dex.method(idx).name + dex.methodDesc(idx) });
+    const nameOf = (dex: DexFile, idx: number) => world.prog.typesOf(dex).typeName(dex.method(idx).cls);
+    const rootOf = (dex: DexFile, idx: number): MethodRoot => ({ cls: nameOf(dex, idx), sig: world.prog.typesOf(dex).methodKey(idx) });
     let called: MethodRoot[] = [];
     for (const [name, methods] of (roots.profile && parseBaselineProfile(roots.profile)) || []) {
       const dex = appDexes.find((d) => d.name === name);

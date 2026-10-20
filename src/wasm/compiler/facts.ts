@@ -121,7 +121,7 @@ export class MethodFacts {
   private ensureTarget(ins: Ins): string | undefined {
     const mc = this.mc;
     if (mc.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) { const name = mc.dex.typeName(ins.b); return name === STRING ? undefined : name; }
+    if (ins.op === 0x22) { const name = mc.types.typeName(ins.b); return name === STRING ? undefined : name; }
     if (ins.op <= 0x6d) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
@@ -129,7 +129,7 @@ export class MethodFacts {
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {
     const op = ins.op;
-    if (op === 0x22) return this.mc.dex.typeName(ins.b) !== STRING; // new-instance
+    if (op === 0x22) return this.mc.types.typeName(ins.b) !== STRING; // new-instance
     // const-string, const-string/jumbo, const-class, new-array, move-exception
     if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
     // move-object, move-object/from16, move-object/16, check-cast

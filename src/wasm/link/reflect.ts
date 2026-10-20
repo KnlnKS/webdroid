@@ -22,9 +22,10 @@ const ITE = "java/lang/reflect/InvocationTargetException";
 
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
-function members(jc: JClass | undefined): string[] {
-  const v = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/MemberClasses")?.elements.value;
-  return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [descToName(jc!.dex!.type(e.idx))] : []) : [];
+function members(w: World, jc: JClass | undefined): string[] {
+  if (!jc?.def) return [];
+  const types = w.prog.typesOf(jc.dex!), v = types.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/MemberClasses")?.elements.value;
+  return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [types.typeName(e.idx)] : []) : [];
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
@@ -56,8 +57,8 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
     const init = jc?.byKey.get("<init>()V");
     return init ? w.synthSlot(`sinit:${a}`, { params: ["L"], ret: "V", body: (cx, c) => { cx.emitEnsure(c, init.cls); c.lget(0); cx.callMethod(c, init); } }) : 0;
   }
-  if (kind === RInfo.MemberCount) return members(jc).length;
-  if (kind === RInfo.Member) return w.idOf(members(jc)[b]);
+  if (kind === RInfo.MemberCount) return members(w, jc).length;
+  if (kind === RInfo.Member) return w.idOf(members(w, jc)[b]);
   const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
   switch (kind) {
     case RInfo.MethodNameLen: return m.name.length;

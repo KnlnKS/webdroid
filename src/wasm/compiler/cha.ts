@@ -5,12 +5,14 @@ import { ACC, mkey, type JClass, type MethodInfo, type Program } from "./program
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
 export class Index {
+  private prog: Program;
   readonly subs = new Map<string, string[]>();                 // direct subtypes (subclasses and implementors)
   private classes: JClass[] = [];
   /** the classes by dex and type id; classes no dex defines (stubs, host and proxy classes) under null */
   private byType?: Map<DexFile | null, Map<number, JClass>>;
   /** each list with the number of classes it was scanned over: an app's classes keep arriving */
   private implementors = new Map<string, { names: string[]; of: number }>();
+  constructor(prog: Program) { this.prog = prog; }
   add(c: JClass): void {
     this.classes.push(c);
     if (this.byType) this.note(c);
@@ -36,11 +38,11 @@ export class Index {
         for (const c of classes.values()) { const m = c.method(key); if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name; }
         continue;
       }
-      const n = dex.findString(name);
+      const n = dex.findString(name), types = this.prog.typesOf(dex);
       if (n < 0) continue;
       for (const i of dex.methodsNamed(n)) {
         const c = classes.get(dex.method(i).cls);
-        if (!c || dex.methodKey(i) !== key) continue;
+        if (!c || types.methodKey(i) !== key) continue;
         const m = dex.declaredAt(c.defIdx, i);
         if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
       }
@@ -69,7 +71,7 @@ export class Cha {
   }
   /** indexes the process's classes again, after their supertypes resolved differently */
   reindex(): void {
-    this.own = new Index(); this.memo.clear();
+    this.own = new Index(this.prog); this.memo.clear();
     for (const c of this.prog.own()) if (this.joined(c)) this.own.add(c);
   }
   defer(dexes: DexFile[]): void { for (const d of dexes) this.deferred.add(d); }
@@ -193,6 +195,6 @@ export class Cha {
 const WALK = 64;
 
 const sharedIndex = (p: Program): Index => {
-  if (!p.cha) { p.cha = new Index(); for (const c of p.own()) p.cha.add(c); }
+  if (!p.cha) { p.cha = new Index(p); for (const c of p.own()) p.cha.add(c); }
   return p.cha;
 };

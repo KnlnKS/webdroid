@@ -324,12 +324,12 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
   const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
   const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
   const type = cls.dex!.proto(cls.dex!.method(self.methodIdx).proto).ret;
-  if (cls.dex!.type(type) !== "LShared;" || peer.desc !== "LShared;") fail("fixture did not warm the parent resolution");
+  if (p.typesOf(cls.dex!).type(type) !== "LShared;" || peer.desc !== "LShared;") fail("fixture did not warm the parent resolution");
   const epoch = cache.epoch;
   cache.namespaces.initiateClass(child, "Shared", key);
   const sub = p.definedBy(child, "Sub")!;
   if (!p.isSubclass(sub, key) || p.isSubclass(sub, "Shared")) fail("initiated superclass identity retained stale subtype relationships");
-  if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) fail("initiating identity retained stale DEX/member caches");
+  if (p.lookup(child, "Shared") !== key || p.typesOf(cls.dex!).type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) fail("initiating identity retained stale DEX/member caches");
   const implementors = () => [...p.own()].filter(c => p.isSubclass(c.name, "NamespaceFace")).map(c => c.name).join();
   const prior = implementors();
   cache.namespaces.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
@@ -378,7 +378,7 @@ for (const asynchronous of [false, true]) {
   if (childSelf.ret !== `L${visible};` || childPeer.desc !== childSelf.ret || childClass.byKey.get(childSelf.key) !== childSelf) {
     fail(`dependent loader caches: self=${childSelf.ret}, peer=${childPeer.desc}, visible=${visible}`);
   }
-  if (result !== 21 || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || appDexes[0].type(retIndex) !== self.ret) {
+  if (result !== 21 || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || p.typesOf(appDexes[0]).type(retIndex) !== self.ret) {
     fail(`${asynchronous ? "deferred" : "synchronous"} library graph: result=${result}, visible=${visible}, self=${self.ret}, peer=${peer.desc}`);
   }
   const hostedSpec = { name: childClass.name, sup: childClass.sup, ifaces: [], methods: ["toString()Ljava/lang/String;"], fields: [], ctor: class {} };

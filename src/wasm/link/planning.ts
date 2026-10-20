@@ -33,7 +33,7 @@ export class Planner {
       for (const ins of this.entryCalls(c)) {
         if (out.length >= BATCH) break;
         if (this.w.needsSymbolicSite(c, ins)) continue;
-        const mr = c.dex.method(ins.b), t = this.w.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
+        const mr = c.dex.method(ins.b), types = this.w.prog.typesOf(c.dex), t = this.w.prog.resolve(types.typeName(mr.cls), mr.name, types.methodDesc(ins.b));
         if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
         if (ts?.k !== "method" || ts.done || ts.pending || this.w.aot?.install(at) && ts.done) continue;
@@ -90,11 +90,11 @@ export class Planner {
   planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [], types = this.w.prog.typesOf(m.dex);
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         const name = ins.op !== 0xfa && ins.op !== 0xfb && instructionClass(m, ins);
         if (name) references.add(name);
-        if (ins.op === 0x22) allocations.add(m.dex.typeName(ins.b));
+        if (ins.op === 0x22) allocations.add(types.typeName(ins.b));
         if (!isInvoke(ins.op) || ins.op >= 0xfa) continue;
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
@@ -118,11 +118,11 @@ export class Planner {
   }
   /** `m`'s calls: the method each one reaches when that is known (a static or direct call, or a virtual call with one implementation) and a virtual call's implementations */
   *calls(m: MethodInfo): Generator<{ t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
-    const dex = m.dex;
+    const dex = m.dex, types = this.w.prog.typesOf(dex);
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (this.w.needsSymbolicSite(m, ins)) continue;
-      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = invokeKind(ins.op);
+      const mr = dex.method(ins.b), desc = types.methodDesc(ins.b), decl = types.typeName(mr.cls), kind = invokeKind(ins.op);
       if (decl[0] === "[" || kind === Invoke.Super) continue;
       const targets = kind === Invoke.Static || kind === Invoke.Direct ? undefined : this.w.cha.targets(decl, mr.name, desc);
       yield { t: targets ? targets.length === 1 ? targets[0] : undefined : this.w.prog.resolve(decl, mr.name, desc), targets, decl, name: mr.name, desc };

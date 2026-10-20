@@ -6,6 +6,7 @@ import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts
 import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
+import type { DexTypes } from "../../jvm/dex.ts";
 import { argRegisters, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
@@ -75,6 +76,8 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
 export class MC {
   cx: Compiler; m: MethodInfo;
   code: Code; prepared!: PreparedMethod; flow!: Flow; typing!: Typing; item; dex;
+  /** the types the method's dex names, as its class's loader sees them */
+  types: DexTypes;
   /** wasm local of each web */
   webLocal: number[] = [];
   /** the instruction being emitted: its operands resolve to webs through it */
@@ -96,7 +99,7 @@ export class MC {
   private loops?: Outliner;
   constructor(cx: Compiler, m: MethodInfo) {
     this.cx = cx; this.m = m;
-    this.dex = m.dex; this.item = m.dex.code(m.codeOff);
+    this.dex = m.dex; this.types = cx.prog.typesOf(m.dex); this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     this.tries = this.item.tries.length > 0;
   }
@@ -299,7 +302,7 @@ export class MC {
   invoke(ins: Ins): InvokeSite {
     let s = this.invokes.get(ins.pc);
     if (s) return s;
-    const dex = this.dex, mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls);
+    const types = this.types, mr = this.dex.method(ins.b), desc = types.methodDesc(ins.b), declared = types.typeName(mr.cls);
     // an array's methods are Object's, except clone, which copies the array
     const decl = declared[0] === "[" ? "java/lang/Object" : declared;
     const target = declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;" ? "clone" : this.invokeTarget(ins.b, invokeKind(ins.op), declared, mr.name, desc);
@@ -452,7 +455,7 @@ export class MC {
     if (isInvoke(op)) return this.emitInvoke(ins);
     if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
     if (op >= 0x32 && op <= 0x3d) return this.emitIf(ins);
-    const c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
+    const c = this.code, cx = this.cx, dex = this.dex, types = this.types, a = ins.a, b = ins.b;
     switch (op) {
       case 0x00: return; // nop
       case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07: case 0x08: case 0x09: { // move, move-wide, move-object
@@ -469,26 +472,26 @@ export class MC {
       case 0x12: case 0x13: case 0x14: case 0x15: this.constNarrow(narrowBits(op, b)); return;
       case 0x16: case 0x17: case 0x18: case 0x19: this.constWide(wideBits(op, b, ins.wideLit)); return;
       case 0x1a: case 0x1b: cx.str.literal(c, dex.string(b)); this.set("L"); return; // const-string
-      case 0x1c: if (this.unresolved(dex.type(b))) return; cx.constClass(c, dex.typeName(b)); this.set("L"); return;
+      case 0x1c: if (this.unresolved(types.type(b))) return; cx.constClass(c, types.typeName(b)); this.set("L"); return;
       case 0x1d: case 0x1e: this.nonNull(a); this.monitor(op === 0x1d); return;
       case 0x1f: { // check-cast
-        if (this.unresolved(dex.type(b))) return;
-        const name = dex.typeName(b);
+        if (this.unresolved(types.type(b))) return;
+        const name = types.typeName(b);
         if (name === "java/lang/Object") { this.copyReference(a); return; }
         this.get("L", a); cx.emitCast(c, name); this.set("L"); return;
       }
-      case 0x20: if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, dex.typeName(ins.c)); this.set("I"); return;
+      case 0x20: if (this.unresolved(types.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, types.typeName(ins.c)); this.set("I"); return;
       case 0x21: this.arrayLength(b); this.set("I"); return;
       case 0x22: { // new-instance
-        if (this.unresolved(dex.type(b))) return;
-        const name = dex.typeName(b);
+        if (this.unresolved(types.type(b))) return;
+        const name = types.typeName(b);
         // a String is made by the constructor call, which assigns its register
         if (name === STRING) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
-      case 0x23: if (this.unresolved(dex.type(ins.c))) return; cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
+      case 0x23: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
       case 0x24: case 0x25: { // filled-new-array
-        const desc = dex.type(b), ek = elemKindOf(desc);
+        const desc = types.type(b), ek = elemKindOf(desc);
         if (this.unresolved(desc)) { this.consumeResult(ins); return; }
         c.gget(cx.vtGlobal(desc)).refAsNonNull().i64(0n);
         for (const r of ins.regs) { ek === "ref" ? this.get("L", r) : this.get("I", r); }
@@ -710,7 +713,7 @@ export class MC {
     if (ins.op >= 0xfc) return emitCustom(this, ins);
     if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
     const { desc, decl, target } = this.invoke(ins);
-    const p = this.dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+    const p = this.types.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     if (target === "clone") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
     const b = this.binding(ins)!, sites = this.frame.sites, site = sites.has(String(ins.pc));

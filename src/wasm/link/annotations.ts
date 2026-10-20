@@ -39,12 +39,12 @@ function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; p
   const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
   // an array or primitive class has no definition, so no annotations
   const element = ELEMENT[kind as Ann];
-  if (element === Element.Class) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
+  if (element === Element.Class) { const jc = classOf(a); return { set: jc?.dex && jc.def ? w.prog.typesOf(jc.dex).classAnnotations(jc.def).cls : [] }; }
   if (element === Element.Field) {
     const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
-    return { set: jc.def ? jc.dex!.classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
+    return { set: jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
   }
-  const m = methodAt(w, a), jc = w.prog.get(m.cls)!, all = jc.def ? jc.dex!.classAnnotations(jc.def) : undefined;
+  const m = methodAt(w, a), jc = w.prog.get(m.cls)!, all = jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def) : undefined;
   return { set: all?.methods.get(m.methodIdx) ?? [], params: all?.params.get(m.methodIdx) };
 }
 const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x.visibility === visibility);
@@ -108,11 +108,11 @@ function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: Enc
   if (typeof v === "string") return w.javaString(v);
   const ref = v as { kind: string; idx: number; anno?: EncAnnotation };
   if (ref.kind === "type") {
-    const name = typeName(dex.type(ref.idx));
+    const name = typeName(w.prog.typesOf(dex).type(ref.idx));
     return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : yield s.typeNotPresent(strand, w.javaString(javaName(name).replace(/\//g, ".")), null);
   }
   if (ref.kind === "enum") {
-    const fr = dex.field(ref.idx), cls = dex.typeName(fr.cls), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
+    const fr = dex.field(ref.idx), cls = w.prog.typesOf(dex).typeName(fr.cls), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
     return yield (f ? s.enumConstant(cls, f.name, f.desc)(strand) : s.enumNotPresent(strand, s.classOf(w.idOf(cls)), w.javaString(fr.name)));
   }
   if (ref.kind === "annotation") return yield* annotation(w, s, strand, ref.anno!);
@@ -157,7 +157,7 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
   if (kind === Ann.DefaultValue) {
     // the AnnotationDefault of the method's annotation class holds a nested annotation whose elements are the defaults
     const m = methodAt(w, a), jc = w.prog.get(m.cls)!;
-    const holder = jc.def ? jc.dex!.classAnnotations(jc.def).cls : [], def = ofKind(holder, SYSTEM).find((x) => x.type === ANNOTATION_DEFAULT)?.elements.value as { anno?: EncAnnotation } | undefined;
+    const holder = jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def).cls : [], def = ofKind(holder, SYSTEM).find((x) => x.type === ANNOTATION_DEFAULT)?.elements.value as { anno?: EncAnnotation } | undefined;
     const v = def?.anno?.elements[m.name];
     return v === undefined ? null : (yield* valueOf(w, s, strand, jc.dex!, v, m.ret)) as object;
   }

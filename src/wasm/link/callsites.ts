@@ -55,7 +55,7 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
     }
     case 0x17: cx.str.literal(c, value as string); return true;
     case 0x18: {
-      const desc = dex.type((value as { idx: number }).idx), failure = typeFailure(cx.prog, desc);
+      const desc = cx.prog.typesOf(dex).type((value as { idx: number }).idx), failure = typeFailure(cx.prog, desc);
       if (failure) { cx.linkError(c, failure); return false; } cx.constClass(c, typeName(desc)); return true;
     }
     case 0x15: return emitTypeValue(cx, c, dex, (value as { idx: number }).idx);
@@ -133,7 +133,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   const split = site.lastIndexOf("#"), index = Number(site.slice(split + 1)), referrer = methodOf(w.prog, site.slice(0, split))!;
   let dexes = linked.get(w); if (!dexes) linked.set(w, dexes = new WeakMap());
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
-  const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
+  const signature = () => w.prog.typesOf(referrer.dex).protoDesc(referrer.dex.callSiteProto(index));
   const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
   const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), InvokeMode.Exact, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);

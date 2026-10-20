@@ -1,8 +1,10 @@
 import type { LinkFailure } from "./linkage.ts";
 import type { Trivial } from "./inline.ts";
 import type { Index } from "./cha.ts";
-import { ACC, type DexFile, type ClassDef } from "../../jvm/dex.ts";
+import { ACC, type DexFile, type DexTypes, type ClassDef } from "../../jvm/dex.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
+import { LoaderGraph, type Loader, type LoaderTypes } from "./loadergraph.ts";
+export type { Loader, LoaderId, LoaderParent, LoaderSnapshot } from "./loadergraph.ts";
 
 export { ACC };
 export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref
@@ -81,29 +83,6 @@ export class PlainClass implements JClass {
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
-export type LoaderId = number | "boot";
-export type LoaderParent = LoaderId | null;
-export interface LoaderSnapshot {
-  parents: LoaderParent[];
-  libraries: [LoaderId, LoaderId[], LoaderId[]][];
-  initiated: [LoaderId, string, string][];
-  ownFirst?: number[];
-  dynamicRoot?: true;
-}
-/** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
-export interface Loader {
-  readonly id: number;
-  readonly parent: Loader | null;
-  /** the java.lang.ClassLoader this namespace belongs to, once the host has one */
-  object: object | null;
-  /** class name -> key of the classes this loader defines */
-  readonly defined: Map<string, string>;
-  before?: Loader[];
-  after?: Loader[];
-  /** its own classes come before its parent's, after the boot classes, as a dalvik.system.DelegateLastClassLoader resolves (loaders.ts) */
-  ownFirst?: boolean;
-}
-const SUFFIX = /@(\d+);?$/;
 /** the name Java code sees for a class key (and for the key of an array class) */
 export const javaName = (key: string): string => (key.includes("@") ? key.replace(/@\d+(?=;|$)/g, "") : key);
 /** the class name of a type descriptor: primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C) */
@@ -115,12 +94,6 @@ export function sameRuntimePackage(prog: Program, a: string, b: string): boolean
   const pkg = (name: string) => { name = javaName(name); return name.slice(0, name.lastIndexOf("/") + 1); };
   return pkg(a) === pkg(b) && prog.loaderOf(a) === prog.loaderOf(b);
 }
-/** the id of the loader that defines the class (or the element class of the array class) with this key */
-const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
-
-/** the descriptors of the `changed` names, or undefined when an array or key name leaves every reference suspect */
-export const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
-  [...changed].some(name => name.startsWith("[") || name.includes("@")) ? undefined : new Set([...changed].map(name => `L${name};`));
 
 /** a class of a dex file. Its header (supertypes, flags) is read when asked for and its members are built when the first of them is, so a Program holds
  *  little for the thousands of platform classes a process never uses. */
@@ -132,8 +105,16 @@ class DexClass implements JClass {
   private declare members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private declare fields_?: FieldInfo[];
   private declare methodInfos?: Map<number, MethodInfo>;
-  constructor(name: string, dex: DexFile, defIdx: number) { this.name = name; this.dex = dex; this.defIdx = defIdx; }
-  refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
+  /** how its loader sees the types its dex names, where that is not as the dex spells them */
+  private declare view?: LoaderTypes;
+  constructor(name: string, dex: DexFile, defIdx: number, types: DexTypes) {
+    this.name = name; this.dex = dex; this.defIdx = defIdx;
+    if (types !== dex) this.view = types as LoaderTypes;
+  }
+  private get types(): DexTypes { return this.view ?? this.dex; }
+  /** its loader came to resolve the class descriptors `changedTypes` differently (any if undefined), as `view` does */
+  retype(view: LoaderTypes, changedTypes?: ReadonlySet<string>): void {
+    this.view = view;
     if (!changedTypes) this.header_ = undefined;
     else if (this.header_) {
       const h = this.dex.classHeader(this.defIdx);
@@ -142,14 +123,14 @@ class DexClass implements JClass {
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
     for (const m of this.members_?.methods ?? this.methodInfos?.values() ?? []) {
       if (m.dex !== this.dex || m.methodIdx < 0) continue;
-      const desc = this.dex.methodDesc(m.methodIdx);
+      const desc = view.methodDesc(m.methodIdx);
       if (desc === m.desc) continue;
       const old = m.key, parsed = parseMethodDesc(desc);
       m.desc = desc; m.params = parsed.params; m.ret = parsed.ret; m.key = mkey(m.name, desc);
       this.members_?.byKey.delete(old); this.members_?.byKey.set(m.key, m);
     }
     for (const [key, method] of aliases) {
-      const at = key.indexOf("("), resolved = key.slice(0, at) + key.slice(at).replace(/L[^;]+;/g, descriptor => resolve(javaName(descriptor)));
+      const at = key.indexOf("("), resolved = key.slice(0, at) + key.slice(at).replace(/L[^;]+;/g, descriptor => view.resolve(javaName(descriptor)));
       if (key !== resolved) this.members_!.byKey.delete(key);
       this.members_!.byKey.set(resolved, method);
     }
@@ -157,14 +138,14 @@ class DexClass implements JClass {
       let i = 0;
       for (const list of [this.def.staticFields, this.def.instanceFields]) for (const f of list) {
         if (this.name === "java/lang/Object" && list === this.def.instanceFields) continue;
-        this.fields_[i++].desc = this.dex.type(this.dex.field(f.fieldIdx).type);
+        this.fields_[i++].desc = view.type(this.dex.field(f.fieldIdx).type);
       }
     }
   }
   private get header() { return this.header_ ??= this.readHeader(); }
   private readHeader() {
-    const h = this.dex.classHeader(this.defIdx), dex = this.dex;
-    return { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : dex.typeName(h.superIdx), ifaces: h.interfaces.map((t) => dex.typeName(t)) };
+    const h = this.dex.classHeader(this.defIdx), types = this.types;
+    return { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : types.typeName(h.superIdx), ifaces: h.interfaces.map((t) => types.typeName(t)) };
   }
   /** without keeping a header for a class nothing else asks about */
   supertypes(): string[] { const { sup, ifaces } = this.header_ ?? this.readHeader(); return sup ? [sup, ...ifaces] : ifaces; }
@@ -183,17 +164,20 @@ class DexClass implements JClass {
   declared(): [key: string, flags: number][] {
     if (this.members_) return this.members_.methods.map((m) => [m.key, m.flags]);
     const def = this.dex.classDef(this.defIdx);
-    return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
+    const types = this.types;
+    return [...def.directMethods, ...def.virtualMethods].map((m) => [types.methodKey(m.methodIdx), m.flags]);
   }
   /** what `method` found in the dex's ids, by key (a raw key after a NUL), null for none: the same questions come back for a class */
   private declare looked?: Map<string, ReturnType<DexFile["declaredAt"]> | null>;
   /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
   method(key: string, raw = false): MethodInfo | undefined {
+    // a dex its loader sees as it is spelled keys its methods so
+    raw &&= !!this.view;
     if (this.members_ && !raw) return this.members_.byKey.get(key);
     const memo = raw ? "\0" + key : key;
     let m = this.looked?.get(memo);
     if (m === undefined) {
-      const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.defIdx), key.slice(0, at), key.slice(at), raw);
+      const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.defIdx), key.slice(0, at), key.slice(at), raw ? this.dex : this.types);
       (this.looked ??= new Map()).set(memo, m = (i < 0 ? undefined : this.dex.declaredAt(this.defIdx, i)) ?? null);
     }
     return m ? this.members_?.methods[m.index] ?? this.methodInfo(m, m.index) : undefined;
@@ -209,18 +193,18 @@ class DexClass implements JClass {
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
     if (cached) return cached;
-    const { dex, name } = this, mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = dex.methodTypes(m.methodIdx);
+    const { dex, name, types } = this, mr = dex.method(m.methodIdx), desc = types.methodDesc(m.methodIdx), p = types.methodTypes(m.methodIdx);
     const info: MethodInfo = { cls: name, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
       isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret, index };
     (this.methodInfos ??= new Map()).set(index, info);
     return info;
   }
   private buildFields(): FieldInfo[] {
-    const { dex, name, def } = this, fields: FieldInfo[] = [];
+    const { dex, name, def, types } = this, fields: FieldInfo[] = [];
     // ART's Object declares its class and monitor words as fields; here they are the object header
     for (const [list, isStatic] of [[def.staticFields, true], [def.instanceFields, false]] as const) {
       for (const f of name === "java/lang/Object" && !isStatic ? [] : list) {
-        const fr = dex.field(f.fieldIdx), desc = dex.type(fr.type);
+        const fr = dex.field(f.fieldIdx), desc = types.type(fr.type);
         fields.push({ owner: name, name: fr.name, desc, kind: kindOf(desc), isStatic, flags: f.flags });
       }
     }
@@ -236,25 +220,15 @@ class DexClass implements JClass {
   }
 }
 
-export class Program {
+export class Program extends LoaderGraph {
   readonly base?: Program;
-  /** the classes this Program adds to its base's, by key */
-  private classes = new Map<string, JClass>();
-  private syntheticLoaders = new Map<string, Loader>();
-  private initiated = new WeakMap<Loader, Map<string, string>>();
-  readonly root: Loader = { id: 0, parent: null, object: null, defined: new Map() };
-  readonly boot: Loader = { id: 0, parent: null, object: null, defined: new Map() };
-  private loaders: Loader[] = [this.root];
-  private dexLoader = new Map<DexFile, Loader>();
   private sealed = false;
-  private bootPath = false;
-  /** The default namespace resolves as `lookup` does, ART's native path for a PathClassLoader over the boot loader, until its loader is found to be another kind. */
-  dynamicRoot = false;
   /** the class-hierarchy index of its classes (cha.ts), which outlives a World: the frames of a page build the platform's once */
   cha?: Index;
   /** `base` is the platform's Program, which is immutable from now on and may be shared by the Programs of several processes: this one adds the app's dexes and the classes
    *  its loaders define, and the default loader's namespace is the base's first, then this one's */
   constructor(dexes: DexFile[], base?: Program) {
+    super();
     this.base = base;
     if (base) base.sealed = true;
     this.add(dexes);
@@ -267,181 +241,18 @@ export class Program {
     const added: string[] = [];
     this.forget();
     for (const dex of dexes) {
-      const owner = this.loaderOfDex(dex);
-      if (owner && owner !== loader) throw new Error(`${dex.name} belongs to another loader`);
-      this.dexLoader.set(dex, loader);
-      if (loader !== this.root) dex.resolveType ??= (d) => this.rewrite(loader, d);
+      const types = this.assign(dex, loader);
       for (let i = 0; i < dex.classDefCount; i++) {
         const name = dex.rawTypeName(dex.classDef2Type(i));
         if (loader === this.root ? this.has(name) : loader.defined.has(name)) continue;
         const key = loader.id ? `${name}@${loader.id}` : name;
         // the root's namespace is this Program's classes
         if (loader !== this.root) loader.defined.set(name, key);
-        this.classes.set(key, new DexClass(key, dex, i));
+        this.classes.set(key, new DexClass(key, dex, i, types));
         added.push(key);
       }
     }
     return added;
-  }
-  /** the loader whose namespace holds `dex`'s classes */
-  loaderOfDex(dex: DexFile): Loader | undefined { return this.dexLoader.get(dex) ?? this.base?.loaderOfDex(dex); }
-  /** a namespace of its own under `parent`, which it consults first */
-  newLoader(parent: Loader, object: object | null, ownFirst = false): Loader {
-    const loader: Loader = { id: this.loaders.length, parent, object, defined: new Map(), ...ownFirst && { ownFirst } };
-    this.loaders.push(loader);
-    return loader;
-  }
-  loadedDexes(): IterableIterator<[DexFile, Loader]> { return this.dexLoader.entries(); }
-  /** whether a reference from code this loader defines resolves at compile time to what it resolves to when it runs */
-  linksStatically(loader: Loader): boolean { return loader === this.boot || loader === this.root && !this.dynamicRoot; }
-  loaderId(loader: Loader): LoaderId { return loader === this.boot ? "boot" : loader.id; }
-  loaderAt(id: LoaderId): Loader { const loader = id === "boot" ? this.boot : this.loaders[id]; if (!loader) throw new Error(`unknown loader ${id}`); return loader; }
-  /** Compiler mirrors carry namespace identity, never the source's Java loader objects. */
-  loaderSnapshot(): LoaderSnapshot {
-    const id = (l: Loader) => this.loaderId(l);
-    return { parents: this.loaders.map(l => l.parent ? id(l.parent) : null),
-      libraries: [this.boot, ...this.loaders].map(l => [id(l), (l.before ?? []).map(id), (l.after ?? []).map(id)]),
-      initiated: [this.boot, ...this.loaders].flatMap(l => [...this.initiated.get(l) ?? []].map(([name, key]): [LoaderId, string, string] => [id(l), name, key])),
-      ownFirst: this.loaders.filter(l => l.ownFirst).map(l => l.id),
-      ...this.dynamicRoot && { dynamicRoot: true } };
-  }
-  followLoaderParents(parents: LoaderParent[], ownFirst: readonly number[] = []): void {
-    if (parents.length < this.loaders.length || parents[0] !== null) throw new Error("incompatible compiler loader graph");
-    for (let i = 1; i < parents.length; i++) {
-      const ref = parents[i];
-      if (ref !== "boot" && (typeof ref !== "number" || !Number.isInteger(ref) || ref < 0 || ref >= i)) throw new Error(`invalid parent of loader ${i}`);
-      const parent = ref === "boot" ? this.boot : this.loaderAt(ref), prior = this.loaders[i];
-      if (prior && prior.parent !== parent) throw new Error(`changed parent of loader ${i}`);
-      if (!prior) this.newLoader(parent, null, ownFirst.includes(i));
-    }
-  }
-  /** the loader that defines the class with this key */
-  loaderOf(key: string): Loader {
-    const array = key[0] === "[" || key[0] === "#";
-    if (array && /^(?:\[+[ZBCSIJFD]|#[ZBCSIJFDV])$/.test(key)) return this.boot;
-    const component = array ? key.replace(/^\[+L(.*);$/, "$1") : key;
-    for (let p: Program | undefined = this; p; p = p.base) {
-      const loader = p.syntheticLoaders.get(component);
-      if (loader) return loader === p.boot ? this.boot : loader;
-      const cls = p.classes.get(component);
-      if (cls) {
-        const owner = cls.dex ? p.dexLoader.get(cls.dex) : undefined;
-        // The immutable base's root DEX is this realm's bootstrap class path.
-        // Its numbered custom namespaces retain their explicit owners.
-        return owner === p.root && p !== this ? this.boot : owner ?? p.loaders[loaderIdOf(key)];
-      }
-    }
-    return this.loaders[loaderIdOf(key)];
-  }
-  /** An initiated identity wins; otherwise search the loader's parent-first namespace. */
-  lookup(loader: Loader, name: string, seen = new Set<Loader>()): string | undefined {
-    if (seen.has(loader)) return undefined;
-    seen.add(loader);
-    const loaded = this.initiatedBy(loader, name);
-    if (loaded) return loaded;
-    if (loader === this.boot) return this.definedBy(loader, name);
-    // as DelegateLastClassLoader.loadClass: the boot loader, then findClass, then the parent
-    const first = loader.ownFirst ? this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name)
-      : loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
-    if (first) return first;
-    for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
-    const own = this.definedBy(loader, name);
-    if (own) return own;
-    for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
-    return loader.ownFirst && loader.parent ? this.lookup(loader.parent, name, seen) : undefined;
-  }
-  libraries(loader: Loader, before: Loader[], after: Loader[], changed: ReadonlySet<string> = this.libraryChanges(loader, before, after)): string[] {
-    const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
-    if (same(loader.before, before) && same(loader.after, after)) return [];
-    loader.before = before; loader.after = after;
-    return changed.size ? this.refreshResolution(loader, changed) : [];
-  }
-  /** the names that a loader seeing `loader` resolves differently once `loader` searches these libraries: only names the old or new libraries can supply */
-  libraryChanges(loader: Loader, before: Loader[], after: Loader[]): Set<string> {
-    const names = new Set<string>(), seen = new Set<Loader>();
-    const supply = (l: Loader | null) => {
-      if (!l || l === this.boot || seen.has(l)) return;
-      seen.add(l);
-      for (const name of l === this.root ? this.classes.keys() : l.defined.keys()) names.add(name);
-      for (const name of this.initiated.get(l)?.keys() ?? []) names.add(name);
-      supply(l.parent);
-      for (const library of [...l.before ?? [], ...l.after ?? []]) supply(library);
-    };
-    for (const library of [...loader.before ?? [], ...loader.after ?? [], ...before, ...after]) supply(library);
-    const views = [...this.dependentLoaders(loader)], prior = [loader.before, loader.after];
-    const resolve = () => views.flatMap(view => [...names].map(name => this.lookup(view, name)));
-    const old = resolve();
-    loader.before = before; loader.after = after;
-    const now = resolve();
-    [loader.before, loader.after] = prior;
-    const changed = new Set<string>();
-    let i = 0;
-    for (let v = 0; v < views.length; v++) for (const name of names) if (old[i] !== now[i++]) changed.add(name);
-    return changed;
-  }
-  initiatedBy(loader: Loader, name: string): string | undefined { return this.initiated.get(loader)?.get(name); }
-  /** A successful native definition fixes the initiating loader's identity before its bytecode is resolved. */
-  initiate(loader: Loader, name: string, key: string): string[] {
-    const visible = this.lookup(loader, name);
-    let loaded = this.initiated.get(loader);
-    if (!loaded) this.initiated.set(loader, loaded = new Map());
-    loaded.set(name, key);
-    return visible === key ? [] : this.refreshResolution(loader, new Set([name]));
-  }
-  forgetInitiated(loader: Loader, name: string): string[] {
-    this.initiated.get(loader)?.delete(name);
-    return this.refreshResolution(loader, new Set([name]));
-  }
-  private dependentLoaders(loader: Loader): Set<Loader> {
-    const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
-      if (view === loader) return true;
-      if (view === this.boot || seen.has(view)) return false;
-      seen.add(view);
-      return [view.parent, ...view.before ?? [], ...view.after ?? []].some(l => !!l && depends(l, seen));
-    };
-    return new Set(this.loaders.filter(l => depends(l)));
-  }
-  /** the dex files whose references can resolve differently when `changed` names do: those of loaders that see `loader` naming one of them, as an element type or not */
-  private resolutionDexes(loader: Loader, changed: ReadonlySet<string>): Map<DexFile, Loader> {
-    const affected = this.dependentLoaders(loader), dexes = new Map<DexFile, Loader>(), types = changedTypes(changed);
-    for (const [dex, owner] of this.dexLoader) if (affected.has(owner) && (!types || dex.typesNaming(types).size)) dexes.set(dex, owner);
-    return dexes;
-  }
-  resolutionClasses(loader: Loader, changed: ReadonlySet<string>): Set<string> {
-    const dexes = this.resolutionDexes(loader, changed);
-    return new Set(dexes.size ? [...this.classes.values()].filter(c => c instanceof DexClass && dexes.has(c.dex)).map(c => c.name) : []);
-  }
-  private refreshResolution(loader: Loader, changed: ReadonlySet<string>): string[] {
-    const dexes = this.resolutionDexes(loader, changed), names: string[] = [], types = changedTypes(changed);
-    for (const [dex, owner] of dexes) dex.resolveType = d => this.rewrite(owner, d);
-    for (const c of this.classes.values()) if (c instanceof DexClass) {
-      const owner = dexes.get(c.dex);
-      if (owner) { c.refreshTypes(d => this.rewrite(owner, d), types); names.push(c.name); }
-    }
-    this.forget();
-    return names;
-  }
-  /** a type or method descriptor in binary names (JNI's) as the loader of class `cls` sees it: each class it names by the key that loader sees under that name */
-  viewOf(cls: string, desc: string): string {
-    const loader = this.loaderOf(cls);
-    return desc.replace(/L([^;]+);/g, (whole, name: string) => { const key = this.lookup(loader, name); return key === undefined ? whole : `L${key};`; });
-  }
-  /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
-  private rewrite(loader: Loader, desc: string): string {
-    const m = /^(\[*)L(.+);$/.exec(desc);
-    if (!m) return desc;
-    const key = this.lookup(loader, m[2]);
-    return key === undefined || key === m[2] ? desc : `${m[1]}L${key};`;
-  }
-  /** the key of the class `name` that `loader` itself defines (not its ancestors) */
-  definedBy(loader: Loader, name: string): string | undefined {
-    if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
-    return loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
-  }
-  /** Synthetic classes have an explicit defining loader; lacking a dex does not imply bootstrap ownership. */
-  private inBoot(name: string): boolean {
-    const loader = this.syntheticLoaders.get(name);
-    return loader ? loader === this.boot : this.base ? this.base.inBoot(name) : !this.bootPath && this.has(name);
   }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
@@ -502,7 +313,12 @@ export class Program {
   /** what a call of each method runs in place, or null (inline.ts trivialOf) */
   readonly trivials = new Map<MethodInfo, Trivial | null>();
   /** drops what a change to the classes or their types can falsify */
-  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refs.clear(); this.trivials.clear(); }
+  protected forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refs.clear(); this.trivials.clear(); }
+  protected retyped(dexes: ReadonlyMap<DexFile, Loader>, types: ReadonlySet<string> | undefined): string[] {
+    const names: string[] = [];
+    for (const c of this.classes.values()) if (c instanceof DexClass && dexes.has(c.dex)) { c.retype(this.typesOf(c.dex) as LoaderTypes, types); names.push(c.name); }
+    return names;
+  }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);

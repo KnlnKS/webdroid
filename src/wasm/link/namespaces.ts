@@ -1,6 +1,7 @@
 // Namespaces that change after code linked against them: a class loader binding its libraries, one initiating a class, the app's loader resolving through Java.
 // Code linked under the old resolution is undone; a change that would alter the dispatch or hierarchy of linked classes is refused with a LinkageError.
-import { changedTypes, javaName, type Loader } from "../compiler/program.ts";
+import { javaName, type Loader } from "../compiler/program.ts";
+import { changedTypes } from "../compiler/loadergraph.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import type { World } from "./world.ts";
 
@@ -11,8 +12,7 @@ export class Namespaces {
   /** A BaseDexClassLoader supplies its immutable library graph before opening its own DEX path. Metadata and ahead-of-time code may already exist. */
   bindLibraries(loader: Loader, before: Loader[], after: Loader[]): void {
     const prog = this.w.prog, priorBefore = loader.before ?? [], priorAfter = loader.after ?? [];
-    const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
-    if (same(priorBefore, before) && same(priorAfter, after)) return;
+    if (prog.hasLibraries(loader, before, after)) return;
     const changed = prog.libraryChanges(loader, before, after);
     // An app build attached before Java bound the libraries it was compiled under stays valid once they are.
     this.rebind(loader, changed, () => prog.libraries(loader, before, after, changed), () => prog.libraries(loader, priorBefore, priorAfter, changed), "Class loader libraries",
