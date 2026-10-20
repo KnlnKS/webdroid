@@ -124,7 +124,7 @@ describe("font-metrics", () => {
     const family = await vcall(await newObj("android/graphics/fonts/FontFamily$Builder", "(Landroid/graphics/fonts/Font;)V", font), "build", "()Landroid/graphics/fonts/FontFamily;");
     const paint = await newPaint("android/text/TextPaint");
     await vcall(paint, "setTypeface", `(L${TF};)L${TF};`, await vcall(await newObj(`${TF}$CustomFallbackBuilder`, "(Landroid/graphics/fonts/FontFamily;)V", family), "build", `()L${TF};`));
-    paintOf(paint).textSize = 68;
+    (await paintOf(paint)).textSize = 68;
     expect(await vcall(paint, "ascent", "()F")).toBeCloseTo(-63.08594, 4);
     expect(metrics(await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"), "FontMetricsInt")).toEqual([-73, -63, 17, 19, 0]);
   });
@@ -164,10 +164,10 @@ describe("lighting-color-filter", () => {
     await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
     expect(await vcall(filter, "getColorMultiply", "()I")).toBe(0x0080ff00);
     expect(await vcall(filter, "getColorAdd", "()I")).toBe(0xff104020 | 0);
-    expect(matrixColor(paintOf(paint).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
+    expect(matrixColor((await paintOf(paint)).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8050ff20);
     await vcall(filter, "setColorMultiply", "(I)V", 0xffffffff);
     await vcall(filter, "setColorAdd", "(I)V", 0);
-    expect(matrixColor(paintOf(paint).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
+    expect(matrixColor((await paintOf(paint)).colorFilter!.matrix!, 0x8080ff80) >>> 0).toBe(0x8080ff80);
   });
 });
 
@@ -267,7 +267,7 @@ describe("matrix-fit", () => {
     const p = await newObj("android/graphics/Paint", "()V");
     await vcall(p, "setColor", "(J)V", color);
     // P3 (0.5, 0.25, 0.75) through linear light and the gamut matrix: sRGB (137, 59, 198)
-    expect(paintOf(p).color >>> 0).toBe(0xff893bc6);
+    expect((await paintOf(p)).color >>> 0).toBe(0xff893bc6);
   });
 });
 

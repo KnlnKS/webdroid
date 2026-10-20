@@ -140,14 +140,10 @@ function copyTextState(src: NativePaint, dst: NativePaint) {
 export const defaultPaint = new NativePaint();
 
 // ── the bridge
-let nativePaintField = "";
 /** A Java Paint's native state, as a draw sees it: Paint.getNativeInstance first hands the native
- *  paint its shader's and colour filter's current native instances. That call suspends only on a
- *  contended monitor; the draw then reads the paint as it stands. */
-export function paintOf(p: object): NativePaint {
-  const h = vcall(p, "getNativeInstance", "()J") as bigint | Promise<bigint>;
-  return deref<NativePaint>(typeof h === "bigint" ? h : (p as Record<string, bigint>)[nativePaintField ||= declaredField(PAINT, "mNativePaint")]);
-}
+ *  paint its shader's and colour filter's current native instances (a Promise while that call waits) */
+export const paintOf = (p: object): NativePaint | Promise<NativePaint> =>
+  after(vcall(p, "getNativeInstance", "()J"), (h: bigint) => deref<NativePaint>(h));
 const TEXT_PAINT = "android/text/TextPaint";
 /** `new Paint(ANTI_ALIAS_FLAG)` or `new TextPaint(ANTI_ALIAS_FLAG)` from host code, which waits when a call it makes links code */
 export const newPaint = async (cls: typeof PAINT | typeof TEXT_PAINT = PAINT): Promise<JObj> => await newObj(cls, "(I)V", AA) as JObj;
