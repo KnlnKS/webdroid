@@ -10,6 +10,7 @@ import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
 import { device } from "../shell/config.ts";
 import { androidGroupId } from "./identity.ts";
+import { appHost } from "./apphost.ts";
 import { uuidFromString } from "../jvm/natives/jvalues.ts";
 import { vcall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
 import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
@@ -74,6 +75,8 @@ function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
+/** this process's name, its package's when it was given none (the application's default process) */
+export const processName = (): string => PROCESS_NAME || appHost?.pkg || "";
 /** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
 export const processTransport = { signal: (_pid: number, _signal: number): void | Promise<void> => {} };
 // Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.

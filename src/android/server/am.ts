@@ -6,7 +6,7 @@ import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from ".
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { hostedService } from "../binder.ts";
-import { PROCESS_NAME, PROCESS_UID } from "../os.ts";
+import { PROCESS_UID, processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { configurations } from "./wm.ts";
 import { startMainActivity } from "./atm.ts";
@@ -30,7 +30,7 @@ const APP_PROVIDER_FLAGS = GET_SHARED_LIBRARY_FILES | 0x800n | 0x10000000n;
 /** the package manager, as system_server's services reach it */
 export const pms = () => hostedService("package") as Promise<JObj>;
 /** a component of `pkg` in `process` runs in this process */
-export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === (PROCESS_NAME || pkg);
+export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === processName();
 
 let appThread: JObj | null = null, launcher = false;
 /** whether this is the app the user launched, whose launcher activity starts with it */
@@ -57,7 +57,7 @@ const disabledChanges = (target: number) =>
 export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 const bind = driven(function* (app: JObj): Gen<void> {
-  const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
+  const pkg = appHost!.pkg, process = processName();
   appThread = app;
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
@@ -128,7 +128,7 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
   if (!info) return null;
   const app = getDeclared<JObj>(info, COMPONENT_INFO, "applicationInfo"), process = getDeclared<string>(info, COMPONENT_INFO, "processName");
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
-  if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === (PROCESS_NAME || appHost!.pkg)))
+  if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === processName()))
     return setDeclared(holder, HOLDER, { mLocal: 1 });
   const binder = yield* awaited(providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name));
   if (!binder) return null;

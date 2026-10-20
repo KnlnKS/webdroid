@@ -14,7 +14,7 @@ import { device } from "../shell/config.ts";
 import { appHost } from "./apphost.ts";
 import { newIntent, putExtra, registerSystemActivity } from "./intent.ts";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, totalMemory, freeMemory } from "./os.ts";
+import { PROCESS_PID, PROCESS_UID, processName, totalMemory, freeMemory } from "./os.ts";
 import { GL_ES_VERSION } from "./pm.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
 import { deviceConfiguration, systemResource } from "./resnative.ts";
@@ -23,15 +23,15 @@ import { packages } from "./packages.ts";
 import { getPrefs } from "./sharedprefs.ts";
 import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue.ts";
 import { activityManagerMethods } from "./server/am.ts";
-import { activityTaskMethods, foreground } from "./server/atm.ts";
+import { activityTaskMethods } from "./server/atm.ts";
+import { processImportance } from "./server/appexitinfo.ts";
 import { activeServiceMethods } from "./server/activeservices.ts";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
-const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 function fillProc(info: JObj): JObj {
   const pkg = appHost?.pkg ?? "";
-  return setDeclared(info, PROCESS_INFO, { processName: PROCESS_NAME || pkg, pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
-    importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED });
+  return setDeclared(info, PROCESS_INFO, { processName: processName(), pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
+    importance: processImportance() });
 }
 
 // IActivityManager: this process's view of the activity manager

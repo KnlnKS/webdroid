@@ -4,7 +4,7 @@
 // will carry, and a crash within MIN_CRASH_INTERVAL of the process's last one repeats, which shows
 // the crash dialog (a first crash shows none).
 import { onProcessExit, type ExitStatus } from "../../process-exit.ts";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os.ts";
+import { PROCESS_PID, PROCESS_UID, processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { foreground } from "./atm.ts";
@@ -38,6 +38,8 @@ const crashedRecently = (pkg: string, process: string, now: number): boolean => 
   return !!last && now - last.timestamp < MIN_CRASH_INTERVAL_MS;
 };
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
+/** this process's RunningAppProcessInfo importance: foreground while it is in front, else cached */
+export const processImportance = (): number => foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED;
 const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
 
 /** the packages with records, which AppExitInfoTracker.onPackageRemoved drops */
@@ -70,7 +72,6 @@ function save(record: ExitRecord): void {
   catch (error) { console.warn("[AppExitInfoTracker] not persisted", error); }
 }
 
-const processName = () => PROCESS_NAME || appHost?.pkg || "";
 /** the reason a kill noted, which the process's death then carries (ProcessList.noteAppKill) */
 let noted: { reason: number; description: string; dialog: boolean } | null = null;
 /** IActivityManager.setProcessStateSummary's bytes, recorded with the exit */
@@ -120,7 +121,7 @@ function recordExit(status: ExitStatus): void {
     pid: PROCESS_PID, uid: PROCESS_UID, process: processName(), pkg: appHost?.pkg ?? processName(), reason,
     // a Java crash keeps no status; the others carry the exit code or the signal
     status: reason === REASON_CRASH ? 0 : status.code ?? status.signal,
-    importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED, timestamp: wallMillis(),
+    importance: processImportance(), timestamp: wallMillis(),
     description: noted?.description ?? null, state: stateSummary && stateSummary.toBase64(),
     tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
     ...(fatalCrash ? {crash:copyCrashInfo(fatalCrash)} : {}),
