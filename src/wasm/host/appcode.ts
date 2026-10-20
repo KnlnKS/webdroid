@@ -296,7 +296,7 @@ class Builder {
       if (this.running !== run) throw new Error("App code closed");
       const t0 = performance.now(), init = (shard: number): [CompileRequest, Transferable[]] => {
         const dexes = containers(this.req.dexes), scopes = libraries?.scopes.map(([id, dexes]): [LoaderId, Containers] => [id, dexes.map(([name, bytes]) => [name, bytes.slice()])]);
-        return [{ type: "init", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, build: this.roots, demand, oneShot: true,
+        return [{ type: "build", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, roots: this.roots, demand,
           shard: [shard, shards], ...libraries && { loaders: libraries.loaders, scopes } }, [dexes, ...scopes?.map(([, dexes]) => dexes) ?? []].flatMap((dexes) => dexes.map(([, b]) => b.buffer as ArrayBuffer))];
       };
       const [lead, ...rest] = await Promise.race([Promise.all(Array.from({ length: shards }, (_, shard) => this.runShard(run, init(shard)))), failed]);

@@ -65,28 +65,6 @@ const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => ad
 }
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
-// A one-shot Builder and a refine-capable worker must produce the same numbered code.
-{
-  const run = async (oneShot: boolean, refine = false, build = true) => {
-    const responses: import("../../src/wasm/host/compile-serve.ts").CompileResponse[] = [];
-    const port: import("../../src/wasm/host/compile-serve.ts").Port = { onmessage: null, postMessage: m => responses.push(m as typeof responses[number]) };
-    serveCompile(port, env);
-    await port.onmessage!({ data: { type: "init", dexes: [["classes.dex", new Uint8Array(readFileSync(join(out, "classes.dex")))]],
-      aot: { base: BASE }, ...(build && { build: { launch: ["Pst"], limit: 500 } }), ...(oneShot && { oneShot: true }) } } as MessageEvent);
-    if (refine) await port.onmessage!({ data: { type: "refine", demand: { methods: [], classes: [], synths: [] } } } as MessageEvent);
-    return responses;
-  };
-  const initial = await run(false, true), once = await run(true), bad = await run(true, false, false);
-  const builds = initial.filter((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
-  const one = once.find((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
-  const equalBuild = (a: typeof one, b: typeof one) => !!a && !!b && a.methods === b.methods && "index" in a.part && "index" in b.part && JSON.stringify(a.part.index) === JSON.stringify(b.part.index)
-    && a.part.files.length === b.part.files.length && a.part.files.every(([name, bytes], i) => name === b.part.files[i][0] && Buffer.compare(bytes, b.part.files[i][1]) === 0);
-  check("one-shot build equals refine-capable payload", equalBuild(builds[0], one), true);
-  check("refine-capable worker remains usable", builds.length, 2);
-  check("refine-capable init retains ready", initial.filter(r => r.type === "ready").length, 1);
-  check("one-shot init finishes at built", once.map(r => r.type).join(","), "loaded,built");
-  check("one-shot without roots fails", bad.map(r => r.type).join(","), "loaded,failed");
-}
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
 /** a compile worker over a MessageChannel in this thread */
@@ -246,7 +224,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   client.start(w, BASE, undefined);
   w.entry("Pst", "hot", "(I)I")(10);
   client.submit(w, w.slotOf(w.prog.resolve("Pst", "hot", "(I)I")!));
-  await until("the worker receives initialization", () => received.includes("init"));
+  await until("the worker receives initialization", () => received.includes("units"));
   check("app Proxy while worker initializes executes", await make(1), 12);
   await until("the worker receives a Proxy during initialization", () => received.includes("proxy"));
   initializing.resolve();
@@ -273,7 +251,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const key = (id: number) => `Pst2@${id}`;
   check("initial namespaced DEX executes", await w.entryAsync(key(first.id), "sub", "()I")(), 500);
   client.submit(w, w.slotOf(w.prog.resolve(key(first.id), "sub", "()I")!));
-  await until("namespaced worker receives initialization", () => received.includes("init"));
+  await until("namespaced worker receives initialization", () => received.includes("units"));
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), second);
   await until("namespaced DEX reaches the initializing worker", () => received.includes("add"));
   initializing.resolve();
@@ -306,7 +284,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const port = spawn(), got: { type: string; message?: string }[] = [];
   port.onmessage = ({ data }) => got.push(data);
   await until("the worker loads", () => got.some((m) => m.type === "loaded"));
-  port.postMessage({ type: "init", dexes: [], hostClasses: ["not/Hosted"], aot: { base: BASE } });
+  port.postMessage({ type: "units", dexes: [], hostClasses: ["not/Hosted"], aot: { base: BASE } });
   await until("the worker answers", () => got.some((m) => m.type === "failed" || m.type === "ready"));
   check("a worker whose host classes are not the page's fails to start", got.some((m) => m.type === "failed" && /host classes/.test(m.message ?? "")), true);
 }
