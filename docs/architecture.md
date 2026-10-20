@@ -43,7 +43,7 @@ Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP relay, Workers
 - **Intrinsics** (a TS or Wasm body for a Java method outside the boundaries) are allowed only when the method is
   a VM built-in or the intrinsic measurably reduces a gated tap or frame, and only when it is differentially
   tested against the AOSP body it replaces (`pnpm textcmp` is the model). They live in `link/intrinsics.ts`
-  and `compiler/chars.ts` (bit conversions, `System.arraycopy`, identity hashes, stack capture, `Math` as Wasm
+  and `link/chars.ts` (bit conversions, `System.arraycopy`, identity hashes, stack capture, `Math` as Wasm
   instructions or direct host imports, a few `Character` predicates) and take precedence over registered natives
   for the same method, so a native registered under an intrinsic's key is unreachable.
 - **Enforced by static checks** in `pnpm test`: `pnpm desccheck` holds every registered descriptor to one
@@ -63,8 +63,8 @@ DEX bytecode is compiled to WebAssembly with GC types and JSPI.
 
 | Layer | Where | Owns |
 |---|---|---|
-| Front end | `src/jvm/{dex,prepared,structure,abi,opcodes}.ts` | DEX parsing, decoded instructions and CFG, structured regions, mangling |
-| Compiler | `src/wasm/compiler/` | one Wasm module per unit of methods (`j2w.ts`, `method.ts`), web-based register typing (`infer.ts`), path facts, CHA, binary encoding |
+| Front end | `src/jvm/{dex,prepared,abi,opcodes}.ts` | DEX parsing, decoded instructions and each method's block graph (built once, in `prepareMethod`), opcode classes, field mangling |
+| Compiler | `src/wasm/compiler/` | one Wasm module per unit of methods (`j2w.ts`, `method.ts`), structured regions and loops (`structure.ts`), web-based register typing (`infer.ts`), path facts, CHA, per-loader type views (`loadergraph.ts`), binary encoding |
 | Linker and VM | `src/wasm/link/` | the `World` (`world.ts`): classes, table slots, lazy linking; strings, monitors, strands, reflection, method handles, Unsafe, loaders, AOT images |
 | Host | `src/wasm/host/` | boot of a realm's World, host→Java entry, the native boundary and bridge, JNI, compile Workers, persisted app builds |
 | Natives | `src/jvm/natives/`, `src/android/` | platform natives and host classes, registered through `rt` (`src/jvm/runtime.ts`) and assembled by `src/natives.ts` |
@@ -85,11 +85,12 @@ is how host code calls Java.
 - A Java thread is a strand, a JSPI stack. Blocking operations (park, contended monitors, `Object.wait`, class
   initialization waits, waiting natives) are Suspending imports, so only a real wait suspends. Back edges charge
   fuel; a yield suspends only when another turn is due (`link/sched.ts`).
-- Exceptions use one Java throwable tag; implicit checks are explicit code (`link/exc.ts`).
+- Exceptions use one Java throwable tag; implicit checks are explicit code (`compiler/exc.ts`).
 
 **The host boundary.**
-- A native is registered once (`rt.register` for host classes, `rt.registerJni` for functions), and its Wasm
-  import is derived from its descriptor (`host/natives.ts`). Scalars pass as Wasm values, strings as externref,
+- A native is registered once, by the module that owns its class (`rt.register` for host classes, `rt.registerJni`
+  for functions); a second registration throws. Its Wasm import is derived from its descriptor (`host/natives.ts`),
+  and it is a Suspending import only when its registration says it may wait (`driven`, async or `waits()`). Scalars pass as Wasm values, strings as externref,
   primitive arrays through linear-memory scratch, other references as opaque values that the bridge
   (`host/bridge.ts`) reaches only through generated accessors.
 - A host class's Java object and its TS object are one object to both sides (`link/hostclass.ts`).
@@ -97,11 +98,11 @@ is how host code calls Java.
   `src/native/jnivm.ts`).
 
 **Code delivery.**
-- **Platform:** compiled at build time (`pnpm aot`, `scripts/wasm/aot-build.ts`) into class-data ("D") and code
+- **Platform:** compiled at build time (`pnpm aot`, `scripts/wasm/aot-build.ts` over `link/aotbuild.ts`, which app builds share) into class-data ("D") and code
   ("C") modules under `vendor/wasm-aot/`, numbered so that they link into any World. The build is keyed by every
   file under `src/` and the AOT scripts. A page streams and compiles it in Workers (`host/aotload.ts`). A warm
   Worker of the page has the engine compile the build code launches ran before a process calls it
-  (`host/warm-worker.ts` over `link/warmshim.ts`), and a spare process Worker stands ready for the next launch
+  (`host/warm-worker.ts` over `host/warmshim.ts`), and a spare process Worker stands ready for the next launch
   (`src/shell/process-host.ts`).
 - **App:** after a first launch, a compile Worker builds the methods the app ran, ordered by the APK's own ART
   baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`src/jvm/reach.ts`), and persists the
@@ -112,7 +113,8 @@ is how host code calls Java.
   demand get globals-only modules, and first-tier units share helpers in large modules. In a launch without a
   saved build, `World.ahead` compiles likely callees in the app thread's idle time.
 - **Second tier:** hot methods are recompiled in a compile Worker under the same numbering and adopted only if the
-  World has not renumbered meanwhile (`link/unit.ts`).
+  World has not renumbered meanwhile (`link/tiering.ts`; the Worker side is `link/unit.ts`). A slot's tier is one
+  state in `Tiering`, which also invalidates and resets it.
 - Compile Workers start in a sandboxed frame of the page (`host/compilehost.ts`), which Chrome's site isolation
   gives its own renderer, so they do not share the app's 4 GB pointer cage.
 
@@ -120,7 +122,7 @@ is how host code calls Java.
 
 AOSP's ActivityThread, view stack, windows and `android.content` run from bytecode over system services
 implemented in TS behind Binder (`src/android/binder.ts`, `parcel.ts`). The shell modules
-(`src/shell/activities.ts`, `packages.ts`, `processes.ts`, `systembars.ts`, `device.ts`, ...) are those services
+(`src/shell/activitystack.ts`, `packages.ts`, `processes.ts`, `device.ts`, ...) are those services
 and own their state.
 
 Every app process runs in its own Worker with its own World, heap, statics and main queue; the page realm is
@@ -140,8 +142,11 @@ emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS 
 
 ## Rendering and text
 
-RenderNode and RecordingCanvas natives record display lists that replay on a Canvas2D software renderer;
-`HardwareRenderer` stays disabled. Text measures on HarfBuzz over the reference fonts and draws with `fillText`;
+RenderNode and RecordingCanvas natives record display lists that replay on a Canvas2D software renderer.
+`HardwareRenderer`'s natives (`src/android/hwui.ts`) run hwui's RenderProxy: each frame replays the root
+RenderNode's tree on Canvas2D into the window surface's next buffer and queues it, and render-thread animators
+keep drawing on each vsync without the UI thread. Every draw goes through one paint bracket (`canvas.ts`), which
+blends a mode Canvas2D cannot bound through the draw's coverage. Text measures on HarfBuzz over the reference fonts and draws with `fillText`;
 Path ops use Skia through CanvasKit (decision below). Resources drive widget defaults, themes and geometry
 (`src/shell/config.ts`).
 
@@ -177,7 +182,7 @@ the linear-memory alternative on that workload with identical semantics and live
 ### 64-bit native userspace: the reference build's bionic (2026-10-01)
 
 Every arm64-v8a process runs the reference build's `libdl`, `libc`, `libm`, `libc++`, `liblog` and `libz` as
-guest code over a Linux syscall layer (`src/native/syscall.ts`, `unix.ts`), with `src/native/bionic.ts` doing the
+guest code over a Linux syscall layer (`src/native/syscall.ts` over `kernel.ts`, `fd.ts` and the file kinds), with `src/native/bionic.ts` doing the
 dynamic linker's share of startup. The host keeps the core's memory and string primitives (`memcpy`, `memmove`,
 `memset`, `memcmp`, `memchr`, `strlen`, `strnlen`, `strcmp`, `strncmp`, `__memcpy_chk`), the heap (through
 bionic's malloc dispatch table), `clock_gettime` (served in the core as the vDSO serves it) and the HLE boundary

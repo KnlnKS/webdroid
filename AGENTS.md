@@ -75,10 +75,10 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 
 ## Architecture and correctness boundaries
 
-- DEX becomes lazy JavaScript; suspension is cooperative within each process realm. Processes
+- DEX compiles lazily to Wasm GC; suspension is cooperative within each process realm. Processes
   have separate JVM state, main queues and native memory. Broker IPC carries serialized Parcels
   and handles, not Java objects; replies must reach callers waiting on the main queue.
-- Java strings are JS strings; int/float/double are numbers, long is BigInt; primitive arrays
+- At the host boundary Java strings are JS strings; int/float/double are numbers, long is BigInt; primitive arrays
   are typed arrays and object arrays carry `$t`. JVM code owns mangling, defining-loader
   identity and null/zero normalization; the compiler types constants by their uses (`infer.ts`).
 - Main-thread entry uses `onMain`; queue ownership is the main loop's dispatch depth, not thread identity.
@@ -106,7 +106,7 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
   details and rejected performance experiments.
 - Java runs on the Wasm tier, `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
   Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `pnpm wasm <suite>` (`scripts/wasm/run.ts`);
-  a change to the shared front end (`prepared`, `structure`, `dex`, `abi`, `opcodes`) also needs `pnpm wasm all`. Map: [docs/architecture.md](docs/architecture.md).
+  a change to the shared front end (`prepared`, `dex`, `abi`, `opcodes`) also needs `pnpm wasm all`. Map: [docs/architecture.md](docs/architecture.md).
 
 ## Diagnosis
 
