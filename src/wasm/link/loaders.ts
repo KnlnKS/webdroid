@@ -9,6 +9,7 @@ import type { Loader } from "../compiler/program.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
 import type { World } from "./world.ts";
 import { prepareDefinition, resolvedMirror } from "./resolution.ts";
+import { chain } from "./maybe.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
 
 /** after host.classByName set local `id`: the Class it named (null for 0), or the settled answer of a lookup that parked */
@@ -192,7 +193,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
     throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative"));
   }
   const dexes = w.opts.dexes(file);
-  return dexes instanceof Promise ? dexes.then(open) : open(dexes);
+  return chain(dexes, open);
   function open(dexes: DexFile[] | undefined): object {
     if (!dexes) throw w.exception(w.makeThrowable("java/io/IOException", `Unable to open DEX file '${file}'`));
     return openDexes(w, dexes, loaderObject);

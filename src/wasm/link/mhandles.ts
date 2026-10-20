@@ -20,6 +20,7 @@ import { invokeVarHandleView } from "./vhandleviews.ts";
 import { invokeCustom } from "./callsites.ts";
 import { RInfo } from "../compiler/info.ts";
 import { MethodHandleType } from "../../jvm/dex.ts";
+import { chain } from "./maybe.ts";
 
 /** what a handle invocation answers: the boxed result, or the Promise of it when the call waited */
 type Answer = object | null | Promise<object | null>;
@@ -234,9 +235,6 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
     if (stat) c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); else c.structSet(st, at);
   }, parent) as never;
 }
-
-/** `next` applied to `value`, after it settles when it is a promise */
-export function chain<A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B>): B | Promise<B> { return value instanceof Promise ? value.then(next) : next(value); }
 
 /** Use libcore's frame accessors: they own reference slots, little-endian primitive storage and return offsets. */
 function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret: boolean): number {

@@ -17,6 +17,7 @@ import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Loo
 import { resolveCatch, resolveForName } from "./resolution.ts";
 import { validateSignatures } from "./signatures.ts";
 import type { World } from "./world.ts";
+import { chain } from "./maybe.ts";
 
 export type HostImports = Record<HostImport, Function>;
 
@@ -44,6 +45,7 @@ export function hostImports(w: World): HostImports {
     return resolveCatch(w, method, pc, throwable, sched.current());
   };
   const signatures = (id: number) => validateSignatures(w, w.nameOf(id), sched.current());
+  const javaValue = (v: unknown) => w.javaValue(v);
   const math = {} as Record<keyof typeof MATH_IMPORTS, Function>;
   for (const f of Object.keys(MATH_IMPORTS) as (keyof typeof MATH_IMPORTS)[]) math[f] = Math[f];
   return {
@@ -69,8 +71,7 @@ export function hostImports(w: World): HostImports {
     net: (node: unknown, family: number, flags: number) => opts.net ? opts.net(w, w.hostString(node) as string, family, flags) : ASYNC,
     netByte: (found: number[][], i: number, j: number) => j < 0 ? found[i].length : found[i][j],
     mhInvoke: (mh: object, args: object, site: string, mode: InvokeMode) => {
-      const value = mhInvoke(w, mh, args, site, mode);
-      return park(value instanceof Promise ? value.then((v) => w.javaValue(v)) : w.javaValue(value), null);
+      return park(chain(mhInvoke(w, mh, args, site, mode), javaValue), null);
     },
     // a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0
     galloc: (owner: object, n: number) => {

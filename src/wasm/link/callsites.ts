@@ -5,7 +5,8 @@ import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
-import { chain, handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
+import { handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
+import { caught, chain, each } from "./maybe.ts";
 import { MethodHandleType, type DexFile, type EncVal } from "../../jvm/dex.ts";
 import type { Compiler } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
@@ -79,15 +80,8 @@ function bootstrapFailure(prog: Program, target: MethodInfo, values: ReturnType<
 function resolveBootstrapArguments(w: World, referrer: MethodInfo, index: number, parent: Strand): void | Promise<void> {
   const invalid = referrer.dex.callSiteValues(index).findIndex(v => !scalarType[v.type]);
   const references = bootstrapReferences(referrer, index).filter(r => r.argument !== 0 && (invalid < 0 || r.argument < invalid));
-  const next = (at: number): void | Promise<void> => {
-    for (; at < references.length; at++) {
-      const ref = references[at];
-      const ready = ref.kind === "handle" ? resolveHandleReference(w, referrer, ref.index, parent)
-        : resolveSignatureTypes(w, ref.kind === "methodType" ? methodTypeSignatureTypes(referrer, ref.index) : [ref], parent);
-      if (ready instanceof Promise) return ready.then(() => next(at + 1));
-    }
-  };
-  return next(0);
+  return each(references, (ref) => ref.kind === "handle" ? resolveHandleReference(w, referrer, ref.index, parent)
+    : resolveSignatureTypes(w, ref.kind === "methodType" ? methodTypeSignatureTypes(referrer, ref.index) : [ref], parent));
 }
 function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand): object | Promise<object> {
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
@@ -152,10 +146,8 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
     }, parent)(candidate) as object | Promise<object>;
   };
   let resolved: object | Promise<object>;
-  try {
-    resolved = chain(bootstrap(w, referrer, index, parent), validate);
-    if (resolved instanceof Promise) resolved = resolved.catch(e => wrap(w, e, index, parent));
-  } catch (e) { return wrap(w, e, index, parent); }
+  try { resolved = caught(chain(bootstrap(w, referrer, index, parent), validate), e => wrap(w, e, index, parent)); }
+  catch (e) { return wrap(w, e, index, parent); }
   return chain(resolved, candidate => {
     const winner = sites!.get(index) ?? candidate; sites!.set(index, winner);
     return invoke(winner);

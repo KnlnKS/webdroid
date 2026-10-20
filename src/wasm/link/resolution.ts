@@ -10,17 +10,10 @@ import { descToName } from "../../jvm/abi.ts";
 import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, type SignatureType } from "./mhandles.ts";
 import { THROWERS } from "../compiler/exc.ts";
 import { resolveHandleMember } from "../compiler/handles.ts";
+import { caught, chain, each } from "./maybe.ts";
 
 export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
-  const next = (at: number): void | Promise<void> => {
-    for (; at < types.length; at++) {
-      const { descriptor, owner: cls } = types[at];
-      if (descriptor[0] !== "L" && descriptor[0] !== "[") continue;
-      const ready = resolveType(w, w.prog.loaderOf(cls), descToName(descriptor), owner);
-      if (ready instanceof Promise) return ready.then(() => next(at + 1));
-    }
-  };
-  return next(0);
+  return each(types, ({ descriptor, owner: cls }) => descriptor[0] === "L" || descriptor[0] === "[" ? resolveType(w, w.prog.loaderOf(cls), descToName(descriptor), owner) : undefined);
 }
 
 export function resolveHandleReference(w: World, method: MethodInfo, index: number, owner: Strand): void | Promise<void> {
@@ -32,7 +25,7 @@ export function resolveHandleReference(w: World, method: MethodInfo, index: numb
     }
     return resolveSignatureTypes(w, handleSignatureTypes(method, index, "field" in member ? member.field : undefined), owner);
   };
-  return ready instanceof Promise ? ready.then(signature) : signature();
+  return chain(ready, signature);
 }
 
 /** a throwable of `cls` with `message` whose cause is the Java throwable `cause` */
@@ -56,7 +49,7 @@ export function resolveType(w: World, loader: Loader, name: string, owner: Stran
     if (!cause || !w.prog.isSubclass(w.classNameOf(cause), "java/lang/ClassNotFoundException")) throw error;
     throw w.exception(causedThrowable(w, "java/lang/NoClassDefFoundError", message, cause));
   };
-  try { const key = resolveClass(w, loader, name, owner); return key instanceof Promise ? key.catch(fail) : key; }
+  try { return caught(resolveClass(w, loader, name, owner), fail); }
   catch (error) { return fail(error); }
 }
 
@@ -110,10 +103,8 @@ export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable
       if (!w.throwable(error)) throw error;
       return next(at + 1);
     };
-    try {
-      const key = resolveType(w, loader, method.dex.rawTypeName(type), owner);
-      return key instanceof Promise ? key.then(matched, failed) : matched(key);
-    } catch (error) { return failed(error); }
+    try { return chain(resolveType(w, loader, method.dex.rawTypeName(type), owner), matched, failed); }
+    catch (error) { return failed(error); }
   };
   return next(0);
 }
@@ -130,11 +121,10 @@ export function resolveForName(w: World, name: string, object: object | null, ow
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
     if (!ctor) throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)"));
     const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => cx.construct(c, ctor, () => { arg(0); arg(1); }), owner)(w.javaString(name), cause);
-    const fail = (value: unknown): never => { throw w.exception(value as object); };
-    return value instanceof Promise ? value.then(fail) : fail(value);
+    return chain(value, (value): never => { throw w.exception(value as object); });
   };
   try {
-    const key = w.resolveClass(definingLoader(w, object), name.replace(/\./g, "/"), owner);
+    const key = resolveClass(w, definingLoader(w, object), name.replace(/\./g, "/"), owner);
     return key instanceof Promise ? key.catch(wrap).then(key => resolvedMirror(w, key, owner)) : w.idOf(key);
   } catch (error) {
     return wrap(error);
@@ -172,12 +162,7 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
   const names = [...superIdx === 0xffffffff ? [] : [superIdx], ...interfaces].map(i => dex.rawTypeName(i));
   const finish = () => { state.state = "ready"; complete(key); return key; };
   const fail = (error: unknown): never => { state.state = "failed"; state.error = error; reject(error); throw error; };
-  const next = (at: number): string | Promise<string> => {
-    if (at === names.length) return finish();
-    const result = resolveType(w, loader, names[at], owner);
-    return result instanceof Promise ? result.then(() => next(at + 1)) : next(at + 1);
-  };
-  try { const result = next(0); return result instanceof Promise ? result.catch(fail) : result; }
+  try { return caught(chain(each(names, (name) => resolveType(w, loader, name, owner)), finish), fail); }
   catch (error) { return fail(error); }
 }
 
@@ -194,7 +179,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     if (!component.startsWith("L") || !component.endsWith(";")) return missing();
     const found = resolveClass(w, loader, component.slice(1, -1), owner);
     const array = (key: string) => name.slice(0, name.length - component.length) + `L${key};`;
-    return found instanceof Promise ? found.then(array) : array(found);
+    return chain(found, array);
   }
   const loaded = w.prog.initiatedBy(loader, name);
   if (loaded) return prepareDefinition(w, loaded, owner);
@@ -237,5 +222,5 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     const string = w.javaString(name.replace(/\//g, "."));
     result = handleThunk(w, `resolve:load:${method.cls}`, ["L", "L"], "L", body, owner)(object, string);
   } catch (error) { return failed(error); }
-  return result instanceof Promise ? result.then(accept, failed) : accept(result);
+  return chain(result, accept, failed);
 }

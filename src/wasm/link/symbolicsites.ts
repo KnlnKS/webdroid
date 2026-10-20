@@ -9,6 +9,7 @@ import { initiatedInstruction, resolveInstruction } from "./resolution.ts";
 import { decodeInstruction } from "../../jvm/prepared.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
 import type { World } from "./world.ts";
+import { chain } from "./maybe.ts";
 
 export class SymbolicSites {
   private readonly w: World;
@@ -92,7 +93,7 @@ export class SymbolicSites {
         }
       };
       const ready = resolveInstruction(this.w, method, ins, owner);
-      return ready instanceof Promise ? ready.then(install) : install();
+      return chain(ready, install);
     };
     return { plain: () => this.w.synchronous(run), wait: this.w.sched.suspending(run) };
   }
