@@ -8,7 +8,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { rt } from "../src/jvm/runtime.ts";
 import { ACC } from "../src/jvm/dex.ts";
-import { descToName } from "../src/jvm/abi.ts";
+import { descToName, parseMethodDesc } from "../src/jvm/abi.ts";
+import { mayWait } from "../src/wasm/host/suspend.ts";
+import type { HostFn } from "../src/wasm/link/hostapi.ts";
 import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
 import { jarDexes } from "../src/android/framework.ts";
 import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
@@ -105,6 +107,25 @@ export function descriptorMismatches(): Map<string, string[]> {
   return out;
 }
 
+/** what the body of a native that can answer a Promise has: it waits for something, reads memory that pages in, or hands on the result of a call into Java */
+const WAITS = /\b(after|awaited|pagesIn|external|externalRead|memoryAt|guestAddress|Promise|await|drive)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
+const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && "ZBCSIJFD".includes(d[1]);
+/** the natives with primitive arrays whose bodies look like they wait but that are not declared to (suspend.ts `mayWait`): such a native, imported plain, parks
+ *  on views of linear memory, which may grow while it waits */
+export function undeclaredWaiters(): string[] {
+  const out: string[] = [];
+  const check = (id: string, fn: unknown) => {
+    if (typeof fn !== "function" || (fn as HostFn).javaValues || mayWait(fn as HostFn)) return;
+    const { params, ret } = parseMethodDesc(id.slice(id.indexOf("(")));
+    const body = Function.prototype.toString.call(fn).replace(/\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm, "$1");
+    if ((params.some(isPrimArray) || isPrimArray(ret)) && WAITS.test(body)) out.push(id);
+  };
+  for (const [key, fn] of rt.jni) check(key.replace("|", "."), fn);
+  for (const [cls, spec] of rt.natives) for (const [key, fn] of Object.entries(spec.methods ?? {})) check(`${cls}.${key.replace(/^static /, "")}`, fn);
+  for (const [key, fn] of stringMethods) check(`${STRING}.${key}`, fn);
+  return out.sort();
+}
+
 /** the accepted mismatches `pnpm test` holds new ones against, without their AOSP hints */
 export const BASELINE = resolve(import.meta.dirname, "../tests/fixtures/desccheck-baseline.json");
 export const withoutHint = (msg: string) => msg.replace(/ \(AOSP: .*/, "");
@@ -122,4 +143,7 @@ if (import.meta.main) {
     for (const msg of found.get(cls)!.sort()) { console.log("  " + msg); n++; }
   }
   console.log(`${n} mismatches in ${found.size} classes`);
+  const waiters = undeclaredWaiters();
+  for (const id of waiters) console.log("may wait, not declared: " + id);
+  console.log(`${waiters.length} natives with arrays may wait undeclared`);
 }

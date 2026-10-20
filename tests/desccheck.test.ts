@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { BASELINE, descriptorMismatches, hasPlatformJars, withoutHint } from "../scripts/desccheck.ts";
+import { BASELINE, descriptorMismatches, hasPlatformJars, undeclaredWaiters, withoutHint } from "../scripts/desccheck.ts";
 import { dexesFrom } from "../scripts/dexes.ts";
 import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
 import { Program } from "../src/wasm/compiler/program.ts";
@@ -14,6 +14,11 @@ test.skipIf(!hasPlatformJars())("registered descriptors match AOSP declarations,
   const found = new Set([...descriptorMismatches()].flatMap(([cls, msgs]) => msgs.map((msg) => `${cls}: ${withoutHint(msg)}`)));
   const baseline = new Set(Object.entries(accepted).flatMap(([cls, msgs]) => msgs.map((msg) => `${cls}: ${msg}`)));
   expect({ fresh: [...found].filter((m) => !baseline.has(m)), stale: [...baseline].filter((m) => !found.has(m)) }).toEqual({ fresh: [], stale: [] });
+});
+
+// Only a declaration makes a native a Suspending import; one with arrays that waits undeclared parks on views memory growth detaches.
+test("natives with arrays whose bodies wait are declared to", () => {
+  expect(undeclaredWaiters()).toEqual([]);
 });
 
 // An intrinsic (a method run as generated code instead of its body or a native) is keyed by class,

@@ -2,7 +2,7 @@
 // the comparisons against values the reference AVD printed for the same calls.
 import { readFileSync } from "node:fs";
 import type { DexFile } from "../../src/jvm/dex.ts";
-import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
+import { rt, JObj, declaredField, waits } from "../../src/jvm/runtime.ts";
 import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry.ts";
 
 const reached: string[] = [];
@@ -56,11 +56,11 @@ export const statics = async (cls: string) => {
   await linkInit(cls);
   return new Proxy({} as Record<string, any>, { get: (_, key) => typeof key === "string" && key.startsWith("s$") ? staticField(cls, key.slice(2)) : undefined });
 };
-/** an object of a class that implements the interface `iface`, answering `name` with `fn` */
+/** an object of a class that implements the interface `iface`, answering `name` with `fn`, which may call Java and wait */
 let listeners = 0;
 export const listener = (iface: string, name: string, desc: string, fn: (...a: any[]) => unknown) => {
   const cls = "fwtest/Listener" + listeners++;
-  rt.register({ name: cls, ctor: class extends JObj {}, ifaces: [iface], methods: { [name + desc]: fn } });
+  rt.register({ name: cls, ctor: class extends JObj {}, ifaces: [iface], methods: { [name + desc]: waits(fn) } });
   return rt.make(cls);
 };
 /** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */

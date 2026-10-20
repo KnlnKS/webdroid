@@ -1,7 +1,7 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, type Gen } from "../../jvm/runtime.ts";
+import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, waits, type Gen } from "../../jvm/runtime.ts";
 import { jarray } from "../../jvm/abi.ts";
 import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry.ts";
 import { hostStub } from "../binder.ts";
@@ -334,14 +334,14 @@ export const dispatchTouch = (action: number, pointers: readonly { id: number; x
 const SESSION = "Landroid/view/IWindow;";
 rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: "android/view/IWindowSession$Stub", methods: {
   [`addToDisplayAsUser(${SESSION}L${LP};IIIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
-    (window: JObj, attrs: JObj, visibility: number, _display: number, _user: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
-      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale)),
+    waits((window: JObj, attrs: JObj, visibility: number, _display: number, _user: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
+      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale))),
   [`addToDisplay(${SESSION}L${LP};IIILandroid/view/InputChannel;Landroid/view/InsetsState;Landroid/view/InsetsSourceControl$Array;Landroid/graphics/Rect;[F)I`]:
-    (window: JObj, attrs: JObj, visibility: number, _display: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
-      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale)),
+    waits((window: JObj, attrs: JObj, visibility: number, _display: number, _types: number, channel: JObj | null, state: JObj | null, _controls: JObj, frame: JObj | null, scale: Float32Array | null) =>
+      rt.drive(addWindow(window, attrs, visibility, channel, state, frame, scale))),
   [`addToDisplayWithoutInputChannel(${SESSION}L${LP};IILandroid/view/InsetsState;Landroid/graphics/Rect;[F)I`]:
-    (window: JObj, attrs: JObj, visibility: number, _display: number, state: JObj | null, frame: JObj | null, scale: Float32Array | null) =>
-      rt.drive(addWindow(window, attrs, visibility, null, state, frame, scale)),
+    waits((window: JObj, attrs: JObj, visibility: number, _display: number, state: JObj | null, frame: JObj | null, scale: Float32Array | null) =>
+      rt.drive(addWindow(window, attrs, visibility, null, state, frame, scale))),
   [`relayout(${SESSION}L${LP};IIIIIILandroid/view/WindowRelayoutResult;)I`]:
     (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number, _flags: number, _seq: number, _sync: number, result: JObj) =>
       rt.drive(relayout(window, attrs, w, h, visibility, result)),

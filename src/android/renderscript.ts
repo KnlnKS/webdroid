@@ -1,7 +1,7 @@
 // RenderScript's natives (librs_jni over the CPU reference driver), as far as apps use the
 // deprecated API: elements, 2D types, allocations over bitmaps, and ScriptIntrinsicBlur. Any
 // other intrinsic or script kernel is an RSRuntimeException, as a driver without it reports.
-import { rt } from "../jvm/runtime.ts";
+import { rt, waits } from "../jvm/runtime.ts";
 import { bitmapOf } from "./bitmap.ts";
 import { clampedBlur, type BlurCache } from "./rendereffect.ts";
 import { handle, deref, release } from "./handles.ts";
@@ -48,7 +48,7 @@ rt.registerJnis(RS, {
   "nContextInitToClient(J)V": () => {},
   "nContextDeinitToClient(J)V": (con: bigint) => { const c = obj<Context>(con); c.teardown?.(); c.teardown = null; },
   // RS_MESSAGE_TO_CLIENT_NONE once the context is torn down
-  "nContextPeekMessage(J[I)I": (con: bigint) => new Promise<number>((resolve) => { obj<Context>(con).teardown = () => resolve(0); }),
+  "nContextPeekMessage(J[I)I": waits((con: bigint) => new Promise<number>((resolve) => { obj<Context>(con).teardown = () => resolve(0); })),
   "rsnObjDestroy(JJ)V": (_con: bigint, o: bigint) => release(o),
   "rsnElementCreate(JJIZI)J": () => handle({ kind: "element" } satisfies Element),
   "rsnTypeCreate(JJIIIZZI)J": (_con: bigint, element: bigint, x: number, y: number, z: number, mips: number, faces: number, yuv: number) => {

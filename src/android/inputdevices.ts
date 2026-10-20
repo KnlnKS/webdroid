@@ -4,7 +4,7 @@
 // there. The touchscreen's raw axes span 0..32767; InputReader scales them to the panel, which
 // sets its motion ranges and the events' precision.
 
-import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { once } from "../jvm/suspend.ts";
 import { hostStub } from "./binder.ts";
@@ -54,7 +54,7 @@ function hasKeys(id: number, sourceMask: number, codes: Int32Array, out: Uint8Ar
 }
 
 rt.register({ name: "webdroid/InputManagerService", ctor: class extends JObj {}, sup: "android/hardware/input/IInputManager$Stub", methods: {
-  "getInputDevice(I)Landroid/view/InputDevice;": (id: number) => after(inputDevices(), (devices) => devices.get(id) ?? null),
+  "getInputDevice(I)Landroid/view/InputDevice;": waits((id: number) => after(inputDevices(), (devices) => devices.get(id) ?? null)),
   "getInputDeviceIds()[I": () => Int32Array.of(VIRTUAL_KEYBOARD, TOUCHSCREEN),
   // the devices never change, so a listener is never called
   "registerInputDevicesChangedListener(Landroid/hardware/input/IInputDevicesChangedListener;)V": () => {},

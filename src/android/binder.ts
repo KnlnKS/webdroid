@@ -1,7 +1,7 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { shareable } from "../jvm/suspend.ts";
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, rt, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
 import { exitProcess, processExited } from "../process-exit.ts";
@@ -479,9 +479,9 @@ rt.registerJnis("android/os/BinderProxy", {
   "pingBinder()Z": proxyAlive,
   "isBinderAlive()Z": proxyAlive,
   "getExtension()Landroid/os/IBinder;": () => null,
-  "transactNative(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": function (this: JObj, code: number, data: JObj | null, reply: JObj | null, flags: number) {
+  "transactNative(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": waits(function (this: JObj, code: number, data: JObj | null, reply: JObj | null, flags: number) {
     return transact(proxyOf(this).handle, code, nativeParcel(data ?? rt.npe()), reply && nativeParcel(reply), flags);
-  },
+  }),
   "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JObj): Gen<string | null> {
     const reply = new NativeParcel();
     yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, new NativeParcel(), reply, 0);
@@ -567,8 +567,8 @@ function localHostedService(name: string): JObj | Promise<JObj> | null {
 }
 rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["android/os/IServiceManager"], methods: {
   "asBinder()Landroid/os/IBinder;": function (this: JServiceManager) { return this.binder; },
-  "getService(Ljava/lang/String;)Landroid/os/IBinder;": (name: string) => after(hostedService(name), appView),
-  "checkService(Ljava/lang/String;)Landroid/os/IBinder;": (name: string) => after(hostedService(name), appView),
+  "getService(Ljava/lang/String;)Landroid/os/IBinder;": waits((name: string) => after(hostedService(name), appView)),
+  "checkService(Ljava/lang/String;)Landroid/os/IBinder;": waits((name: string) => after(hostedService(name), appView)),
   "isDeclared(Ljava/lang/String;)Z": (name: string) => binderServices.has(name) ? 1 : 0,
   "listServices(I)[Ljava/lang/String;": () => jarray([...binderServices.keys()], "Ljava/lang/String;"),
   "addService(Ljava/lang/String;Landroid/os/IBinder;ZI)V": () => {

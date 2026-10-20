@@ -7,7 +7,6 @@ import type { HostFn, HostSpec, NativeSource } from "../link/hostapi.ts";
 import { waitsEnded } from "../link/module.ts";
 import { Natives } from "./natives.ts";
 import { refOf } from "./bridge.ts";
-import { mayWait } from "./suspend.ts";
 
 const lookup = (cls: string, key: string, isStatic: boolean): HostFn | undefined => {
   const own = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key] as HostFn | undefined;
@@ -50,12 +49,3 @@ export const nativeSource = {
   },
 } satisfies NativeSource;
 export const natives = new Natives(nativeSource);
-
-/** the ids (class.name+descriptor) of the registered natives that can answer a Promise (suspend.ts `mayWait`), for the platform build to hand to pages */
-export function waitingNatives(): string[] {
-  const ids = new Set<string>();
-  const add = (id: string, fn: unknown) => { if (typeof fn === "function" && mayWait(fn as HostFn)) ids.add(id); };
-  for (const [key, fn] of rt.jni) add(key.replace("|", "."), fn);
-  for (const [cls, spec] of rt.natives) for (const [key, impl] of Object.entries(spec.methods ?? {})) add(`${cls}.${key.replace(/^static /, "")}`, impl);
-  return [...ids].sort();
-}

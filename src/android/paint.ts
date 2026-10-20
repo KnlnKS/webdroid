@@ -2,7 +2,7 @@
 // mNativePaint, with its natives and the text metrics TS reads off it. Paint and TextPaint run from
 // AOSP bytecode; TS reaches a Java paint's native state through paintOf.
 
-import { rt, declaredField, type JObj } from "../jvm/runtime.ts";
+import { rt, declaredField, waits, type JObj } from "../jvm/runtime.ts";
 import { charsToString, mangleMethod } from "../jvm/abi.ts";
 import { after, newObj } from "../jvm/natives/jentry.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
@@ -360,5 +360,5 @@ rt.registerJnis(PAINT, {
     textPath(paintAt(h), bidi, charsToString(c, index, count), x, y, path),
   "nGetTextPath(JILjava/lang/String;IIFFJ)V": (h: bigint, bidi: number, s: string, start: number, end: number, x: number, y: number, path: bigint) =>
     textPath(paintAt(h), bidi, s.slice(start, end), x, y, path),
-  "nGetFillPath(JJJ)Z": (h: bigint, src: bigint, dst: bigint) => after(fillPath(paintAt(h), pathAt(src), pathAt(dst)), (b) => +b),
+  "nGetFillPath(JJJ)Z": waits((h: bigint, src: bigint, dst: bigint) => after(fillPath(paintAt(h), pathAt(src), pathAt(dst)), (b) => +b)),
 });

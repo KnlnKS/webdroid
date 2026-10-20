@@ -79,9 +79,9 @@ rt.registerJnis(AT, {
   "native_flush()V": T((tr) => { if (!tr.playing) { tr.flush(); tr.origin = 0; } }),
   "native_release()V": tracks.detach,
   "native_finalize()V": tracks.detach,
-  "native_write_byte([BIIIZ)I": writeSamples,
-  "native_write_short([SIIIZ)I": writeSamples,
-  "native_write_float([FIIIZ)I": writeSamples,
+  "native_write_byte([BIIIZ)I": waits(writeSamples),
+  "native_write_short([SIIIZ)I": waits(writeSamples),
+  "native_write_float([FIIIZ)I": waits(writeSamples),
   "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": waits(function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
     return after(readBufferBytes(buffer,pos,n), bytes => writeSamples.call(this,new Int8Array(bytes.buffer,bytes.byteOffset,bytes.length),0,n,f,b));
   }),

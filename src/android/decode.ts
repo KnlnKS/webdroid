@@ -416,7 +416,7 @@ function regionDecoder(bytes: Uint8Array) {
   return newObj("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies EncodedImage));
 }
 rt.registerJnis("android/graphics/BitmapRegionDecoder", {
-  "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": (bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice()),
+  "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": waits((bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice())),
   "nativeNewInstance(Ljava/io/FileDescriptor;)Landroid/graphics/BitmapRegionDecoder;":
     driven(function* (fd: object | null): Gen { return regionDecoder(yield* awaited(fdBytes(fd))); }),
   "nativeNewInstance(Ljava/io/InputStream;[B)Landroid/graphics/BitmapRegionDecoder;":

@@ -187,13 +187,13 @@ export function writeAt(address: bigint, bytes: Uint8Array): void {
   if (isExternal(address)) readOnly(address);
   mem.write(physical(address), bytes);
 }
-const peekArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
+const peekArray = waits((address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   const target = region(array, offset, count);
   if (!count) return;
   const n = target.length, size = array!.BYTES_PER_ELEMENT;
   if (!isExternal(address)) { const bytes = mem.bytes(physical(address), n); target.set(swap ? swapped(bytes, size) : bytes); return; }
   return after(memoryAt(address,n),bytes => { target.set(swap ? swapped(bytes,size) : bytes); });
-};
+});
 const pokeArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   const source = region(array, offset, count);
   // a set within one buffer copies as memmove does, so a guest-memory array needs no copy first

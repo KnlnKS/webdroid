@@ -2,7 +2,7 @@
 // KeyCharacterMap (KeyCharacterMap.cpp) over the reference device's .kcm files behind
 // KeyCharacterMap's mPtr. KeyEvent, its DispatcherState and KeyCharacterMap run from AOSP bytecode.
 
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, waits, type JObj, declaredField } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { ownedHandle, deref } from "./handles.ts";
@@ -279,7 +279,7 @@ rt.registerJnis(KCM, {
   },
   "nativeGetDisplayLabel(JI)C": (ptr: bigint, code: number) => kcmAt(ptr).map?.keys.get(code)?.label ?? 0,
   "nativeGetKeyboardType(J)I": (ptr: bigint) => kcmAt(ptr).map?.type ?? 0,
-  "nativeGetEvents(J[C)[Landroid/view/KeyEvent;": (ptr: bigint, chars: Uint16Array) => {
+  "nativeGetEvents(J[C)[Landroid/view/KeyEvent;": waits((ptr: bigint, chars: Uint16Array) => {
     const k = kcmAt(ptr);
     if (!k.map) return jarray([], `L${KE};`);
     const list = strokes(k.map, chars);
@@ -289,7 +289,7 @@ rt.registerJnis(KCM, {
       : after(scall(KE, "obtain", `(IJJIIIIIIIII[BLjava/lang/String;)L${KE};`, nextId(), now, now, list[i].down ? 0 : 1, list[i].code, 0,
         list[i].meta, k.deviceId, 0, 0, SOURCE_KEYBOARD, -1, new Int8Array(32), null) as JObj | Promise<JObj>, (ev: JObj) => { events.push(ev); return next(i + 1); });
     return next(0);
-  },
+  }),
   "nativeObtainEmptyKeyCharacterMap(I)Landroid/view/KeyCharacterMap;": (deviceId: number) => javaKeyCharacterMap(deviceId, null),
   "nativeEquals(JJ)Z": (a: bigint, b: bigint) => {
     const x = kcmAt(a).map, y = kcmAt(b).map;

@@ -30,7 +30,6 @@ import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
 import { hostSpec, natives, nativeSource } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
-import { declareWaiting } from "./suspend.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
 import { openPersist } from "./persist.ts";
@@ -291,9 +290,7 @@ export function openAot(): Promise<FetchStore | undefined> {
     const other = switchValue("aot"), current = await fetch(`/aot/current.json${other ? `?key=${other}` : ""}`);
     if (!current.ok) return undefined;
     const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`, aotPort);
-    const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
-    // the natives the modules import as Suspending were chosen when the build was made
-    declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);
+    const [, startup] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json")]);
     mark("aotIndex");
     store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
     return store;

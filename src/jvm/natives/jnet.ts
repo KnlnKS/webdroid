@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime.ts";
+import { awaited, rt, JObj, type NativeSpec, driven, declaredField, waits, type Gen } from "../runtime.ts";
 import { newArrayList, toJsArray } from "./jcoll.ts";
 import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry.ts";
 import { checkFromIndexSize } from "./jlang.ts";
@@ -159,12 +159,12 @@ rt.register({
       const n = yield* awaited(socketRead(this.s, b, 0, 1));
       return n < 0 ? -1 : b[0];
     }),
-    "read([B)I": function (this: JSocketIn, out: Int8Array) {
+    "read([B)I": waits(function (this: JSocketIn, out: Int8Array) {
       return socketRead(this.s, u8(out), 0, out.length);
-    },
-    "read([BII)I": function (this: JSocketIn, out: Int8Array, off: number, len: number) {
+    }),
+    "read([BII)I": waits(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
       return socketRead(this.s, u8(out), off, len);
-    },
+    }),
     "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
     "close()V": function (this: JSocketIn) { this.s.relay?.close(); },
   },
@@ -174,12 +174,12 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "write(I)V": function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); },
-    "write([B)V": function (this: JSocketOut, b: Int8Array) {
+    "write([B)V": waits(function (this: JSocketOut, b: Int8Array) {
       return socketWrite(this.s, u8(b));
-    },
-    "write([BII)V": function (this: JSocketOut, b: Int8Array, off: number, len: number) {
+    }),
+    "write([BII)V": waits(function (this: JSocketOut, b: Int8Array, off: number, len: number) {
       return socketWrite(this.s, u8(b, off, len));
-    },
+    }),
     "flush()V": () => {},
     "close()V": function (this: JSocketOut) { this.s.relay?.close(); },
   },
@@ -390,8 +390,8 @@ class JHttpInputStream extends JObj {
 }
 rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "java/io/InputStream", methods: {
   "read()I": driven(function* (this: JHttpInputStream): Gen { return (yield* awaited(this.fill())) ? this.bytes[this.offset++] : -1; }),
-  "read([B)I": function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); },
-  "read([BII)I": function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); },
+  "read([B)I": waits(function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); }),
+  "read([BII)I": waits(function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); }),
   "available()I": function (this: JHttpInputStream) { return this.bytes.length - this.offset; },
   "skip(J)J": driven(function* (this: JHttpInputStream, count: bigint): Gen {
     let left = count;

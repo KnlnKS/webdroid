@@ -13,8 +13,6 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
-import { SERVICES } from "../../src/wasm/host/suspend.ts";
-import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
 import { synthModules } from "../../src/wasm/link/apps.ts";
@@ -34,7 +32,7 @@ const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(joi
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
-  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...[SERVICES, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`))].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
@@ -182,7 +180,6 @@ const t2 = performance.now();
 
 const index = aot.finish(synths);
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
-writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 writeFileSync(join(out, "apps.json"), "[]");
 // what profiled launches add (aot-profile.ts): until they run, no numbering prefix and no slots to warm
 writeFileSync(join(out, "prefix.json"), "null");
