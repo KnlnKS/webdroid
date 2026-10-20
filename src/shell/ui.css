@@ -60,7 +60,6 @@ input { display: block; width: 100%; margin-top: 6px; padding: 8px; font-family:
 #phone { display: grid; grid-template-rows: minmax(0, 1fr) auto; align-items: center; justify-items: center; flex: none; position: relative; padding: 10px 8px 8px; border: 1px solid #3a3e44; border-radius: 28px; background: #0a0c0e; box-shadow: 0 20px 50px #0005; }
 #display { width: fit-content; height: fit-content; position: relative; overflow: hidden; border-radius: 19px; }
 #screen { display: block; background: #101316; touch-action: none; }
-#weblayer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 #nav { width: 100%; display: flex; justify-content: space-around; padding-top: 6px; }
 .navb { display: grid; place-items: center; width: 72px; padding: 8px; border: 0; background: transparent; color: #b5bec9; }
 #session { padding: 18px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px; background: #1b1e23; overflow-wrap: anywhere; }

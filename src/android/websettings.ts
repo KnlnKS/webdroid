@@ -12,6 +12,8 @@ const settingsMethods: NonNullable<NativeSpec["methods"]> = {
 interface WebSettingsValues { userAgentString: string; standardFontFamily: string | null; defaultFontSize: number; [setting: string]: unknown }
 export class WebSettingsAdapter extends JObj {
   get userAgent(): string { return this.v.userAgentString; }
+  /** whether the page's subframes and requests take third-party cookies, as CookieManager sets it */
+  get thirdPartyCookies(): boolean { return !!this.v.acceptThirdPartyCookies; }
   v: WebSettingsValues = {
     userAgentString: defaultUserAgent(), cacheMode: -1, textZoom: 100, minimumFontSize: 8, minimumLogicalFontSize: 8, defaultFontSize: 16,
     defaultFixedFontSize: 13, mixedContentMode: 1, forceDark: 1, supportZoom: 1, displayZoomControls: 1, allowContentAccess: 1,

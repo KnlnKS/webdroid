@@ -1,5 +1,5 @@
-// The audio output: one shared Web Audio context (closed when the process dies), the PCM a Java AudioTrack or an
-// AAudio stream schedules on it, and what is sounding there for AudioManager.isMusicActive.
+// The audio output: the Web Audio context the page gives this process (closed when the process dies), and the
+// PCM a Java AudioTrack or an AAudio stream schedules on it.
 
 import { onProcessExit } from "../process-exit.ts";
 
@@ -20,7 +20,10 @@ export interface AudioOut {
   decodeAudioData(bytes: ArrayBuffer): Promise<AudioData>;
 }
 let actx: AudioOut | null = null;
-export const audioContext = (): AudioOut => (actx ??= new AudioContext());
+export const audioContext = (): AudioOut => {
+  if (!actx) throw new Error("No audio output: the page that owns this process gives it one");
+  return actx;
+};
 export const useAudioOut = (out: AudioOut): void => { actx = out; };
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
@@ -31,16 +34,8 @@ export const minFrames = (rate: number): number => Math.max(1024, Math.ceil(rate
 /** bytes per sample of ENCODING_PCM_16BIT, _8BIT and _FLOAT, the encodings Web Audio can play */
 export const PCM_BYTES: Record<number, number> = { 2: 2, 3: 1, 4: 4 };
 
-/** the media players and SoundPool streams sounding now */
-const sounding = new Set<object>();
-export const setSounding = (source: object, on: boolean): void => { if (on) sounding.add(source); else sounding.delete(source); };
-/** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now */
-export const isMusicActive = (): number => +(sounding.size > 0);
-// a dead process sounds nothing: its scheduled PCM and its players' elements stop with it
-onProcessExit(() => {
-  void actx?.close();
-  for (const source of sounding) if (typeof HTMLMediaElement !== "undefined" && source instanceof HTMLMediaElement) source.pause();
-});
+// a dead process sounds nothing: closing its output stops its scheduled PCM and its players' elements
+onProcessExit(() => void actx?.close());
 
 type Entry = { buffer: AudioPcm; offset: number; start: number; source: AudioSource | null; consumed?: () => void };
 export type PcmConfig = { rate: number; channels: number; bytesPerSample: number; sessionId: number };

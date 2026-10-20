@@ -9,7 +9,7 @@ import { useAccountStore, useAccountAccess, accountsChanged } from "../android/a
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
 import { alarmTransport } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
-import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
+import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
 import { PROCESS_PID, processTransport } from "../android/os.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
@@ -29,7 +29,7 @@ import { useNotificationStore, notificationTransport } from "../android/notifica
 import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings.ts";
 import { remoteSettings } from "./settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
-import { cookieTransport, useWebCookies } from "../android/cookies.ts";
+import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard.ts";
 import { locationTransport } from "../android/locationmanager.ts";
 import { useHostUi } from "./host-ui.ts";
@@ -102,7 +102,7 @@ function connectCommandTransports(): void {
 /** the stores and system services a Worker reaches through the broker, which system_server's realm holds */
 function connectRemoteStores(): void {
   webStorageTransport.calls = brokerCalls;
-  useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
+  useSystemServiceAccess(SYSTEM_SERVICES, name => brokerCalls().systemService(name));
   systemProviderTransport.lookup = authority => brokerCalls().systemProvider(authority);
   notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
   useSettingsAccess(remoteSettings(brokerCalls));
@@ -197,7 +197,6 @@ export function connectProcess(): ProcessEndpoint {
   if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
   const stopSettings = useSettingsStore(broker.settings);
   if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
-  useWebCookies((pkg) => broker.cookies(pkg));
   return createProcessEndpoint();
 }
 
@@ -208,6 +207,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     locationChanged: async (id,token,event) => location.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
+    cookiesChanged: async () => cookiesChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => forgetRemoved(pkg),

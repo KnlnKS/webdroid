@@ -84,7 +84,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return cookieOwnership();
     });
     expect(cookies).toEqual({ session: true, persisted: true, read: "session=one; saved=two", isolatedRead: "",
-      document: ["saved=two"], accept: false, denied: false, removed: true, afterSession: "saved=two",
+      document: ["saved=two"], network: "session=one; saved=two", accept: false, denied: false, removed: true, afterSession: "saved=two",
       saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
     const clipboard = await page.evaluate(async () => {
       const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");

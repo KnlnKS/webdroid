@@ -1,7 +1,7 @@
 // The broker's side of a process's command port: the serialized operations a process may ask of
 // system_server, each made as the process the port belongs to.
 import { accountAuthority } from "../android/accounts.ts";
-import { asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
+import { SYSTEM_SERVICES, asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
@@ -132,7 +132,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     alarmSchedule: async (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval),
     alarmCancel: async id => broker.alarms.cancel(id),
     systemService: async name => {
-      if (name !== "notification" && name !== "mount") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+      if (!SYSTEM_SERVICES.includes(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
       const handle = await asSystem(() => ownedSystemService(name));
       broker.entry(pid);
       return handle;
@@ -177,7 +177,11 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     accountExists: async key => accounts().accountExists(key),
     accountCached: async (key, type) => accounts().accountCached(key, type),
     accountChange: async change => accounts().accountChange(change),
-    ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }),
+    ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {
+      if (!broker.alive(pid)) return false;
+      unawaited(broker.request(broker.entry(pid), endpoint => endpoint.cookiesChanged()));
+      return true;
+    }),
     exitRecords: async pkg => {
       if (!ownedBy(pkg, caller.uid) && await permissionDenied("android.permission.DUMP", caller.pkg))
         throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");

@@ -1,15 +1,15 @@
 // The audio policy: AudioSystem's limits and product strategies, and IAudioService under AOSP's
 // AudioManager and Spatializer: the reference AVD's stream volumes (dumpsys audio; aliased streams
 // follow their alias, rescaled as AudioService.rescaleIndex does), a normal ringer and mode,
-// MediaFocusControl's focus stack, and no spatializer. Output devices are not modelled (AudioSystem
-// lists no ports), so no attributes route to one. A codec's loudness parameters are the reference
-// AVD's for its output (the speaker).
-import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime.ts";
+// MediaFocusControl's focus stack, PlaybackActivityMonitor's players, and no spatializer. Output
+// devices are not modelled (AudioSystem lists no ports), so no attributes route to one. A codec's
+// loudness parameters are the reference AVD's for its output (the speaker).
+import { rt, JObj, noops, stubs, declaredField, driven, getDeclared, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { hostStub, oneway } from "./binder.ts";
-import { isMusicActive, newAudioSessionId, outputSampleRate } from "./audio-output.ts";
+import { callingIdentity, hostStub, onCallerDeath, oneway, type Caller } from "./binder.ts";
+import { newAudioSessionId, outputSampleRate } from "./audio-output.ts";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
 const VOLUMES: [number, number, number][] = [[1, 5, 3], [0, 7, 5], [0, 7, 5], [0, 15, 5], [1, 7, 6], [0, 7, 5], [0, 15, 7],
@@ -30,8 +30,8 @@ export function setStreamVolume(stream: number, index: number): void {
   ALIAS.forEach((a, s) => { if (a === alias) VOLUMES[s][2] = Math.max(VOLUMES[s][0], s === alias ? set : rescale(set, alias, s)); });
 }
 
-/** a focus holder, and the loss it last heard (0 while it holds focus) */
-type Holder = { clientId: string; dispatcher: JObj | null; loss: number };
+/** a focus holder in process `pid`, and the loss it last heard (0 while it holds focus) */
+type Holder = { pid: number; clientId: string; dispatcher: JObj | null; loss: number };
 const focusStack: Holder[] = [];
 const GAIN = 1, GAIN_TRANSIENT_MAY_DUCK = 3, LOSS = -1, LOSS_TRANSIENT = -2, LOSS_TRANSIENT_CAN_DUCK = -3;
 /** FocusRequester.focusLossForGainRequest */
@@ -41,6 +41,7 @@ const dispatch = (h: Holder, change: number) => {
   if (h.dispatcher) oneway(h.dispatcher, "dispatchAudioFocusChange", "(ILjava/lang/String;)V", change, h.clientId);
 };
 function requestFocus(gain: number, dispatcher: JObj | null, clientId: string): number {
+  const { pid } = caller();
   abandon(clientId, false);
   for (const h of [...focusStack]) {
     const loss = lossFor(gain, h.loss);
@@ -49,7 +50,7 @@ function requestFocus(gain: number, dispatcher: JObj | null, clientId: string): 
     if (loss === LOSS) focusStack.splice(focusStack.indexOf(h), 1);
     dispatch(h, loss);
   }
-  focusStack.push({ clientId, dispatcher, loss: 0 });
+  focusStack.push({ pid, clientId, dispatcher, loss: 0 });
   return 1;
 }
 /** the holder leaves the stack; a new top that had lost focus regains it */
@@ -62,7 +63,35 @@ function abandon(clientId: string, notify = true): number {
   return 1;
 }
 
-let capturePolicy = 1, playerIds = 0;
+// PlaybackActivityMonitor's players by the piid trackPlayer hands out: their owner, legacy stream and last state
+const IDLE = 1, STARTED = 2, STOPPED = 4, PLAYER_TYPE_JAM_SOUNDPOOL = 3, STREAM_MUSIC = 3;
+type Player = { pid: number; uid: number; type: number; stream: number; state: number };
+const players = new Map<number, Player>();
+let playerIds = 0;
+const PIC = "android/media/PlayerBase$PlayerIdCard";
+const legacyStream = (attributes: unknown) => scall("android/media/AudioAttributes", "toLegacyStreamType", "(Landroid/media/AudioAttributes;)I", attributes);
+/** the player, when the caller owns it: checkConfigurationCaller takes no other uid's updates */
+const owned = (piid: number) => {
+  const p = players.get(piid);
+  return p?.uid === callingIdentity().uid ? p : undefined;
+};
+/** whether a started player `matches` */
+function active(matches: (p: Player) => boolean): number {
+  for (const p of players.values()) if (p.state === STARTED && matches(p)) return 1;
+  return 0;
+}
+/** the caller, whose players and focus requests die with its process */
+function caller(): Caller {
+  const who = callingIdentity();
+  onCallerDeath(who.pid, died);
+  return who;
+}
+function died(pid: number) {
+  for (const [piid, p] of players) if (p.pid === pid) players.delete(piid);
+  for (const h of focusStack.filter((h) => h.pid === pid)) abandon(h.clientId);
+}
+/** each uid's allowed capture policy, ALLOW_CAPTURE_BY_ALL until it sets one */
+const capturePolicies = new Map<number, number>();
 rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "android/media/IAudioService$Stub", methods: {
   "getStreamVolume(I)I": streamVolume,
   "getStreamMaxVolume(I)I": streamMaxVolume,
@@ -71,7 +100,8 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
   "getStreamTypeAlias(I)I": (stream: number) => { volumeOf(stream); return ALIAS[stream]; },
   "setStreamVolume(IIILjava/lang/String;)V": setStreamVolume,
   "setStreamVolumeWithAttribution(IIILjava/lang/String;Ljava/lang/String;)V": setStreamVolume,
-  "isMusicActive(Z)Z": isMusicActive,
+  // AudioSystem.isStreamActive(STREAM_MUSIC) as its players report it; none plays to a remote submix
+  "isMusicActive(Z)Z": (remotely: number) => remotely ? 0 : active((p) => p.stream === STREAM_MUSIC),
   // RINGER_MODE_NORMAL, MODE_NORMAL
   ...stubs(2, "getRingerModeExternal()I", "getRingerModeInternal()I"),
   ...stubs(0, "getMode()I", "isStreamMute(I)Z", "isMasterMute()Z", "isSpeakerphoneOn()Z", "isBluetoothScoOn()Z", "isBluetoothA2dpOn()Z", "isVolumeFixed()Z",
@@ -84,11 +114,12 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
   "playSoundEffect(II)V": () => {},
   // the one output is the speaker (AudioRoutesInfo.MAIN_SPEAKER), and it never changes
   "startWatchingRoutes(Landroid/media/IAudioRoutesObserver;)Landroid/media/AudioRoutesInfo;": () => newObj("android/media/AudioRoutesInfo"),
-  "getAllowedCapturePolicy()I": () => capturePolicy,
+  "getAllowedCapturePolicy()I": () => capturePolicies.get(callingIdentity().uid) ?? 1,
   // AudioService validates the policy as AudioAttributes does
   "setAllowedCapturePolicy(I)I": async (policy: number) => {
+    const { uid } = callingIdentity();
     await scall("android/media/AudioAttributes", "capturePolicyToFlags", "(II)I", policy, 0);
-    capturePolicy = policy;
+    capturePolicies.set(uid, policy);
     return 0;
   },
   "getDevicesForAttributesUnprotected(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
@@ -110,10 +141,25 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
     "removeLoudnessCodecInfo(ILandroid/media/LoudnessCodecInfo;)V"),
   // no SystemUI registered a ringtone player, so a Ringtone plays locally
   "getRingtonePlayer()Landroid/media/IRingtonePlayer;": () => null,
-  // PlaybackActivityMonitor: each player gets an id; no playback callback is registered to hear of its events
-  "trackPlayer(Landroid/media/PlayerBase$PlayerIdCard;)I": () => ++playerIds,
-  "playerAttributes(ILandroid/media/AudioAttributes;)V": () => {}, "playerEvent(III)V": () => {},
-  "releasePlayer(I)V": () => {}, "playerSessionId(II)V": () => {},
+  // PlaybackActivityMonitor; no playback callback is registered to hear of its players' events
+  "trackPlayer(Landroid/media/PlayerBase$PlayerIdCard;)I": driven(function* (card: JObj): Gen<number> {
+    const { pid, uid } = caller(), piid = ++playerIds;
+    const stream: number = yield legacyStream(getDeclared(card, PIC, "mAttributes"));
+    players.set(piid, { pid, uid, type: getDeclared(card, PIC, "mPlayerType"), stream, state: IDLE });
+    return piid;
+  }),
+  "playerAttributes(ILandroid/media/AudioAttributes;)V": driven(function* (piid: number, attributes: JObj): Gen<void> {
+    const p = owned(piid);
+    if (p) p.stream = yield legacyStream(attributes);
+  }),
+  // a SoundPool reports each play but never its end, so the monitor takes none of its states; events
+  // past STOPPED update a player's device, port, mute or format
+  "playerEvent(III)V": (piid: number, event: number) => {
+    const p = owned(piid);
+    if (p && p.type !== PLAYER_TYPE_JAM_SOUNDPOOL && event <= STOPPED) p.state = event;
+  },
+  "releasePlayer(I)V": (piid: number) => { if (owned(piid)) players.delete(piid); },
+  "playerSessionId(II)V": () => {},
   // the mode stays MODE_NORMAL, so no mode change is ever dispatched
   ...noops("registerModeDispatcher(Landroid/media/IAudioModeDispatcher;)V", "unregisterModeDispatcher(Landroid/media/IAudioModeDispatcher;)V"),
 } });
@@ -203,8 +249,11 @@ rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
 const MRC = "Landroid/media/IMediaRouterClient;";
 rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, sup: "android/media/IMediaRouterService$Stub", methods: {
   [`getState(${MRC})Landroid/media/MediaRouterClientState;`]: () => newObj("android/media/MediaRouterClientState"),
-  // AudioPlayerStateMonitor's view of the client's uid: its own players
-  [`isPlaybackActive(${MRC})Z`]: isMusicActive,
+  // AudioPlayerStateMonitor's view of the client's uid: its own started players
+  [`isPlaybackActive(${MRC})Z`]: () => {
+    const { uid } = callingIdentity();
+    return active((p) => p.uid === uid);
+  },
   ...noops(`registerClientAsUser(${MRC}Ljava/lang/String;I)V`, `unregisterClient(${MRC})V`, `setDiscoveryRequest(${MRC}IZ)V`,
     `setSelectedRoute(${MRC}Ljava/lang/String;Z)V`),
 } });

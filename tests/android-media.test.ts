@@ -10,6 +10,7 @@ import { vfs } from "../src/shell/vfs.ts";
 import { onMain } from "../src/android/mainloop.ts";
 import { mkAssetFd } from "../src/android/resnative.ts";
 import { hostedService } from "../src/android/binder.ts";
+import { useAudioOut, type AudioOut } from "../src/android/audio-output.ts";
 import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec.ts";
 import { NativeFormat, annexB } from "../src/android/media-format.ts";
 
@@ -44,6 +45,22 @@ describe("audio-attributes", () => {
     expect(await request(1, "other")).toBe(1);
     await onMain(() => {});
     expect(changes).toEqual([["music", -3], ["music", 1], ["music", -1]]);
+  });
+
+  test("music is active while a media player the audio service tracks is started", async () => {
+    const audio = await hostedService("audio");
+    const attrs = await vcall(await newObj("android/media/AudioAttributes$Builder"), "build", "()Landroid/media/AudioAttributes;");
+    const track = async (type: number) => vcall(audio, "trackPlayer", "(Landroid/media/PlayerBase$PlayerIdCard;)I",
+      await newObj("android/media/PlayerBase$PlayerIdCard", "(ILandroid/media/AudioAttributes;Landroid/media/IPlayer;I)V", type, attrs, null, 0));
+    const event = (piid: number, state: number) => vcall(audio, "playerEvent", "(III)V", piid, state, 0);
+    const active = () => vcall(audio, "isMusicActive", "(Z)Z", 0);
+    const player = await track(2), pool = await track(3);
+    await event(pool, 2);
+    expect(await active()).toBe(0);
+    await event(player, 2);
+    expect(await active()).toBe(1);
+    await event(player, 3);
+    expect(await active()).toBe(0);
   });
 
 });
@@ -157,9 +174,7 @@ describe("sound-pool", () => {
 
   test("SoundPool.load(AssetFileDescriptor) decodes the descriptor's bytes and reports the load", async () => {
     const decoded: number[] = [];
-    (globalThis as { AudioContext?: unknown }).AudioContext ??= class {
-      decodeAudioData(b: ArrayBuffer) { decoded.push(b.byteLength); return Promise.resolve({}); }
-    };
+    useAudioOut({ decodeAudioData: async (b: ArrayBuffer) => { decoded.push(b.byteLength); return { length: 0, duration: 0 }; } } as Partial<AudioOut> as AudioOut);
     const pool = await newObj("android/media/SoundPool", "(III)V", 4, 3, 0);
     const listener = loadListener();
     await vcall(pool, "setOnLoadCompleteListener", "(Landroid/media/SoundPool$OnLoadCompleteListener;)V", listener);
