@@ -1,4 +1,4 @@
-import { zipTree } from "../jvm/natives/jzip.ts";
+import { zipTree } from "../zip.ts";
 import type { FileSource } from "./lazyfile.ts";
 import { isDexEntry } from "../jvm/dex.ts";
 

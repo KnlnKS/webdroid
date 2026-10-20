@@ -1,5 +1,5 @@
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../src/jvm/dex.ts";
-import { zipTree } from "../src/jvm/natives/jzip.ts";
+import { zipTree } from "../src/zip.ts";
 import { openInstall } from "../src/shell/install.ts";
 
 export function dexesOf(zip: Record<string, Uint8Array>): DexFile[] {

@@ -6,7 +6,7 @@ import { Inflate, Deflate, Zlib, Gzip } from "fflate";
 import { mem, AddrMap } from "./mem.ts";
 import { hostLib, type HostFn, stp, ldp } from "./host.ts";
 import { concat } from "../jvm/abi.ts";
-import { crc32 as javaCrc32, adler32 as javaAdler32 } from "../jvm/natives/jzip.ts";
+import { crc32 as javaCrc32, adler32 as javaAdler32 } from "../zip.ts";
 
 // z_stream fields used here
 const Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };

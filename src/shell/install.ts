@@ -3,7 +3,7 @@
 
 import { parseAXML, attrStr } from "../android/axml.ts";
 import { isDexEntry } from "../jvm/dex.ts";
-import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip.ts";
+import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../zip.ts";
 import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an

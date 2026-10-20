@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { gzipSync, zipSync } from "fflate";
-import { centralDir, entryBytes } from "../src/jvm/natives/jzip.ts";
+import { centralDir, entryBytes, localStart } from "../src/zip.ts";
 import { parsePackageArchive } from "../src/android/packagearchive.ts";
 import { verifyApkSignature } from "../src/android/apksignature.ts";
 import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages.ts";
@@ -32,9 +32,8 @@ async function packArchive(bytes: Uint8Array, directory: string): Promise<Packed
     const data = bytes.subarray(position, end); headers.push(data);
     index.spans.push([position, data.length, "", headerOffset]); headerOffset += data.length;
   };
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (const entry of [...entries.values()].sort((a, b) => a.off - b.off)) {
-    const start = entry.off + 30 + view.getUint16(entry.off + 26, true) + view.getUint16(entry.off + 28, true);
+    const start = localStart(bytes, entry);
     if (start < position || start + entry.csize > bytes.length) throw new Error("Overlapping ZIP entry: " + entry.name);
     gap(start);
     const raw = bytes.subarray(start, start + entry.csize), decoded = entryBytes(bytes, entry);

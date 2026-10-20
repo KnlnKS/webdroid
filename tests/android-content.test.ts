@@ -11,7 +11,7 @@ import { mkUri } from "../src/android/net.ts";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { pickFiles } from "../src/shell/hostfs.ts";
-import { centralDir, zipTree } from "../src/jvm/natives/jzip.ts";
+import { centralDir, zipTree } from "../src/zip.ts";
 import { mergeInstall } from "../src/shell/install.ts";
 import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
 import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";

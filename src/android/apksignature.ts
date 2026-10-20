@@ -1,4 +1,5 @@
 import { sameBytes } from "../jvm/abi.ts";
+import { endRecord } from "../zip.ts";
 
 class Fields {
   readonly bytes: Uint8Array;
@@ -22,27 +23,24 @@ export function signingSequence(bytes: Uint8Array): Uint8Array[] {
   return out;
 }
 export function apkSigningBlock(bytes: Uint8Array) {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-  for (let end = bytes.length - 22; end >= Math.max(0, bytes.length - 65557); end--) {
-    if (view.getUint32(end, true) !== 0x06054b50 || end + 22 + view.getUint16(end + 20, true) !== bytes.length) continue;
-    const central = view.getUint32(end + 16, true);
-    if (view.getUint16(end + 4, true) || view.getUint16(end + 6, true) || central + view.getUint32(end + 12, true) !== end)
-      throw new Error("unsupported APK ZIP directory");
-    if (central < 24 || central > end || new TextDecoder().decode(bytes.subarray(central - 16, central)) !== "APK Sig Block 42") return null;
-    const size = Number(view.getBigUint64(central - 24, true)), start = central - size - 8;
-    if (!Number.isSafeInteger(size) || size < 24 || start < 0 || view.getBigUint64(start, true) !== BigInt(size)) throw new Error("invalid APK signing block");
-    const blocks = new Map<number, Uint8Array>();
-    for (let at = start + 8; at < central - 24;) {
-      if (at + 8 > central - 24) throw new Error("truncated APK signing entry");
-      const length = Number(view.getBigUint64(at, true)); at += 8;
-      if (!Number.isSafeInteger(length) || length < 4 || length > central - 24 - at) throw new Error("invalid APK signing entry");
-      const id = view.getUint32(at, true);
-      if (blocks.has(id)) throw new Error("duplicate APK signing block");
-      blocks.set(id, bytes.subarray(at + 4, at + length)); at += length;
-    }
-    return { start, central, end, blocks };
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length), end = endRecord(bytes);
+  if (end < 0) throw new Error("APK has no valid ZIP end record");
+  const central = view.getUint32(end + 16, true);
+  if (view.getUint16(end + 4, true) || view.getUint16(end + 6, true) || central + view.getUint32(end + 12, true) !== end)
+    throw new Error("unsupported APK ZIP directory");
+  if (central < 24 || central > end || new TextDecoder().decode(bytes.subarray(central - 16, central)) !== "APK Sig Block 42") return null;
+  const size = Number(view.getBigUint64(central - 24, true)), start = central - size - 8;
+  if (!Number.isSafeInteger(size) || size < 24 || start < 0 || view.getBigUint64(start, true) !== BigInt(size)) throw new Error("invalid APK signing block");
+  const blocks = new Map<number, Uint8Array>();
+  for (let at = start + 8; at < central - 24;) {
+    if (at + 8 > central - 24) throw new Error("truncated APK signing entry");
+    const length = Number(view.getBigUint64(at, true)); at += 8;
+    if (!Number.isSafeInteger(length) || length < 4 || length > central - 24 - at) throw new Error("invalid APK signing entry");
+    const id = view.getUint32(at, true);
+    if (blocks.has(id)) throw new Error("duplicate APK signing block");
+    blocks.set(id, bytes.subarray(at + 4, at + length)); at += length;
   }
-  throw new Error("APK has no valid ZIP end record");
+  return { start, central, end, blocks };
 }
 function algorithms(bytes: Uint8Array) {
   return signingSequence(bytes).map((entry) => {

@@ -5,7 +5,7 @@ import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex.ts";
 import { rt } from "../jvm/runtime.ts";
 import { appLaunched, beginAppCode, loadAppCode, loadDex, tierReady } from "../jvm/tier.ts";
 import { vfs, apkPath } from "./vfs.ts";
-import { inflateTree } from "../jvm/natives/jzip.ts";
+import { inflateTree } from "../zip.ts";
 import type { Install } from "./install.ts";
 import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jvmruntime.ts";
 import { Arsc } from "../android/arsc.ts";

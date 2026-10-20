@@ -5,7 +5,7 @@ import type { AppCodeRequest } from "../../src/wasm/host/appcode.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../src/jvm/dex.ts";
 import { vfs } from "../../src/shell/vfs.ts";
-import { zipTree } from "../../src/jvm/natives/jzip.ts";
+import { zipTree } from "../../src/zip.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";

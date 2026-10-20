@@ -1,5 +1,5 @@
 import { parseAXML, attrStr, type XmlNode } from "./axml.ts";
-import { zipTree, centralDirOfSource } from "../jvm/natives/jzip.ts";
+import { zipTree, centralDirOfSource } from "../zip.ts";
 import { ZipEntryFile } from "../shell/install.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Arsc } from "./arsc.ts";

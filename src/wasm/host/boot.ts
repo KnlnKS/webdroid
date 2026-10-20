@@ -9,7 +9,7 @@ import type { Entry } from "../../jvm/natives/jentry.ts";
 import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex.ts";
-import { centralDir, entryBytes } from "../../jvm/natives/jzip.ts";
+import { centralDir, entryBytes } from "../../zip.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { appArchives, packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
