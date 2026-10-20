@@ -14,7 +14,7 @@ import { BlurMask } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint.ts";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, PLANE, canvasLocalBounds, shaderIdentity, recolor } from "./graphics.ts";
-import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds } from "./matrix.ts";
+import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -28,6 +28,8 @@ type Behind = { image: OffscreenCanvas | null; x: number; y: number };
 const NO_DASH: number[] = [];
 /** SkCanvas::SaveFlags: Matrix and Clip */
 const MATRIX_CLIP = 3;
+/** the context's transform as SkMatrix holds it, in floats */
+const skMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
 /** SkiaCanvas: a 2D context and the state Canvas2D does not expose — the save count, the device
  *  clip bounds, open layers */
@@ -416,21 +418,13 @@ export class NativeCanvas {
     if (!(Number.isFinite(d[0]) && Number.isFinite(d[1]) && Number.isFinite(d[2]) && Number.isFinite(d[3]))) return true;
     return !(Math.max(d[0], this.cl - 1) < Math.min(d[2], this.cr + 1) && Math.max(d[1], this.ct - 1) < Math.min(d[3], this.cb + 1));
   }
-  /** SkiaCanvas::getClipBounds: the device clip's bounds in local coordinates, rounded */
+  /** SkiaCanvas::getClipBounds: the device clip's bounds in local coordinates, under SkMatrix's float inverse, rounded */
   clipBounds(): Box | null {
-    const matrix = transformOf(this.ctx);
-    const a = Math.fround(matrix.a), b = Math.fround(matrix.b), c = Math.fround(matrix.c), d = Math.fround(matrix.d);
-    const e = Math.fround(matrix.e), f = Math.fround(matrix.f);
-    const det = a * d - b * c;
-    if (!det || !Number.isFinite(det) || this.clipEmpty) return null;
-    const dx = this.cl - e, dy = this.ct - f;
-    const ox = (d * dx - c * dy) / det, oy = (a * dy - b * dx) / det;
-    const wx = d * (this.cr - this.cl) / det, wy = -b * (this.cr - this.cl) / det;
-    const hx = -c * (this.cb - this.ct) / det, hy = a * (this.cb - this.ct) / det;
-    return {
-      left: Math.round(ox + Math.min(0, wx) + Math.min(0, hx)), top: Math.round(oy + Math.min(0, wy) + Math.min(0, hy)),
-      right: Math.round(ox + Math.max(0, wx) + Math.max(0, hx)), bottom: Math.round(oy + Math.max(0, wy) + Math.max(0, hy)),
-    };
+    if (this.clipEmpty) return null;
+    const m = transformOf(this.ctx), f = Math.fround;
+    skMatrix.a = f(m.a); skMatrix.b = f(m.b); skMatrix.c = f(m.c); skMatrix.d = f(m.d); skMatrix.e = f(m.e); skMatrix.f = f(m.f);
+    const d = localBounds(skMatrix, this.cr - this.cl, this.cb - this.ct, this.cl, this.ct);
+    return d && { left: Math.round(d[0]), top: Math.round(d[1]), right: Math.round(d[2]), bottom: Math.round(d[3]) };
   }
   /** a layer confines what is drawn in it to its device bounds, rounded out */
   clipToLayer(bounds: Box | null) {
