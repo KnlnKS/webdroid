@@ -4,7 +4,7 @@
 // package, has the data's owners clear or remove it (shell/packagedata.ts) and sends them.
 import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime.ts";
 import { scall, vcall, newObj, after } from "../jvm/natives/jentry.ts";
-import { callingIdentity, notConnected, type ParcelData, binderEscape } from "./binder.ts";
+import { callingIdentity, type ParcelData, binderEscape } from "./binder.ts";
 import { encodeIntent } from "./intentipc.ts";
 import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent.ts";
 import { longVersionCode, queryReceivers } from "./pm.ts";
@@ -13,7 +13,7 @@ import { checkUidPermission } from "./permissions.ts";
 import { sendIntent } from "./pendingintent.ts";
 import type { PackageDataChange } from "../shell/packagedata.ts";
 import type { Receiver } from "../shell/broker-contract.ts";
-import { detached } from "../jvm/natives/jthrowable.ts";
+import { detached, notConnected } from "../jvm/natives/jthrowable.ts";
 
 const S = "Ljava/lang/String;";
 type Broadcast = { data: ParcelData; targets: Receiver[] };

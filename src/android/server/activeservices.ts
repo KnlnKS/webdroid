@@ -7,8 +7,8 @@
 // recreates in a restarted process.
 import { awaited, rt, type JObj, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
 import { newObj, vcall } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
-import { notConnected, parceledList, type ParcelData, binderEscape } from "../binder.ts";
+import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
+import { parceledList, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
 import { PROCESS_PID, PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
@@ -18,7 +18,7 @@ import { type JComponentName, type JIntent, componentParts$, mkComponentName, ne
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
 import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./am.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
-import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords.ts";
+import type { ServiceBinding, ServiceStartAccess } from "../../shell/servicerecords.ts";
 
 /** the services of another process, through the broker; `flags` are bindService's. A binding hears
  *  its service's binder through `connected`, which the broker sends again when the service restarts. */
@@ -33,9 +33,9 @@ export const serviceTransport: {
   /** what a binding of another process hears: the binder published, or that the service is gone */
   connected: (key: string, binder: JObj | null, dead: boolean) => unknown;
 } = { bind: notConnected, unbind: notConnected, start: notConnected, stop: notConnected, peek: notConnected,
-  starts: () => standalone, connected: () => {} };
-/** a process the broker does not know keeps its own */
-const standalone = new ServiceRecords({ send: () => null, connected: () => {}, persistent: () => false }).starts("", "");
+  starts: () => unconnected, connected: notConnected };
+const unconnected: ServiceStartAccess = { created: notConnected, destroyed: notConnected, start: notConnected, deliver: notConnected,
+  requested: notConnected, stop: notConnected, stopSelf: notConnected, done: notConnected, foreground: notConnected };
 
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";
 const CONNECTED = "(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V";

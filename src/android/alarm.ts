@@ -4,7 +4,8 @@
 // Exact alarms need the permission AlarmManagerService asks for.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, hostStub, newStub, notConnected, onCallerDeath, oneway } from "./binder.ts";
+import { callingIdentity, hostStub, newStub, onCallerDeath, oneway } from "./binder.ts";
+import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { operationId } from "./pendingintent.ts";
 import type { Alarms } from "../shell/alarms.ts";
 import { clearGuestTimeout, setSystemTimeout, uptimeMillis, wallMillis, MAX_TIMER_DELAY, type GuestTimer } from "../guest-clock.ts";

@@ -120,6 +120,11 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
     started = entry = (async () => {
       const { startActivityThread } = await import("../src/android/server/am.ts");
       const { hostWindowManager } = await import("../src/android/server/wm.ts");
+      const { serviceTransport } = await import("../src/android/server/activeservices.ts");
+      const { ServiceRecords } = await import("../src/shell/servicerecords.ts");
+      // the start state the broker keeps of this realm's services, which no broker holds here
+      const starts = new ServiceRecords({ send: () => null, connected: () => {}, persistent: () => false }).starts("", "");
+      serviceTransport.starts = () => starts;
       await loadPlatform();
       await loadSystemFonts();
       hostWindowManager();

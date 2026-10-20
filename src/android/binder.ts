@@ -270,8 +270,6 @@ export function oneway(target: JObj, name: string, desc: string, ...args: unknow
   const thread = curThread;
   queueMicrotask(() => detached(() => callOn(thread, () => vcall(target, name, desc, ...args)), binderEscape()));
 }
-/** a cross-process transport's call before the broker connects it */
-export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
 /** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
 export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
 export const enforceCallingOrSelfPermission = driven(function* (permission: string, message: string | null): Gen<void> {

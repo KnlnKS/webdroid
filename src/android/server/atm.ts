@@ -5,7 +5,7 @@
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
 import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
 import { once } from "../../jvm/suspend.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
@@ -24,11 +24,11 @@ const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
 export type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
 /** the broker's half of ActivityTaskManager: starts in other processes and their results */
 export const activityTransport: {
-  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
+  launch: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
   presentation?: (translucent: boolean) => void;
   /** an activity the broker started here (its record id) finished with a result */
   finished?: (remoteId: number, code: number, data: JIntent | null) => void;
-} = {};
+} = { launch: notConnected };
 
 /** a resumed activity is also the top resumed one: it hears that with its resume, and loses it
  *  in the transaction that pauses it */
@@ -319,10 +319,8 @@ function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, res
   const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
   const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
   if (runsHere(pkg, process)) return { run: () => startActivity(app, copy, info, resultRecord, resultWho, requestCode), remote: false };
-  const launch = activityTransport.launch;
-  if (!launch) return START_INTENT_NOT_RESOLVED;
   return { remote: true, run: function* () {
-    yield launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+    yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
       caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
       deliver: (resultCode, data) => detached(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data))), logUncaught),
     } : undefined);

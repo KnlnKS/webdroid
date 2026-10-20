@@ -1,7 +1,8 @@
 import { awaited, type JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { type JIntent, newIntent, putExtra } from "./intent.ts";
-import { exportBinder, importBinder, notConnected, type ParcelData } from "./binder.ts";
+import { exportBinder, importBinder, type ParcelData } from "./binder.ts";
+import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { encodeIntent, decodeIntent } from "./intentipc.ts";
 import type { PendingOperation } from "../shell/pendingintents.ts";
 import { broadcastIntent } from "./server/broadcastqueue.ts";

@@ -15,7 +15,7 @@ import { uuidFromString } from "../jvm/natives/jvalues.ts";
 import { vcall, scall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
 import { handle, deref } from "./handles.ts";
 import { hasProperty, propertyValue } from "../shell/properties.ts";
-import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
+import { type JThrowable, logUncaught, notConnected } from "../jvm/natives/jthrowable.ts";
 import { checkFromIndexSize } from "../jvm/natives/jlang.ts";
 import { E, ERRSTR, strerror, AT_FDCWD, S_IFMT, S_IFDIR } from "../native/abi.ts";
 import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
@@ -84,7 +84,7 @@ export function setProcessName(name: string): void { PROCESS_NAME = name; procId
 /** this process's name, its package's when it was given none (the application's default process) */
 export const processName = (): string => PROCESS_NAME || appHost?.pkg || "";
 /** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
-export const processTransport = { signal: (_pid: number, _signal: number): void | Promise<void> => {} };
+export const processTransport: { signal: (pid: number, signal: number) => void | Promise<void> } = { signal: notConnected };
 // Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.
 rt.registerJni("java/lang/Runtime", "nativeExit(I)V", (code: number) => { exitProcess({ code: code & 0xff }); return never(); });
 const SIGNAL_KILL = 9;
