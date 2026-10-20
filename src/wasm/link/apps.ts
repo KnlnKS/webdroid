@@ -45,7 +45,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
     for (;;) {
       const cx = new Compiler(w);
       w.beginTouch();
-      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
+      const built = cx.buildSynthetics(group.map(({ name, slot, d }) => ({ name, slot, params: d.params, ret: d.ret, body: (c) => d.body(cx, c) }))), touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
       if (!bad) {
         if (built.kept.length) {
           const header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };

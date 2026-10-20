@@ -51,15 +51,7 @@ export class StructStrings {
 
   // ---------- functions of the module
   /** a function of this module, defined on first use under `key` */
-  private fn(key: string, params: VT[], results: VT[], body: (c: Code) => void): number {
-    const mb = this.cx.mb;
-    return this.cx.memo("s:" + key, () => {
-      const f = mb.reserveFunc(mb.addFuncType(params, results), "$s:" + key), c = new Code(params.length);
-      body(c);
-      mb.setBody(f, c.finish());
-      return f;
-    }, () => mb.addFuncType(params, results));
-  }
+  private fn(key: string, params: VT[], results: VT[], body: (c: Code) => void): number { return this.cx.defineFn("s:" + key, params, results, body, true); }
   private get st(): number { return this.cx.tStr; }
   private get chars(): number { return this.cx.tData.i16; }
   /** pushes the char array of the String in local `l` */
@@ -157,18 +149,6 @@ export class StructStrings {
         .lget(a).lget(i).arrayGetU(this.chars).lget(b).lget(i).arrayGetU(this.chars).raw(OP.i32_sub).ltee(d).if_().lget(d).ret().end()
         .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(na).lget(nb).raw(OP.i32_sub);
     });
-  }
-
-  /** a module-local helper over references (vtab, acmp, shash), see Compiler.helper */
-  helper(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] | undefined {
-    const A = T.anyref;
-    switch (name) {
-      case "vtab": return [t([A], [ref(this.cx.tVT)]), () => new Code(1).lget(0).refCast(this.cx.tObj).structGet(this.cx.tObj, 0).finish()];
-      // every non-null reference is an Object: identity
-      case "acmp": return [t([A, A], [T.i32]), () => new Code(2).lget(0).refCast(HT.eq, true).lget(1).refCast(HT.eq, true).refEq().finish()];
-      case "shash": return [t([A], [T.i32]), () => new Code(1).lget(0).call(this.hash()).finish()];
-    }
-    return undefined;
   }
 
   // ---------- constructors

@@ -35,7 +35,7 @@ export class SymbolicSites {
         binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
         return { name, slot, params, output, plain, wait, method };
       });
-      const built = cx.buildSyntheticGroup(pending.map(({ name, slot, params, output, plain, wait }) => ({
+      const built = cx.buildSynthetics(pending.map(({ name, slot, params, output, plain, wait }) => ({
         name, params, ret: output, body: (c: Code) => {
           emitRestored(cx, c, [], [], () => { c.call(sync).if_().call(plain).else_().call(wait).end(); });
           params.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(params, output), table);

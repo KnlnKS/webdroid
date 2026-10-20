@@ -249,9 +249,8 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     console.log("helper accounting: throwable and field reader record units and bytes; warm calls unchanged");
     {
       const stubs: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [];
-      const emit = Compiler.prototype.buildSynthetic, group = Compiler.prototype.buildSyntheticGroup;
-      Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
-      Compiler.prototype.buildSyntheticGroup = function (...args: Parameters<typeof group>) { compilers.push(new WeakRef(this)); return group.apply(this, args); };
+      const emit = Compiler.prototype.buildSynthetics;
+      Compiler.prototype.buildSynthetics = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
       const before = { ...w.stats.phase };
       try {
         const bindings = w.symbolic.symbolicImports(Array.from({ length: 32 }, (_, i) => [`memory:${i}`, key, method.index, ins.pc, [], "I"]));
@@ -262,7 +261,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
         }
         if (w.stats.phase.prepare !== before.prepare || w.stats.phase.infer !== before.infer) fail("symbolic operation reanalyzed its method");
       } finally {
-        Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
+        Compiler.prototype.buildSynthetics = emit;
       }
       const collect = (globalThis as typeof globalThis & { gc: () => void }).gc;
       check("symbolic lifetime probe compilers (shared operations are not rebuilt)", compilers.length, 1);
