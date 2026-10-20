@@ -557,12 +557,13 @@ export class Program {
     for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) c.ifaces.forEach(visit);
     return [...out];
   }
-  resolveField(cls: string, name: string, desc: string): FieldInfo | undefined {
+  /** the field `name` that `cls` declares or inherits (the class, its superinterfaces, then its superclass): of type `desc` and kind `isStatic` when given */
+  resolveField(cls: string, name: string, desc?: string, isStatic?: boolean): FieldInfo | undefined {
     const seen = new Set<string>();
     const visit = (n: string): FieldInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const f = c.fields.find((x) => x.name === name && x.desc === desc); if (f) return f;
+      const f = c.fields.find((x) => x.name === name && (desc === undefined || x.desc === desc) && (isStatic === undefined || x.isStatic === isStatic)); if (f) return f;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return c.sup ? visit(c.sup) : undefined;
     };

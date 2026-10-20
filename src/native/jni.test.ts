@@ -104,6 +104,11 @@ for (const a64 of abis) test(`${abi(a64)} FindClass, GetMethodID and the Call fa
   expect(await j.call(S.IsSameObject, await j.call(S.GetSuperclass, child), probe)).toBe(1);
   expect(await j.call(S.IsAssignableFrom, child, probe)).toBe(1);
   expect(await j.call(S.IsAssignableFrom, probe, child)).toBe(0);
+  // an array is covariant in a reference element type, and an int[] is an Object
+  const objects = await j.cls("[Ljava/lang/Object;");
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[LJniProbe$Child;"), await j.cls("[LJniProbe;"))).toBe(1);
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[[I"), objects)).toBe(1);
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[I"), objects)).toBe(0);
 
   // a constructor with arguments, and an object no constructor has run on
   const ctor = await j.method(probe, "<init>", "(ILjava/lang/String;)V"), seven = await j.call(S.NewObjectA, probe, ctor, j.values(7, await j.string("seven")));

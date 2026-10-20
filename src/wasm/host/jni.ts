@@ -10,7 +10,7 @@ import { elemKindOf } from "../compiler/consts.ts";
 import { failed, symbolicImplFor } from "../compiler/linkage.ts";
 import type { World } from "../link/world.ts";
 import type { Strand } from "../link/sched.ts";
-import { ARRAY_SUPERS, classRef, onNestedStrand, runningThread } from "./entry.ts";
+import { assignable, classRef, onNestedStrand, runningThread } from "./entry.ts";
 import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm.ts";
 
 interface WasmField extends JniField { info: FieldInfo }
@@ -31,13 +31,6 @@ export function wasmJni(w: World): JniVm {
     const element = name.replace(/^\[+/, "");
     if (name[0] === "[") return element.length === 1 ? element in PRIMS : element[0] === "L" && !!prog.get(element.slice(1, -1));
     return !!prog.get(name);
-  };
-  const isSub = (a: string, b: string): boolean => {
-    if (a === b) return true;
-    if (a[0] !== "[") return b[0] !== "[" && prog.isSubclass(a, b);
-    if (b[0] !== "[") return ARRAY_SUPERS.has(b);
-    const x = a.slice(1), y = b.slice(1);
-    return x[0] === "L" && y[0] === "L" ? isSub(x.slice(1, -1), y.slice(1, -1)) : x[0] === "[" && y[0] === "[" ? isSub(x, y) : x === y;
   };
   const mirror = (c: JniClass): unknown => classRef(w, c.name);
   const classId = w.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
@@ -88,8 +81,8 @@ export function wasmJni(w: World): JniVm {
       const jc = prog.get(c.name), sup = c.name[0] === "[" ? OBJECT : jc && !jc.isInterface ? jc.sup : null;
       return sup ? mirror(cls(sup)) : null;
     },
-    assignable: (from, to) => isSub(from.name, to.name),
-    isInstance: (o, c) => isSub(w.classNameOf(o as object), c.name),
+    assignable: (from, to) => assignable(prog, from.name, to.name),
+    isInstance: (o, c) => assignable(prog, w.classNameOf(o as object), c.name),
     init(c) {
       if (!prog.get(c.name) || !w.needsInit(c.name)) return null;
       const done = nest((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
@@ -101,8 +94,9 @@ export function wasmJni(w: World): JniVm {
       return !!m && m.isStatic === isStatic;
     },
     field(c, name, sig, isStatic): WasmField | null {
-      const info = prog.resolveField(c.name, name, view(c, sig));
-      return info && info.isStatic === isStatic ? { cls: cls(info.owner), key: (isStatic ? "static " : "") + name + ":" + sig, type: sig, isStatic, info } : null;
+      // ART's FindStaticField or FindInstanceField: a field of the other kind does not hide one further up
+      const info = prog.resolveField(c.name, name, view(c, sig), isStatic);
+      return info ? { cls: cls(info.owner), key: (isStatic ? "static " : "") + name + ":" + sig, type: sig, isStatic, info } : null;
     },
     get(f, o) { const info = (f as WasmField).info; return bridge.read(info, info.isStatic ? null : o as object); },
     set(f, o, v) { const info = (f as WasmField).info; bridge.write(info, info.isStatic ? null : o as object, v); },
