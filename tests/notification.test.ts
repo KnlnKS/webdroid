@@ -17,6 +17,7 @@ import { javaReadFd, openFd } from "../src/native/fd.ts";
 import { ProcessBroker } from "../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
+import { usePathOwner } from "../src/shell/file-path.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { bootApp, packageRecord } from "./java.ts";
 
@@ -209,7 +210,7 @@ test("foreground broker retains transferred rights after sender death and reject
   const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(source));
   let recipient: JObj | undefined;
   try {
-    descriptorTransport.calls = () => client.endpoint.descriptors;
+    usePathOwner(client.endpoint);
     descriptorTransport.local = broker.descriptorRights(7701);
     notificationTransport.foreground = client.endpoint.notificationForeground;
     grantPermissions(["android.permission.POST_NOTIFICATIONS"]);
@@ -242,7 +243,7 @@ test("foreground broker retains transferred rights after sender death and reject
     await store.clear(pkg, packageUid(pkg), {fromApp:true,keepState:false});
     await vcall(pfd, "close", "()V");
     for (const key of Object.keys(descriptorTransport)) Reflect.deleteProperty(descriptorTransport, key);
-    Object.assign(descriptorTransport, descriptors); notificationTransport.foreground = foreground;
+    Object.assign(descriptorTransport, descriptors); usePathOwner(null); notificationTransport.foreground = foreground;
     client.close(); broker.fail(7701, "test cleanup", NOT_CRASHED); useNotificationStore(original); vfs.delete(path);
   }
   expect(file.references).toBe(0);

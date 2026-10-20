@@ -2,7 +2,7 @@ import { webStorageTransport } from "../android/webstorage.ts";
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
 import { remoteProcessLife } from "./process-life.ts";
-import { filePathTransport } from "./file-path.ts";
+import { usePathOwner } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore } from "../android/accounts.ts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
@@ -60,7 +60,6 @@ function connectCommandTransports(broker: BrokerCalls): void {
     return yield* awaited(broadcastResult(yield* awaited(remote(broker.broadcast(data, targets, permissions, ordered, from)))));
   });
   binderTransport.transact = request => remote(broker.transact(request));
-  descriptorTransport.importCalls = () => broker.descriptors;
   sqliteTransport.call = broker.sqlite;
   cookieTransport.calls = brokerCalls;
   Object.assign(pendingTransport, broker.pending);
@@ -78,8 +77,7 @@ function connectRemoteStores(broker: BrokerCalls): void {
   systemProviderTransport.lookup = broker.systemProvider;
   notificationTransport.foreground = broker.notificationForeground;
   useSettingsAccess(broker.settings);
-  filePathTransport.calls = () => broker.files;
-  descriptorTransport.calls = () => broker.descriptors;
+  usePathOwner(broker);
   vfs.prepare = broker.files.filePrepare;
   useHostUi(() => broker.ui);
   usePreferenceAccess(broker.prefs);

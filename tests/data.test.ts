@@ -29,7 +29,8 @@ import { WebCookies } from "../src/shell/webcookies.ts";
 import { NativeWindow } from "../src/android/cursorwindow.ts";
 import { handle, release } from "../src/android/handles.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
-import { filePathTransport } from "../src/shell/file-path.ts";
+import { usePathOwner } from "../src/shell/file-path.ts";
+import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { descriptorTransport } from "../src/native/process-fd.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore.ts";
@@ -153,7 +154,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
   const previousPending = {...pendingTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
-    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousPaths = filePathTransport.calls,
+    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls,
     previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
@@ -205,7 +206,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
-    filePathTransport.calls = previousPaths; for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors); vfs.prepare = previousPrepare;
+    usePathOwner(null); for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors); vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); usePreferenceStore(previousPrefs);
   }
 });
@@ -638,14 +639,14 @@ describe("mediastore", () => {
 
 test("libcore directory operations await their canonical owner and observe peer metadata", async () => {
   const {onMain}=await import("../src/android/mainloop.ts");
-  const {filePathTransport,canonicalFilePaths} = await import("../src/shell/file-path.ts");
-  const previous=filePathTransport.calls,owner=canonicalFilePaths(()=>0),root="/data/data/org.webdroid.test.pathowner",path=root+"/created";
+  const {canonicalFilePaths} = await import("../src/shell/file-path.ts");
+  const owner=canonicalFilePaths(()=>0),root="/data/data/org.webdroid.test.pathowner",path=root+"/created";
   const {vfs}=await import("../src/shell/vfs.ts");vfs.mkdir(root);
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
-  filePathTransport.calls=()=>({filePrepare:async()=>{},fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
+  usePathOwner({descriptors:{fileDescriptor:notConnected},files:{fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
     fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),fileFifo:async p=>owner.fileFifo(p),
-    fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}});
+    fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}}});
   try {
     const file=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",path));
     let finished=false;
@@ -656,7 +657,7 @@ test("libcore directory operations await their canonical owner and observe peer 
     expect(await onMain(()=>vcall(file,"mkdir","()Z"))).toBe(0);
     const parent=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",root));
     expect([...await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))]).toEqual(["created"]);
-  }finally{release();filePathTransport.calls=previous;vfs.rmdir(path);vfs.rmdir(root);}
+  }finally{release();usePathOwner(null);vfs.rmdir(path);vfs.rmdir(root);}
 });
 
 test("queued IME edits retain their editor generation through the Java main queue", async () => {

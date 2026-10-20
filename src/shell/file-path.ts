@@ -4,6 +4,7 @@ import { procIdentity, procText } from "./procfs.ts";
 import type { FdStat, FileStat } from "../native/fd.ts";
 import { isFifo, moveRemoteFifo, nameFifo } from "../native/pipe.ts";
 import { utf8 } from "../jvm/abi.ts";
+import type { DescriptorCalls } from "./file-descriptors.ts";
 export type PathReply<T> = { errno: number; value: T };
 /** a change to a file's owner, group (-1 keeps either), permission bits or modification time (epoch ms) */
 export type AttributeChange = Partial<FileAttributes> & { mtime?: number };
@@ -35,9 +36,14 @@ export function packageOfPath(path: string): { pkg: string; private: boolean; wi
 export const sameUidOrSystem = (caller: number, owner: number | undefined): boolean => caller === 0 || caller === 1000 || caller === owner;
 /** Only mutable app/shared paths cross; platform archives and procfs stay in their owning realm. */
 export const isMutablePath = (path: string): boolean => /^\/(?:data\/(?:data|user\/0|user_de\/0)(?:\/|$)|sdcard(?:\/|$))/.test(vfs.norm(path));
-export const filePathTransport: { calls?: () => FilePathCalls } = {};
-/** whether `path` lives in the page, which this realm is not: a process Worker's mutable path */
-const ownersPath = (path: string): boolean => !!filePathTransport.calls && isMutablePath(path);
+/** the realm that owns the page's mutable files, as a process Worker reaches it through the broker: its path
+ *  operations and the kernel of their descriptors */
+export type PathOwner = { files: FilePaths; descriptors: DescriptorCalls };
+let owner: PathOwner | null = null;
+export const usePathOwner = (realm: PathOwner | null): void => { owner = realm; };
+/** the realm that owns `path`, or every mutable file when none is given, when this realm does not: in a process
+ *  Worker a mutable path is the page's */
+export const pathOwner = (path?: string): PathOwner | null => owner && (path === undefined || isMutablePath(path)) ? owner : null;
 /** chmod, chown and utimes of `path` as process `uid` may make them: an owner changes its file's mode and times, and
  *  gives it to a group it is in (its own, or the cache and shared application gids ProcessList gives every app process) */
 export function changeFileAttributes(path: string, change: AttributeChange, uid = procIdentity.uid): number {
@@ -146,23 +152,23 @@ const localFilePaths: Answering<Operations, true> = {
   fileFifo: makeFifo,
   fileSetAttributes: (path, change) => changeFileAttributes(path, change),
 };
-const owner = () => filePathTransport.calls!();
+const owned = () => owner!.files;
 /** the owning realm's path operations; this process's pipes for its fifos follow their names (pipe.ts) */
 const ownerFilePaths: FilePaths = {
-  fileStat: path => owner().fileStat(path),
-  fileMkdir: path => owner().fileMkdir(path),
-  fileAccess: (path, mode) => owner().fileAccess(path, mode),
-  fileList: path => owner().fileList(path),
-  fileRename: (from, to) => owner().fileRename(from, to).then(r => { if (!r) moveRemoteFifo(vfs.norm(from), vfs.norm(to)); return r; }),
-  fileRemove: (path, directory) => owner().fileRemove(path, directory).then(r => { if (!r) moveRemoteFifo(vfs.norm(path), null); return r; }),
-  fileCreate: path => owner().fileCreate(path),
-  fileFifo: path => owner().fileFifo(path),
-  fileSetAttributes: (path, change) => owner().fileSetAttributes(path, change),
+  fileStat: path => owned().fileStat(path),
+  fileMkdir: path => owned().fileMkdir(path),
+  fileAccess: (path, mode) => owned().fileAccess(path, mode),
+  fileList: path => owned().fileList(path),
+  fileRename: (from, to) => Promise.resolve(owned().fileRename(from, to)).then(r => { if (!r) moveRemoteFifo(vfs.norm(from), vfs.norm(to)); return r; }),
+  fileRemove: (path, directory) => Promise.resolve(owned().fileRemove(path, directory)).then(r => { if (!r) moveRemoteFifo(vfs.norm(path), null); return r; }),
+  fileCreate: path => owned().fileCreate(path),
+  fileFifo: path => owned().fileFifo(path),
+  fileSetAttributes: (path, change) => owned().fileSetAttributes(path, change),
 };
-/** the path operations where `path` (with `other`, a rename's target) lives: in a process Worker a mutable path is
- *  the page's, which answers for every process; any other path is this realm's */
+/** the path operations where `path` (with `other`, a rename's target) lives: the owner's, for every process, or
+ *  this realm's */
 export const filePaths = (path: string, other?: string): FilePaths =>
-  ownersPath(path) || other !== undefined && ownersPath(other) ? ownerFilePaths : localFilePaths;
+  pathOwner(path) || other !== undefined && pathOwner(other) ? ownerFilePaths : localFilePaths;
 /** the page's path operations for process `uid`: what `authorize` allows of this realm's, a mutable path's changes
  *  only, and new entries its creator's */
 export function canonicalFilePaths(authorize: (path: string, write: boolean) => number, uid?: number): Answering<Operations, true> {
