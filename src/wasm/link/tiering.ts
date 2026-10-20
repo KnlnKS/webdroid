@@ -323,7 +323,7 @@ export class Tiering {
     const head = result.header, n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.w.adopt(n)) return undefined;
     for (const id of head.touch) this.w.link(this.w.nameOf(id));
-    for (const name of head.synth) this.w.ensureSynth(name);
+    for (const name of head.synth) this.w.synthSlot(name);
     const target = (cls: string, key: string) => (cls ? this.w.prog.get(cls)?.byKey.get(key) : undefined);
     const owner = (at: number) => this.w.slots.method(at)!.m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),

@@ -73,7 +73,7 @@ const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsi
     serveCompile(port, env);
     await port.onmessage!({ data: { type: "init", dexes: [["classes.dex", new Uint8Array(readFileSync(join(out, "classes.dex")))]],
       aot: { base: BASE }, ...(build && { build: { launch: ["Pst"], limit: 500 } }), ...(oneShot && { oneShot: true }) } } as MessageEvent);
-    if (refine) await port.onmessage!({ data: { type: "refine", demand: { methods: [], classes: [], infos: [] } } } as MessageEvent);
+    if (refine) await port.onmessage!({ data: { type: "refine", demand: { methods: [], classes: [], synths: [] } } } as MessageEvent);
     return responses;
   };
   const initial = await run(false, true), once = await run(true), bad = await run(true, false, false);
@@ -111,7 +111,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 {
   const part = (shard: number) => {
     const w = world(app, { compileOnly: true });
-    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], infos: [] }, shard, 3);
+    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], synths: [] }, shard, 3);
   };
   const [lead, ...rest] = [0, 1, 2].map(part);
   if (!("index" in lead)) throw new Error("the first shard made no index");
@@ -126,7 +126,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const producer = world(app, { compileOnly: true });
   const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
   if (name) {
-    const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], infos: [] }), files = new Map(built.files);
+    const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], synths: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
     const owner = page.link(name), slot = owner.slotBase + owner.nMethods, initialize = page.table.get(slot);
     page.link("Pst$Base");
@@ -146,7 +146,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     } });
     c.i32(slot).callIndirect(cx.sig([], "V"));
   } });
-  const built = buildApp(w, [], { classes: [], methods: [], infos: [] });
+  const built = buildApp(w, [], { classes: [], methods: [], synths: [] });
   const kept = new Set(built.index.synths.flat());
   check("partial synthetic group keeps its discovered child", kept.has("pst:child"), true);
   check("discovered synthetic group keeps its own dependency", kept.has("pst:leaf"), true);

@@ -87,7 +87,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       followLoaders(w, req.loaders);
     }
     if (roots) {
-      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot, req.shard);
+      build(req.demand ?? { methods: [], classes: [], synths: [] }, req.oneShot, req.shard);
       if (req.oneShot) return performance.now() - t0;
     }
     units = new UnitCompiler(w);

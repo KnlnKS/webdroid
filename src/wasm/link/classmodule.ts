@@ -5,7 +5,6 @@ import { methodKinds, type Kinds, type Kind, type JClass, type FieldInfo } from 
 import { f32bits, f64bits } from "../compiler/consts.ts";
 import { Compiler, declareBase, kindVT, type Base } from "../compiler/j2w.ts";
 import { SYSTEM_LOADER } from "./sched.ts";
-import { rtfns } from "../compiler/rtfns.ts";
 import { hasSignatureConstraints } from "./signatures.ts";
 import { INIT_DONE, INIT_FAILED } from "../compiler/exc.ts";
 import { stubKey, kindsType } from "./stubs.ts";
@@ -84,7 +83,7 @@ export class ClassModules {
     }
     const literal = (c: Code, v: string) => {
       if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
-      c.anyConvertExtern().i32(this.w.synthSlot("strLit", rtfns.get("strLit")!)).callIndirect(mb.addFuncType([T.anyref], [T.anyref]));
+      c.anyConvertExtern().i32(this.w.synthSlot("strLit")).callIndirect(mb.addFuncType([T.anyref], [T.anyref]));
     };
     const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
     const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
@@ -150,7 +149,7 @@ export class ClassModules {
   private emitEnsure(x: InitScope, jc: JClass, rt: ClassRt, c: Code): void {
     const { mb, b, initG, sid, iw, tag } = x, voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
-    const rtfn = (name: string) => this.w.synthSlot(name, rtfns.get(name)!);
+    const rtfn = (name: string) => this.w.synthSlot(name);
     if (hasSignatureConstraints(this.w, jc.name)) {
       c.gget(initG).raw(OP.i32_eqz).if_();
       c.block().block(T.anyref).tryTable(null, [[0, tag, 0]]);

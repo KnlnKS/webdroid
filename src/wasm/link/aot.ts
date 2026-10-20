@@ -13,7 +13,6 @@
 import type { ClassRt, World } from "./world.ts";
 import { sameMarks, type Marks, type Numbering, type Tail } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
-import type { InfoRecord } from "./classes.ts";
 
 import type { DexFile } from "../../jvm/dex.ts";
 import { methodCount, type Loader, type MethodInfo } from "../compiler/program.ts";
@@ -105,9 +104,9 @@ function numberingDiff(a: Numbering, b: Numbering): string {
 }
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 20;
-/** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
-export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
+export const APP_VERSION = 21;
+/** what launches built on demand because no saved code had it: method ids, class names and the names of the synthetic functions the host made when asked, in order of first use */
+export interface Demand { methods: string[]; classes: string[]; synths: string[] }
 export interface AppIndex {
   version: number;
   /** what the World had numbered after the platform build when the app's numbering began (the zygote's): a World that has numbered exactly that since, or nothing, can use it */
@@ -414,7 +413,7 @@ export class AotRuntime {
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
     for (const id of head.touch) this.touch(id);
-    for (const s of head.synth) w.ensureSynth(s);
+    for (const s of head.synth) w.synthSlot(s);
     return ex;
   }
   /** makes sure the module that holds class `id` is loaded: the class's own record is made when something asks for the class, not for every class a module names */
@@ -434,7 +433,7 @@ export class AotRuntime {
     if (!w.units.admits(head)) return dead();
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
-    for (const s of head.synth) if (this.synthIn.get(s) !== file) w.ensureSynth(s);
+    for (const s of head.synth) if (this.synthIn.get(s) !== file) w.synthSlot(s);
     const imports = w.units.ofHeader(head);
     w.units.classImports(head.classImports, imports);
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
@@ -592,7 +591,7 @@ export class AotRuntime {
     w.assumptions.hold(head.held ?? []);
     if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
-    for (const s of head.synth) w.ensureSynth(s);
+    for (const s of head.synth) w.synthSlot(s);
     const imports = w.units.ofHeader(head);
     // Retired data groups bind each class's published globals instead of creating another owner.
     let bindClasses = app;

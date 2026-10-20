@@ -11,8 +11,8 @@ import { Cha } from "../compiler/cha.ts";
 import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
 import { Sched, defaultLoop, type HostLoop, type Strand } from "./sched.ts";
-import { rtfns, type Synth } from "../compiler/rtfns.ts";
-import { replayInfo, type InfoRecord } from "./classes.ts";
+import type { Synth } from "../compiler/rtfns.ts";
+import { askedSynth, synthOf } from "./synths.ts";
 import { HostClasses } from "./hostclass.ts";
 import type { ProxyDefinition } from "./proxy.ts";
 import { initiatedInstruction, resolveClass } from "./resolution.ts";
@@ -116,8 +116,9 @@ export class World {
   readonly assumptions = new Assumptions(this);
   readonly namespaces = new Namespaces(this);
   classes = new Map<string, ClassRt>();
-  /** what this World built because no saved code had it: the methods compiled at their first call and the classes whose modules it made, in order (an app build made later includes them) */
-  readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], infos: [] as InfoRecord[] };
+  /** what this World built because no saved code had it: the methods compiled at their first call, the classes whose modules it made and the synthetic functions the
+   *  host made when asked, in order (an app build made later includes them) */
+  readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], synths: [] as string[] };
   /** the Method objects of proxy classes, which their compiled code reads by index (proxy.ts) */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
@@ -234,23 +235,22 @@ export class World {
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called;
    *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
-  synthSlot(name: string, d: Synth, eager = false): number {
+  synthSlot(name: string, d?: Synth, eager = false): number {
     this.touching?.add("!" + name);
     const { slot, fresh } = this.slots.synthSlot(name);
     if (!fresh) return slot;
+    d ??= synthOf(this, name);
+    if (!d) throw new Error(`no synthetic function ${name}`);
     const s = { k: "synth" as const, name, d, done: false };
     this.slots.set(slot, s);
     if (!this.instantiates) return slot;
+    if (askedSynth(name)) this.demand.synths.push(name);
     // the app build may hold its code, which its module puts in the slot
     if (this.aot?.installSynth(name)) { s.done = true; return slot; }
     if (eager) { this.tiers.linkSlot(slot); return slot; }
     this.table.set(slot, this.stubs.stubsFor([d])[0]);
     return slot;
   }
-  /** asks again for the synthetic functions the hosts asked for in a World whose classes have other ids */
-  replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
-  /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
-  ensureSynth(name: string): void { if (!this.dispatch.ensureNamed(name)) this.synthSlot(name, rtfns.get(name)!); }
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {

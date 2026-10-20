@@ -17,8 +17,9 @@ import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
-import { hostUnsafe, fieldCookie, byFieldId } from "./unsafe.ts";
+import { hostUnsafe, fieldCookie } from "./unsafe.ts";
 import { hostReflect } from "./reflect.ts";
 import { hostMembers } from "./members.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
@@ -51,15 +52,6 @@ function interfaces(w: World, name: string): string[] {
   }
   return l;
 }
-/** a `hostInfo` call that made a synthetic function, by names: the class ids it was given are the World's own */
-export type InfoRecord = [kind: number, cls: string, index: number, b: number];
-const fieldInfo = (kind: number) => kind === UInfo.FieldGet || kind === UInfo.FieldPut || kind === UInfo.FieldCas || kind === UInfo.StaticGet || kind === UInfo.StaticPut;
-export const infoRecord = (w: World, kind: number, a: number, b: number): InfoRecord => {
-  [kind, a] = byFieldId(w, kind, a);
-  return fieldInfo(kind) ? [kind, w.nameOf(a >>> 12), a & 0xfff, b] : [kind, w.nameOf(a), 0, b];
-};
-/** asks again, in a World that numbers its classes differently, for what `infoRecord` recorded */
-export function replayInfo(w: World, [kind, cls, index, b]: InfoRecord): void { hostInfo(w, kind, fieldInfo(kind) ? w.idOf(cls) << 12 | index : w.idOf(cls), b); }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
   if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
@@ -85,28 +77,24 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
     case Info.CanAccess: { const decl = w.prog.get(w.nameOf(b >>> 12))!; return +canAccess(w.prog, w.nameOf(a), decl, decl.fields[b & 0xfff].flags); }
-    case Info.AllocSlot: {
-      const ctor = jc?.byKey.get("<init>()V");
-      if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
-      return w.synthSlot("new:" + name, { params: [], ret: "L", body: (cx, c) => cx.construct(c, ctor) });
-    }
-    case Info.CloneSlot: {
-      if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT) return 0;
-      return w.synthSlot("clone:" + name, { params: ["L"], ret: "L", body: (cx, c) => {
-        const st = cx.structFor(name), src = c.newLocal(refNull(st)), o = c.newLocal(refNull(st));
-        c.lget(0).refCast(st).lset(src); cx.emitNew(c, name); c.lset(o);
-        cx.prog.layout(name).forEach((_, i) => c.lget(o).lget(src).structGet(st, i + 2).structSet(st, i + 2));
-        c.lget(o);
-      } });
-    }
+    case Info.AllocSlot: return !jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !jc.byKey.has("<init>()V") ? 0 : w.synthSlot("new:" + name);
+    case Info.CloneSlot: return !jc || jc.isInterface || jc.flags & ACC.ABSTRACT ? 0 : w.synthSlot("clone:" + name);
     case Info.EnsureSlot: return jc ? w.ensureSlot(name) : 0;           // an array class has nothing to initialize
     case Info.ArrayOf: return b ? w.idOf("[".repeat(b) + descOf(name)) : a;      // the class of the b-fold array of a
-    case Info.ArraySlot: {           // a = the component class: the array allocator for it
-      const arrName = "[" + descOf(name);
-      return w.synthSlot("newarray:" + arrName, { params: ["I"], ret: "L", body: (cx, c) => cx.emitNewArray(c, arrName, () => c.lget(0)) });
-    }
+    case Info.ArraySlot: return w.synthSlot("newarray:[" + descOf(name));      // a = the component class: the array allocator for it
   }
 }
+synthFamily("new", (w, name) => {
+  const ctor = w.prog.get(name)?.byKey.get("<init>()V");
+  return ctor && { params: [], ret: "L", body: (cx, c) => cx.construct(c, ctor) };
+}, true);
+synthFamily("clone", (_w, name) => ({ params: ["L"], ret: "L", body: (cx, c) => {
+  const st = cx.structFor(name), src = c.newLocal(refNull(st)), o = c.newLocal(refNull(st));
+  c.lget(0).refCast(st).lset(src); cx.emitNew(c, name); c.lset(o);
+  cx.prog.layout(name).forEach((_, i) => c.lget(o).lget(src).structGet(st, i + 2).structSet(st, i + 2));
+  c.lget(o);
+} }), true);
+synthFamily("newarray", (_w, name) => ({ params: ["I"], ret: "L", body: (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)) }), true);
 
 // ---------- the pieces compiled code calls
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */

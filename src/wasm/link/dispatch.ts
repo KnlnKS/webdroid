@@ -5,6 +5,7 @@ import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER } from "../compiler/consts.t
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicMethod, resolveSymbolicMethod } from "../compiler/linkage.ts";
 import type { World } from "./world.ts";
+import { synthFamily } from "./synths.ts";
 
 /** the kinds of a vtable entry's parameters (the receiver first) and result, from its method key */
 function entryKinds(key: string): Kinds {
@@ -117,28 +118,20 @@ export class Dispatch {
   private dispatchSlot(key: string, target: ReturnType<typeof symbolicDispatchFor>): number {
     return target ? failed(target) ? this.conflictSlot(key, target.message) : this.w.slotOf(target) : this.abstractSlot(entryKinds(key));
   }
-  /** the slot of a synthetic function of the families below, made again from its name as a precompiled module numbered it; false for another name */
-  ensureNamed(name: string): boolean {
-    const at = name.indexOf(":"), family = name.slice(0, at), rest = name.slice(at + 1);
-    if (family === "conflict") { const [key, message] = JSON.parse(rest) as [string, string]; this.conflictSlot(key, message); return true; }
-    if (family !== "abstract" && family !== "interfaceAccess") return false;
-    const [params, ret] = rest.split(">"), kinds: Kinds = { params: [...params] as Kind[], ret: ret as Kind | "V" };
-    if (family === "abstract") this.abstractSlot(kinds); else this.interfaceAccessSlot(kinds);
-    return true;
-  }
   /** a stub for a method the class does not implement: AbstractMethodError, with the signature of the vtable entry it fills */
-  abstractSlot({ params, ret }: Kinds): number {
-    return this.w.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
-  }
+  abstractSlot({ params, ret }: Kinds): number { return this.w.synthSlot(`abstract:${params.join("")}>${ret}`); }
   /** A default conflict keeps the physical dispatch signature and throws only when invoked. */
-  conflictSlot(key: string, message: string): number {
-    return this.w.synthSlot("conflict:" + JSON.stringify([key, message]), { ...entryKinds(key), body: (cx, c) => {
-      cx.linkError(c, { thrower: "icce", message });
-    } });
-  }
-  interfaceAccessSlot({ params, ret }: Kinds): number {
-    return this.w.synthSlot(`interfaceAccess:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => {
-      cx.construct(c, cx.prog.resolve("java/lang/IllegalAccessError", "<init>", "()V")!); c.throw_(cx.tag);
-    } });
-  }
+  conflictSlot(key: string, message: string): number { return this.w.synthSlot("conflict:" + JSON.stringify([key, message])); }
+  interfaceAccessSlot({ params, ret }: Kinds): number { return this.w.synthSlot(`interfaceAccess:${params.join("")}>${ret}`); }
 }
+
+/** the kinds of a signature written as its parameters' kinds, ">" and its result's */
+function kindsOf(sig: string): Kinds { const [params, ret] = sig.split(">"); return { params: [...params] as Kind[], ret: ret as Kind | "V" }; }
+synthFamily("abstract", (_w, sig) => ({ ...kindsOf(sig), body: (cx, c) => { cx.callThrower(c, "ame"); } }));
+synthFamily("conflict", (_w, arg) => {
+  const [key, message] = JSON.parse(arg) as [string, string];
+  return { ...entryKinds(key), body: (cx, c) => { cx.linkError(c, { thrower: "icce", message }); } };
+});
+synthFamily("interfaceAccess", (_w, sig) => ({ ...kindsOf(sig), body: (cx, c) => {
+  cx.construct(c, cx.prog.resolve("java/lang/IllegalAccessError", "<init>", "()V")!); c.throw_(cx.tag);
+} }));

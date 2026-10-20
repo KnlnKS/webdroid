@@ -24,8 +24,6 @@ export class SlotTable {
 
   constructor(w: World, fixed: number) { this.w = w; this.reserve(fixed); }
 
-  /** how many runtime functions have slots */
-  get synthCount(): number { return this.synth.size; }
   private reserve(n: number): number {
     const base = this.entries.length, table = this.w.table;
     this.entries.length += n;

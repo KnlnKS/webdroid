@@ -7,7 +7,7 @@ import { mid } from "../compiler/ids.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { hostInfo, infoRecord } from "./classes.ts";
+import { hostInfo } from "./classes.ts";
 import { hostText } from "./members.ts";
 import { hostObject } from "./annotations.ts";
 import { ASYNC } from "./inet.ts";
@@ -59,11 +59,7 @@ export function hostImports(w: World): HostImports {
     long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
-    info: (kind: number, a: number, b: number) => {
-      const synths = w.slots.synthCount, answer = hostInfo(w, kind, a, b);
-      if (w.slots.synthCount !== synths && !opts.compileOnly) w.demand.infos.push(infoRecord(w, kind, a, b));
-      return answer;
-    },
+    info: (kind: number, a: number, b: number) => hostInfo(w, kind, a, b),
     text: (kind: number, a: number) => w.javaValue(hostText(w, kind, a)),
     obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(w, a) : w.javaValue(hostObject(w, kind, a, b, filter))),
     annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(w, kind, a, b, filter), null),

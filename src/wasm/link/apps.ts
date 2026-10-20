@@ -4,6 +4,7 @@
 import { Compiler, NeedsNumber } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
 import { compileModule } from "./module.ts";
+import { synthOf } from "./synths.ts";
 import { APP_VERSION, packModule, unitHeader, type AotRuntime, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot.ts";
 import { methodCount, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
@@ -205,7 +206,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   }
   flush();
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
-  w.replay(demand.infos);
+  for (const name of demand.synths) { const d = synthOf(w, name); if (d) w.synthSlot(name, d); }
   const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
   const { aot, prefix, base } = plan;
   return { ...part, links: w.numbers.links.since(base.links), index: { version: APP_VERSION, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount,

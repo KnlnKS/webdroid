@@ -15,7 +15,7 @@ class CompilePort implements WorkerPort {
   terminate(): void { this.terminated++; }
 }
 
-const world = {demand: {methods: new Set(), classes: [], infos: []}, prog: {root: {}}, ahead: {noteRuns() {}}} as unknown as World;
+const world = {demand: {methods: new Set(), classes: [], synths: []}, prog: {root: {}}, ahead: {noteRuns() {}}} as unknown as World;
 // without the Web Locks API a build's worker is spawned at once
 Object.defineProperty(navigator, 'locks', {value: undefined, configurable: true});
 
