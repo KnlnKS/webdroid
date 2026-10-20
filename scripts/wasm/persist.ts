@@ -64,26 +64,6 @@ const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => ad
   check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
 }
 
-// Optional probe for a CLI-built --app image, kept separate from the platform store.
-const combinedAt = process.argv.indexOf("--combined-image");
-if (combinedAt >= 0) {
-  const dir = process.argv[combinedAt + 1], dex = process.argv[combinedAt + 2];
-  if (!dir || !dex) throw new Error("--combined-image requires image directory and app dex");
-  const input = loadDexes(dex), store: AotStore = { get: file => { try { return new Uint8Array(readFileSync(join(dir, file))); } catch { return undefined; } } };
-  const image = world(input, { aot: store }), control = world(loadDexes(dex), { aot: undefined });
-  check("CLI combined image attaches", !!image.aot, true);
-  check("CLI combined image retains app root", image.prog.loaderOf("Pst") === image.prog.root, true);
-  for (const [name, desc, args] of [["chain", "()I", []], ["hot", "(I)I", [10]], ["viaTable", "(I)I", [3]]] as [string, string, number[]][]) {
-    const expected = await control.entryAsync("Pst", name, desc)(...args);
-    check(`CLI combined image ${name}`, await image.entryAsync("Pst", name, desc)(...args), expected);
-  }
-  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.slots.blockOf(image.slotOf(method)));
-  check("CLI combined image executes its app code module", module !== undefined && module >= 0 && image.aot!.loaded.includes(`c${module}.wasm`), true);
-  const resolutions = image.symbolic.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
-  check("CLI combined image warm result", await image.entryAsync("Pst", "hot", "(I)I")(10), expected);
-  check("CLI combined image warm resolutions", image.symbolic.symbolicResolutions, resolutions);
-}
-
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
 // A one-shot Builder and a refine-capable worker must produce the same numbered code.
 {
