@@ -7,14 +7,15 @@ import type { Cpu } from "../cpu.ts";
 import { hostLib, stLong, complete, type HostFn, type HostRet } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
 import { wrapped } from "../kernel.ts";
-import { fdRead, fdWrite, installSocket, installFile, dropFile, written, socketOf, type OpenFile } from "../fs.ts";
+import { fdRead, fdWrite, written } from "../fs.ts";
+import { installFile, dropFile, type OpenFile } from "../fd.ts";
 import { nativePoll, nativeSelect } from "../poll.ts";
 import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address.ts";
 import {
   SOL_SOCKET, MSG_CTRUNC, MSG_TRUNC, MSG_CMSG_CLOEXEC, readSockaddr, writeSockaddr, readMsghdr, readCmsgs, writeControl, gather,
   iovecs, guestBuffer, ucredBytes, readTimeval, writeTimeval, TIMEVAL_SIZE, type GuestBuffer, type Cmsg,
 } from "./abi.ts";
-import { record, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core.ts";
+import { record, installSocket, socketOf, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core.ts";
 import { inetSocket, IPPROTO_IP, IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP } from "./inet.ts";
 import { unixSocket, unixSocketPair } from "./unix.ts";
 import { RESOLVER } from "./resolver.ts";

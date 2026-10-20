@@ -7,7 +7,7 @@ import { PTR, type HostFn } from "./host.ts";
 import { E, PAGE_SIZE } from "./abi.ts";
 import { invalidateRange } from "./cpu.ts";
 import { offArg } from "./kernel.ts";
-import { readInto, fdFile, contentAt } from "./fs.ts";
+import { fdRead, fdFile, contentAt } from "./fs.ts";
 import { isRemoteFd } from "./process-fd.ts";
 import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings.ts";
 
@@ -31,7 +31,7 @@ export const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn =>
       if (file) { if (flags & 1) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); else trackPrivateMap(BigInt(p), n, off, file); }
       return p;
     };
-    const r = readInto(fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track(r);
+    const r = fdRead(fd, guestAt(p), n, off); return r instanceof Promise ? r.then(track) : track(r);
   }
   return p;
 };

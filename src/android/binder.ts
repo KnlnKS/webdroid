@@ -7,7 +7,9 @@ import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts
 import { exitProcess, processExited } from "../process-exit.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
-import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd, FdScope, detachFdScope } from "../native/fs.ts";
+import { O_ACCMODE } from "../native/abi.ts";
+import { javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fd.ts";
+import { FdScope, detachFdScope } from "./fd-scope.ts";
 import { processRights } from "../native/process-fd.ts";
 import type { DescriptorRights } from "../shell/file-descriptors.ts";
 import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel.ts";

@@ -5,11 +5,11 @@
 // file with no listener is. Every peer is this process, whose credentials SO_PEERCRED and
 // SCM_CREDENTIALS carry; SCM_RIGHTS passes open files along with the bytes.
 
-import { E } from "../abi.ts";
+import { E, POLLIN, POLLERR, POLLHUP, POLLOUT } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import { logLine } from "../kernel.ts";
 import { complete } from "../host.ts";
-import { openFd, holdFile, dropFile, installSocket, naming, POLLIN, POLLERR, POLLHUP, POLLOUT, type OpenFile } from "../fs.ts";
+import { openFd, holdFile, dropFile, type OpenFile } from "../fd.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 import { parseIpv4 } from "../../shell/relay.ts";
 import { AF_INET, AF_INET6, AF_UNIX, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, resolveHost, hostOf, parseIpv6 } from "../net-address.ts";
@@ -18,7 +18,7 @@ import {
   sockaddrOf, unixAddress, scmRights, readUcred, type SocketAddress, type Cmsg, type Ucred,
 } from "./abi.ts";
 import { IPPROTO_TCP, IPPROTO_UDP } from "./inet.ts";
-import { Socket, Loopback, block, received, SO_LINGER, SO_PASSCRED, SO_RCVTIMEO, type Received, type Accepted } from "./core.ts";
+import { Socket, Loopback, block, received, installSocket, naming, SO_LINGER, SO_PASSCRED, SO_RCVTIMEO, type Received, type Accepted } from "./core.ts";
 
 const SCM_MAX_FD = 253;
 /** this process's credentials: SO_PEERCRED's and SCM_CREDENTIALS's struct ucred */

@@ -12,7 +12,7 @@ import { guestAt, mem } from "./mem.ts";
 import { vfs, type VfsFile } from "../shell/vfs.ts";
 import { E } from "./abi.ts";
 import type { ProcessMapping } from "./process-fd.ts";
-import { openFd } from "./fs.ts";
+import { openFd } from "./fd.ts";
 
 type SharedMapping = { va: bigint; n: number; off: number; base: Uint8Array | null };
 const overlaps = (m: SharedMapping, va: bigint, end: bigint) => m.va < end && va < m.va + BigInt(m.n);

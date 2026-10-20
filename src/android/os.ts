@@ -14,17 +14,19 @@ import { uuidFromString } from "../jvm/natives/jvalues.ts";
 import { vcall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
 import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
 import { checkFromIndexSize } from "../jvm/natives/jlang.ts";
-import { E, ERRSTR, strerror } from "../native/abi.ts";
+import { E, ERRSTR, strerror, AT_FDCWD, S_IFMT, S_IFDIR } from "../native/abi.ts";
 import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
 import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
 import { filePaths, type AttributeChange } from "../shell/file-path.ts";
 import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
-import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, localFdStat, javaPipeFds, javaReadFd, javaPreadFd,
-  javaWriteFd, javaPwriteFd, javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, javaChangeFdAttributes, AT_FDCWD,
-  S_IFMT, S_IFDIR, type FileStat } from "../native/fs.ts";
-import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd.ts";
+import { javaOpenFd, javaBytesFd, fdFile } from "../native/fs.ts";
+import { openFd, javaOnLastClose, javaCloseFd, javaDupFd, javaFdSource, javaFdStat, localFdStat, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd,
+  javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, javaChangeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
+  fdsanTagType, fdsanTagValue, type FileStat } from "../native/fd.ts";
+import { javaPipeFds } from "../native/pipe.ts";
+import { inoOf } from "../native/kernel.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
 import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory.ts";
 import { uptimeMillis, wallMillis } from "../guest-clock.ts";

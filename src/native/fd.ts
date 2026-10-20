@@ -1,28 +1,283 @@
-// One descriptor namespace shared by files, pipes, and relay-backed sockets.
+// One process's descriptor table: the numbers naming its open files, which dup(2) and SCM_RIGHTS
+// share, with close-on-exec and bionic's fdsan owner tags. An open file's kind (FileOps) answers the
+// calls on it: files, directories and devices (fs.ts), pipes and fifos (pipe.ts), eventfd and timerfd
+// (eventfd.ts), inotify (inotify.ts), epoll (poll.ts), sockets (socket/core.ts) and the open files
+// another realm owns (process-fd.ts). The java* calls are libcore's; each answers -errno on failure.
 
-import { E } from "./abi.ts";
+import { E, O_ACCMODE, O_APPEND, O_NONBLOCK, O_RDONLY, O_WRONLY, POLLIN, POLLNVAL, POLLOUT } from "./abi.ts";
 import { logLine } from "./kernel.ts";
+import { procIdentity } from "../shell/procfs.ts";
+import { concat } from "../jvm/abi.ts";
+import type { VfsFile } from "../shell/vfs.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
+import type { AttributeChange } from "../shell/file-path.ts";
+import type { Pipe } from "./pipe.ts";
+import type { Counter } from "./eventfd.ts";
+import type { ClockTimer } from "./timers.ts";
+import type { Epoll } from "./poll.ts";
+import type { Inotify } from "./inotify.ts";
+import type { Socket } from "./socket/core.ts";
+import type { RemoteDescriptor } from "./process-fd.ts";
 
-const claimed = new Set<number>([0, 1, 2]);
-let next = 3;
+/** stat(2)'s answer: st_mode with the file type, st_size, st_mtime in milliseconds and the owner */
+export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
+/** fstat(2)'s answer, with the path the open file has now */
+export type FdStat = FileStat & { path: string | null };
 
-/** the lowest unclaimed descriptor at or above `min` */
-export function allocateFd(min = 0): number {
-  while (claimed.has(next)) next++;
-  let fd = Math.max(next, min);
-  while (claimed.has(fd)) fd++;
-  if (fd === next) next++;
-  claimed.add(fd);
+/** an open file: what descriptors dup(2) and SCM_RIGHTS share, with its kind's state */
+export interface OpenFile {
+  ops: FileOps; path: string; content: VfsFile; pos: number; dir: boolean; statusFlags: number; references: number;
+  /** a read whose file answers later, which the next read at the position waits behind */
+  readQueue?: Promise<void>;
+  rpipe?: Pipe; wpipe?: Pipe; event?: Counter; timer?: ClockTimer; epoll?: Epoll; inotify?: Inotify; socket?: Socket;
+  /** the open file's owner in another realm, which answers every operation on it */
+  remote?: RemoteDescriptor;
+  /** a remote directory's entries, listed when reading starts */
+  entries?: string[];
+  /** a log stream's priority, and its unfinished line */
+  log?: number; line?: string;
+  /** the ARM32 libc's getc buffer (stdio.ts) */
+  byte?: number;
+  /** run when the last descriptor sharing this open file closes it */
+  onLastClose?: () => void;
+}
+
+/** What an open file's kind does with each call. A result is -errno on failure. */
+export interface FileOps {
+  /** st_mode of an open file without a name */
+  readonly mode: number;
+  /** whether pread and pwrite reach it: a stream has no offsets */
+  readonly positional: boolean;
+  /** Up to target.length bytes at `off`, or at the position (off < 0), which moves past them. A stream
+   *  that would wait answers -EAGAIN, and is waited on (watch) unless O_NONBLOCK. A Promise leaves
+   *  `target` alone and settles to the bytes read, or -errno. */
+  read(f: OpenFile, target: Uint8Array, off: number, fd: number): number | Promise<Uint8Array | number>;
+  /** `bytes` at `off`, or at the position (off < 0); the kind copies what it keeps */
+  write(f: OpenFile, bytes: Uint8Array, off: number): number | Promise<number>;
+  poll(f: OpenFile, events: number): number;
+  /** call `wake` once the readiness may have changed; answers how to stop */
+  watch(f: OpenFile, wake: () => void): () => void;
+  seek(f: OpenFile, off: number, whence: number): number | Promise<number>;
+  stat(f: OpenFile): FdStat | Promise<FdStat | null>;
+  sync(f: OpenFile): number | Promise<number>;
+  /** FIONREAD: what a read could take now */
+  available(f: OpenFile): number | Promise<number>;
+  truncate(f: OpenFile, length: number): number | Promise<number>;
+  allocate(f: OpenFile, off: number, length: number): number | Promise<number>;
+  /** F_GETFL and F_SETFL */
+  status(f: OpenFile, cmd: number, arg: number): number | Promise<number>;
+  change(f: OpenFile, change: AttributeChange, uid?: number): number | Promise<number>;
+  /** a regular file's bytes, read as a lazy source while descriptor `fd` names it */
+  source(f: OpenFile, fd: number): FileSource | null | Promise<FileSource | null>;
+  /** a directory's entries as readdir lists them */
+  entries(f: OpenFile): string[] | number | Promise<string[] | number>;
+  /** the last descriptor sharing the open file closed it; a remote one answers once its owner has */
+  close(f: OpenFile): void | Promise<number>;
+}
+const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
+const F_DUPFD_CLOEXEC = 0x406;
+export const FIONREAD = 0x541b;
+const NOOP = () => {};
+/** an anonymous inode's answers, which each kind starts from: ready as its access mode allows, with no
+ *  name, offsets or entries */
+export const ANON: FileOps = {
+  mode: 0o600,
+  positional: false,
+  read: () => -E.INVAL,
+  write: () => -E.INVAL,
+  poll(f, events) {
+    const access = f.statusFlags & O_ACCMODE;
+    return (access !== O_WRONLY ? events & POLLIN : 0) | (access !== O_RDONLY ? events & POLLOUT : 0);
+  },
+  watch: () => NOOP,
+  seek: () => -E.SPIPE,
+  stat: (f) => ({ mode: f.ops.mode, size: 0, path: null, uid: procIdentity.uid, gid: procIdentity.uid, mtime: 0 }),
+  sync: () => -E.INVAL,
+  available: () => -E.NOTTY,
+  truncate: () => -E.INVAL,
+  allocate: () => -E.NODEV,
+  status(f, cmd, arg) {
+    if (cmd === F_GETFL) return f.statusFlags;
+    f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (arg & (O_APPEND | O_NONBLOCK));
+    return 0;
+  },
+  change: () => -E.NOTSUP,
+  source: () => null,
+  entries: () => -E.NOTDIR,
+  close: NOOP,
+};
+/** an open file of kind `ops`, opened as `path` with `statusFlags`, reading `content` */
+export const newFile = (ops: FileOps, path: string, statusFlags: number, content: VfsFile = { path: null, data: new Uint8Array(0), len: 0 }, dir = false): OpenFile =>
+  ({ ops, path, content, pos: 0, dir, statusFlags, references: 1 });
+
+const fds = new Map<number, OpenFile>();
+const closeOnExec = new Set<number>();
+/** every descriptor below it is taken: 0, 1 and 2 are stdio's until the process closes them */
+let lowest = 3;
+export const openFd = (fd: number): OpenFile | undefined => fds.get(fd);
+/** libcore's descriptor scopes (android/fd-scope.ts), told of descriptors closing and duplicating */
+export const fdEvents: { closed?(fd: number): void; duplicated?(from: number, to: number): void } = {};
+/** a descriptor for `f`, which takes over a reference to it: the lowest free at or above `min` */
+export function installFile(f: OpenFile, cloexec = false, min = 0): number {
+  let fd = Math.max(min, lowest);
+  while (fds.has(fd)) fd++;
+  if (min <= lowest) lowest = fd + 1;
+  placeFile(fd, f, cloexec);
   return fd;
 }
-
-export function releaseFd(fd: number): void {
-  if (fd >= 0 && claimed.delete(fd)) next = Math.min(next, fd);
-  ownerTags.delete(fd);
+/** `f` at free descriptor `fd` */
+export function placeFile(fd: number, f: OpenFile, cloexec = false): void {
+  fds.set(fd, f);
+  if (cloexec) closeOnExec.add(fd);
+}
+/** SCM_RIGHTS's hold on an open file while a message carries it, installed in the receiver's table
+ *  when the message is read, or dropped */
+export const holdFile = (f: OpenFile): OpenFile => { f.references++; return f; };
+/** one reference to an open file gone: the last ends it */
+export function dropFile(f: OpenFile): void | Promise<number> {
+  if (--f.references > 0) return;
+  f.onLastClose?.();
+  return f.ops.close(f);
+}
+export function javaOnLastClose(fd: number, hook: () => void): void { const f = fds.get(fd); if (f) f.onLastClose = hook; }
+/** close(2); the last close of a remote open file answers once its owner has closed it */
+export function javaCloseFd(fd: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f) return -E.BADF;
+  fds.delete(fd); closeOnExec.delete(fd); ownerTags.delete(fd);
+  if (fd < lowest) lowest = fd;
+  fdEvents.closed?.(fd);
+  const closing = dropFile(f);
+  // a socket call waiting on this descriptor ends with EBADF
+  f.socket?.wake();
+  return closing ?? 0;
+}
+/** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
+function dupFd(fd: number, min: number, cloexec: boolean): number {
+  const f = fds.get(fd);
+  if (!f) return -E.BADF;
+  f.references++;
+  const copy = installFile(f, cloexec, min);
+  fdEvents.duplicated?.(fd, copy);
+  return copy;
+}
+export const javaDupFd = (fd: number, cloexec = false): number => dupFd(fd, 0, cloexec);
+/** dup2(2) and dup3(2); the implicit close of `to` (unlike close) leaves its fdsan owner tag in place */
+export function javaDup2Fd(fd: number, to: number, cloexec = false): number {
+  if (to < 0) return -E.BADF;
+  if (fd === to) return fds.has(fd) ? fd : -E.BADF;
+  const f = fds.get(fd);
+  if (!f) return -E.BADF;
+  const tag = fdsanOwnerTag(to);
+  if (fds.has(to)) javaCloseFd(to);
+  f.references++;
+  placeFile(to, f, cloexec);
+  fdEvents.duplicated?.(fd, to);
+  if (tag) fdsanExchangeOwnerTag(to, 0n, tag);
+  return to;
+}
+/** fcntl(2): descriptor flags and duplicates belong to this table, status flags to the open file */
+export function javaFcntlFd(fd: number, cmd: number, arg: number): number | Promise<number> {
+  if (cmd === F_DUPFD || cmd === F_DUPFD_CLOEXEC) return arg < 0 ? -E.INVAL : dupFd(fd, arg, cmd === F_DUPFD_CLOEXEC);
+  const f = fds.get(fd);
+  if (!f) return -E.BADF;
+  if (cmd === F_GETFD) return closeOnExec.has(fd) ? 1 : 0;
+  if (cmd === F_SETFD) { if (arg & 1) closeOnExec.add(fd); else closeOnExec.delete(fd); return 0; }
+  return cmd === F_GETFL || cmd === F_SETFL ? f.ops.status(f, cmd, arg) : 0;
 }
 
-export function reserveFd(fd: number): void {
-  if (fd >= 0) claimed.add(fd);
+/** why a read (or with `write`, a write) at `off` (-1: the position) cannot reach `f`, or 0 */
+export function refused(f: OpenFile | undefined, off: number, write: boolean): number {
+  if (!f) return -E.BADF;
+  if (off >= 0 && !f.ops.positional) return -E.SPIPE;
+  return (f.statusFlags & O_ACCMODE) === (write ? O_RDONLY : O_WRONLY) ? -E.BADF : 0;
+}
+/** once `f` may be ready: what a read that would wait waits for */
+export const woken = (f: OpenFile): Promise<void> => new Promise((resolve) => { const stop = f.ops.watch(f, () => { stop(); resolve(); }); });
+/** read(2), or pread(2) at `off`, into `target`, which a Promise fills once the bytes come */
+export function javaReadFd(fd: number, target: Uint8Array, off = -1): number | Promise<number> {
+  const f = fds.get(fd), error = refused(f, off, false);
+  if (error) return error;
+  const r = f!.ops.read(f!, target, off, fd);
+  if (typeof r !== "number") return r.then((v) => typeof v === "number" ? v : (target.set(v), v.length));
+  return r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK) ? woken(f!).then(() => javaReadFd(fd, target, off)) : r;
+}
+export const javaPreadFd = (fd: number, target: Uint8Array, off: number): number | Promise<number> => off < 0 ? -E.INVAL : javaReadFd(fd, target, off);
+export function javaWriteFd(fd: number, bytes: Uint8Array, off = -1): number | Promise<number> {
+  const f = fds.get(fd), error = refused(f, off, true);
+  return error || f!.ops.write(f!, bytes, off);
+}
+export const javaPwriteFd = (fd: number, bytes: Uint8Array, off: number): number | Promise<number> => off < 0 ? -E.INVAL : javaWriteFd(fd, bytes, off);
+/** the rest of an open file from its position: a file's, which keeps it, or a stream's, which it consumes */
+export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
+  const f = fds.get(fd);
+  if (!f || (f.statusFlags & O_ACCMODE) === O_WRONLY) return null;
+  if (!f.ops.positional) {
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const chunk = new Uint8Array(65536), n = await javaReadFd(fd, chunk);
+      if (n < 0) return null;
+      if (!n) return concat(chunks);
+      chunks.push(chunk.subarray(0, n));
+    }
+  }
+  const [stat, position] = await Promise.all([f.ops.stat(f), f.ops.seek(f, 0, 1)]);
+  if (!stat || position < 0) return null;
+  const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await javaReadFd(fd, bytes, position);
+  return n < 0 ? null : bytes.subarray(0, n);
+}
+export function javaLseekFd(fd: number, off: number, whence: number): number | Promise<number> {
+  const f = fds.get(fd);
+  return f ? f.ops.seek(f, off, whence) : -E.BADF;
+}
+export function javaTruncateFd(fd: number, length: number): number | Promise<number> {
+  const f = fds.get(fd);
+  return f ? f.ops.truncate(f, length) : -E.BADF;
+}
+/** fsync and fdatasync */
+export function javaSyncFd(fd: number): number | Promise<number> {
+  const f = fds.get(fd);
+  return f ? f.ops.sync(f) : -E.BADF;
+}
+/** fallocate's mode 0: the file grown to cover the range */
+export function javaAllocateFd(fd: number, off: number, length: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f || (f.statusFlags & O_ACCMODE) === O_RDONLY) return -E.BADF;
+  return off < 0 || length <= 0 ? -E.INVAL : f.ops.allocate(f, off, length);
+}
+/** ioctl(2) requests with an int result; FIONREAD is the one files answer */
+export function javaIoctlIntFd(fd: number, request: number): number | Promise<number> {
+  const f = fds.get(fd);
+  return !f ? -E.BADF : request === FIONREAD ? f.ops.available(f) : -E.NOTTY;
+}
+export function javaFdStat(fd: number): FdStat | null | Promise<FdStat | null> {
+  const f = fds.get(fd);
+  return f ? f.ops.stat(f) : null;
+}
+/** the stat of an open file this realm holds */
+export function localFdStat(fd: number): FdStat | null {
+  const f = fds.get(fd), stat = f && f.ops.stat(f);
+  return !stat || stat instanceof Promise ? null : stat;
+}
+export function javaFdSource(fd: number): FileSource | null | Promise<FileSource | null> {
+  const f = fds.get(fd);
+  return f ? f.ops.source(f, fd) : null;
+}
+/** fchmod, fchown and futimens: a change to the file open on `fd`, which its owner (by `uid`) makes */
+export function javaChangeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
+  const f = fds.get(fd);
+  return f ? f.ops.change(f, change, uid) : -E.BADF;
+}
+export const javaIsSocketFd = (fd: number): boolean => !!fds.get(fd)?.socket;
+/** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
+export function pollEvents(fd: number, events: number): number {
+  const f = fds.get(fd);
+  return f ? f.ops.poll(f, events) : POLLNVAL;
+}
+/** call `wake` once the descriptor's readiness may have changed */
+export function watchFd(fd: number, wake: () => void): () => void {
+  const f = fds.get(fd);
+  return f ? f.ops.watch(f, wake) : NOOP;
 }
 
 // bionic's fdsan: a descriptor's owner tag, which an ownership exchange or a tagged close checks.

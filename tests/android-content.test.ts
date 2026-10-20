@@ -30,7 +30,7 @@ import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
 import { alarmTransport } from "../src/android/alarm.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
-import { javaReadFd } from "../src/native/fs.ts";
+import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { scall, bootApp, packageRecord } from "./java.ts";
 

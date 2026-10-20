@@ -1,7 +1,8 @@
-import { E } from "../native/abi.ts";
-import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
-  javaReadFd, javaLseekFd, javaSyncFd, javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, fdBase, installFile, javaChangeFdAttributes, type FdStat, type OpenFile } from "../native/fs.ts";
+import { E, O_ACCMODE, O_CREAT, O_TRUNC, S_IFMT, S_IFREG } from "../native/abi.ts";
+import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaPreadFd, javaPwriteFd, javaReadFd, javaLseekFd, javaSyncFd,
+  javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, javaChangeFdAttributes, type FdStat, type OpenFile } from "../native/fd.ts";
+import { javaAnonymousFd, javaOpenFd } from "../native/fs.ts";
+import { detachFdScope } from "../android/fd-scope.ts";
 import type { AttributeChange } from "./file-path.ts";
 import { fifoOf, holdFifo, type Pipe } from "../native/pipe.ts";
 import { vfs, type VfsFile } from "./vfs.ts";
@@ -108,7 +109,7 @@ export class FileDescriptors {
     const file = openFd(fd)!;
     // Pipes/sockets must not wait behind their own blocking read. They require their
     // existing independent readiness protocol, not this regular-file operation queue.
-    if (!file.dir && (localFdStat(fd)!.mode & 0xf000) !== 0x8000) { javaCloseFd(fd); return -E.NOTSUP; }
+    if (!file.dir && (localFdStat(fd)!.mode & S_IFMT) !== S_IFREG) { javaCloseFd(fd); return -E.NOTSUP; }
     const token = this.next++;
     session.descriptors.set(token, {fd,file});
     return token;
@@ -154,10 +155,10 @@ export class FileDescriptors {
   private readonly handlers: Handlers = {
     ashmemCreate: (session, {size}) => {
       if (!Number.isSafeInteger(size) || size <= 0 || size > 0x7fffffff) return -E.INVAL;
-      const file = {...fdBase(""),write:true,statusFlags:2};
-      try { file.content = {path:null,data:new Uint8Array(size),len:size,ashmem:{prot:7}}; }
+      let data: Uint8Array;
+      try { data = new Uint8Array(size); }
       catch { return -E.NOMEM; }
-      return this.put(session,installFile(file,true));
+      return this.put(session,javaAnonymousFd({path:null,data,len:size,ashmem:{prot:7}}));
     },
     open: (session, request) => {
       const path = vfs.norm(request.path), flags = request.flags;
@@ -241,14 +242,6 @@ export class FileDescriptors {
       return this.ordered(mapping.file, async () => { await javaCloseFd(mapping.fd); return 0; });
     },
   };
-
-  /** Only an owning broker may grant an FD to another PID. A recipient's path authority
-   * does not apply to an explicitly passed descriptor; its access mode still does. */
-  async duplicateTo(from: number, token: number, to: number): Promise<number> {
-    const source = this.sessions.get(from), target = this.sessions.get(to), descriptor = source?.descriptors.get(token);
-    if (!source || source.dead || !target || target.dead || !descriptor) return -E.BADF;
-    return this.ordered(descriptor.file, () => source.dead || target.dead ? -E.BADF : this.put(target,javaDupFd(descriptor.fd)));
-  }
 
   /** A serialized transaction can consume only the sender's staged reference. The
    * driver's bound sender/receiver IDs, rather than wire-supplied PIDs, choose the tables. */

@@ -2,16 +2,15 @@
 // in this process and UDP between this process's sockets stay in the process.
 
 import { DatagramRelay, Relay, syntheticHost, ipv4Key, ipv4Text, parseIpv4 } from "../../shell/relay.ts";
-import { E } from "../abi.ts";
+import { E, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../abi.ts";
 import { sameBytes } from "../../jvm/abi.ts";
-import { installSocket, socketOf, naming, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../fs.ts";
 import {
   AF_UNIX, AF_INET, AF_INET6, V4_ANY, V4_LOOPBACK, V6_LOOPBACK, isAny, isLoopback, isMulticast, addressKey,
   endpointOf, parseIpv6, addressText, INTERFACES, type Endpoint,
 } from "../net-address.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi.ts";
 import {
-  Socket, Loopback, block, record, received, type Stream, type Received, type Accepted,
+  Socket, Loopback, block, record, received, installSocket, socketOf, naming, type Stream, type Received, type Accepted,
   SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF, SO_SNDBUF, SO_LINGER, SO_RCVTIMEO,
 } from "./core.ts";
 

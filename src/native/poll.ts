@@ -1,10 +1,10 @@
-// Readiness over any descriptors: poll(2), select(2) and epoll, over the answer and wakeup fs.ts
-// gives for each descriptor.
+// Readiness over any descriptors: poll(2), select(2) and epoll, over the answer and wakeup each
+// open file's kind gives (fd.ts).
 
 import { mem, anchor } from "./mem.ts";
 import { PTR, complete, type HostFn } from "./host.ts";
-import { E } from "./abi.ts";
-import { openFd, installFile, fdBase, pollEvents, watchFd, O_CLOEXEC, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./fs.ts";
+import { E, O_CLOEXEC, O_RDWR, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./abi.ts";
+import { ANON, openFd, installFile, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 
 export interface PollEntry { fd: number; events: number; revents: number }
@@ -80,7 +80,16 @@ export function nativeSelect(count: number, readSet: number, writeSet: number, e
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000;
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 export interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
-export const epollCreate = (cloexec: boolean): number => installFile({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }, cloexec);
+const EPOLL: FileOps = {
+  ...ANON,
+  poll: () => 0,
+  close(f) { const ep = f.epoll!; for (const e of ep.entries.values()) e.cancel(); for (const wake of ep.wake) wake(); },
+};
+export function epollCreate(cloexec: boolean): number {
+  const f = newFile(EPOLL, "epoll", O_RDWR);
+  f.epoll = { entries: new Map(), wake: new Set() };
+  return installFile(f, cloexec);
+}
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: pollEvents(fd, events), disabled: false, cancel: () => {} };
   let active = true, remove = () => {};

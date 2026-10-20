@@ -6,7 +6,8 @@ import { JObj, rt, getDeclared } from "../jvm/runtime.ts";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
 import { scall, iof } from "../jvm/natives/jentry.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
-import { javaCloseFd, javaDupFd, fdLease, type FdScope } from "../native/fs.ts";
+import { javaCloseFd, javaDupFd } from "../native/fd.ts";
+import { fdLease, type FdScope } from "./fd-scope.ts";
 import { ownedHandle, deref, release } from "./handles.ts";
 
 export class NativeParcel {

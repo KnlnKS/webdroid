@@ -4,15 +4,17 @@
 
 import { mem, wrote, anchor } from "./mem.ts";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
-import { E } from "./abi.ts";
+import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, S_IFDIR, S_IFREG } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { asWrappers, fail, kernelResult, logLine, readTs, KLAYOUT } from "./kernel.ts";
+import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "./kernel.ts";
 import { format, scan, scanSink } from "./printf.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdWrite, fdDup2, javaCloseFd, javaLseekFd, javaPreadFd,
-  javaTruncateFd, javaAllocateFd, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess, javaChangeFdAttributes,
-  modifiedTime, AT_FDCWD, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
+import { localStat } from "../shell/file-path.ts";
+import { FS_SYSCALLS, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
+  modifiedTime, makePipe, pread, pwrite, listProcess } from "./fs.ts";
+import { openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
+import { processOpenFd } from "./process-fd.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
 
@@ -33,7 +35,7 @@ function fdTemp(tpl: number, flags: number, dir: boolean): number | Promise<numb
     if (count === 100) return -E.EXIST;
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
-    const pending = dir ? mkdirProcess(name) : fdOpen(name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    const pending = dir ? mkdirProcess(name) : processOpenFd(name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
     return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
   };
   return attempt(0);
@@ -217,8 +219,8 @@ export function stdioInit(): void {
 
   // the calls bionic makes straight to the kernel, which answer -1 with errno set
   const K: Record<string, HostFn> = {
-    open: (_c, a) => fdOpen(a.str(), a.i()),
-    creat: (_c, a) => fdOpen(a.str(), 1 | O_CREAT | O_TRUNC),
+    open: (_c, a) => processOpenFd(a.str(), a.i()),
+    creat: (_c, a) => processOpenFd(a.str(), 1 | O_CREAT | O_TRUNC),
     mkstemp: (_c, a) => fdTemp(a.p(), 0, false),
     mkostemp: (_c, a) => fdTemp(a.p(), a.i(), false),
     pread: (_c, a) => pread(a.i(), a.p(), a.u(), a.i()),
@@ -236,7 +238,7 @@ export function stdioInit(): void {
     mkdir: (_c, a) => mkdirProcess(a.str()),
     rmdir: (_c, a) => removeProcess(a.str(), true),
     ftruncate64: (_c, a) => javaTruncateFd(a.i(), Number(a.l())),
-    dup2: (_c, a) => fdDup2(a.i(), a.i()),
+    dup2: (_c, a) => javaDup2Fd(a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),
     epoll_wait: POLL_SYSCALLS.epoll_pwait,
@@ -328,16 +330,16 @@ export function stdioInit(): void {
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();
       const { o, f } = modeFlags(mode);
-      return complete(kernelResult(cpu, fdOpen(path, o)), fd => fd < 0 ? 0 : newFile(fd, f));
+      return complete(kernelResult(cpu, processOpenFd(path, o)), fd => fd < 0 ? 0 : newFile(fd, f));
     },
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return openFd(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
     freopen: (cpu, a) => {
       const path=a.str(),mode=a.str(),fp=a.p(),{o,f}=modeFlags(mode);pushback.delete(fp);
-      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(kernelResult(cpu, fdOpen(path, o)), fd => {
+      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(kernelResult(cpu, processOpenFd(path, o)), fd => {
         if(fd<0)return 0;files.set(fp,fd);mem.st16(fp+FILE.file,fd);mem.st16(fp+FILE.flags,f);return fp;
       }));
     },
-    tmpfile: (cpu) => { return complete(kernelResult(cpu, fdOpen(`/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC)), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
+    tmpfile: (cpu) => { return complete(kernelResult(cpu, processOpenFd(`/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC)), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
     fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = kernelResult(cpu, javaCloseFd(fd)); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (cpu, a) => { const fp = a.p(); return !fp || openFd(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {

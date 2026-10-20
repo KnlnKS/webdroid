@@ -13,7 +13,10 @@ import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals.ts";
 import { writeSiginfo } from "./sigframe.ts";
 import { fillRandom, kernelResult, readTs, setKernelLayout } from "./kernel.ts";
 import { VM_SYSCALLS } from "./vm.ts";
-import { FS_SYSCALLS, fsInit, faccessatPath, getdents64, javaAllocateFd } from "./fs.ts";
+import { FS_SYSCALLS, fsInit, faccessatPath, getdents64 } from "./fs.ts";
+import { javaAllocateFd } from "./fd.ts";
+import { EVENTFD_SYSCALLS } from "./eventfd.ts";
+import { INOTIFY_SYSCALLS } from "./inotify.ts";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread.ts";
 import { NET_SYSCALLS } from "./socket/syscalls.ts";
 import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll.ts";
@@ -22,7 +25,7 @@ import { TIMER_SYSCALLS } from "./timers.ts";
 import { device } from "../shell/config.ts";
 
 /** the kernel's calls by name, which the ARM32 libc's wrappers of the same names answer too */
-export const KERNEL_SYSCALLS: Record<string, HostFn> = { ...VM_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
+export const KERNEL_SYSCALLS: Record<string, HostFn> = { ...VM_SYSCALLS, ...FS_SYSCALLS, ...EVENTFD_SYSCALLS, ...INOTIFY_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
 
 /** served by the body of the same arguments (an offset in a register on LP64 makes mmap direct;
  *  ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */

@@ -1,8 +1,9 @@
-import { E } from "../native/abi.ts";
-import { vfs, type FileAttributes } from "./vfs.ts";
-import { procIdentity } from "./procfs.ts";
-import { mkdirPath, accessPath, renamePath, removePath, createPath, makeFifo, pathStat, type FileStat } from "../native/fs.ts";
-import { moveRemoteFifo } from "../native/pipe.ts";
+import { E, S_IFDIR, S_IFIFO, S_IFREG } from "../native/abi.ts";
+import { vfs, type FileAttributes, type VfsFile } from "./vfs.ts";
+import { procIdentity, procText } from "./procfs.ts";
+import type { FdStat, FileStat } from "../native/fd.ts";
+import { isFifo, moveRemoteFifo, nameFifo } from "../native/pipe.ts";
+import { utf8 } from "../jvm/abi.ts";
 export type PathReply<T> = { errno: number; value: T };
 /** a change to a file's owner, group (-1 keeps either), permission bits or modification time (epoch ms) */
 export type AttributeChange = Partial<FileAttributes> & { mtime?: number };
@@ -52,6 +53,92 @@ export function changeFileAttributes(path: string, change: AttributeChange, uid 
     ...(change.gid !== undefined && change.gid !== -1 ? {gid:change.gid} : {}),...(change.mode !== undefined ? {mode:change.mode & 0o7777} : {})});
   if (change.mtime !== undefined) vfs.mtimes.set(p, Math.floor(change.mtime));
   return 0;
+}
+/** fstat(2) of an open file named `path` (null: it has no name now), of st_mode `mode` and `size` bytes */
+export const openFileStat = (path: string | null, mode: number, size: number, { uid, gid } = vfs.attributes(path)): FdStat =>
+  ({ mode, size, path, uid, gid, mtime: path ? vfs.mtime(path) : 0 });
+/** fchmod, fchown and futimens of an open file named `path`: a file without a name keeps no attributes */
+export const changeOpenFile = (path: string | null, change: AttributeChange, uid?: number): number =>
+  path === null ? -E.NOTSUP : changeFileAttributes(path, change, uid);
+// The path operations on this realm's own files, each answering -errno or 0
+const pathType = (p: string): number => vfs.isDir(p) ? S_IFDIR : isFifo(p) ? S_IFIFO : S_IFREG;
+/** the stat of a file this realm holds, of `size` bytes unless it is a directory */
+export function localStat(path: string, type: number, size: number, mtime: number, file: VfsFile | null = vfs.opened(path)): FileStat {
+  const { mode, uid, gid } = file?.attributes ?? vfs.attributes(path, type === S_IFDIR);
+  return { mode: type | mode, size: type === S_IFDIR ? 4096 : size, mtime, uid, gid };
+}
+export const isRandomDevice = (path: string): boolean => path === "/dev/urandom" || path === "/dev/random";
+/** stat(2) of normalized `p`: a directory, a file (procfs included) or a random device */
+function pathStat(p: string): PathReply<FileStat | null> {
+  const s = isRandomDevice(p) ? "" : procText(p);
+  if (s !== null) return { errno: 0, value: localStat(p, S_IFREG, utf8.enc.encode(s).length, Date.now()) };
+  const directory = vfs.isDir(p), file = directory ? null : vfs.stat(p);
+  return directory || file ? { errno: 0, value: localStat(p, pathType(p), file?.size ?? 0, vfs.mtime(p), null) } : { errno: E.NOENT, value: null };
+}
+function accessPath(path: string, mode: number): number {
+  if (mode & ~7) return -E.INVAL;
+  const p = vfs.norm(path);
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : -E.NOENT;
+}
+/** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
+export function renamePath(fromPath: string, toPath: string): number {
+  const from = vfs.norm(fromPath), to = vfs.norm(toPath), parent = to.slice(0, to.lastIndexOf("/")) || "/";
+  if (from === to) return vfs.exists(from) ? 0 : -E.NOENT;
+  if (!vfs.isDir(parent)) return -(vfs.exists(parent) ? E.NOTDIR : E.NOENT);
+  if (vfs.isDir(from)) {
+    if (to === from || to.startsWith(from + "/")) return -E.INVAL;
+    if (vfs.exists(to)) {
+      if (!vfs.isDir(to)) return -E.NOTDIR;
+      if (vfs.list(to).length) return -E.NOTEMPTY;
+      vfs.rmdir(to);
+    }
+    const prefix = from + "/";
+    for (const m of [vfs.files, vfs.lazyFiles]) {
+      for (const k of [...m.keys()]) if (k.startsWith(prefix)) vfs.rename(k, to + k.slice(from.length));
+    }
+    for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) {
+      const dest = to + d.slice(from.length), attributes = vfs.attributes(d,true);
+      vfs.dirs.delete(d); vfs.dirs.add(dest);vfs.metadata.delete(d);vfs.metadata.set(dest,attributes);
+    }
+    vfs.dirs.add(to);
+    vfs.onWrite(from); vfs.onWrite(to);
+    return 0;
+  }
+  const source = vfs.source(from);
+  if (!source) return -E.NOENT;
+  if (vfs.isDir(to)) return -E.ISDIR;
+  vfs.rename(from, to);
+  return 0;
+}
+/** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
+function newName(p: string): number {
+  if (vfs.exists(p) || vfs.isDir(p)) return -E.EXIST;
+  const parent = p.slice(0, p.lastIndexOf("/")) || "/";
+  return parent !== "/" && !vfs.isDir(parent) ? -E.NOENT : 0;
+}
+function mkdirPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
+  if (taken) return taken;
+  vfs.mkdir(p); return 0;
+}
+/** open(O_CREAT|O_EXCL) and close: an empty file where nothing was */
+function createPath(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
+  if (taken) return taken;
+  vfs.write(p, new Uint8Array(0)); return 0;
+}
+export function makeFifo(path: string): number {
+  const p = vfs.norm(path), taken = newName(p);
+  if (!taken) nameFifo(p);
+  return taken;
+}
+/** unlink(2) with `directory` false, rmdir(2) with true, and remove(3) when it is omitted */
+function removePath(path: string, directory?: boolean): number {
+  const p = vfs.norm(path);
+  if (!vfs.isDir(p)) return directory ? -(vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : -E.NOENT;
+  if (directory === false) return -E.ISDIR;
+  if (vfs.list(p).length) return -E.NOTEMPTY;
+  vfs.rmdir(p); return 0;
 }
 /** this realm's path operations on its own files */
 const localFilePaths: Answering<Operations, true> = {
