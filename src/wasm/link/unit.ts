@@ -6,7 +6,8 @@ import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/ids.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { JClass } from "../compiler/program.ts";
-import { unitHeader, type UnitHeader } from "./aot.ts";
+import type { UnitHeader } from "./aot.ts";
+import { unitHeader } from "./aotbuild.ts";
 import type { Marks, Numbering } from "./numbers.ts";
 import type { World } from "./world.ts";
 
@@ -72,10 +73,8 @@ export class UnitCompiler {
     for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
     const cx = new Compiler(w), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
-    w.beginTouch();
-    const { bytes, traces } = cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan, seq: job.unit });
-    const touch = w.endTouch();
-    return { header: unitHeader(w, cx, touch), numbering: w.numbers.since(this.known), module: bytes,
+    const [{ bytes, traces }, touched] = w.touched(() => cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan, seq: job.unit }));
+    return { header: unitHeader(w, cx, touched), numbering: w.numbers.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs, inline: t.inline?.map(([m, pc, at]) => [mid(m), pc, at]) })) };
   }
 }

@@ -87,6 +87,8 @@ export interface ClassRt { name: string; id: number; mod: string; from: "own" | 
 export type Clock = { start: number; accounted: number };
 export type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
 
+/** the classes (ids) and synthetic functions code names the table slots of */
+export interface Touched { touch: number[]; synth: string[] }
 export class World {
   opts: WorldOptions;
   /** whether code is instantiated and runs here: a build's World and a compile worker's only number and name what code links */
@@ -178,9 +180,15 @@ export class World {
     for (const t of tail) if (typeof t !== "string") this.classes.delete(t[0]);
     this.slots.rollback(tail);
   }
-  /** the classes (and, as "!name", runtime functions) whose slots code made between `beginTouch` and `endTouch` names: they need their stubs before the code runs */
-  beginTouch(): void { this.touching = new Set(); }
-  endTouch(): Set<string> { const t = this.touching!; this.touching = null; return t; }
+  /** runs `make`, which makes code, and what that code names the table slots of: classes (by id) and synthetic functions, which need their stubs before it runs */
+  touched<T>(make: () => T): [T, Touched] {
+    const names = this.touching = new Set();
+    let value: T;
+    try { value = make(); } finally { this.touching = null; }
+    const touched: Touched = { touch: [], synth: [] };
+    for (const n of names) if (n[0] === "!") touched.synth.push(n.slice(1)); else touched.touch.push(this.idOf(n));
+    return [value, touched];
+  }
 
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {

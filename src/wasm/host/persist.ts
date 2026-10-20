@@ -1,7 +1,7 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot.ts";
+import { APP_VERSION, header, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { compileBytes } from "../link/module.ts";
 import type { DexFile } from "../../jvm/dex.ts";
@@ -99,10 +99,8 @@ export class SavedBuild implements AotStore {
       build = new SavedBuild(index);
       await Promise.all([...files].filter(([name]) => name.endsWith(".wasm")).map(async ([name, bytes]) => {
         const mod = await compileBytes(bytes);
-        const section = WebAssembly.Module.customSections(mod, "aot")[0];
-        if (!section) throw new Error("saved module header missing");
-        const header = JSON.parse(new TextDecoder().decode(section)) as UnitHeader;
-        if (header.version !== VERSION) throw new Error("saved module format mismatch");
+        // a module without a header fails to parse one
+        if (header<UnitHeader>(mod).version !== VERSION) throw new Error("saved module format mismatch");
         build.modules.set(name, mod);
       }));
     } catch { return undefined; }

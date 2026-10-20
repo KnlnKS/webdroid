@@ -16,9 +16,8 @@ import type { SymbolicSite } from "../compiler/sites.ts";
 
 import type { DexFile } from "../../jvm/dex.ts";
 import { methodCount, type Loader, type MethodInfo } from "../compiler/program.ts";
-import type { Compiler, FnTrace } from "../compiler/j2w.ts";
+import type { FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/ids.ts";
-import { uleb } from "../compiler/wasmbin.ts";
 import { hostTakeover } from "./hostclass.ts";
 import { LebReader } from "./module.ts";
 
@@ -136,19 +135,6 @@ export interface AppIndex {
 }
 /** the module of synthetic functions: what it relies on, and the functions it holds */
 export interface SHeader extends UnitHeader { names: string[] }
-/** what compiled code (built by `cx`, whose classes were touched while it was made) relies on, by the numbers of `w` */
-export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHeader {
-  const held = cx.held;
-  const seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
-  for (const [decl, name, desc, target, owner] of cx.assumptions) {
-    const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
-    if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
-  }
-  return { version: VERSION, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
-    classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions, allocs: [...cx.allocs],
-    missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
-    ...held.length && { held } };
-}
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
 const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
@@ -160,37 +146,10 @@ function invert(entries: Iterable<[string, string[]]>): Map<string, string[]> {
 }
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
-/** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions (methods numbered by `w`) */
-export function packModule(header: object, wasm: Uint8Array, traced?: { w: World; traces: FnTrace[] }): Uint8Array {
-  const section = (name: string, body: Uint8Array) => {
-    const n = new TextEncoder().encode(name), pre: number[] = [0], inner: number[] = [];
-    uleb(n.length, inner);
-    uleb(n.length + inner.length + body.length, pre);
-    return [Uint8Array.from(pre), Uint8Array.from(inner), n, body];
-  };
-  // a function's trace is its slot, its length in bytes and then the count, ascending offsets and the pcs they belong to (both as differences), then its
-  // inline frames (FnTrace.inline) as count and (slot, pc, at): a reader skips the functions it does not want
-  const t: number[] = [], { w, traces = [] } = traced ?? {};
-  for (const { m, offsets, pcs, inline = [] } of traces) {
-    const body: number[] = [];
-    uleb(offsets.length, body);
-    let o = 0, p = 0;
-    for (let i = 0; i < offsets.length; i++) { uleb(offsets[i] - o, body); o = offsets[i]; uleb((((pcs[i] - p) << 1) ^ ((pcs[i] - p) >> 31)) >>> 0, body); p = pcs[i]; }
-    uleb(inline.length, body);
-    for (const [im, pc, at] of inline) { uleb(w!.slotOf(im), body); uleb(pc, body); uleb(at, body); }
-    uleb(w!.slotOf(m!), t); uleb(body.length, t);
-    for (const x of body) t.push(x);
-  }
-  const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify({ version: VERSION, ...header }))), ...(traced ? section("aottrace", Uint8Array.from(t)) : [])];
-  const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
-  let at = 0;
-  for (const x of parts) { out.set(x, at); at += x.length; }
-  return out;
-}
 const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new Uint8Array(WebAssembly.Module.customSections(m, name)[0]);
 /** a module's header, parsed once: linking asks a code module's on every lazy link until the module loads */
 const headers = new WeakMap<WebAssembly.Module, unknown>();
-const header = <H>(m: WebAssembly.Module): H => {
+export const header = <H>(m: WebAssembly.Module): H => {
   let h = headers.get(m);
   if (h === undefined) headers.set(m, h = JSON.parse(new TextDecoder().decode(customSection(m, "aot"))));
   return h as H;
