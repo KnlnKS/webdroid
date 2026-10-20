@@ -3,8 +3,8 @@
 // region is ordered so every loop is contiguous and every other edge goes forward, so a branch is
 // a `continue` of the loop it closes or a `break` out of a labelled block ending at its target.
 // Only edges between regions, which exceptions and handler exits take, go through the `pc` switch.
-import type { CodeItem } from "./dex.ts";
-import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "./prepared.ts";
+import type { CodeItem } from "../../jvm/dex.ts";
+import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "../../jvm/prepared.ts";
 
 /** How a branch reaches its target block. */
 export const Go = { Next: 0, Break: 1, Continue: 2, Dispatch: 3 } as const;
@@ -20,12 +20,12 @@ interface Scope { open: number; close: number; label: string; loop: boolean }
 export interface Region { entry: number; order: number[]; scopes: Scope[] }
 
 export class Flow {
-  readonly starts: number[] = [];
-  readonly blockAt: Int32Array;
   readonly regions: Region[] = [];
   /** blocks whose conditional branch targets the next block: the test is inverted */
   readonly inverted: Set<number> = new Set();
-  private readonly fall: number[] = [];
+  /** by block, the innermost natural loop it is in, -1 for none */
+  readonly loopOf: Int32Array;
+  private readonly fall: Int32Array;
   private readonly region: Int32Array;
   private readonly pos: Int32Array;
   private readonly rpo: Int32Array;
@@ -33,28 +33,18 @@ export class Flow {
 
   /** `extraEntries` are blocks (by start pc) that also begin a region: an irreducible cycle is cut by making its extra heads (`Irreducible.heads`) entries, so every edge into them takes the dispatch. */
   constructor(prepared: PreparedMethod, code: CodeItem, extraEntries: readonly number[] = []) {
-    const { instructions, leaders } = prepared, last: PreparedMethod["instructions"][number][] = [];
-    this.blockAt = new Int32Array(code.insns.length + 1).fill(-1);
-    for (let i = 0; i < instructions.length; i++) {
-      const pc = instructions[i].pc;
-      if (!leaders[pc]) continue;
-      if (i) last.push(instructions[i - 1]);
-      this.blockAt[pc] = this.starts.length; this.starts.push(pc);
-    }
-    last.push(instructions[instructions.length - 1]);
-    const n = this.starts.length, root = n;
-    const succs: number[][] = [], preds: number[][] = new Array(n + 1);
+    const { instructions, blockAt, start, last: lastIdx } = prepared, n = start.length, root = n;
+    const succs: (readonly number[])[] = prepared.succ.slice(), preds: number[][] = new Array(n + 1), last = (b: number) => instructions[lastIdx[b]];
+    this.fall = new Int32Array(n);
     for (let b = 0; b <= n; b++) preds[b] = [];
     for (let b = 0; b < n; b++) {
-      const ins = last[b], out = branchTargets(code, ins).map((t) => this.blockAt[t]);
-      this.fall[b] = endsBlock(ins.op) ? -1 : this.blockAt[ins.pc + ins.len];
-      if (this.fall[b] >= 0) out.push(this.fall[b]);
-      succs.push(out);
-      for (const s of out) preds[s].push(b);
+      const ins = last(b);
+      this.fall[b] = endsBlock(ins.op) ? -1 : blockAt[ins.pc + ins.len];
+      for (const s of succs[b]) preds[s].push(b);
     }
     const entries = [0];
-    for (const pc of extraEntries) entries.push(this.blockAt[pc]);
-    for (const pc of prepared.handlerPcs) entries.push(this.blockAt[pc]);
+    for (const pc of extraEntries) entries.push(blockAt[pc]);
+    for (const pc of prepared.handlerPcs) entries.push(blockAt[pc]);
     succs.push(entries);
     for (const e of entries) preds[e].push(root);
 
@@ -97,7 +87,7 @@ export class Flow {
     const backs = new Map<number, number[]>(), heads = new Set<number>();
     for (const u of order) if (u !== root) for (const v of succs[u]) {
       if (region[v] !== region[u] || rpo[v] > rpo[u]) continue;
-      if (!dominates(v, u)) { heads.add(this.starts[v]); continue; }
+      if (!dominates(v, u)) { heads.add(start[v]); continue; }
       backs.get(v)?.push(u) ?? backs.set(v, [u]);
     }
     if (heads.size) throw new Irreducible([...heads]);
@@ -107,7 +97,7 @@ export class Flow {
       while (work.length) for (const p of preds[work.pop()!]) if (p !== root && !body.has(p)) { body.add(p); work.push(p); }
       return { head, body, parent: -1 };
     }).sort((a, b) => b.body.size - a.body.size);
-    const loopOf = new Int32Array(n).fill(-1);
+    const loopOf = this.loopOf = new Int32Array(n).fill(-1);
     loops.forEach((l, i) => { l.parent = loopOf[l.head]; for (const b of l.body) loopOf[b] = i; });
 
     // each scope's blocks in topological order with its inner loops collapsed to their headers
@@ -166,7 +156,7 @@ export class Flow {
     for (const l of loops) {
       const r = regionOf.get(region[l.head])!, open = this.pos[l.head], close = open + l.body.size;
       for (const b of l.body) if (this.pos[b] < open || this.pos[b] >= close) throw new Error("split loop");
-      r.scopes.push({ open, close, label: `L${this.starts[l.head]}`, loop: true });
+      r.scopes.push({ open, close, label: `L${start[l.head]}`, loop: true });
       this.loopCloses[region[l.head]].add(close);
     }
 
@@ -176,18 +166,18 @@ export class Flow {
       if (this.go(u, v, final) === Go.Break) opens.set(v, Math.min(opens.get(v) ?? Infinity, this.pos[u]));
     };
     for (const r of this.regions) for (const u of r.order) {
-      const ins = last[u], op = ins.op;
-      if (op >= 0x28 && op <= 0x2a) { note(u, this.blockAt[ins.pc + ins.a], true); continue; }
+      const ins = last(u), op = ins.op;
+      if (op >= 0x28 && op <= 0x2a) { note(u, blockAt[ins.pc + ins.a], true); continue; }
       if (endsBlock(op)) continue;
       if (op >= 0x32 && op <= 0x3d) {
-        const t = this.blockAt[ifTarget(ins)], f = this.fall[u];
+        const t = blockAt[ifTarget(ins)], f = this.fall[u];
         if (t === f) { note(u, f, true); continue; }
         if (this.go(u, t, true) === Go.Next) { this.inverted.add(u); note(u, f, false); continue; }
         note(u, t, false);
-      } else if (op === 0x2b || op === 0x2c) for (const t of branchTargets(code, ins)) note(u, this.blockAt[t], false);
+      } else if (op === 0x2b || op === 0x2c) for (const t of branchTargets(code, ins)) note(u, blockAt[t], false);
       if (this.fall[u] >= 0) note(u, this.fall[u], true);
     }
-    for (const [t, open] of opens) regionOf.get(region[t])!.scopes.push({ open, close: this.pos[t], label: `B${this.starts[t]}`, loop: false });
+    for (const [t, open] of opens) regionOf.get(region[t])!.scopes.push({ open, close: this.pos[t], label: `B${start[t]}`, loop: false });
     for (const r of this.regions) {
       const scopes = r.scopes;
       for (let changed = scopes.length > 1; changed;) {

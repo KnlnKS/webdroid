@@ -7,7 +7,7 @@ import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
-import { type Flow, Go, structureAny } from "../../jvm/structure.ts";
+import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
@@ -85,7 +85,6 @@ export class MC {
   nest: string[] = [];
   block = 0;
   regionLocal = -1; pcLocal = -1; excLocal = -1; tmpL = -1;
-  blockIns: Ins[][] = [];
   consumed = new Set<number>();            // move-result pcs folded into their invoke
   tries: boolean;
   regionOfPc = new Map<number, number>();
@@ -181,9 +180,6 @@ export class MC {
     lap("flow");
     this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared);
     lap("infer");
-    // blocks
-    let cur = -1;
-    for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     this.known = new MethodFacts(this);
     lap("facts");
     const c = this.code;
@@ -208,7 +204,7 @@ export class MC {
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
-    regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
+    regions.forEach((r, i) => this.regionOfPc.set(prepared.start[r.entry], i));
     if (regions.length === 1 && !this.tries) {
       this.emitRegion(0);
       c.unreachable();
@@ -277,8 +273,8 @@ export class MC {
     const calls = this.prepared.instructions.filter((i) => isInvoke(i.op));
     if (!calls.length) return false;
     if (this.tries) return true;
-    const open: string[] = [], cold: string[] = [], thrown = new Set<number>();
-    for (const b of this.blockIns) if (b?.[b.length - 1].op === 0x27) for (const i of b) thrown.add(i.pc);
+    const open: string[] = [], cold: string[] = [], thrown = new Set<number>(), { instructions, first, last } = this.prepared;
+    for (let b = 0; b < first.length; b++) if (instructions[last[b]].op === 0x27) for (let i = first[b]; i <= last[b]; i++) thrown.add(instructions[i].pc);
     const bounded = (m: MethodInfo) => { const w = this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
     for (const ins of calls) {
       if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
@@ -396,24 +392,22 @@ export class MC {
     this.leave(); this.code.ret();
   }
   emitBlock(b: number) {
-    const flow = this.flow, c = this.code, inss = this.blockIns[b];
+    const { instructions, blockAt, start, first } = this.prepared, c = this.code, end = this.prepared.last[b];
     this.block = b;
-    if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
+    if (this.tries) c.i32(start[b]).lset(this.pcLocal);
     this.facts = cloneFacts(this.known!.entry[b]);
-    for (const ins of inss) {
-      this.emit(ins);
-      this.known!.step(ins, this.facts);
+    for (let i = first[b]; i <= end; i++) {
+      this.emit(instructions[i]);
+      this.known!.step(instructions[i], this.facts);
     }
-    const last = inss[inss.length - 1];
+    const last = instructions[end];
     if (!endsBlock(last.op)) {
-      const taken = last.op >= 0x32 && last.op <= 0x3d ? flow.blockAt[ifTarget(last)] : -1;
-      const target = flow.fallTarget(b, taken);
-      if (target >= 0) this.jump(flow.starts[target], true);
+      const target = this.flow.fallTarget(b, last.op >= 0x32 && last.op <= 0x3d ? blockAt[ifTarget(last)] : -1);
+      if (target >= 0) this.jump(start[target], true);
     }
   }
   jump(targetPc: number, final: boolean) {
-    const flow = this.flow, c = this.code, v = flow.blockAt[targetPc];
-    const go = flow.go(this.block, v, final);
+    const go = this.flow.go(this.block, this.prepared.blockAt[targetPc], final), c = this.code;
     const label = go === Go.Continue ? "L" + targetPc : go === Go.Break ? "B" + targetPc : "$disp";
     if (this.loops?.exit(targetPc, final, go, label)) return;
     switch (go) {
@@ -700,24 +694,24 @@ export class MC {
       c.raw(COMPARE[op - (zero ? 0x3a : 0x34)]);
     };
     const fall = ins.pc + ins.len;
-    if (flow.blockAt[target] === flow.blockAt[fall]) return;
+    if (this.prepared.blockAt[target] === this.prepared.blockAt[fall]) return;
     cond();
     if (flow.inverted.has(this.block)) { c.raw(OP.i32_eqz).if_(); this.push("if"); this.jump(fall, false); }
     else { c.if_(); this.push("if"); this.jump(target, false); }
     this.pop(); c.end();
   }
   emitSwitch(ins: Ins) {
-    const c = this.code, cases = switchCases(this.item, ins), flow = this.flow;
+    const c = this.code, cases = switchCases(this.item, ins), flow = this.flow, blockAt = this.prepared.blockAt;
     const lo = Math.min(...cases.map(([k]) => k)), hi = Math.max(...cases.map(([k]) => k));
     // keys dense enough make a jump table, when every target is a label (a hole and the fall-through go to the end of the block)
-    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, flow.blockAt[t], false); return g === Go.Break ? this.nest.includes("B" + t) : g === Go.Continue && this.nest.includes("L" + t); });
+    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, blockAt[t], false); return g === Go.Break ? this.nest.includes("B" + t) : g === Go.Continue && this.nest.includes("L" + t); });
     if (cases.length >= 4 && hi - lo < 4 * cases.length && labelled) {
       const target = new Map(cases);
       this.push("$sw"); c.block();
       this.get("I", ins.a); c.i32(lo).raw(OP.i32_sub);
       c.brTable(Array.from({ length: hi - lo + 1 }, (_, i) => {
         const t = target.get(lo + i);
-        return t === undefined ? 0 : this.depth((flow.go(this.block, flow.blockAt[t], false) === Go.Break ? "B" : "L") + t);
+        return t === undefined ? 0 : this.depth((flow.go(this.block, blockAt[t], false) === Go.Break ? "B" : "L") + t);
       }), 0);
       this.pop(); c.end();
       return;
@@ -754,11 +748,8 @@ export class MC {
   }
   /** the move-result that follows `ins`, if one does */
   private moveResult(ins: Ins): Ins | undefined {
-    const insts = this.prepared.instructions, pc = ins.pc + ins.len;
-    let lo = 0, hi = insts.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (insts[mid].pc < pc) lo = mid + 1; else hi = mid; }
-    const nx = insts[lo];
-    return nx?.pc === pc && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
+    const i = this.prepared.indexAt[ins.pc + ins.len], nx = i >= 0 ? this.prepared.instructions[i] : undefined;
+    return nx && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, prog = cx.prog;

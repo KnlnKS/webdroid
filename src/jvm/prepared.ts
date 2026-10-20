@@ -14,13 +14,24 @@ export interface PreparedInstruction {
   readonly wideLit: bigint;
 }
 
+/** A method's decoded instructions and its basic blocks, numbered in pc order. */
 export interface PreparedMethod {
   readonly instructions: readonly PreparedInstruction[];
-  /** 1 at each pc that starts a basic block */
-  readonly leaders: Readonly<Uint8Array>;
+  /** by pc, the index of the instruction there, -1 elsewhere (one past the end included) */
+  readonly indexAt: Int32Array;
+  /** by pc, the block that starts there, -1 elsewhere */
+  readonly blockAt: Int32Array;
+  /** by block: its start pc, and the indices of its first and last instructions */
+  readonly start: Int32Array;
+  readonly first: Int32Array;
+  readonly last: Int32Array;
+  /** by block: the blocks its branch and fall-through reach, each once */
+  readonly succ: readonly (readonly number[])[];
+  /** by block: the handler blocks its throwing instructions reach */
+  readonly hsucc: readonly (readonly number[])[];
   /** every pc a try hands exceptions to, once each, in the order the tries name them */
   readonly handlerPcs: readonly number[];
-  /** by instruction index, the handler pcs of the try covering it, unless it cannot throw */
+  /** by instruction index, the handler blocks of the try covering it, unless it cannot throw */
   readonly handlers: readonly (readonly number[] | undefined)[];
 }
 
@@ -154,28 +165,53 @@ export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readon
   }
 }
 export function prepareMethod(code: CodeItem): PreparedMethod {
-  const instructions = decodeInstructions(code.insns);
-  const leaders = new Uint8Array(code.insns.length + 1);
+  const instructions = decodeInstructions(code.insns), n = instructions.length, size = code.insns.length + 1;
+  const leaders = new Uint8Array(size), indexAt = new Int32Array(size).fill(-1);
   leaders[0] = 1;
   let end = 0;
-  for (const instruction of instructions) {
+  for (let i = 0; i < n; i++) {
+    const instruction = instructions[i];
+    indexAt[instruction.pc] = i;
     // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
     if (instruction.pc !== end) leaders[instruction.pc] = 1;
     end = instruction.pc + instruction.len;
     const targets = branchTargets(code, instruction);
     for (const target of targets) leaders[target] = 1;
-    if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
+    if (targets.length || endsBlock(instruction.op)) leaders[end] = 1;
   }
-  const all = new Set<number>(), handlers: (readonly number[] | undefined)[] = code.tries.length ? new Array(instructions.length) : [];
-  for (const region of code.tries) {
+  const tries = code.tries.map((region) => {
     leaders[region.start] = 1;
     leaders[region.end] = 1;
     const pcs = region.handlers.map(([, address]) => address);
     if (region.catchAllAddr >= 0) pcs.push(region.catchAllAddr);
-    for (const pc of pcs) { leaders[pc] = 1; all.add(pc); }
-    let i = 0;
-    for (let hi = instructions.length; i < hi;) { const mid = (i + hi) >> 1; if (instructions[mid].pc < region.start) i = mid + 1; else hi = mid; }
-    for (; i < instructions.length && instructions[i].pc < region.end; i++) if (!NO_THROW[instructions[i].op]) handlers[i] = pcs;
+    for (const pc of pcs) leaders[pc] = 1;
+    return pcs;
+  });
+  const blockAt = new Int32Array(size).fill(-1), firsts: number[] = [];
+  for (let i = 0; i < n; i++) if (leaders[instructions[i].pc]) { blockAt[instructions[i].pc] = firsts.length; firsts.push(i); }
+  const nb = firsts.length, start = new Int32Array(nb), first = Int32Array.from(firsts), last = new Int32Array(nb);
+  const succ: number[][] = new Array(nb), hsucc: (readonly number[])[] = new Array(nb).fill(NO_TARGETS), seen = new Int32Array(nb).fill(-1);
+  for (let b = 0; b < nb; b++) {
+    last[b] = b + 1 < nb ? first[b + 1] - 1 : n - 1;
+    start[b] = instructions[first[b]].pc;
+    const instruction = instructions[last[b]], out: number[] = succ[b] = [], fall = endsBlock(instruction.op) ? -1 : blockAt[instruction.pc + instruction.len];
+    for (const target of branchTargets(code, instruction)) { const s = blockAt[target]; if (s >= 0 && seen[s] !== b) { seen[s] = b; out.push(s); } }
+    if (fall >= 0 && seen[fall] !== b) out.push(fall);
   }
-  return { instructions, leaders, handlerPcs: [...all], handlers };
+  const all = new Set<number>(), handlers: (readonly number[] | undefined)[] = tries.length ? new Array(n) : [];
+  code.tries.forEach((region, t) => {
+    const blocks = tries[t].map((pc) => blockAt[pc]);
+    for (const pc of tries[t]) all.add(pc);
+    let i = 0, b = 0;
+    for (let hi = n; i < hi;) { const mid = (i + hi) >> 1; if (instructions[mid].pc < region.start) i = mid + 1; else hi = mid; }
+    for (let hi = nb; b < hi;) { const mid = (b + hi) >> 1; if (first[mid] <= i) b = mid + 1; else hi = mid; }
+    for (b--; i < n && instructions[i].pc < region.end; i++) {
+      if (blockAt[instructions[i].pc] >= 0) b = blockAt[instructions[i].pc];
+      if (NO_THROW[instructions[i].op]) continue;
+      handlers[i] = blocks;
+      const at = hsucc[b] === NO_TARGETS ? (hsucc[b] = []) : hsucc[b] as number[];
+      for (const h of blocks) if (!at.includes(h)) at.push(h);
+    }
+  });
+  return { instructions, indexAt, blockAt, start, first, last, succ, hsucc, handlerPcs: [...all], handlers };
 }

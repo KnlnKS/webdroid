@@ -3,7 +3,7 @@
 // initialization never goes back and a null check stays true until its web is redefined, so a fact survives until its web is written.
 // A reference that field accesses cast to a struct type more than once keeps the cast in a local of that type (the "shadow"), so a later
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
-import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { R as KR } from "./infer.ts";
 import { isFieldAccess, isInstanceInvoke } from "./opinfo.ts";
 import { failed } from "./linkage.ts";
@@ -74,12 +74,12 @@ export class MethodFacts {
   }
 
   private analyze(): Facts[] {
-    const mc = this.mc, flow = mc.flow, n = flow.starts.length, entry: (Facts | undefined)[] = new Array(n);
+    const mc = this.mc, { instructions, blockAt, first, last, succ } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
     const start = newFacts();
     if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
     entry[0] = start;
     const handlers = new Set<number>();
-    for (const pc of mc.prepared.handlerPcs) handlers.add(flow.blockAt[pc]);
+    for (const pc of mc.prepared.handlerPcs) handlers.add(blockAt[pc]);
     for (const h of handlers) entry[h] = newFacts();
     // blocks whose entry facts changed since they were last stepped
     const dirty = new Uint8Array(n).fill(1);
@@ -93,23 +93,19 @@ export class MethodFacts {
     while (changed) {
       changed = false;
       for (let b = 0; b < n; b++) {
-        const inf = entry[b], inss = mc.blockIns[b];
-        if (!dirty[b] || !inf || !inss) continue;
+        const inf = entry[b];
+        if (!dirty[b] || !inf) continue;
         dirty[b] = 0;
         const out = cloneFacts(inf);
-        for (const ins of inss) this.step(ins, out);
-        const last = inss[inss.length - 1], fall = last.pc + last.len;
-        const targets = branchTargets(mc.item, last);
-        // a null test (if-eqz, if-nez) refines the facts along its two edges
-        const test = last.op === 0x38 || last.op === 0x39 ? mc.typing.use(last.pc, last.a) : -1;
-        const nonNullEdge = (taken: boolean) => (last.op === 0x39) === taken;
-        const edge = (t: number, taken: boolean) => {
-          let o = out;
-          if (test >= 0 && mc.typing.kind[test] === KR && nonNullEdge(taken) && !out.nonNull.has(test)) { o = cloneFacts(out); o.nonNull.add(test); }
-          push(flow.blockAt[t], o);
-        };
-        for (const t of targets) edge(t, true);
-        if (!endsBlock(last.op) && flow.blockAt[fall] >= 0) edge(fall, false);
+        for (let i = first[b]; i <= last[b]; i++) this.step(instructions[i], out);
+        // a null test (if-eqz, if-nez) refines the facts along its two edges, unless both reach one block
+        const test = instructions[last[b]], op = test.op, w = op === 0x38 || op === 0x39 ? mc.typing.use(test.pc, test.a) : -1;
+        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = blockAt[test.pc + test.len];
+        if (taken < 0 || taken === fall) { for (const s of succ[b]) push(s, out); continue; }
+        const refined = cloneFacts(out);
+        refined.nonNull.add(w);
+        push(taken, op === 0x39 ? refined : out);
+        if (fall >= 0) push(fall, op === 0x39 ? out : refined);
       }
     }
     return entry.map((e) => e ?? newFacts());

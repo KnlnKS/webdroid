@@ -7,8 +7,7 @@
 import { Code, OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf } from "./program.ts";
-import { endsBlock, branchTargets } from "../../jvm/prepared.ts";
-import { type Flow, Go } from "../../jvm/structure.ts";
+import { type Flow, Go } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { CHUNK_MARK, COUNT_SLOTS } from "./exc.ts";
 import { FUEL } from "./hostcalls.ts";
@@ -238,30 +237,14 @@ export class Outliner {
 
 /** the dispatch cycles of the method's regions: the strong components of their jumps and handler edges, so acyclic handler paths stay in the method */
 function dispatchCycles(mc: MC): Map<number, number[]> {
-  const { regions, blockAt } = mc.flow, n = regions.length, cycleOf = new Map<number, number[]>();
+  const regions = mc.flow.regions, n = regions.length, cycleOf = new Map<number, number[]>();
   if (n < 2) return cycleOf;
-  const owner = new Int32Array(mc.flow.starts.length).fill(-1);
+  const { succ, hsucc } = mc.prepared, owner = new Int32Array(succ.length).fill(-1);
   regions.forEach((r, k) => { for (const b of r.order) owner[b] = k; });
   const edges = Array.from({ length: n }, () => new Set<number>()), reverse = Array.from({ length: n }, () => new Set<number>());
-  for (let k = 0; k < n; k++) for (const b of regions[k].order) {
-    const ins = mc.blockIns[b].at(-1)!;
-    const targets = [...branchTargets(mc.item, ins)];
-    if (!endsBlock(ins.op)) targets.push(ins.pc + ins.len);
-    for (const pc of targets) {
-      const to = owner[blockAt[pc]];
-      if (to !== k) { edges[k].add(to); reverse[to].add(k); }
-    }
-  }
-  const { instructions, leaders, handlers } = mc.prepared;
-  let from = -1;
-  if (mc.tries) instructions.forEach((ins, i) => {
-    if (leaders[ins.pc]) from = owner[blockAt[ins.pc]];
-    const hs = handlers[i];
-    if (from >= 0 && hs) for (const pc of hs) {
-      const to = owner[blockAt[pc]];
-      if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
-    }
-  });
+  const link = (from: number, to: number) => { if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); } };
+  for (let k = 0; k < n; k++) for (const b of regions[k].order) for (const s of succ[b]) link(k, owner[s]);
+  for (let b = 0; b < succ.length; b++) if (owner[b] >= 0) for (const h of hsucc[b]) link(owner[b], owner[h]);
   const seen = new Set<number>(), order: number[] = [];
   for (let start = 0; start < n; start++) {
     if (seen.has(start)) continue;
