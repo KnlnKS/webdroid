@@ -77,9 +77,7 @@ export interface HostBridge {
   /** sets `s`, the scope of the call in progress, aside while its strand waits (`end` leaves it open), until `resume` takes it up again */
   hold(s: BridgeScope): void;
   resume(s: BridgeScope): void;
-  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
-  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
-  /** `invoke` on strand `s`, whose stack can wait: a Promise of the host value when the call waited */
+  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
 

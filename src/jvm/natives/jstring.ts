@@ -1,7 +1,7 @@
 // java.lang.String over JS string primitives: the methods implemented here, called with the string as `this`, replace their bytecode.
 
 import { rt } from "../runtime.ts";
-import { mangleMethod, charsToString, utf8 } from "../abi.ts";
+import { charsToString, utf8 } from "../abi.ts";
 import { encodeString } from "../charset.ts";
 import { once } from "../suspend.ts";
 import { csText } from "./jchars.ts";
@@ -86,7 +86,7 @@ sm("subSequence(II)Ljava/lang/CharSequence;", substring);
 sm("startsWith(Ljava/lang/String;)Z", function (s: string) { return this.startsWith(s) ? 1 : 0; });
 sm("startsWith(Ljava/lang/String;I)Z", function (s: string, i: number) { return this.startsWith(s, i) ? 1 : 0; });
 sm("endsWith(Ljava/lang/String;)Z", function (s: string) { return this.endsWith(s) ? 1 : 0; });
-sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return this.includes(jToString(s)) ? 1 : 0; });
+sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return after(csText(s ?? rt.npe()), (t: string) => this.includes(t) ? 1 : 0); });
 function javaTrim(value: string): string {
   let start = 0;
   let end = value.length;
@@ -158,7 +158,7 @@ sm("regionMatches(ILjava/lang/String;II)Z", function (toff: number, o: string, o
   if (toff < 0 || ooff < 0 || toff + len > this.length || ooff + len > o.length) return 0;
   return this.substr(toff, len) === o.substr(ooff, len) ? 1 : 0;
 });
-sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
+sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return after(csText(o ?? rt.npe()), (t: string) => this === t ? 1 : 0); });
 sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
 const intStream = (values: Int32Array) => scall("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;", values);
@@ -172,15 +172,6 @@ sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", funct
 sm("split(Ljava/lang/String;)[Ljava/lang/String;", function (p: string) { return stringSplit(this as string, p, 0); });
 sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: number) { return stringSplit(this as string, p, l); });
 
-const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
-/** A value's OWN toString — %s prints that, and so does every CharSequence a synchronous
- *  native is handed. A body that suspends cannot be awaited here and falls back to JS. */
-function jToString(v: unknown): string {
-  if (v === null || v === undefined) return "null";
-  if (typeof v !== "object") return String(v);
-  const r = (v as Record<string, (() => unknown) | undefined>)[M_TO_STRING]?.call(v);
-  return typeof r === "string" ? r : String(v);
-}
 function offsetCodePoints(text: string, index: number, offset: number): number {
   if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
   while (offset > 0 && index < text.length) {

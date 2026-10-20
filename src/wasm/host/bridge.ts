@@ -4,8 +4,7 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object a native made (a Struct*) is copied field by field.
-import { failed } from "../compiler/linkage.ts";
-import { PRIMS, demangle, mangleField } from "../../jvm/abi.ts";
+import { PRIMS, mangleField } from "../../jvm/abi.ts";
 import { rt, JObj } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
 import { ELEM_KINDS } from "../compiler/consts.ts";
@@ -197,7 +196,6 @@ export class Bridge implements HostBridge {
         if (p === "jframes" && throwable) return bridge.frames(o);
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
         if (!f) {
-          if (typeof p === "string" && p.startsWith("m$")) return bridge.method(o, name, p);
           if (typeof p === "string" && !(p in t) && !PROBES.has(p)) { count("wasmFacadeMisses"); rt.noteMissing(`facade ${name}.${p}`); }
           return Reflect.get(t, p);
         }
@@ -273,12 +271,6 @@ export class Bridge implements HostBridge {
   private written(raw: unknown, f: FieldInfo): boolean { return f.kind === "L" ? raw !== null : f.kind === "J" ? raw !== 0n : raw !== 0; }
   private scoped<T>(f: () => T): T { const s = this.begin(); try { return f(); } finally { this.end(s); } }
 
-  /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
-  private method(o: object, cls: string, mangled: string): Fn | undefined {
-    const nd = demangle(mangled), impl = nd && this.w.prog.dispatchFor(cls, nd[0], nd[1]);
-    if (impl && failed(impl)) return () => this.w.hostFn("b:conflict:" + cls + "." + mangled, [], "V", (cx, c) => cx.linkError(c, impl))();
-    return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
-  }
   private callers = new WeakMap<MethodInfo, Caller>();
   private strandCallers = new WeakMap<MethodInfo, Caller>();
   /** Cache the World wrapper, which retains its lazy-link invalidation, rather than a raw Wasm export. */
@@ -294,21 +286,10 @@ export class Bridge implements HostBridge {
     cache.set(m, entry = { cls: m.cls, key: m.key, call, rk });
     return entry;
   }
-  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
-   *  method's class is initialized first. An array passed is copied for the call, and what the method wrote to it is read back. */
-  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
-    const { call, rk } = this.caller(m);
-    const scope = this.open ? null : this.begin();
-    try {
-      const given = this.javaArgs(m, args);
-      const r = call(...(m.isStatic ? [] : [recv]), ...given);
-      this.readBackAll(args, given);
-      return this.hostResult(m, rk, r);
-    } finally { if (scope) this.end(scope); }
-  }
-
-  /** `invoke` on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited. The call itself has no scope: the natives it reaches open their own,
-   *  and one scope that outlived them would hand a native the copy of an array an earlier native reached */
+  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, on strand `s`, whose stack can wait: the way a native calls into Java. A static method's
+   *  class is initialized first. An array passed is copied for the call, and what the method wrote to it is read back. The answer is the host value, or a Promise of it when
+   *  the call waited. The call itself has no scope: the natives it reaches open their own, and one scope that outlived them would hand a native the copy of an array an
+   *  earlier native reached */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
     const { call, rk } = this.caller(m, true);
     const given = this.scoped(() => this.javaArgs(m, args));

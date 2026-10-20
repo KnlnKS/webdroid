@@ -356,6 +356,13 @@ describe("string-trim", () => {
   test("String.trim removes a proc cmdline terminator", async () => {
     expect(await vcall("\0 com.example.app\0", "trim", "()Ljava/lang/String;")).toBe("com.example.app");
   });
+  test("contains and contentEquals read a CharSequence's text, and throw for null", async () => {
+    const builder = await newObj("java/lang/StringBuilder", "(Ljava/lang/String;)V", "ell");
+    expect(await vcall("hello", "contains", "(Ljava/lang/CharSequence;)Z", builder)).toBe(1);
+    expect(await vcall("ell", "contentEquals", "(Ljava/lang/CharSequence;)Z", builder)).toBe(1);
+    expect(await vcall("hello", "contentEquals", "(Ljava/lang/CharSequence;)Z", builder)).toBe(0);
+    expect(await thrown(() => vcall("hello", "contains", "(Ljava/lang/CharSequence;)Z", null))).toMatch(/^java\/lang\/NullPointerException/);
+  });
 });
 
 describe("invoke-polymorphic-custom", () => {

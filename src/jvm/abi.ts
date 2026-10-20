@@ -7,8 +7,8 @@
 //     int=Int32, long=BigInt64, float=Float32, double=Float64)
 //   object arrays → JS Array with $t = element descriptor tag
 //
-// A host object (wasm/host/bridge.ts) exposes a Java method as `m$name$H`, H = hash(descriptor), and an
-// instance field as `f$name$H2`, H2 = hash(declaring class), so R8's shadowed fields stay distinct.
+// A host object (wasm/host/bridge.ts) exposes an instance field as `f$name$H`, H = hash(declaring class),
+// so R8's shadowed fields stay distinct.
 
 function hash36(s: string): string {
   let h = 5381;
@@ -25,24 +25,6 @@ function safeName(n: string): string {
   }
   return n;
 }
-
-// Two-level memo (name → desc → mangled), which also records the demangling a host object's method lookup reads (wasm/host/bridge.ts).
-const mangleMemo = new Map<string, Map<string, string>>();
-/** mangle method: name + full descriptor like "(ILjava/lang/String;)V" */
-export function mangleMethod(name: string, desc: string): string {
-  let byDesc = mangleMemo.get(name);
-  if (byDesc === undefined) mangleMemo.set(name, (byDesc = new Map()));
-  const hit = byDesc.get(desc);
-  if (hit !== undefined) return hit;
-  const m = name === "<init>" ? "i$" + hash36(desc)
-    : name === "<clinit>" ? "$clinit"
-    : "m$" + safeName(name) + "$" + hash36(desc);
-  byDesc.set(desc, m);
-  demangled.set(m, [name, desc]);
-  return m;
-}
-const demangled = new Map<string, [string, string]>();
-export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 
 /** ART's heap limit: Runtime.maxMemory reports it, and an allocation past it throws OutOfMemoryError */
 export const HEAP_LIMIT = 512 * 1024 * 1024;

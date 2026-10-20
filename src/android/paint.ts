@@ -3,8 +3,8 @@
 // AOSP bytecode; TS reaches a Java paint's native state through paintOf.
 
 import { rt, declaredField, waits, type JObj } from "../jvm/runtime.ts";
-import { charsToString, mangleMethod } from "../jvm/abi.ts";
-import { after, newObj } from "../jvm/natives/jentry.ts";
+import { charsToString } from "../jvm/abi.ts";
+import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { device } from "../shell/config.ts";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts.ts";
@@ -140,13 +140,12 @@ function copyTextState(src: NativePaint, dst: NativePaint) {
 export const defaultPaint = new NativePaint();
 
 // ── the bridge
-const GET_NATIVE_INSTANCE = mangleMethod("getNativeInstance", "()J");
 let nativePaintField = "";
 /** A Java Paint's native state, as a draw sees it: Paint.getNativeInstance first hands the native
  *  paint its shader's and colour filter's current native instances. That call suspends only on a
  *  contended monitor; the draw then reads the paint as it stands. */
 export function paintOf(p: object): NativePaint {
-  const h = (p as Record<string, () => bigint | Promise<bigint>>)[GET_NATIVE_INSTANCE]();
+  const h = vcall(p, "getNativeInstance", "()J") as bigint | Promise<bigint>;
   return deref<NativePaint>(typeof h === "bigint" ? h : (p as Record<string, bigint>)[nativePaintField ||= declaredField(PAINT, "mNativePaint")]);
 }
 const TEXT_PAINT = "android/text/TextPaint";
