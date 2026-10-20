@@ -1,19 +1,29 @@
-// IShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run from bytecode.
-// A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
-// There is no launcher here: nothing can be pinned, and none is persisted past the process.
+// system_server's ShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run
+// from bytecode. A package's dynamic shortcuts, validated, ranked and capped per activity as
+// ShortcutService does, outlive its processes. There is no launcher here: nothing can be pinned,
+// and none is persisted past a reload.
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { after, vcall } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
-import { hostStub, parceledList } from "./binder.ts";
+import { wallMillis } from "../guest-clock.ts";
+import { callingIdentity, hostStub, parceledList } from "./binder.ts";
 import { mkComponentName } from "./intent.ts";
+import { ownedBy } from "./packages.ts";
 import { launcherActivity } from "./pm.ts";
+import type { PackageState } from "../shell/packagedata.ts";
 
 const MAX_PER_ACTIVITY = 15, MAX_UPDATES_PER_INTERVAL = 10;
 const FLAG_DYNAMIC = 1, MATCH_DYNAMIC = 2, CLONE_REMOVE_FOR_CREATOR = 9;
 const SI = "Landroid/content/pm/ShortcutInfo;", CN = "Landroid/content/ComponentName;";
 /** each package's dynamic shortcuts by id, in publishing order */
 const packages = new Map<string, Map<string, JObj>>();
+/** a data clear's cleanUpPackageLocked */
+export const shortcutData: PackageState = { clear(pkg) { packages.delete(pkg); } };
+/** ShortcutService.verifyCaller, as each call starts */
+function verifyCaller(pkg: string): void {
+  if (!ownedBy(pkg, callingIdentity().uid)) throw rt.mkThrowable("java/lang/SecurityException", "Calling package name mismatch");
+}
 const dynamicOf = (pkg: string) => {
   let shortcuts = packages.get(pkg);
   if (!shortcuts) packages.set(pkg, shortcuts = new Map());
@@ -34,7 +44,7 @@ function* incoming(pkg: string, si: JObj | null, forUpdate = false): Gen<JObj> {
     if (!(yield vcall(copy, "getActivity", `()${CN}`))) yield vcall(copy, "setActivity", `(${CN})V`, yield* awaited(mainActivity(pkg)));
     yield vcall(copy, "enforceMandatoryFields", "(Z)V", 0);
   }
-  yield vcall(copy, "setTimestamp", "(J)V", BigInt(Date.now()));
+  yield vcall(copy, "setTimestamp", "(J)V", BigInt(Math.floor(wallMillis())));
   return copy;
 }
 function* incomingList(pkg: string, slice: JObj): Gen<JObj[]> {
@@ -64,13 +74,17 @@ function* commit(pkg: string, shortcuts: JObj[]): Gen<void> {
   for (const si of shortcuts) next.set(yield* awaited(idOf(si)), si);
   packages.set(pkg, next);
 }
-const remove = (pkg: string, ids: JObj | null) => after(toJsArray(ids), (list) => { const shortcuts = dynamicOf(pkg); for (const id of list as string[]) shortcuts.delete(id); });
+const remove = (pkg: string, ids: JObj | null) => {
+  verifyCaller(pkg);
+  return after(toJsArray(ids), (list) => { const shortcuts = dynamicOf(pkg); for (const id of list as string[]) shortcuts.delete(id); });
+};
 const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
 
 const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";
 rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup: "android/content/pm/IShortcutService$Stub", methods: {
-  [`setDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) { yield* commit(pkg, yield* incomingList(pkg, slice)); return 1; }),
+  [`setDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) { verifyCaller(pkg); yield* commit(pkg, yield* incomingList(pkg, slice)); return 1; }),
   [`addDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
+    verifyCaller(pkg);
     const shortcuts = new Map(dynamicOf(pkg));
     for (const si of yield* incomingList(pkg, slice)) shortcuts.set(yield* awaited(idOf(si)), si);
     yield* commit(pkg, [...shortcuts.values()]);
@@ -78,6 +92,7 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   }),
   // a full activity drops its lowest-ranked shortcut to make room
   [`pushDynamicShortcut(${S}${SI}I)V`]: driven(function* (pkg: string, si: JObj) {
+    verifyCaller(pkg);
     const pushed = yield* incoming(pkg, si), id = yield* awaited(idOf(pushed)), shortcuts = new Map(dynamicOf(pkg));
     shortcuts.delete(id);
     const activity = yield vcall(pushed, "getActivity", `()${CN}`), same: JObj[] = [];
@@ -91,6 +106,7 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   }),
   // an update changes only shortcuts that exist, and only the fields it sets
   [`updateShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
+    verifyCaller(pkg);
     const shortcuts = dynamicOf(pkg);
     for (const si of (yield* awaited(toJsArray(yield vcall(slice, "getList", `()${LIST}`)))) as JObj[]) {
       const update = yield* incoming(pkg, si, true), target = shortcuts.get(yield* awaited(idOf(update)));
@@ -103,8 +119,9 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   [`removeLongLivedShortcuts(${S}${LIST}I)V`]: remove,
   // disabling removes a dynamic shortcut; only a pinned one would stay, disabled
   [`disableShortcuts(${S}${LIST}Ljava/lang/CharSequence;II)V`]: remove,
-  [`removeAllDynamicShortcuts(${S}I)V`]: (pkg: string) => { dynamicOf(pkg).clear(); },
+  [`removeAllDynamicShortcuts(${S}I)V`]: (pkg: string) => { verifyCaller(pkg); dynamicOf(pkg).clear(); },
   [`getShortcuts(${S}II)${SLICE}`]: driven(function* (pkg: string, flags: number) {
+    verifyCaller(pkg);
     const clones: JObj[] = [];
     if (flags & MATCH_DYNAMIC) for (const si of dynamicOf(pkg).values()) clones.push(yield vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR));
     return yield* awaited(parceledList(clones));
