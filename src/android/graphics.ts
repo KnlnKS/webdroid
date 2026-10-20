@@ -183,10 +183,11 @@ export class NativeComposeShader extends NativeShader {
 /** a ComposeShader's native instance: `src` over `dst` by the SkBlendMode numbered `mode` */
 export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
   new NativeComposeShader(local, dst, src, mode === 2 ? null : COMPOSITE[BLEND_MODES[mode]] ?? "source-over");
+/** a gradient's style: a CanvasGradient, or the pattern of a tiled one, which carries the local matrix */
 export class NativeGradient extends NativeShader {
-  readonly grad: CanvasGradient;
-  constructor(local: Affine | null, grad: CanvasGradient) { super(local); this.grad = grad; }
-  override pattern(): CanvasGradient { return this.grad; }
+  readonly style: CanvasGradient | CanvasPattern;
+  constructor(local: Affine | null, style: CanvasGradient | CanvasPattern) { super(local); this.style = style; }
+  override pattern(): CanvasGradient | CanvasPattern { return this.style; }
 }
 let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 /** a 2D context that makes gradients for any canvas */
@@ -196,11 +197,34 @@ export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRendering
 /** a gradient's native instance: its sRGB ARGB colours at `positions` (evenly spaced when null),
  *  which SkGradientShader pins to [0, 1] and to no less than the position before */
 export function gradient(local: Affine | null, g: CanvasGradient, colors: Int32Array, positions: Float32Array | null): NativeGradient {
+  return new NativeGradient(local, withStops(g, colors, positions));
+}
+function withStops(g: CanvasGradient, colors: Int32Array, positions: Float32Array | null): CanvasGradient {
   for (let i = 0, prev = 0; i < colors.length; i++) {
     const at = positions ? prev = Math.min(Math.max(positions[i], prev), 1) : i / (colors.length - 1);
     g.addColorStop(at, cssColor(colors[i]));
   }
-  return new NativeGradient(local, g);
+  return g;
+}
+/** the texels of one period of a tiled gradient */
+const STRIP = 1024;
+/** a LinearGradient by Shader.TileMode's nativeInt `tile`. A Canvas2D gradient only clamps, so a
+ *  REPEAT, MIRROR or DECAL one is a strip of a period (and its reflection, for MIRROR) that a
+ *  pattern lays along the gradient's line, repeated (DECAL: transparent past its ends) and
+ *  stretched across it. */
+function linearGradient(local: Affine | null, x0: number, y0: number, x1: number, y1: number, colors: Int32Array, positions: Float32Array | null, tile: number): NativeGradient {
+  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+  if (tile === 0 || !len) return gradient(local, scratch2d().createLinearGradient(x0, y0, x1, y1), colors, positions);
+  // DECAL's strip ends in a texel of each end colour, so filtering fades it out past the ends, not before
+  const mirror = tile === 2, pad = tile === 3 ? 1 : 0, w = (mirror ? 2 * STRIP : STRIP) + 2 * pad;
+  const c = new OffscreenCanvas(w, 1).getContext("2d")!;
+  c.fillStyle = withStops(c.createLinearGradient(pad, 0, pad + STRIP, 0), colors, positions);
+  c.fillRect(0, 0, STRIP + 2 * pad, 1);
+  if (mirror) { c.setTransform(-1, 0, 0, 1, 2 * STRIP, 0); c.drawImage(c.canvas, 0, 0, STRIP, 1, 0, 0, STRIP, 1); }
+  const pattern = scratch2d().createPattern(c.canvas, pad ? "repeat-y" : "repeat")!;
+  const ux = dx / STRIP, uy = dy / STRIP, strip = new DOMMatrix([ux, uy, -dy / len, dx / len, x0 - pad * ux, y0 - pad * uy]);
+  pattern.setTransform(local ? new DOMMatrix(local).multiply(strip) : strip);
+  return new NativeGradient(local, pattern);
 }
 
 /** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
@@ -315,17 +339,19 @@ rt.registerJnis("android/graphics/ColorMatrixColorFilter", {
   "nativeSetColorMatrix(J[F)V": (h: bigint, k: Float32Array) => colorFilter(h).matrix!.set(k.subarray(0, 20)),
 });
 
-// Gradients clamp: Canvas2D has no REPEAT, MIRROR or DECAL gradient, so the tile mode is not used.
 rt.registerJnis("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
 /** a gradient's ColorLongs, which Shader requires to share the space handle `cs` names, as sRGB ARGB */
 const stopColors = (colors: BigInt64Array, cs: bigint) => Int32Array.from(colors, (c) => colorLongAt(c, cs));
 rt.registerJnis("android/graphics/LinearGradient", {
-  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
-    handle(gradient(localMatrix(m), scratch2d().createLinearGradient(x0, y0, x1, y1), stopColors(colors, cs), positions)),
+  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null, tile: number, cs: bigint) =>
+    handle(linearGradient(localMatrix(m), x0, y0, x1, y1, stopColors(colors, cs), positions, tile)),
 });
 rt.registerJnis("android/graphics/RadialGradient", {
-  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
-    handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), stopColors(colors, cs), positions)),
+  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null, tile: number, cs: bigint) => {
+    // a radial gradient's period is a ring, which no pattern repeats: it clamps
+    if (tile !== 0) rt.noteMissing(`RadialGradient tile mode ${["REPEAT", "MIRROR", "DECAL"][tile - 1]}`);
+    return handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), stopColors(colors, cs), positions));
+  },
 });
 rt.registerJnis("android/graphics/SweepGradient", {
   "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null, cs: bigint) =>

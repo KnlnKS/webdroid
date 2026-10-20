@@ -664,7 +664,7 @@ function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: Gl
   c.globalCompositeOperation = "source-over";
 }
 
-export function unsupported(what: string) { return () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", what); }; }
+export function unsupported(what: string) { return () => { throw rt.unimplemented(what); }; }
 
 // ── natives ──
 export const canvasAt = (h: bigint) => deref<NativeCanvas>(h);
