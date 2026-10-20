@@ -13,7 +13,8 @@ import { type PathCommands, pathOp as skiaPathOp } from "./skia.ts";
 import { setEdges, type Box } from "./graphics.ts";
 
 type PathOp = [string, ...number[]];
-type Verb = number[];
+/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
+export type Verb = number[];
 /** what the pen writes to: Path2D itself, the verb list, or a scan converter */
 export interface Sink {
   moveTo(x: number, y: number): void;
@@ -26,7 +27,7 @@ export interface Sink {
 }
 
 /** SkPath::Verb, which PathIterator reports */
-const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
+export const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
 /** Path$Direction.nativeInt */
 const CW = 0, CCW = 1;
 const NEARLY_ZERO = 1 / 4096;
@@ -211,7 +212,6 @@ class Pen {
 /** the unit quadrant conics' points: (1,0) (1,1) (0,1) (-1,1) (-1,0) (-1,-1) (0,-1) (1,-1) */
 const QUADRANT_PTS = [1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1, 0, -1, 1, -1];
 
-/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
 class VerbSink implements Sink {
   verbs: Verb[] = [];
   private x = 0; private y = 0;
@@ -293,6 +293,7 @@ export class NativePath {
   /** where the next verb starts */
   readonly pen = new Pen();
   private p2d: Path2D | null = null;
+  private vs: Verb[] | null = null;
   /** SkPathRef's generation ID, assigned when asked after a change; the empty path's is 1 */
   private gen = 1;
 
@@ -307,7 +308,9 @@ export class NativePath {
     }
     return this.p2d;
   }
-  private changed() { this.p2d = null; this.gen = 0; }
+  /** the verbs SkPath stores, until the path changes; they are not to be modified */
+  verbs(): Verb[] { return this.vs ??= pathVerbs(this.ops); }
+  private changed() { this.p2d = null; this.vs = null; this.gen = 0; }
   private add(op: PathOp) { this.ops.push(op); this.pen.op(op); this.changed(); }
   /** SkPath::injectMoveToIfNeeded: a segment with no open contour starts one where the pen is */
   private begin() { if (!this.pen.open) this.moveTo(this.pen.x, this.pen.y); }
@@ -375,7 +378,7 @@ export class NativePath {
     this.ops = [];
     this.fillRule = "nonzero"; this.inverseFill = false;
     this.pen.clear();
-    this.p2d = null; this.gen = 1;
+    this.p2d = this.vs = null; this.gen = 1;
   }
   set(src: NativePath) {
     if (src === this) return;
@@ -409,7 +412,7 @@ export class NativePath {
   /** SkPath::setLastPt: moves the last stored point, or starts the path there */
   setLastPoint(x: number, y: number) {
     if (!this.ops.length) return this.moveTo(x, y);
-    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(pathVerbs(this.ops)) : this.ops;
+    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(this.verbs()) : this.ops;
     let i = ops.length - 1;
     while (ops[i][0] === "z") i--;
     const op = ops[i];
@@ -424,7 +427,7 @@ export class NativePath {
   }
   /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
   isRect(): Box | null {
-    const vs = pathVerbs(this.ops), xs: number[] = [], ys: number[] = [];
+    const vs = this.verbs(), xs: number[] = [], ys: number[] = [];
     let i = 0;
     for (; i < vs.length; i++) {
       const v = vs[i];
@@ -448,12 +451,12 @@ export class NativePath {
   }
   /** SkPath::isInterpolatable: the same verbs */
   isInterpolatable(o: NativePath): boolean {
-    const a = pathVerbs(this.ops), b = pathVerbs(o.ops);
+    const a = this.verbs(), b = o.verbs();
     return a.length === b.length && a.every((v, i) => v[0] === b[i][0]);
   }
   /** SkPath::interpolate: out holds this path's verbs over points weighted `w` toward this path */
   interpolate(end: NativePath, w: number, out: NativePath): boolean {
-    const verbs = pathVerbs(this.ops), a = verbPoints(verbs), b = verbPoints(pathVerbs(end.ops));
+    const verbs = this.verbs(), a = verbPoints(verbs), b = verbPoints(end.verbs());
     if (a.length !== b.length) return false;
     if (!a.length) return true;
     let k = 0;
@@ -508,21 +511,20 @@ export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number
   });
 }
 
-/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it */
-export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
+/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it, once CanvasKit (which the page loads before anything draws) can subtract it */
+export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] | Promise<[Path2D, CanvasFillRule]> {
   if (path.fillRule === "evenodd") {
     const inverse = new Path2D();
     inverse.rect(l, t, r - l, b - t);
     inverse.addPath(path.path());
     return [inverse, "evenodd"];
   }
-  // the bounds less the path under its plain fill; the page's CanvasKit is loaded before anything draws
+  // the bounds less the path under its plain fill
   const outer = new NativePath(), plain = new NativePath(), result = new NativePath();
   outer.addRect(l, t, r, b, CW);
   plain.set(path);
   plain.setFillType(path.fillType() & 1);
-  if (pathOp(result, outer, plain, DIFFERENCE) instanceof Promise) throw new Error("CanvasKit is not loaded");
-  return [result.path(), result.fillRule];
+  return after(pathOp(result, outer, plain, DIFFERENCE), (): [Path2D, CanvasFillRule] => [result.path(), result.fillRule]);
 }
 
 type Pt = [number, number];
@@ -530,7 +532,7 @@ type Pt = [number, number];
 export function pathIsConvex(path: NativePath): boolean {
   const points: Pt[] = [];
   let start: Pt = [0, 0], ended = false;
-  for (const verb of pathVerbs(path.ops)) {
+  for (const verb of path.verbs()) {
     if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return false;
     if (verb[0] === MOVE) {
       if (points.length) ended = true;
@@ -592,7 +594,7 @@ export function approximate(p: NativePath, error: number): Float32Array {
     if (lx === x && ly === y) return;
     lens.push(lens.at(-1)! + Math.hypot(x - lx, y - ly)); xs.push(x); ys.push(y);
   };
-  const verbs = pathVerbs(p.ops);
+  const verbs = p.verbs();
   let mx = 0, my = 0;
   for (let i = 0; i < verbs.length; i++) {
     const v = verbs[i];
@@ -694,7 +696,7 @@ export class PathMeasure {
 
   /** SkPathMeasure::setPath: the path is copied, and the first contour with length measured */
   setPath(p: NativePath | undefined, forceClosed: boolean) {
-    this.verbs = p ? pathVerbs(p.ops) : [];
+    this.verbs = p ? p.verbs() : [];
     this.i = 0;
     this.forceClosed = forceClosed;
     this.nextContour();
@@ -885,7 +887,7 @@ function chopCubic(src: Float64Array, t: number, dst: Float64Array) {
 export class VerbIterator {
   private i = 0;
   readonly verbs: Verb[];
-  constructor(p: NativePath) { this.verbs = pathVerbs(p.ops); }
+  constructor(p: NativePath) { this.verbs = p.verbs(); }
   peek(): number { return this.verbs[this.i]?.[0] ?? DONE; }
   next(pts: Float32Array, off: number): number {
     const v = this.verbs[this.i];

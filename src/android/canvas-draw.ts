@@ -6,6 +6,7 @@ import { isRecording, recordOrRun, type Ctx2D } from "./recording.ts";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
 import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
 import { rt } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { deref } from "./handles.ts";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
@@ -20,7 +21,7 @@ import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
 import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas.ts";
 
-function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
+function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
   if (tryBitmapPath(nc, p, path)) return;
   if (!path.inverseFill) {
     nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path);
@@ -28,8 +29,9 @@ function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
   }
   const bounds = canvasLocalBounds(nc.ctx);
   if (!bounds) return;
-  const [inverse, rule] = inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]);
-  nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
+  return after(inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]), ([inverse, rule]) => {
+    nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
+  });
 }
 function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
@@ -354,7 +356,7 @@ const DRAWS: Record<string, unknown> = {
     nc.ctx.fill();
   },
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
-  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); drawPath(nc, pathAt(path), nc.paint(p)); },
+  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); return drawPath(nc, pathAt(path), nc.paint(p)); },
   "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = drawingCanvas(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
   ...fontNatives({
   "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) => {

@@ -6,7 +6,7 @@
 import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
-import { newObj, scall } from "../jvm/natives/jentry.ts";
+import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
 import { NativePath, inversePath, pathAt } from "./path.ts";
 import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
@@ -384,23 +384,20 @@ export class NativeCanvas {
     return !this.clipEmpty;
   }
   /** SkCanvas::clipPath: intersect (anti-aliased, so the bounds round out) or take the path out */
-  clipPath(path: NativePath, out: boolean): boolean {
-    const ctx = this.ctx;
-    const apply = (c: Ctx2D) => {
-      if (path.inverseFill !== out) {
-        const bounds = canvasLocalBounds(c);
-        if (!bounds) return;
-        const [inverse, rule] = inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]);
-        c.clip(inverse, rule);
-      } else c.clip(path.path(), path.fillRule);
-    };
-    apply(ctx);
-    this.persist(apply);
-    if (!out && !path.inverseFill) {
-      const b = path.bounds();
-      this.narrowOut(b.left, b.top, b.right, b.bottom);
+  clipPath(path: NativePath, out: boolean): boolean | Promise<boolean> {
+    if (path.inverseFill === out) {
+      this.clipTo(path.path(), path.fillRule);
+      if (!out) { const b = path.bounds(); this.narrowOut(b.left, b.top, b.right, b.bottom); }
+      return !this.clipEmpty;
     }
-    return !this.clipEmpty;
+    const bounds = canvasLocalBounds(this.ctx);
+    if (!bounds) return !this.clipEmpty;
+    return after(inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]), ([inverse, rule]) => { this.clipTo(inverse, rule); return !this.clipEmpty; });
+  }
+  private clipTo(shape: Path2D, rule: CanvasFillRule) {
+    const apply = (c: Ctx2D) => c.clip(shape, rule);
+    apply(this.ctx);
+    this.persist(apply);
   }
   /** intersect the bounds with an anti-aliased clip's local bounds, rounded out */
   private narrowOut(l: number, t: number, r: number, b: number) {
@@ -637,10 +634,9 @@ export function drawingCanvas(h: bigint): NativeCanvas {
   nc.bmp?.wrote();
   return nc;
 }
-/** SkClipOp and Region.Op's nativeInt: 0 difference, 1 intersect; hwui ignores the ops that would
- *  widen the clip (it emulates REPLACE only for apps before P, which cannot be done by narrowing) */
-const clipOp = (nc: NativeCanvas, op: number, intersect: () => boolean, difference: () => boolean) =>
-  +(op === 1 ? intersect() : op === 0 ? difference() : !nc.clipEmpty);
+/** SkClipOp and Region.Op's nativeInt; hwui ignores the ops that would widen the clip (it emulates
+ *  REPLACE only for apps before P, which cannot be done by narrowing) */
+const DIFFERENCE = 0, INTERSECT = 1;
 rt.registerJnis("android/graphics/Canvas", {
   "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(b ? bitmapAt(b) : null)),
   "nGetNativeFinalizer()J": () => FINALIZER,
@@ -682,11 +678,11 @@ rt.registerJnis("android/graphics/Canvas", {
 
   "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
     const nc = canvasAt(h);
-    return clipOp(nc, op, () => nc.clipRect(l, t, r, b), () => nc.clipOutRect(l, t, r, b));
+    return +(op === INTERSECT ? nc.clipRect(l, t, r, b) : op === DIFFERENCE ? nc.clipOutRect(l, t, r, b) : !nc.clipEmpty);
   },
   "nClipPath(JJI)Z": (h: bigint, p: bigint, op: number) => {
-    const nc = canvasAt(h), path = pathAt(p);
-    return clipOp(nc, op, () => nc.clipPath(path, false), () => nc.clipPath(path, true));
+    const nc = canvasAt(h);
+    return op === INTERSECT || op === DIFFERENCE ? after(nc.clipPath(pathAt(p), op === DIFFERENCE), Number) : +!nc.clipEmpty;
   },
   // a clip by a shader's coverage needs per-pixel clipping, which a 2D context's clip is not
   "nClipShader(JJI)V": unsupported("Canvas.clipShader"),
