@@ -25,9 +25,9 @@ const OBJECT = "Ljava/lang/Object;", STRING = "Ljava/lang/String;", STRING_CLASS
 const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && d[1] in PRIMS;
 const isRef = (d: string) => d[0] === "L" || d[0] === "[";
 const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref) : KINDS[valueKind(d)].vt;
-/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives), or ART's native doReplace, and whose
- *  production override is a self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
-const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(|^replace\(CC\)/;
+/** String methods whose Java body builds a Pattern and a Matcher per call, and whose production override, a self-contained JS routine,
+ *  measured tens of times faster; the rest of String runs its bytecode unless that reads the representation */
+const HOST_FIRST = /^(matches|replaceAll|replaceFirst)\(/;
 /** must `m`, a String method with a body, be replaced by its production override */
 function overridden(m: MethodInfo): boolean {
   return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && m.dex.typeName(m.dex.field(i.c).cls) === STRING_CLASS);

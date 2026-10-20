@@ -1,5 +1,5 @@
 import { packageArchive, packageArchiveSource } from "../android/packagearchive.ts";
-import { zipTree } from "../jvm/natives/jzip.ts";
+import { zipTree } from "../zip.ts";
 import { PackedArchive, packedArchives, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
 import { SYSTEM_PACKAGES } from "./system-packages.ts";
 import { rt } from "../jvm/runtime.ts";

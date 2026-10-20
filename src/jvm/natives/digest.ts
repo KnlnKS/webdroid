@@ -240,11 +240,11 @@ export const DIGESTS: Record<string, () => Hash> = {
   md5: () => new MD5(), sha1: () => new SHA1(), sha224: () => new SHA256(28), sha256: () => new SHA256(32),
   sha384: () => new SHA512(48), sha512: () => new SHA512(64),
 };
-/** the `name` digest of `data` */
-export const hashOf = (name: string, data: Uint8Array) => { const h = DIGESTS[name](); h.update(data); return h.digest(); };
-export const md5 = (data: Uint8Array) => hashOf("md5", data);
-export const sha1 = (data: Uint8Array) => hashOf("sha1", data);
-export const sha256 = (data: Uint8Array) => hashOf("sha256", data);
+/** the digest of `parts` concatenated */
+export const hashOf = (make: () => Hash, ...parts: Uint8Array[]): Uint8Array => { const h = make(); for (const p of parts) h.update(p); return h.digest(); };
+export const md5 = (data: Uint8Array) => hashOf(DIGESTS.md5, data);
+export const sha1 = (data: Uint8Array) => hashOf(DIGESTS.sha1, data);
+export const sha256 = (data: Uint8Array) => hashOf(DIGESTS.sha256, data);
 
 /** HMAC (RFC 2104) over one of the digests */
 export class Hmac {

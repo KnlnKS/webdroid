@@ -6,7 +6,7 @@
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { once } from "../jvm/suspend.ts";
 import { awaited, rt, JObj, getDeclared, setDeclared, driven, waits, type Gen } from "../jvm/runtime.ts";
-import { concat, jarray } from "../jvm/abi.ts";
+import { concat, jarray, sameBytes } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { unbox } from "../jvm/natives/jbox.ts";
 import { hostStub } from "./binder.ts";
@@ -16,7 +16,7 @@ import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
 import { aes, ctr, AesGcm } from "../jvm/natives/ciphers.ts";
 import {
   CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
-  oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength, equal,
+  oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength,
   EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
 } from "../jvm/natives/pkey.ts";
 import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
@@ -254,7 +254,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
     mac.update(data);
     const full = mac.digest();
     if (op.purpose === PURPOSE.SIGN) return full.subarray(0, (num(ps, TAG.MAC_LENGTH) ?? full.length * 8) / 8);
-    if (!signature || !equal(full.subarray(0, signature.length), signature)) throw ERR.VERIFICATION_FAILED;
+    if (!signature || !sameBytes(full.subarray(0, signature.length), signature)) throw ERR.VERIFICATION_FAILED;
     return null;
   }
   const key = keyOf(op.e);
@@ -282,7 +282,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
       return bigToBytes(rsaPrivate(r, bytesToBig(block)), k);
     }
     const got = signature && signature.length === k ? bigToBytes(rsaPublic(r, bytesToBig(signature)), k) : null;
-    const ok = got && (pad === PAD.RSA_PSS ? pssVerify(digest, got, bitLength(r.n) - 1, hash, hash, -1) : !!em && equal(em, got));
+    const ok = got && (pad === PAD.RSA_PSS ? pssVerify(digest, got, bitLength(r.n) - 1, hash, hash, -1) : !!em && sameBytes(em, got));
     if (!ok) throw ERR.VERIFICATION_FAILED;
     return null;
   }

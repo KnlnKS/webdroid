@@ -1,6 +1,6 @@
 // The java.lang.Character natives, as java_lang_Character.cpp answers them with ICU4C: the ASCII range of the predicates text loops call inline,
 // every other code point (and every property without an ASCII shortcut) by ICU4J's UCharacter, which reads the ICU property data through its own
-// loaders. jicu.ts answers the natives this does not.
+// loaders.
 import { OP, type Code } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";

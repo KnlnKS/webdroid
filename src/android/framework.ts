@@ -8,7 +8,7 @@
 
 import { Arsc } from "./arsc.ts";
 import { DEVICE_OVERLAYS } from "./device-overlays.ts";
-import { centralDir, entryBytes } from "../jvm/natives/jzip.ts";
+import { centralDir, entryBytes } from "../zip.ts";
 import { rt } from "../jvm/runtime.ts";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex.ts";
 import { Resources, setFramework } from "./res.ts";

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dexesIn, dexesOfZip, isDexEntry, type DexFile } from "../src/jvm/dex.ts";
-import { zipTree } from "../src/jvm/natives/jzip.ts";
+import { zipTree } from "../src/zip.ts";
 import { openInstall } from "../src/shell/install.ts";
 
 /** the dex files of a dex, a jar or an apk, or of a split install's merged tree */

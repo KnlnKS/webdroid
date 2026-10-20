@@ -9,12 +9,12 @@ import { handle, ownedHandle, weakHandle, deref, release } from "../../android/h
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest.ts";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers.ts";
 import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio.ts";
-import { memoryAt } from "./jmemory.ts";
+import { memoryAt, region } from "./jmemory.ts";
 import { randomBytes } from "../../native/libc.ts";
 import { after, scall } from "./jentry.ts";
-import { concat, i8, jarray, u8 } from "../abi.ts";
+import { concat, i8, jarray, u8, sameBytes } from "../abi.ts";
 import {
-  CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, equal, x25519, X25519_BASE,
+  CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, x25519, X25519_BASE,
   rsaBytes, rsaPublic, rsaPrivate, pkcs1SignPad, pssEncode, pssVerify, oaepEncode, oaepDecode, pkcs1EncryptPad, pkcs1Unpad, digestNamed,
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type EcKey, type PKey,
@@ -33,12 +33,6 @@ export function ptr<T>(ref: JObj | null): T {
   const o = deref<T>(h);
   if (!o) throw rt.mkThrowable("java/lang/NullPointerException", "address == 0");
   return o;
-}
-/** JNI's array region check (ARRAY_OFFSET_LENGTH_INVALID) */
-export function region(b: Int8Array | null, off: number, len: number): Uint8Array {
-  if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  if (off < 0 || len < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
-  return new Uint8Array(b.buffer, b.byteOffset + off, len);
 }
 const runtimeError = (msg: string) => rt.mkThrowable("java/lang/RuntimeException", msg);
 
@@ -381,7 +375,7 @@ nc("EVP_PKEY_free(J)V", (h: bigint) => release(h));
 nc("EVP_PKEY_cmp(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (a: JObj, b: JObj) => {
   const x = keyOf(a), y = keyOf(b);
   if (x.type !== y.type) return -1;
-  return +equal(marshalPublicKey(publicOf(x)), marshalPublicKey(publicOf(y)));
+  return +sameBytes(marshalPublicKey(publicOf(x)), marshalPublicKey(publicOf(y)));
 });
 const rsaOf = (ref: JObj): Rsa => {
   const k = keyOf(ref);
@@ -552,7 +546,7 @@ nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z
     return +pssVerify(digest, em, bitsN - 1, c.md!.make, digestNamed(p.mgf1Md ?? c.md!.name), p.saltLen);
   }
   const want = pkcs1SignPad(n, c.md!.name, digest);
-  return +(want !== null && equal(want, em));
+  return +(want !== null && sameBytes(want, em));
 });
 
 // ── EC groups, points and keys

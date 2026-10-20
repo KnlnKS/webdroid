@@ -3,13 +3,14 @@
 
 import { rt, driven, waits, type Gen, type JObj } from "../runtime.ts";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles.ts";
-import { concat, i8, jarray, u8 } from "../abi.ts";
+import { concat, i8, jarray, u8, sameBytes } from "../abi.ts";
 import { vcall } from "./jentry.ts";
 import { boxInt } from "./jbox.ts";
-import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
+import { region } from "./jmemory.ts";
+import { nc, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
   KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509.ts";
-import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, equal, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey.ts";
+import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey.ts";
 import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der.ts";
 import { hashOf, sha1 } from "./digest.ts";
 
@@ -117,7 +118,7 @@ function verify(x: X509, key: Key): JObj | null {
   if ("wrapper" in key) return wrong();
   if (alg.kind === "ec") {
     if (key.type !== EVP_PKEY_EC) return wrong();
-    return ecdsaVerify(key.ec.curve, key.ec.pub, hashOf(alg.md, x.tbs), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
+    return ecdsaVerify(key.ec.curve, key.ec.pub, hashOf(digestNamed(alg.md), x.tbs), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
   }
   if (key.type !== EVP_PKEY_RSA) return wrong();
   const r = key.rsa, n = rsaBytes(r), s = x.signature;
@@ -125,10 +126,10 @@ function verify(x: X509, key: Key): JObj | null {
   const em = bigToBytes(rsaPublic(r, bytesToBig(s)), n);
   if (alg.kind === "pss") {
     const p = pssParams(x.sigParams);
-    return pssVerify(hashOf(p.md, x.tbs), em, bitLength(r.n) - 1, digestNamed(p.md), digestNamed(p.mgf), p.salt) ? null : sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
+    return pssVerify(hashOf(digestNamed(p.md), x.tbs), em, bitLength(r.n) - 1, digestNamed(p.md), digestNamed(p.mgf), p.salt) ? null : sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
   }
-  const want = pkcs1SignPad(n, alg.md, hashOf(alg.md, x.tbs));
-  if (want && equal(want, em)) return null;
+  const want = pkcs1SignPad(n, alg.md, hashOf(digestNamed(alg.md), x.tbs));
+  if (want && sameBytes(want, em)) return null;
   return em[0] === 0 && em[1] === 1 ? sslError("javax/crypto/BadPaddingException", 4, 105, "BAD_SIGNATURE") : sslError("javax/crypto/BadPaddingException", 4, 107, "BLOCK_TYPE_IS_NOT_01");
 }
 nc(`X509_verify(J${X}Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)V`, (h: bigint, _c: JObj, ref: JObj) => {
@@ -137,7 +138,7 @@ nc(`X509_verify(J${X}Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)V`, (h: bigi
 });
 nc(`X509_check_issued(J${X}J${X})I`, (issuerH: bigint, _a: JObj, subjectH: bigint) => {
   const issuer = x509Of(issuerH), subject = x509Of(subjectH);
-  if (!equal(issuer.subject, subject.issuer)) return 29; // X509_V_ERR_SUBJECT_ISSUER_MISMATCH
+  if (!sameBytes(issuer.subject, subject.issuer)) return 29; // X509_V_ERR_SUBJECT_ISSUER_MISMATCH
   const ku = issuer.ext(KEY_USAGE);
   if (ku && !bitBooleans(parseOne(ku.value, 3).body)[5]) return 32; // X509_V_ERR_KEYUSAGE_NO_CERTSIGN
   return 0;

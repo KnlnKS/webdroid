@@ -3,14 +3,14 @@
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, type JObj, declaredField, waits } from "../runtime.ts";
+import { rt, type JObj, declaredField, getDeclared, waits } from "../runtime.ts";
 import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared } from "../../native/mappings.ts";
 import { jarray } from "../abi.ts";
 import { handle, deref, release } from "../../android/handles.ts";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset.ts";
-import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
+import { isExternal, pagesIn, externalBytes, guestAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
 import { BytesFile, type FileSource } from "../../shell/lazyfile.ts";
 export { isExternal };
 
@@ -34,7 +34,6 @@ export const setLimit = (b: JBuffer, l: number): void => { (b as Fields)[fields(
 export const isBuffer = (o: unknown): o is JBuffer => !!o && typeof o === "object" && !!iof(o, "java/nio/Buffer");
 /** Buffer.address: a direct buffer's memory, 0 for a heap buffer */
 export const addressOf = (b: JBuffer): bigint => (b as Fields)[fields().address];
-setBufferAddress(addressOf);
 
 /** where a buffer class keeps its elements: a heap buffer's array and offset, a view's buffer and byte offset */
 interface Layout { hb?: string; offset?: string; bb?: string; byteOffset?: string }
@@ -140,7 +139,7 @@ const unmappers = new FinalizationRegistry<() => void | Promise<void>>((unmap) =
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
 function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void | Promise<void>): JBuffer | Promise<JBuffer> {
   return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
-    unmappers.register((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], unmap);
+    unmappers.register(getDeclared<object>(b, "java/nio/DirectByteBuffer", "memoryRef"), unmap);
     return b;
   });
 }

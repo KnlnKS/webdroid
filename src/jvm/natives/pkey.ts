@@ -3,8 +3,8 @@
 // encodings EVP_parse_*/EVP_marshal_* read and write.
 
 import { modInverse, modPow } from "./jmath.ts";
-import { DIGESTS, type Hash } from "./digest.ts";
-import { concat, hexBytes } from "../abi.ts";
+import { DIGESTS, hashOf, type Hash } from "./digest.ts";
+import { concat, hexBytes, sameBytes } from "../abi.ts";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
   bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
@@ -232,7 +232,7 @@ export function ecdsaVerify(c: Curve, Q: [bigint, bigint], digest: Uint8Array, s
     if (parts.length !== 2) return false;
     r = uintOf(parts[0]); s = uintOf(parts[1]);
     // BoringSSL re-encodes and compares, so only the minimal encoding verifies
-    if (!equal(seq(integer(r), integer(s)), sig)) return false;
+    if (!sameBytes(seq(integer(r), integer(s)), sig)) return false;
   } catch { return false; }
   if (r <= 0n || s <= 0n || r >= c.n || s >= c.n) return false;
   const w = modInverse(s, c.n), e = hashToInt(c, digest);
@@ -243,7 +243,6 @@ export function ecdsaVerify(c: Curve, Q: [bigint, bigint], digest: Uint8Array, s
   for (let t = r; t < c.p; t += c.n) if (t * zz % c.p === R[0]) return true;
   return false;
 }
-export const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 // ── X25519 (RFC 7748 §5)
 const P25519 = (1n << 255n) - 19n, A24 = 121665n;
@@ -302,7 +301,6 @@ function mgf1(make: () => Hash, seed: Uint8Array, len: number): Uint8Array {
   }
   return out;
 }
-const hashOf = (make: () => Hash, ...parts: Uint8Array[]) => { const h = make(); for (const p of parts) h.update(p); return h.digest(); };
 /** EMSA-PSS-ENCODE (RFC 8017 §9.1.1) */
 export function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): Uint8Array | null {
   const emLen = (emBits + 7) >> 3, hLen = mHash.length;
@@ -331,7 +329,7 @@ export function pssVerify(mHash: Uint8Array, em: Uint8Array, emBits: number, has
   if (i === db.length || db[i] !== 1) return false;
   const salt = db.subarray(i + 1);
   if (saltLen === -1 ? salt.length !== hLen : saltLen >= 0 && salt.length !== saltLen) return false;
-  return equal(hashOf(hash, new Uint8Array(8), mHash, salt), H);
+  return sameBytes(hashOf(hash, new Uint8Array(8), mHash, salt), H);
 }
 /** RSAES-OAEP encoding (RFC 8017 §7.1.1) */
 export function oaepEncode(k: number, m: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
@@ -354,7 +352,7 @@ export function oaepDecode(k: number, em: Uint8Array, hash: () => Hash, mgf: () 
   for (let i = 0; i < hLen; i++) seed[i] ^= seedMask[i];
   const dbMask = mgf1(mgf, seed, db.length);
   for (let i = 0; i < db.length; i++) db[i] ^= dbMask[i];
-  if (!equal(db.subarray(0, hLen), lHash)) return null;
+  if (!sameBytes(db.subarray(0, hLen), lHash)) return null;
   let i = hLen;
   while (i < db.length && db[i] === 0) i++;
   return i < db.length && db[i] === 1 ? db.slice(i + 1) : null;
@@ -394,7 +392,7 @@ export function curveOfParams(t: Tlv0): Curve {
     const [, field, curve, base, order] = children(t.body);
     const p = uintOf(children(expect(field, SEQUENCE).body)[1]), [a, b] = children(expect(curve, SEQUENCE).body).map((v) => bytesToBig(v.body));
     const n = uintOf(order), c = CURVES.find((k) => k.p === p && k.a === a && k.b === b && k.n === n);
-    if (c && equal(expect(base, OCTET_STRING).body, encodePoint(c, [c.gx, c.gy]))) return c;
+    if (c && sameBytes(expect(base, OCTET_STRING).body, encodePoint(c, [c.gx, c.gy]))) return c;
   }
   throw new DerError("unsupported curve parameters");
 }
