@@ -408,11 +408,6 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
     infos.push(setDeclared(yield newObj(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
   return infos;
 }
-/** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
-export const resolveActivity = driven(function* resolveActivity$(intent: JObj): Gen<Match | "system" | null> {
-  const q = yield* intentQuery$(intent);
-  return (yield* queryComponents$(q, MATCH_DEFAULT_ONLY, "activity"))[0] ?? (answersSystem(q) ? "system" : null);
-});
 export const resolveService = driven(function* resolveService$(intent: JObj): Gen<Match | null> {
   return (yield* queryComponents$(yield* intentQuery$(intent), 0, "service"))[0] ?? null;
 });
