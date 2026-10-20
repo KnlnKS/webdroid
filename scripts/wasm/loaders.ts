@@ -185,18 +185,18 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
   };
   const key = await symbolicShared();
   const handedData: WeakRef<object>[] = [], handingCompilers: WeakRef<object>[] = [];
-  const buildUnit = Compiler.prototype.buildUnit;
-  Compiler.prototype.buildUnit = function (...args: Parameters<typeof buildUnit>) {
-    const built = buildUnit.apply(this, args);
-    const method = w.prog.require(key).byKey.get("symbolic()I")!, analysis = this.methodAnalyses.get(method);
-    if (analysis) { handingCompilers.push(new WeakRef(this)); handedData.push(new WeakRef(analysis.prepared), new WeakRef(analysis.typing)); }
-    return built;
+  const analysisOf = Compiler.prototype.analysis;
+  Compiler.prototype.analysis = function (m, last) {
+    const analysis = analysisOf.call(this, m, last);
+    // the symbolic sites of the method are declared from its analysis
+    if (!last && m === w.prog.require(key).byKey.get("symbolic()I")) { handingCompilers.push(new WeakRef(this)); handedData.push(new WeakRef(analysis.prepared), new WeakRef(analysis.typing)); }
+    return analysis;
   };
   let call: ReturnType<typeof w.entryAsync>;
   try {
     call = w.entryAsync(key, "symbolic", "()I");
     if (await call() !== 42) fail("symbolic direct entry failed");
-  } finally { Compiler.prototype.buildUnit = buildUnit; }
+  } finally { Compiler.prototype.analysis = analysisOf; }
   const resolutions = w.symbolic.symbolicResolutions, stubModules = w.symbolic.symbolicStubModules;
   for (let i = 0; i < 3; i++) if (await call() !== 42) fail("cached symbolic operation failed");
   if (w.symbolic.symbolicResolutions !== resolutions) fail("resolved symbolic site entered the loader bridge again");

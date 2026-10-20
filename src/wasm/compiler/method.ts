@@ -1,4 +1,4 @@
-import { emitSymbolicSite } from "./sites.ts";
+import { emitSymbolicSite, siteKey } from "./sites.ts";
 import { STRING } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
@@ -6,7 +6,7 @@ import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts
 import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
-import { argRegisters, prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { argRegisters, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
@@ -18,7 +18,7 @@ import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/op
 import { emitRestored } from "./hostcalls.ts";
 import { Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
-import { inferTyping, KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
+import { KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** what an invoke names: the method's name and descriptor, the class whose methods it searches, and the resolved target */
 type InvokeSite = { name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
@@ -166,18 +166,14 @@ export class MC {
   setNum(k: number): void { if (KINDS[k].toBits) this.store(this.cur); else this.set(KINDS[k].abi); }
 
   run(): void {
-    const { m, item, cx } = this, phase = cx.w.stats.phase;
+    const { m, item, cx } = this, phase = cx.w.stats.phase, { prepared, typing } = cx.analysis(m, true);
+    this.prepared = prepared; this.typing = typing;
     let t = performance.now();
     const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
-    const analysis = cx.methodAnalyses.get(m);
-    const prepared = this.prepared = analysis?.prepared ?? prepareMethod(item);
-    lap("prepare");
     let flow: Flow;
     try { flow = structureAny(prepared, item); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow");
-    this.typing = analysis?.typing ?? inferTyping(this.dex, item, m.desc, m.isStatic, prepared);
-    lap("infer");
     this.known = new MethodFacts(this);
     lap("facts");
     const c = this.code;
@@ -306,7 +302,7 @@ export class MC {
   }
   /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
   deferredSite(ins: Ins): boolean {
-    return this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
+    return this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(siteKey(this.m, ins));
   }
   private bindings = new Map<number, Binding | null>();
   /** how an invoke other than invoke-polymorphic, invoke-custom and a symbolic site reaches its target; null if it calls no Java method */

@@ -6,8 +6,8 @@ import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program
 import { mid } from "./ids.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
-import type { PreparedMethod } from "../../jvm/prepared.ts";
-import type { Typing } from "./infer.ts";
+import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
+import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
 import { rtfns, type Synth } from "./rtfns.ts";
@@ -169,7 +169,7 @@ export class Compiler implements Base {
   str: StructStrings;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
-  methodAnalyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
+  private analyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
   symbolicTable?: number;
   symbolicImports = new Map<string, { slot: number; site: SymbolicSite }>();
   private memory = false;
@@ -738,6 +738,17 @@ export class Compiler implements Base {
     const s = this.str.helper(name, t);
     if (s) return s;
     throw new Error("unknown helper " + name);
+  }
+
+  /** `m`'s decoded code and typing, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
+  analysis(m: MethodInfo, last = false): { prepared: PreparedMethod; typing: Typing } {
+    let a = this.analyses.get(m);
+    if (a) { if (last) this.analyses.delete(m); return a; }
+    const phase = this.w.stats.phase, item = m.dex.code(m.codeOff), t0 = performance.now(), prepared = prepareMethod(item), t1 = performance.now();
+    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared) };
+    phase.prepare += t1 - t0; phase.infer += performance.now() - t1;
+    if (!last) this.analyses.set(m, a);
+    return a;
   }
 
   // ---------- units

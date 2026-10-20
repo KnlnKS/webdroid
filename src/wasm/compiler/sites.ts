@@ -1,12 +1,14 @@
-import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { Invoke, Pool, invokeKind, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { inferTyping, KINDS, type Typing } from "./infer.ts";
+import { KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
+/** the name of the symbolic site of `ins` in `m` */
+export const siteKey = (m: MethodInfo, ins: PreparedInstruction): string => `${m.cls}:${m.index}:${ins.pc}`;
 
 export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: SymbolicSite[5]): string {
   const roles = new Map<number, number>();
@@ -43,9 +45,7 @@ function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): 
 }
 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
-  const cx = mc.cx;
-  if (cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
-  const entry = cx.symbolicImports.get(`${mc.m.cls}:${mc.m.index}:${ins.pc}`);
+  const cx = mc.cx, entry = cx.symbolicImports.size ? cx.symbolicImports.get(siteKey(mc.m, ins)) : undefined;
   if (!entry) return false;
   // the operands declareSymbolicSites gave the site, which its linked operation takes
   const [, , , , inputs, output] = entry.site;
@@ -61,16 +61,10 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
   for (const m of methods) {
     if (cx.w.aot?.building && !cx.w.opts.build?.appDexes?.has(m.dex)) continue;
     if (!m.codeOff || cx.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
-    const phase = cx.w.stats.phase, item = m.dex.code(m.codeOff);
-    let t = performance.now();
-    const prepared = prepareMethod(item);
-    phase.prepare += performance.now() - t; t = performance.now();
-    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared);
-    phase.infer += performance.now() - t;
-    cx.methodAnalyses.set(m, { prepared, typing });
+    const { prepared, typing } = cx.analysis(m);
     for (const ins of prepared.instructions) {
       if (!typing.reached(ins.pc) || !cx.w.needsSymbolicSite(m, ins)) continue;
-      const name = `${m.cls}:${m.index}:${ins.pc}`;
+      const name = siteKey(m, ins);
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const slot = cx.mb.importGlobal("symbolic", name, T.i32, false);
