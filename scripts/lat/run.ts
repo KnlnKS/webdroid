@@ -90,7 +90,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return { at: performance.now(), frames: [{ url: location.href, aotKey: globalThis.__wdWasm?.aotKey ?? null, ...pageDiagnostics(errorLine) }], workers };
   };
   const workerReadiness = async (save: boolean) => {
-    const code = await w.wd.foregroundCodeReadiness(save);
+    const code = await w.wd.foreground()?.codeReadiness(save);
     if (!code) throw new Error("foreground Worker code readiness unavailable");
     if (save ? !code.kept && !code.persisted : !code.saved || code.source !== "persist" || !code.attached)
       throw new Error("Wasm Worker app code is not " + (save ? "saved" : "attached from persisted code") + ": " + JSON.stringify(code));
@@ -280,7 +280,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
    * for, on the Worker's clock without the presentation's jitter.
    */
   const frameReport = async (from: number, to: number, answer?: [number, number]) => {
-    const events: [number, number, number][] = (await w.wd.foregroundTimeline(performance.timeOrigin + from)).map(([t, e, a]: number[]) => [t - performance.timeOrigin, e, a]);
+    const events: [number, number, number][] = ((await w.wd.foreground()?.timeline(performance.timeOrigin + from)) ?? []).map(([t, e, a]: number[]) => [t - performance.timeOrigin, e, a]);
     const spans = { doFrame: [] as number[], draw: [] as number[], composite: [] as number[], vsyncToPresent: [] as number[], inputToDispatch: [] as number[], busyAtVsync: [] as number[] };
     // doFrames by their frame number: the next one can begin before the last one's end is noted
     const frames = new Map<number, number>();
@@ -350,7 +350,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   }
   const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(await snapshot()).filter(([, v]) => v));
   // the Worker's timeline up to the first frame, as far back as its ring holds
-  const launchTimeline = (await w.wd.foregroundTimeline(performance.timeOrigin) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]);
+  const launchTimeline = ((await w.wd.foreground()?.timeline(performance.timeOrigin) ?? []) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]);
   /** waits for 600 ms with nothing drawn or queued, no thread but the main one running Java, and no main-looper message due within a second: an app's
    *  background work and its own clock (an animation scheduled after a dialog closes) can still change the screen under a tap */
   const idle = async (maxMs = 8000) => {
@@ -359,7 +359,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     while (performance.now() < until) {
       const now = performance.now(), state = (await app())!, cur = state.perf.draws;
       let background = false;
-      for (const [t, e, a] of await w.wd.foregroundTimeline(performance.timeOrigin + seen) as number[][]) {
+      for (const [t, e, a] of (await w.wd.foreground()?.timeline(performance.timeOrigin + seen) ?? []) as number[][]) {
         if (e === E.Thread && a >= 2) background = true;
         else if (e === E.LoopIdle) due = a > 0 ? t - performance.timeOrigin + a : Infinity;
         else if (e === E.LoopWake) due = Infinity;
@@ -386,7 +386,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`)
     .concat(((await foreground())?.marks ?? []).map(([name, at]: [string, number]) => `app:${name}:${Math.round(at - performance.timeOrigin)}`));
   result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt,
-    idle: Math.round(performance.now()), perf: launchPerf, marks, demand: w.__wdDemand ? await w.wd.foregroundDemandSince([0, 0]) : undefined, timeline: launchTimeline };
+    idle: Math.round(performance.now()), perf: launchPerf, marks, demand: w.__wdDemand ? (await w.wd.foreground()?.demandSince([0, 0])) ?? null : undefined, timeline: launchTimeline };
   result.processesBefore = await diagnostics();
   if (replay) result.codeReadiness = { phase: "attached", realms: [await workerReadiness(false)] };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
@@ -459,7 +459,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     const processesBefore = s.m ? await diagnostics() : undefined;
     if (s.m) {
       // nothing reaches the app between pointerdown and the window's close but the pointer itself
-      const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? await w.wd.foregroundDemandMark() : null;
+      const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? (await w.wd.foreground()?.demandMark()) ?? null : null;
       watch(s.expect);
       await sleep(50);
       const longTasks: [number, number][] = [], lto = new PerformanceObserver((list) => { for (const e of list.getEntries()) longTasks.push([e.startTime, e.duration]); });
@@ -483,9 +483,9 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       window.forEach(shot => shot.crops.forEach(c => c.close()));
       const after = await snapshot(), timeline = await frameReport(t0, compileAt, response.first === null ? undefined : [tu, tu + response.first]).catch(e => ({ error: String(e) }));
       lto.disconnect();
-      const page = timeline && "raw" in timeline ? { raw: (w.wd.pageTimeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
+      const page = timeline && "raw" in timeline ? { raw: (await w.wd.page.timeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
       await idle();
-      const processesAfter = await diagnostics(), nodes = await state(), demanded = mark ? await w.wd.foregroundDemandSince(mark) : undefined;
+      const processesAfter = await diagnostics(), nodes = await state(), demanded = mark ? (await w.wd.foreground()?.demandSince(mark)) ?? null : undefined;
       const { last, still, ...first } = response;
       let error = first.error ?? frameError ?? null;
       if (!error && (!nodes || !w.__wdLatMatches(nodes, s.expect))) error = "the settled UI state does not match the scenario";

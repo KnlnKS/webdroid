@@ -88,11 +88,14 @@ is `SLOW` only under `--jobs 1`; rates never fail a run. Measure performance wit
 
 | Action | Emulator (`drivers/emulator.ts`) | webdroid (`drivers/webdroid.ts`) |
 |---|---|---|
-| `tapText` | `uiautomator dump`, `input tap` | await `wd.locateText`, `wd.tap` |
-| `tapAt` | `input tap` | `wd.tap` (`repeat`/`everyMs`, `whileText`) |
-| `typeInto` | tap, `input text`, ESC | `wd.tap`, `wd.type` |
-| `swipe`/`back`/`enter` | `input swipe`, key 4, key 66 | `wd.swipe` (`untilText`, `whileText`), `wd.back` (`whileText`), `wd.enter` |
+| `tapText` | `uiautomator dump`, `input tap` | await `wd.locateText`, `wd.control(x, y).tap` |
+| `tapAt` | `input tap` | `wd.control(x, y).tap` (`repeat`/`everyMs`, `whileText`) |
+| `typeInto` | tap, `input text`, ESC | `wd.control(x, y).tap`, `wd.control().type` |
+| `swipe`/`back`/`enter` | `input swipe`, key 4, key 66 | `wd.control(x, y).swipe` (`untilText`, `whileText`), `wd.back` (`whileText`), `wd.control().enter` |
 | `background` | HOME, relaunch | pause/stop, resume |
+
+`wd.control(x, y)` is the realm whose window takes that point (a system window, else the shown
+process on top) and `wd.control()` the realm with the focused field; each is a `WorkerControl`.
 
 A required `tapText` absent at the action timeout fails the step (recorded coordinates are no
 longer replayed); optional ones are skipped and tagged `skipped`. Overrides: `webdroidAction` (browser lanes, when

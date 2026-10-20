@@ -1,7 +1,7 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import "./natives.ts";
 import { PROCESS_PID } from "./android/os.ts";
-import { hostFrames, recordVsync, vsyncScheduled } from "./android/vsync.ts";
+import { vsyncScheduled } from "./android/vsync.ts";
 import { pendingTransitions } from "./android/server/atm.ts";
 import { mountSystemCertificates } from "./shell/cacerts.ts";
 import { mountPlatformData } from "./shell/apex.ts";
@@ -18,14 +18,17 @@ import { clearRoots } from "./shell/hostfs.ts";
 import { clearPickedDocuments } from "./android/documents.ts";
 import { mark, perf, perfReset } from "./perf.ts";
 import { loadTier, wasmThreads } from "./jvm/tier.ts";
-import { onMain } from "./android/mainloop.ts";
-import { imeInput, imeAction } from "./android/ime.ts";
+import { mainDbg, onMain } from "./android/mainloop.ts";
+import { rt } from "./jvm/runtime.ts";
+import { appHost } from "./android/apphost.ts";
+import { guestClockControl } from "./guest-clock.ts";
+import { native } from "./native/debug.ts";
 import { setWebLayer, webViewInfo } from "./android/webframes.ts";
 import { packagesWithData, removePackageData } from "./shell/packagedata.ts";
 import { clearUserData, deletePackage } from "./android/appdata.ts";
 import { jitStats } from "./native/core.ts";
-import { mountDiagnostics } from "./shell/diagnostics.ts";
-import { realmWd, type RealmWd } from "./shell/realmwd.ts";
+import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics.ts";
+import { countVsyncs, workerControl, type WorkerControl } from "./shell/worker-control.ts";
 import { createShell } from "./shell/ui.ts";
 import { openInstallLocal, openInstallRemote } from "./shell/install.ts";
 import { activateLocalAssets, localAsset } from "./shell/localassets.ts";
@@ -33,11 +36,8 @@ import { vfs } from "./shell/vfs.ts";
 import { yieldStats, timedParks } from "./jvm/yield.ts";
 import { provisionPackages, provisionServices } from "./shell/provision.ts";
 import { processBroker } from "./shell/processes.ts";
-import { foregroundWorkerSnapshot, visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "./shell/worker-diagnostics.ts";
+import { foregroundWorkerSnapshot, visibleWorkerProcesses, visibleWorkersAlive, within, workerAotProfiles, workerSnapshots } from "./shell/worker-diagnostics.ts";
 import { displayRate } from "./shell/display-rate.ts";
-import { processPresentation } from "./shell/process-endpoint.ts";
-import { timelineSince } from "./timeline.ts";
-import { swipe } from "./shell/gesture.ts";
 import { device } from "./shell/config.ts";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot.ts";
 import { hasFocusedWindow, hasTouchWindow } from "./android/server/wm.ts";
@@ -156,21 +156,27 @@ async function boot(file: string, local?: File) {
   }
 }
 
-const local = realmWd();
-// a system window, then the process on top, takes the harness's input, as they take the browser's own events
-const inputHost = () => processBroker().activities.shownEntries().at(-1)?.host;
-const tap = (x: number, y: number): Promise<void> => {
-  const host = inputHost();
-  return host && !hasTouchWindow(x, y) ? host.control.tap(x, y) : local.tap(x, y);
+// several fingers' moves and a wheel's synthetic drag drain once per display frame
+const ticks = countVsyncs(drainPointers), page = workerControl(logBuf, () => "ready", ticks);
+/** the realm that takes input at (x, y), or the focused field's keys without a point: a system window, then
+ *  the process on top, as they take the browser's own events */
+const control = (x?: number, y?: number): WorkerControl => {
+  const host = processBroker().activities.shownEntries().at(-1)?.host;
+  return host && !(x === undefined || y === undefined ? hasFocusedWindow() : hasTouchWindow(x, y)) ? host.control : page;
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
 jitStats.on = params.get("jit") !== "0";
 
-/** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
+/** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. A realm's own
+ *  input, frames and reads are its WorkerControl: `page`, `control(x, y)`'s or `foreground()`'s. */
 const wd = {
-  ...local,
-  vfs, perfReset, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0,
+  rt, app: () => appHost, perf, mainDbg, guestClock: guestClockControl, nativeRequirements, native,
+  vfs, perfReset, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf,
+  get ticks() { return ticks(); },
+  page, control,
+  /** the foreground process Worker's control, if one is in front */
+  foreground: (): WorkerControl | undefined => processBroker().foregroundHost()?.control,
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
@@ -183,27 +189,19 @@ const wd = {
   mirrorFrames: (on: Mirror) => processBroker().hosts.mirror(on),
   foregroundWorkerSnapshot: () => foregroundWorkerSnapshot(processBroker()),
   processStarting: () => processBroker().starting(),
-  /** the foreground process's frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
-  foregroundTimeline: async (from: number) => (await processBroker().foregroundHost()?.control.timeline(from)) ?? [],
-  /** the page's own events since `from` (ms since the epoch), as foregroundTimeline */
-  pageTimeline: (from: number) => timelineSince(from - performance.timeOrigin),
-  /** where the foreground process's on-demand compiling stands, and what it compiled since such a mark, each method with whether its class was linked by then */
-  foregroundDemandMark: async () => (await processBroker().foregroundHost()?.control.demandMark()) ?? null,
-  foregroundDemandSince: async (mark: number[]) => (await processBroker().foregroundHost()?.control.demandSince(mark)) ?? null,
-  foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundHost()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => visibleWorkerProcesses(processBroker(), ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotate(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // the shown processes' windows bottom to top, then the system windows above them
-  uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
+  uiTree: async (): Promise<Awaited<ReturnType<WorkerControl["uiTree"]>>> => {
     const nodes = [];
     for (const entry of processBroker().activities.shownEntries()) if (entry.host) nodes.push(...await entry.host.control.uiTree());
-    return [...nodes, ...await local.uiTree()];
+    return [...nodes, ...await page.uiTree()];
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
-  // the space wd.tap takes), topmost window first.
+  // the space a control's tap takes), topmost window first.
   locateText: (s: string): Promise<{ x: number; y: number; bounds: [number, number, number, number] } | null> => {
     const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = normalized(s);
@@ -215,30 +213,11 @@ const wd = {
       return hit ? { x: (hit.bounds[0] + hit.bounds[2]) / 2, y: (hit.bounds[1] + hit.bounds[3]) / 2, bounds: hit.bounds } : null;
     });
   },
-  tap,
-  tapText: async (s: string) => {
-    const hit = await wd.locateText(s);
-    if (!hit) return "not found: " + s;
-    await tap(hit.x, hit.y);
-    return `tapped ${s} @ ${hit.x},${hit.y}`;
-  },
-  swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
-    const host = inputHost();
-    if (host && !hasTouchWindow(x1, y1)) await host.control.swipe(x1, y1, x2, y2, ms);
-    else await swipe(x1, y1, x2, y2, ms);
-    return `swiped ${x1},${y1} -> ${x2},${y2}`;
-  },
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
   // looks exactly like a settled screen from outside.
   alive: async (ms = 1500) => {
-    const workersAlive = visibleWorkersAlive(processBroker(), ms);
-    let id: ReturnType<typeof setTimeout>;
-    const rootAlive = Promise.race([
-      onMain(() => true).finally(() => clearTimeout(id)),
-      new Promise((r) => { id = setTimeout(() => r(false), ms); }),
-    ]);
-    const [root, workers] = await Promise.all([rootAlive, workersAlive]);
-    return Boolean(root) && workers !== false;
+    const [root, workers] = await Promise.all([within(page.alive(), ms, () => false), visibleWorkersAlive(processBroker(), ms)]);
+    return root && workers !== false;
   },
   // a fresh install of every app: each package's data and install state as its removal takes them,
   // with the shared storage and the picked directories
@@ -251,29 +230,15 @@ const wd = {
   // an app's data cleared as Settings' "Clear storage" does, and its uninstall as the launcher's
   clearData: async (pkg: string) => (await onMain(() => clearUserData(pkg, false, false, null))).done,
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
-  type: async (s: string) => {
-    const host = inputHost();
-    if (host && !hasFocusedWindow()) await host.control.type(s);
-    else { kbd.value = s; await imeInput(s); }
-    return "typed " + s;
-  },
-  // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : inputHost()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop.ts").then((m) => m.looperDump()),
   threads: wasmThreads,
   redraw,
   testFrame: async () => {
-    await local.testFrame();
+    await page.testFrame();
     for (const entry of processBroker().activities.shownEntries()) if (entry.host) await entry.host.control.testFrame();
   },
 };
 (globalThis as any).wd = wd;
-
-hostFrames(time => {
-  if (!processPresentation.visible) return;
-  drainPointers(); // several fingers' moves and a wheel's synthetic drag, once per display frame
-  if (recordVsync(time)) wd.ticks++;
-});
 
 attachIme(canvas, kbd, systemInput.element);
 attachKeyboard(kbd);

@@ -47,7 +47,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     await attachWorkerBootstrap(data.bootstrap);
     const { processPresentation } = await import("./shell/process-endpoint.ts");
     processPresentation.visible = false;
-    closeControl = p.port.serveCalls(data.control, p.control.workerControl(logs, () => phase));
+    closeControl = p.port.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
     p.core.jitStats.on = new URLSearchParams(location.search).get("jit") !== "0";
     phase = "packages";
     const boot = await p.packages.loadProcessPackages(data.bootstrap);

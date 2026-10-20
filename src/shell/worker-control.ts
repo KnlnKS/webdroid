@@ -1,12 +1,13 @@
 import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os.ts";
 import { appHost } from "../android/apphost.ts";
 import { rt } from "../jvm/runtime.ts";
-import { realmWd } from "./realmwd.ts";
 import { processExited } from "../process-exit.ts";
-import { pressBack, SCREEN_W, SCREEN_H } from "./device.ts";
+import { dispatchPointer, pressBack, testFrame, SCREEN_W, SCREEN_H } from "./device.ts";
 import { yieldStats, timedParks } from "../jvm/yield.ts";
 import { webViewInfo } from "../android/webframes.ts";
 import { mainDbg, onMain } from "../android/mainloop.ts";
+import { guestSleep } from "../guest-clock.ts";
+import { dumpWindows } from "./uiautomator.ts";
 import { swipe } from "./gesture.ts";
 import { imeInput, imeAction, imeState } from "../android/ime.ts";
 import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync.ts";
@@ -18,16 +19,25 @@ import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
 import { tierStatus } from "../jvm/tier.ts";
 
-/** Copies only observable data; a page never receives this JVM's objects or callbacks. */
-export function workerControl(logs: string[], phase: () => string) {
+/** the vsyncs this realm's shown display has had while its process lives; `frame` runs first on each shown frame */
+export function countVsyncs(frame?: () => void): () => number {
   let ticks = 0;
-  const local = realmWd();
-  hostFrames(time => { if (processPresentation.visible && !processExited() && recordVsync(time)) ticks++; });
+  hostFrames(time => {
+    if (!processPresentation.visible) return;
+    frame?.();
+    if (!processExited() && recordVsync(time)) ticks++;
+  });
+  return () => ticks;
+}
+
+/** What the harness drives and reads of one process realm: the page's own (main.ts's wd) and each Worker's
+ *  through its control port. Copies only observable data; a page never receives this JVM's objects or callbacks. */
+export function workerControl(logs: string[], phase: () => string, ticks: () => number) {
   return {
     aotProfile: async () => ({phase:phase(),dead:processExited(),
       identity:{pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
       profile:await existingAotProfile()}),
-    snapshot: async () => ({ phase: phase(), dead: processExited(), ticks, width: SCREEN_W, height: SCREEN_H,
+    snapshot: async () => ({ phase: phase(), dead: processExited(), ticks: ticks(), width: SCREEN_W, height: SCREEN_H,
       identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
       placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
@@ -47,14 +57,24 @@ export function workerControl(logs: string[], phase: () => string) {
     demandMark: async () => tierStatus()?.demandMark?.() ?? null,
     demandSince: async (mark: number[]) => tierStatus()?.demandSince?.(mark) ?? null,
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
-    uiTree: local.uiTree,
-    tap: local.tap,
+    // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
+    // absolute device px with the status bar included, which is the space a tap is expressed in.
+    // A process that has ended shows no window; its own main loop answers nothing.
+    uiTree: async (): Promise<Awaited<ReturnType<typeof dumpWindows>>> => processExited() ? [] : onMain(dumpWindows),
+    tap: async (x: number, y: number): Promise<void> => {
+      // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past. The
+      // finger lifts on time however long the app takes to handle the press, as on a touchscreen:
+      // a late UP would read as a long press.
+      const down = dispatchPointer(0, x, y);
+      await guestSleep(60);
+      await Promise.all([down, dispatchPointer(1, x, y)]);
+    },
     swipe,
     type: async (text: string) => { await imeInput(text, text.length, text.length, false, imeState().generation); },
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),
     back: async () => { await pressBack(); },
-    testFrame: local.testFrame,
+    testFrame: async (): Promise<void> => { if (processPresentation.visible) await testFrame(); },
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
     timeline: async (from: number) => timelineSince(from - performance.timeOrigin),
   };
