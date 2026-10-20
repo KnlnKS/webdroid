@@ -104,13 +104,13 @@ export class CompileClient implements CompileService {
     this.port = port;
     port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
       if (data.type !== "unit") { this.take(data); return; }
-      // the engine compiles a unit's bytes off this thread
+      // the engine compiles a unit's bytes off this thread: compiled in the handler, they kept a busy app from its frames for seconds. Bytes that do not compile fail the job
       const bytes = data.result.module as Uint8Array, merge = this.busy?.id === data.id && this.busy.job.merge;
       void compileBytes(bytes).then(async (module) => {
         data.result.module = module;
         if (merge && this.warm) this.stats.warmed += (await this.warm(module, bytes))?.warmed ?? 0;
         this.take(data);
-      }, (e) => this.take({ type: "failed", id: data.id, message: String(e) }));
+      }, (e) => this.take({ type: "failed", id: data.id, message: `${this.busy?.job.installed[0]}: ${(e as Error).message}` }));
     };
     port.onerror = (e) => this.retire(`the compile worker failed: ${e.message}`);
   }
@@ -195,7 +195,6 @@ export class CompileClient implements CompileService {
     if (m.type === "built") return;
     const busy = this.busy;
     if (!busy || m.id !== busy.id) return;
-    if (m.type === "unit" && m.result.module instanceof Uint8Array) { this.compile(m); return; }
     if (m.type === "unit" && this.holding(m)) return;
     this.busy = undefined;
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
@@ -218,12 +217,6 @@ export class CompileClient implements CompileService {
       if (numbered) { this.keep = true; this.marks = w.numbers.marks(); }
     } else this.stats.stale++;
     this.pump();
-  }
-  /** A unit's bytes compile off the main thread before it is taken: compiled in the handler, they kept a busy app from its frames for seconds.
-   *  Bytes that do not compile fail the job. */
-  private compile(m: Extract<CompileResponse, { type: "unit" }>): void {
-    compileBytes(m.result.module as Uint8Array).then((module) => { m.result.module = module; this.receive(m); },
-      (e) => this.receive({ type: "failed", id: m.id, message: `${this.busy?.job.installed[0]}: ${(e as Error).message}` }));
   }
   private held?: { timer: ReturnType<typeof setTimeout>; unit?: CompileResponse };
   /** Planning a job and taking a unit (`unit`) wait while the app answers input: either would spend main-thread time in the response, and a unit replaces
