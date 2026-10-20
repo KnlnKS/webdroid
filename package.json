@@ -58,6 +58,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/sql.js": "^1.4.11",
     "@types/ws": "^8.18.2",
+    "binaryen": "^132.0.0",
     "html-rewriter-wasm": "0.4.1",
     "pixelmatch": "^7.2.0",
     "playwright": "^1.62.1",

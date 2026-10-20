@@ -12,11 +12,10 @@ const dex = join(G1_DIR, "classes.dex");
 await mountPlatform(ROOT);
 const w = world(program([dex, ...PLATFORM_PATHS]), { natives });
 await startProcess(w);
-const units: Uint8Array[] = [];
-const inst = (w as unknown as { instantiate(b: Uint8Array, i: unknown): unknown }).instantiate;
-(w as unknown as { instantiate: unknown }).instantiate = function (this: unknown, bytes: Uint8Array, imports: unknown) { units.push(bytes); return inst.call(this, bytes, imports); };
+const units: Uint8Array[] = [], instantiate = w.instantiate.bind(w);
+w.instantiate = (mod, imports) => { if (mod instanceof Uint8Array) units.push(mod); return instantiate(mod, imports); };
 const call = w.entryAsync(process.env.CLS ?? "Bench", `w_${workload}`, "()I"); for (let i = 0; i < Number(process.env.CALLS ?? 1); i++) await call();
-const bin = join(ROOT, "research/wasm/node_modules/.bin/wasm-dis"), file = join(G1_DIR, "unit.wasm"), sh = shellIn(G1_DIR);
+const bin = join(ROOT, "node_modules/.bin/wasm-dis"), file = join(G1_DIR, "unit.wasm"), sh = shellIn(G1_DIR);
 for (const bytes of units) {
   writeFileSync(file, bytes);
   const text = sh([bin, "-all", file]);
