@@ -26,11 +26,13 @@ export const CONTEXT_OPTS = {
   geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
   permissions: ["geolocation"],
 };
+/** Chrome's GL on the CPU, SwiftShader behind ANGLE */
+export const SOFTWARE_GL = ["--use-gl=angle", "--use-angle=swiftshader"];
 /** headless Chrome on software GL, rendering as the e2e goldens were recorded */
 export const launchOptions = (jsFlags?: string) => ({
   headless: true,
   args: [...chromeArgs(jsFlags), "--font-render-hinting=none", "--disable-lcd-text",
-    "--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"],
+    ...SOFTWARE_GL, "--disable-partial-raster", "--disable-skia-runtime-opts"],
   ignoreDefaultArgs: ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : [],
 });
 export const launchBrowser = (jsFlags?: string) => chromium.launch(launchOptions(jsFlags));
