@@ -215,7 +215,7 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
   await bootApp(await packageRecord("org.webdroid.test.clipboard"));
   const service = rt.make("webdroid/ClipboardService"), P = "Ljava/lang/String;Ljava/lang/String;II", caller = ["org.webdroid.test.clipboard",null,0,0];
   let focused: number | undefined;
-  useFocusedUid(() => focused);
+  const previous = useFocusedUid(() => focused);
   try {
     const source = await scall("android/content/ClipData", "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;", "label", "copied");
     await vcall(service, "setPrimaryClip", `(Landroid/content/ClipData;${P})V`, source, ...caller);
@@ -227,7 +227,7 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
     expect(await vcall(await vcall(read,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");
     await vcall(service, "clearPrimaryClip", `(${P})V`, ...caller);
     expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
-  } finally { useFocusedUid(() => undefined); }
+  } finally { useFocusedUid(previous); }
 });
 
 test("CookieManager waits for canonical mutation before its main-looper callback", async () => {

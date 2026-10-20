@@ -11,7 +11,8 @@ import { wallMillis } from "../guest-clock.ts";
 /** the uid whose app has input focus (WindowManagerService.isUidFocused): system_server's realm asks
  *  the broker; a realm of its own has its app while one of its activities is resumed */
 let focusedUid = (): number | undefined => foreground() ? PROCESS_UID : undefined;
-export function useFocusedUid(focused: () => number | undefined): void { focusedUid = focused; }
+/** the uid whose window has focus, `focused`'s answer from now on; the previous source is returned */
+export function useFocusedUid(focused: () => number | undefined): () => number | undefined { const was = focusedUid; focusedUid = focused; return was; }
 
 let primary: JObj | null = null;
 /** each listener by its binder, with the uid that registered it, as a RemoteCallbackList keeps them */

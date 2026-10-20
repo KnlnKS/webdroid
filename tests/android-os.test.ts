@@ -9,7 +9,7 @@ import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/m
 import { BridgeCalls } from "../src/shell/bridgecalls.ts";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os.ts";
 import { UNAME } from "../src/shell/device-properties.ts";
-import { binderTransport, importBinder } from "../src/android/binder.ts";
+import { binderTransport, importBinder, onCallerDeath } from "../src/android/binder.ts";
 import { procList, procText, procWrite } from "../src/shell/procfs.ts";
 
 describe("bundle-parcel", () => {
@@ -272,6 +272,21 @@ describe("remotecallbacklist", () => {
       expect(await register(list, cb)).toBe(0);
     } finally { Object.assign(binderTransport, saved); }
   });
+});
+
+test("a system service hears each caller's death once, through one watch per process", () => {
+  const saved = { ...binderTransport }, watches: (() => void)[] = [], heard: string[] = [];
+  binderTransport.watch = (_pid, died) => { watches.push(died); return () => {}; };
+  try {
+    onCallerDeath(4242, (pid) => heard.push("kept " + pid));
+    const stop = onCallerDeath(4242, (pid) => heard.push("dropped " + pid));
+    expect(watches.length).toBe(1);
+    stop();
+    watches[0]();
+    expect(heard).toEqual(["kept 4242"]);
+    onCallerDeath(4242, () => {});
+    expect(watches.length).toBe(2);
+  } finally { Object.assign(binderTransport, saved); }
 });
 
 describe("stats-log", () => {
