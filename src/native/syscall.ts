@@ -4,7 +4,6 @@
 // calls no wrapper of the ARM32 libc shares.
 
 import { mem, anchor } from "./mem.ts";
-import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
 import { calledMissing, markKernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host.ts";
 import { E, PAGE_SIZE } from "./abi.ts";
 import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu.ts";
@@ -19,7 +18,7 @@ import { EVENTFD_SYSCALLS } from "./eventfd.ts";
 import { INOTIFY_SYSCALLS } from "./inotify.ts";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread.ts";
 import { NET_SYSCALLS } from "./socket/syscalls.ts";
-import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll.ts";
+import { POLL_SYSCALLS, nativePoll, nativeSelect, waitUntil } from "./poll.ts";
 import { PROC_SYSCALLS } from "./proc.ts";
 import { TIMER_SYSCALLS } from "./timers.ts";
 import { device } from "../shell/config.ts";
@@ -106,13 +105,11 @@ const A64: Record<number, HostFn> = {
       if (at) writeSiginfo(at, taken.sig, taken.info);
       return taken.sig;
     };
-    const now = take();
-    if (now || ms === 0) return now || -E.AGAIN;
-    return new Promise<number>((resolve) => {
-      const done = (r: number) => { cpu.sigQueued = null; unparkTimeout(timer); resolve(r); };
-      const timer = ms < 0 ? undefined : parkTimeout(() => done(-E.AGAIN), ms);
-      cpu.sigQueued = () => { const sig = take(); if (sig) done(sig); };
-    });
+    let sig = take();
+    if (sig || ms === 0) return sig || -E.AGAIN;
+    // taken as it is queued, before the Cpu could deliver it to a handler
+    const subscribe = (wake: () => void) => { cpu.sigQueued = () => { if ((sig = take())) wake(); }; return () => { cpu.sigQueued = null; }; };
+    return waitUntil(subscribe, ms, undefined, true).then(() => sig || -E.AGAIN);
   },
   168: (_c, a) => { const cpuOut = a.p(), node = a.p(); if (cpuOut) mem.st32(cpuOut, 0); if (node) mem.st32(node, 0); return 0; }, // getcpu
   172: (cpu) => cpu.pid,

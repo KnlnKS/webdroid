@@ -4,6 +4,8 @@ import { Cpu, bindCpu } from "./cpu.ts";
 import { processExited } from "../process-exit.ts";
 import { hostLib, stp, ptr, type HostFn } from "./host.ts";
 import { mem, anchor } from "./mem.ts";
+import { msLeft, waitUntil } from "./poll.ts";
+import { guestNow } from "../guest-clock.ts";
 import { toThread } from "../jvm/natives/jthrowable.ts";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
@@ -73,13 +75,15 @@ class Stream {
     this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
   }
+  /** AAudioStream_waitForStateChange: the timeout is the app's, on the guest clock; the changes
+   *  come at the audio clock's pace, a drain's STOPPED once the output has played its queue */
   wait(input: number, out: () => number, nanos: bigint): number | Promise<number> {
     const done = () => { const at = out(); if (at) mem.st32(at, this.state); return this.state === input ? -885 : 0; };
     if (this.state !== input || nanos <= 0n) return done();
-    return new Promise(resolve => {
-      const wake = () => { clearTimeout(timer); this.waiters.delete(wake); resolve(done()); };
-      const timer = setTimeout(wake, Math.min(Number(nanos / 1000000n), 0x7fffffff)); this.waiters.add(wake);
-    });
+    const timeout = Number(nanos / 1000000n), deadline = guestNow() + timeout;
+    const subscribe = (wake: () => void) => { this.waiters.add(wake); return () => { this.waiters.delete(wake); }; };
+    const next = (): Promise<number> => waitUntil(subscribe, msLeft(timeout, deadline)).then(woken => woken && this.state === input ? next() : done());
+    return next();
   }
 }
 type Setting = "SampleRate" | "ChannelCount" | "Format" | "Direction" | "SharingMode" | "BufferCapacityInFrames" | "FramesPerDataCallback" | "PerformanceMode" | "DeviceId" | "SessionId";

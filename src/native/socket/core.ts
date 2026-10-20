@@ -4,8 +4,9 @@
 // socket calls (syscalls.ts) and libcore's (android/socket.ts) adapt them.
 
 import { E, O_CLOEXEC, O_NONBLOCK, O_RDWR, S_IFSOCK } from "../abi.ts";
-import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../../guest-clock.ts";
+import { guestNow } from "../../guest-clock.ts";
 import { ANON, dropFile, installFile, newFile, openFd, type FileOps, type OpenFile } from "../fd.ts";
+import { msLeft, waitUntil } from "../poll.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, MSG_DONTWAIT, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
 
 export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8, SO_LINGER = 13, SO_PASSCRED = 16;
@@ -220,21 +221,15 @@ export abstract class Socket {
 
 /** Wait until `attempt` answers (anything but null), the socket's `timeoutOption` (SO_RCVTIMEO or
  *  SO_SNDTIMEO) elapses (EAGAIN) or the descriptor waited on stops naming it (EBADF). */
-export function block<T>(socket: Socket, named: () => boolean, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
-  return new Promise((resolve) => {
-    const ms = socket.option(SOL_SOCKET, timeoutOption);
-    let timer: GuestTimer | undefined, unsubscribe: (() => void) | undefined;
-    const done = (value: T | number) => { clearGuestTimeout(timer); unsubscribe?.(); resolve(value); };
-    const retry = () => {
-      unsubscribe?.(); unsubscribe = undefined;
-      if (!named()) return done(-E.BADF);
-      const result = attempt();
-      if (result !== null) return done(result);
-      unsubscribe = socket.watch(retry);
-    };
-    if (ms > 0) timer = setGuestTimeout(() => done(-E.AGAIN), ms);
-    unsubscribe = socket.watch(retry);
-  });
+export async function block<T>(socket: Socket, named: () => boolean, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
+  const ms = socket.option(SOL_SOCKET, timeoutOption), timeout = ms > 0 ? ms : -1, deadline = guestNow() + timeout;
+  const subscribe = (wake: () => void) => socket.watch(wake);
+  for (;;) {
+    if (!await waitUntil(subscribe, msLeft(timeout, deadline))) return -E.AGAIN;
+    if (!named()) return -E.BADF;
+    const result = attempt();
+    if (result !== null) return result;
+  }
 }
 
 /** a received message's bytes alone, the open files it passed dropped */
