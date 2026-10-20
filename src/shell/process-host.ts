@@ -79,13 +79,7 @@ export class ProcessHosts {
     let spare = this.spare;
     this.spare = undefined;
     if (spare && spare.url !== workerUrl(spare.pid, wide)) { spare.worker.terminate(); spare.release(); spare = undefined; }
-    return this.adopt(spare ?? spawn(this.nextPid++, wide), owner.pkg);
-  }
-  /** a host for a process of `pkg` in `spare`, which the broker starts once it registers the process */
-  adopt(spare: SpareWorker, pkg: string): ProcessHost {
-    const host = new ProcessHost(spare, pkg, this);
-    this.live.add(host);
-    return host;
+    return new ProcessHost(spare ?? spawn(this.nextPid++, wide), owner.pkg, this);
   }
   /** whether process Workers send the page a copy of each frame they show, or crops of its regions */
   mirror(on: Mirror): void {
@@ -105,6 +99,7 @@ export class ProcessHost {
   readonly control: WorkerControl;
   display: FrameReceiver | undefined;
   ime: ReturnType<typeof receiveIme> | undefined;
+  private web: HTMLElement | undefined;
   /** how the process ended, which diagnostics report once its Worker is gone */
   ended: { error: string; terminal: WorkerTerminal } | null = null;
   private readonly spare: SpareWorker;
@@ -142,6 +137,7 @@ export class ProcessHost {
         this.fail(data.error.message ?? "Process Worker startup failed");
       }
     };
+    hosts.live.add(this);
   }
   /** sends the Worker its process's bootstrap, once the broker has registered the process */
   start(): void {
@@ -167,8 +163,16 @@ export class ProcessHost {
       clearTimeout(this.focusTimer);
       this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
     });
-    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), receiveWebSurfaces(web.port1, canvas, () => device));
+    const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
+    this.web = surfaces.layer;
+    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), surfaces.close);
     return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
+  }
+  /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
+  setLayer(z: number | null, interactive: boolean): void {
+    for (const layer of [this.canvas, this.web]) if (layer) { layer.hidden = z === null; if (z !== null) layer.style.zIndex = String(z); }
+    this.canvas.style.pointerEvents = interactive ? "auto" : "none";
+    this.ime?.show(z !== null);
   }
   private fail(message: string): void { if (!this.closed) this.hosts.owner.failed(this.pid, message); }
   close(): void {

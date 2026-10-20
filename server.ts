@@ -1,5 +1,6 @@
 // The dev server's own routes, as a Vite plugin: Vite serves the page and its modules, this answers what the page asks of a
-// server (packages, the reference build's files, the proxy, the WebView bridge) and lends it sockets.
+// server (packages, the reference build's files, the proxy, the WebView bridge) and lends it sockets. The routes the
+// deployed Worker answers alike are src/shell/serve-routes.ts's.
 import dns from "node:dns/promises";
 import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -7,9 +8,8 @@ import http, { type IncomingMessage } from "node:http";
 import https from "node:https";
 import type { Plugin } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
-import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject.ts";
 import { webDocument } from "./src/shell/webhtml.ts";
-import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy.ts";
+import { sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
 import { mimeOf } from "./src/mime.ts";
 import { WebRelay } from "./src/shell/webrelay.ts";
@@ -19,7 +19,8 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { relayTcp, relayUdp, tcpTarget } from "./socket-relays.ts";
+import { bridgeSocket, gzipHeaders, sharedRoute, tcpTarget, type ServeHost } from "./src/shell/serve-routes.ts";
+import { relayTcp, relayUdp } from "./socket-relays.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
@@ -70,7 +71,6 @@ async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
-const html = (body: string) => new Response(body, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
 function serveFile(req: Request, dir: string, name: string, headers?: Record<string, string>): Response {
   if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
   return fileResponse(`${dir}/${name}`, req, headers);
@@ -100,8 +100,6 @@ type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Re
 const ROUTES: [RegExp, Route][] = [
   // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
   [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache" })],
-  [/^\/webview$/, () => html(WEB_FRAME)],
-  [/^\/webview-call$/, (req) => webRelay.call(req)],
   [/^\/webview-origin$/, (_, url) => {
     if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
     if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
@@ -110,10 +108,6 @@ const ROUTES: [RegExp, Route][] = [
   }],
   ...Object.values(WORKER_SCRIPTS).map(({ url, entry }): [RegExp, Route] => [new RegExp(`^${url.replaceAll(".", "\\.")}$`), () => workerScript(entry)]),
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
-  [/^\/webview-worker\.js$/, () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } })],
-  [/^\/dns-query$/, (req) => forwardDnsMessage(req)],
-  [/^\/proxy$/, (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
-    fetchUpstream: (url, init, encoded) => encoded ? fetchEncoded(url, init) : fetch(url, init) })],
   // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
   // so a page's relative subresources resolve to siblings, as they do under android_asset.
   [/^\/asset\/([^/]+)\/(.*)$/, async (req, _, [rawApk, rawPath]) => {
@@ -136,31 +130,19 @@ const ROUTES: [RegExp, Route][] = [
   // The page's modules among them are Vite's to serve.
   [/^\/(vendor(?:\/aosp(?:\/boot)?)?)\/(?![^/]*\.[cm]?[jt]s$)([^/]+)$/,(req, _, [dir, file]) => serveFile(req, dir, file, { "cache-control": IMMUTABLE })],
   [/^\/vendor\/aosp\/(?:apex|system|data)\//, (req, url) => devicePath(req, url.pathname)],
-  [/^\/vendor\/microg\/([^/]+)$/, (req, url, [file]) => {
-    const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
-    if (file.endsWith(".gz") && !url.searchParams.has("raw")) {
-      headers["content-encoding"] = "gzip";
-      headers["content-type"] = "application/octet-stream";
-      // A .gz download filename makes WebKit retain the compressed transport body.
-      headers["content-disposition"] = "inline";
-    }
-    return serveFile(req, "vendor/microg", file, headers);
-  }],
+  [/^\/vendor\/microg\/([^/]+)$/, (req, url, [file]) =>
+    serveFile(req, "vendor/microg", file, { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE, ...gzipHeaders(url) })],
   [/^\/apks$/, () => Response.json(globSync("*.{apk,xapk}", { cwd: apkDirectory }).sort())],
   [/^\/apks\/([^/]+)$/, (req, _, [name]) => serveFile(req, apkDirectory, decodeURIComponent(name))],
-  // Whether a name resolves: the guest's resolvers answer a synthetic address for every name
-  // (the relay dials by name), so this is how a name that does not exist fails as it would on a
-  // device, instead of every connection to it being refused.
-  [/^\/dns$/, (_, url) => {
-    const name = url.searchParams.get("host") ?? "";
-    if (!/^[A-Za-z0-9.-]{1,253}$/.test(name)) return new Response("bad name", { status: 400 });
-    return dns.lookup(name, { all: true }).then(
-      (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
-      (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
-  }],
 ];
 const webRelay = new WebRelay();
-const BRIDGE_ID = /^[a-f0-9-]{36}$/;
+const host: ServeHost = {
+  bridge: (request, id) => webRelay.call(request, id),
+  dnsLookup: (name) => dns.lookup(name, { all: true }).then(
+    (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
+    (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 })),
+  proxy: { target: proxyTarget, fetchUpstream: (url, init, encoded) => encoded ? fetchEncoded(url, init) : fetch(url, init) },
+};
 export function devServer(): Plugin {
   return {
     name: "webdroid:dev-server",
@@ -168,13 +150,12 @@ export function devServer(): Plugin {
       await prepareSystemPackages();
       server.watcher.on("all", () => workerBuild.clear());
       server.middlewares.use((req, res, next) => {
-        const url = new URL(req.url ?? "/", "http://localhost");
+        const url = new URL(req.url ?? "/", "http://localhost"), shared = sharedRoute(url, host);
+        if (shared) return void respond(req, res, shared);
         for (const [pattern, route] of ROUTES) {
           const match = pattern.exec(url.pathname);
           if (match) return void respond(req, res, (request) => route(request, new URL(request.url), match.slice(1)));
         }
-        // a renderer frame at any other path of its origin
-        if (BRIDGE_ID.test(url.searchParams.get("__wd_bridge") ?? "")) return void respond(req, res, () => html(WEB_FRAME));
         next();
       });
       const sockets = new WebSocketServer({ noServer: true });
@@ -184,8 +165,8 @@ export function devServer(): Plugin {
         // a socket's error (a frame past the size limit) closes it, which its relay ends with
         const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
         if (url.pathname === "/webview-socket") {
-          const id = url.searchParams.get("id") ?? "";
-          if (!BRIDGE_ID.test(id) || req.headers.origin !== url.origin) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
+          const id = bridgeSocket(url, req.headers.origin);
+          if (id === null) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
           return upgrade((ws) => {
             webRelay.open(id, ws);
             ws.on("message", (data, binary) => { if (!binary) webRelay.reply(ws, data.toString()); });

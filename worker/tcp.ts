@@ -1,17 +1,16 @@
 import { connect } from "cloudflare:sockets";
+import { tcpReady, tcpTarget } from "../src/shell/serve-routes.ts";
 
 export async function tcpRelay(request: Request, context: ExecutionContext): Promise<Response> {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected websocket", { status: 400 });
-  const query = new URL(request.url).searchParams;
-  const host = query.get("host") ?? "", port = Number(query.get("port"));
-  if (!host || host.length > 253 || !Number.isInteger(port) || port < 1 || port > 65535) return new Response("bad target", { status: 400 });
-  const alpn = query.getAll("alpn");
-  if (alpn.length > 32 || alpn.some((item) => !item.length || new TextEncoder().encode(item).length > 255)) return new Response("bad ALPN", { status: 400 });
+  const target = tcpTarget(new URL(request.url));
+  if (typeof target === "string") return new Response(target, { status: 400 });
+  const { host, port, secure } = target;
 
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
   let socket: ReturnType<typeof connect>;
-  try { socket = connect({ hostname: host, port }, { secureTransport: query.get("tls") === "1" ? "on" : "off", allowHalfOpen: false }); }
+  try { socket = connect({ hostname: host, port }, { secureTransport: secure ? "on" : "off", allowHalfOpen: false }); }
   catch (error) { server.close(4000, String(error).slice(0, 100)); return new Response(null, { status: 101, webSocket: client }); }
 
   const writer = socket.writable.getWriter();
@@ -42,8 +41,7 @@ export async function tcpRelay(request: Request, context: ExecutionContext): Pro
       const info = await socket.opened;
       const address = info.localAddress ?? "";
       const match = /^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/.exec(address);
-      server.send(match ? JSON.stringify({ type: "ready", localFamily: match[1] ? "IPv6" : "IPv4",
-        localAddress: match[1] ?? match[2], localPort: Number(match[3]), alpn: "" }) : "ok");
+      server.send(match ? tcpReady(match[1] ? "IPv6" : "IPv4", match[1] ?? match[2], Number(match[3]), "") : "ok");
       const reader = socket.readable.getReader();
       for (;;) {
         const { done, value } = await reader.read();

@@ -13,7 +13,7 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
   { error: string; terminal?: WorkerTerminal } | { terminal: WorkerTerminal; error?: never });
 
 /** p, or late()'s result once `ms` pass first */
-function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
+export function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }).then(late)]).finally(() => clearTimeout(timer));
 }

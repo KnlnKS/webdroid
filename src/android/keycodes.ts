@@ -33,3 +33,11 @@ STYLUS_BUTTON_PRIMARY STYLUS_BUTTON_SECONDARY STYLUS_BUTTON_TERTIARY STYLUS_BUTT
 MACRO_2 MACRO_3 MACRO_4 EMOJI_PICKER SCREENSHOT
 `.trim().split(/\s+/).map((name, code) => [name, code]));
 
+
+/** navigation and editing keys and the DOM keys (KeyboardEvent key, legacy keyCode) Chromium pairs them with */
+const DOM_KEYS = [["DPAD_UP", "ArrowUp", 38], ["DPAD_DOWN", "ArrowDown", 40], ["DPAD_LEFT", "ArrowLeft", 37], ["DPAD_RIGHT", "ArrowRight", 39],
+  ["DPAD_CENTER", "Enter", 13], ["TAB", "Tab", 9], ["SPACE", " ", 32], ["ENTER", "Enter", 13], ["DEL", "Backspace", 8], ["PAGE_UP", "PageUp", 33],
+  ["PAGE_DOWN", "PageDown", 34], ["ESCAPE", "Escape", 27], ["FORWARD_DEL", "Delete", 46], ["MOVE_HOME", "Home", 36], ["MOVE_END", "End", 35]] as const;
+export const domKeyOf = new Map(DOM_KEYS.map(([name, key, keyCode]) => [keyCodes.get(name)!, [key, keyCode] as const]));
+/** a DOM key's Android key; Enter is ENTER */
+export const keyCodeOfDom = new Map(DOM_KEYS.map(([name, key]) => [key as string, keyCodes.get(name)!]));

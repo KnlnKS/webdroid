@@ -42,6 +42,8 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   };
   const { a, screen: s, deadlineMs } = input;
   const wd = globalThis.wd;
+  // the realm whose window takes a point, or the focused field's keys
+  const tap = (x: number, y: number): Promise<void> => wd.control(x, y).tap(x, y);
   const sleep = input.controlled && wd.guestClock?.controlled
     ? (ms: number) => wd.guestClock.advanceBy(ms)
     : (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -89,17 +91,17 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       const hit = a.required
         ? await ready(() => wd.locateText(a.text), `text ${JSON.stringify(a.text)}`)
         : await query(wd.locateText(a.text), "locateText") as { x: number; y: number } | null;
-      if (hit) await run(wd.tap(hit.x, hit.y));
+      if (hit) await run(tap(hit.x, hit.y));
       return !!hit;
     }
     case "tap":
       if (a.unlessResource && (await query(wd.uiTree(), "uiTree")).some((node: { resId: string; bounds: [number, number, number, number] }) =>
         node.resId === a.unlessResource && node.bounds[2] > 0 && node.bounds[3] > 0 &&
         node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
-      if (a.whileText) await whileShown(a.whileText, a.appearMs, a.repeat ?? 1, a.everyMs ?? 500, () => wd.tap(a.x * s.width, a.y * s.height), a.quietMs);
+      if (a.whileText) await whileShown(a.whileText, a.appearMs, a.repeat ?? 1, a.everyMs ?? 500, () => tap(a.x * s.width, a.y * s.height), a.quietMs);
       else for (let i = 0; i < (a.repeat ?? 1); i++) {
         if (i) await sleep(a.everyMs ?? 500);
-        await run(wd.tap(a.x * s.width, a.y * s.height));
+        await run(tap(a.x * s.width, a.y * s.height));
       }
       return;
     case "type":
@@ -107,18 +109,19 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
         const x = a.x * s.width, y = a.y * s.height;
         if (input.controlled) await ready(async () => (await wd.uiTree()).some((node: UiNode) =>
           node.editable && node.enabled && node.bounds[0] <= x && x < node.bounds[2] && node.bounds[1] <= y && y < node.bounds[3]), "editable target");
-        await run(wd.tap(x, y)); await sleep(250);
+        await run(tap(x, y)); await sleep(250);
       }
-      await run(wd.type(a.text));
+      await run(wd.control().type(a.text));
       return;
     case "back":
       if (a.whileText) await whileShown(a.whileText, a.appearMs, 1, 500, () => wd.back());
       else await run(wd.back());
       return;
-    case "enter": await run(wd.enter()); return;
+    case "enter": await run(wd.control().enter()); return;
     case "background": await run(wd.background(a.ms)); return;
     case "swipe": {
-      const swipe = () => wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms);
+      const [x1, y1, x2, y2] = [a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height];
+      const swipe = () => wd.control(x1, y1).swipe(x1, y1, x2, y2, a.ms);
       if (a.whileText) { await whileShown(a.whileText, a.appearMs, a.maxSwipes ?? 1, a.ms + 500, swipe); return; }
       const count = a.maxSwipes ?? 1;
       for (let i = 0; i < count; i++) {

@@ -155,26 +155,6 @@ export class ProcessSession {
   }
 }
 export class ProcessBroker {
-  /** the page realm's lifecycle, under ?perfProbe=1 (scripts/lat): a process Worker reports its
-   *  counters in its snapshot instead */
-  private counterEvents: { sequence: number; kind: "created" | "retired"; at: number; pid: number; pkg: string; process: string; url: string }[] = [];
-  private counterEvent(entry: Entry, kind: "created" | "retired"): void {
-    if (entry.pid !== PROCESS_PID || typeof window === "undefined" || !window.__wdCounterReceipt) return;
-    this.counterEvents.push({ sequence: this.counterEvents.length + 1, kind, at: performance.timeOrigin + performance.now(),
-      pid: entry.pid, pkg: entry.pkg, process: entry.process, url: location.href });
-  }
-  counterReceipts() {
-    if (typeof window === "undefined" || !window.__wdCounterReceipt) return null;
-    const entry = this.entries.get(PROCESS_PID), rows = [];
-    if (entry) {
-      let receipt = null, error = null;
-      try { receipt = window.__wdCounterReceipt(); } catch (e) { error = String(e); }
-      rows.push(Object.freeze({ owner: Object.freeze({ pid: entry.pid, pkg: entry.pkg, process: entry.process, url: location.href }),
-        dead: false, processDead: entry.dead, receipt, error }));
-    }
-    return Object.freeze({ schema: 1, source: import.meta.url, at: performance.timeOrigin + performance.now(), sequence: this.counterEvents.length,
-      dropped: 0, events: Object.freeze(this.counterEvents.map(e => Object.freeze({ ...e }))), rows: Object.freeze(rows) });
-  }
   readonly files = new PrivateFiles();
   readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
@@ -286,11 +266,7 @@ export class ProcessBroker {
     return entry;
   }
   /** the page's own process, which serves its endpoint once its Java has booted */
-  registerSystemServer(): Entry {
-    const entry = this.register("android", "system_server", PROCESS_PID);
-    this.counterEvent(entry, "created");
-    return entry;
-  }
+  registerSystemServer(): Entry { return this.register("android", "system_server", PROCESS_PID); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
@@ -373,7 +349,6 @@ export class ProcessBroker {
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
-    this.counterEvent(entry, "retired");
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message), host = entry.host;
     if (host) host.ended = { error: message, terminal: { cause: message, record: record && copyExitRecord(record), expected: !!record && !death.crashed &&
@@ -396,13 +371,6 @@ export class ProcessBroker {
   foregroundHost(): ProcessHost | null {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.host : null;
-  }
-  displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
-    const layers = this.activities.shownEntries().flatMap(entry => {
-      const canvas = entry.host?.canvas;
-      return canvas && !canvas.hidden ? [canvas] : [];
-    });
-    return [...layers, root];
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** every process registered, dead ones included */
@@ -451,25 +419,31 @@ export class ProcessBroker {
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
     const caller = this.entry(callerPid);
-    let delivered: ParcelData | null = null;
-    try {
-      if (request.handle.pid === 0) {
+    if (request.handle.pid === 0) {
+      try {
         if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
         const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
         if (handled) writeString(reply, "android.content.IIntentSender");
         return { handled, data: await exportParcel(reply) };
-      }
-      const target = this.entry(request.handle.pid);
-      delivered = await this.transferDescriptors(caller.pid,target.pid,request.data);
-      return await this.request(target, async endpoint => {
-        const reply = await endpoint.transact({...request,data:delivered!},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
-        try { return {...reply,data:await this.transferDescriptors(target.pid,caller.pid,reply.data)}; }
-        finally { await this.discardDescriptors(target.pid,reply.data,true); }
-      });
+      } finally { await this.discardDescriptors(callerPid,request.data,true); }
+    }
+    const target = request.handle.pid;
+    return this.withTransferred(caller.pid, target, request.data, delivered => this.request(this.entry(target), async endpoint => {
+      const reply = await endpoint.transact({...request,data:delivered},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
+      return {...reply,data:await this.withTransferred(target,caller.pid,reply.data,async data => data)};
+    }));
+  }
+  /** `use` with `data`'s descriptor rights moved from `from` to `to`, which gets them back unless `use`
+   *  succeeds; `from`'s staged rights are discarded either way */
+  async withTransferred<T>(from: number, to: number, data: ParcelData, use: (moved: ParcelData) => Promise<T>, broker = false): Promise<T> {
+    let moved: ParcelData | null = null;
+    try {
+      moved = await this.transferDescriptors(from, to, data, broker);
+      return await use(moved);
     } catch (error) {
-      if (delivered) await this.discardDescriptors(request.handle.pid,delivered,false);
+      if (moved) await this.discardDescriptors(to, moved, false);
       throw error;
-    } finally { await this.discardDescriptors(callerPid,request.data,true); }
+    } finally { await this.discardDescriptors(from, data, true); }
   }
   /** the descriptor rights of `pid`, a process in this realm: staging and taking need it alive, discarding does not */
   descriptorRights(pid: number): DescriptorRights {

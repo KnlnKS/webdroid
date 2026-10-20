@@ -41,9 +41,12 @@ export function closePort(port: MessagePort, error?: ProcessFailure): void {
 
 /** per method, what acts on a call's result */
 type ByResult<C extends Contract, R> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => R };
+/** per method, what acts on a call's arguments */
+type ByArgs<C extends Contract, R> = { [K in keyof C]?: (...args: Parameters<C[K]>) => R };
+const NONE: Transferable[] = [];
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
  *  this endpoint while the request that caused it is suspended. `undelivered` releases a result that never reached its caller;
- *  `transfer` names what a result gives away. */
+ *  `transfer` names what a result gives away. A proxy may call over the same port (duplex). */
 export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
   undelivered: ByResult<C, unknown> = {}, transfer: ByResult<C, Transferable[]> = {}): () => void {
   const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
@@ -53,36 +56,39 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
     closed = true;
     closePort(port, error); onClose();
   };
-  port.onmessageerror = () => close(closedFailure);
-  port.onmessage = async ({ data }: MessageEvent<Message>) => {
+  port.addEventListener("messageerror", () => close(closedFailure));
+  port.addEventListener("message", async ({ data }: MessageEvent<Message>) => {
     if (closed) return;
     if (data.kind === "close") { close(); return; }
     if (data.kind !== "call" && data.kind !== "notify") return;
     try {
       if (!allowed.has(data.method) || !Array.isArray(data.args)) throw new Error("Unknown process endpoint method");
       const invoke = endpoint[data.method] as (...args: unknown[]) => unknown, at = index.get(data.method)!;
-      note(Ev.Serve, at);
+      // a notification has no caller waiting on it: only calls are timed
+      const call = data.kind === "call";
+      if (call) note(Ev.Serve, at);
       const value = await invoke.apply(endpoint, data.args);
+      if (!call) return;
       note(Ev.Served, at);
-      if (data.kind === "call") {
-        const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
-        const given = transfer[data.method] as ((value: unknown) => Transferable[]) | undefined;
-        if (closed) await release?.(value);
-        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? []); }
-        catch (error) { await release?.(value); throw error; }
-      }
+      const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
+      const given = transfer[data.method] as ((value: unknown) => Transferable[]) | undefined;
+      if (closed) await release?.(value);
+      else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? NONE); }
+      catch (error) { await release?.(value); throw error; }
     } catch (error) {
       if (data.kind === "notify") close(processFailure(error));
       else if (!closed) port.postMessage({ kind: "error", id: data.id, error: processFailure(error) } satisfies Message);
     }
-  };
+  });
+  port.start();
   return close;
 }
 
-/** The broker's proxy. The caller supplies its own VM's exception constructor. */
+/** The broker's proxy. The caller supplies its own VM's exception constructor; `transfer` names what a call's
+ *  arguments give away. */
 export function callProxy<C extends Contract>(port: MessagePort, names: readonly (keyof C & string)[],
   notifications: readonly (keyof C & string)[] = [], makeError: (error: ProcessFailure) => unknown = processError,
-  onClose: (error: ProcessFailure) => void = () => {}): { endpoint: C; close(): void } {
+  onClose: (error: ProcessFailure) => void = () => {}, transfer: ByArgs<C, Transferable[]> = {}): { endpoint: C; close(): void } {
   let closed = false, nextId = 1;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void; method: number }>();
   const index = new Map(names.map((name, i) => [name as string, i]));
@@ -93,8 +99,8 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     pending.clear(); port.close(); onClose(error);
   };
   const close = () => { if (!closed) port.postMessage({ kind: "close" } satisfies Message); finish(); };
-  port.onmessageerror = close;
-  port.onmessage = ({ data }: MessageEvent<Message>) => {
+  port.addEventListener("messageerror", close);
+  port.addEventListener("message", ({ data }: MessageEvent<Message>) => {
     if (data.kind === "close") { finish(data.error); return; }
     if (data.kind !== "result" && data.kind !== "error") return;
     const request = pending.get(data.id);
@@ -103,7 +109,9 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     note(Ev.Answer, request.method);
     if (data.kind === "result") request.resolve(data.value);
     else request.reject(makeError(data.error));
-  };
+  });
+  port.start();
+  const given = (method: string, args: unknown[]) => (transfer[method] as ((...args: unknown[]) => Transferable[]) | undefined)?.(...args) ?? NONE;
   const call = (method: string, args: unknown[]): Promise<unknown> => {
     if (closed) return Promise.reject(makeError(closedFailure));
     const id = nextId++;
@@ -111,7 +119,7 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
       const at = index.get(method) ?? -1;
       pending.set(id, { resolve, reject, method: at });
       note(Ev.Call, at);
-      try { port.postMessage({ kind: "call", id, method, args }); }
+      try { port.postMessage({ kind: "call", id, method, args } satisfies Message, given(method, args)); }
       catch (error) { pending.delete(id); reject(error); }
     });
   };
@@ -119,9 +127,19 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
   const endpoint = Object.fromEntries(names.map(method => [method, (...args: unknown[]) => {
     if (!notify.has(method)) return call(method, args);
     if (closed) throw makeError(closedFailure);
-    port.postMessage({ kind: "notify", id: 0, method, args } satisfies Message);
+    port.postMessage({ kind: "notify", id: 0, method, args } satisfies Message, given(method, args));
   }])) as unknown as C;
   return { close, endpoint };
+}
+
+/** `endpoint` served and `names` called over one port, so that messages keep one order both ways; either
+ *  side's close closes both */
+export function duplex<S extends Contract, C extends Contract>(port: MessagePort, endpoint: S, names: readonly (keyof C & string)[],
+  notifications: readonly (keyof C & string)[], onClose: () => void, transfer: ByArgs<C, Transferable[]> = {}): { endpoint: C; close(): void } {
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; stop(); proxy.close(); onClose(); };
+  const stop = serveCalls(port, endpoint, close), proxy = callProxy<C>(port, names, notifications, processError, close, transfer);
+  return { endpoint: proxy.endpoint, close };
 }
 
 export const serveProcess = (port: MessagePort, endpoint: ProcessEndpoint): (() => void) => serveCalls(port, endpoint);

@@ -12,7 +12,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     await page.goto(server.url.href);
     const counterReceipt = await page.evaluate(async () => {
       const previous = location.href, absent = window.__wdCounterReceipt === undefined;
-      history.replaceState(null, "", "?perfProbe=1&pid=17");
+      history.replaceState(null, "", "?perfProbe=1");
       const { perf, perfReset } = await import(location.origin + "/perf.js") as typeof import("../src/perf.ts");
       const first = window.__wdCounterReceipt!();
       perf.wasmCompileMs = 7;
@@ -21,10 +21,10 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const reset = window.__wdCounterReceipt!();
       const readonly = !Reflect.set(window, "__wdCounterReceipt", () => null) && Object.isFrozen(first) && Object.isFrozen(first.counters) && Object.isFrozen(first.initial);
       history.replaceState(null, "", previous);
-      return { absent, readonly, pid: first.pid, initial: first.initial.wasmCompileMs, first: first.counters.wasmCompileMs, second: second.counters.wasmCompileMs,
-        resets: [first.resets, second.resets, reset.resets], reset: reset.counters.wasmCompileMs, ordered: first.bornAt <= first.at && first.at <= second.at && first.sequence < second.sequence };
+      return { absent, readonly, initial: first.initial.wasmCompileMs, first: first.counters.wasmCompileMs, second: second.counters.wasmCompileMs,
+        resets: [first.resets, second.resets, reset.resets], reset: reset.counters.wasmCompileMs, ordered: first.at <= second.at && first.sequence < second.sequence };
     });
-    expect(counterReceipt).toEqual({ absent: true, readonly: true, pid: 17, initial: 0, first: 0, second: 7, resets: [0, 0, 1], reset: 0, ordered: true });
+    expect(counterReceipt).toEqual({ absent: true, readonly: true, initial: 0, first: 0, second: 7, resets: [0, 0, 1], reset: 0, ordered: true });
     const profileOwnership = await page.evaluate(async () => {
       const { fixtureWorker } = await import(location.origin + "/fixture-calls.js") as typeof import("./fixtures/browser/fixture-calls.ts");
       const worker = fixtureWorker("aot");

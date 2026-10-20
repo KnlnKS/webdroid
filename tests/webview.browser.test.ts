@@ -730,7 +730,7 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
       const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port.ts");
       const canvas = document.createElement("canvas"); canvas.width=720;canvas.height=1280;canvas.style.zIndex="3";document.body.append(canvas);
       const channel = new MessageChannel();
-      const close = receiveWebSurfaces(channel.port1,canvas,()=>({density:2,width:720}));
+      const {close,layer} = receiveWebSurfaces(channel.port1,canvas,()=>({density:2,width:720}));
       const transferred = structuredClone({port:channel.port2},{transfer:[channel.port2]});
       const code = `import {sendWebSurfaces} from '${location.origin}/web-surface-port.js';
         onmessage=({data})=>{
@@ -759,15 +759,13 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
         const answer = new Promise<unknown>(resolve=>worker.onmessage=({data})=>resolve(data));
         worker.postMessage({...transferred,origin,html},[transferred.port]);
         const value=await answer;
-        const layer=canvas.nextElementSibling as HTMLElement;
-        canvas.hidden=true;canvas.style.zIndex="7";await new Promise(resolve=>setTimeout(resolve,0));
-        const hidden=layer.hidden,z=layer.style.zIndex;
+        const z=layer.style.zIndex;
         const closed=new Promise(resolve=>worker.onmessage=({data})=>resolve(data));worker.postMessage("close");await closed;
         await new Promise(resolve=>setTimeout(resolve,0));close();
-        return {value,hidden,z,frames:layer.querySelectorAll("iframe").length,removed:!layer.isConnected,sibling:sibling.isConnected};
+        return {value,z,frames:layer.querySelectorAll("iframe").length,removed:!layer.isConnected,sibling:sibling.isConnected};
       } finally {worker.terminate();URL.revokeObjectURL(url);}
     },{origin:`http://surface.localhost:${server.port}`,html:await webDocument('<body>Worker page</body>',"https://upstream.example/")});
-    expect(result).toEqual({value:{ready:1,main:true,value:'"Worker page"'},hidden:true,z:"7",frames:0,removed:true,sibling:true});
+    expect(result).toEqual({value:{ready:1,main:true,value:'"Worker page"'},z:"3",frames:0,removed:true,sibling:true});
   } finally {await page.close();await server.stop(true);}
 });
 

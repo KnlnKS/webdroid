@@ -1,5 +1,5 @@
 // A/B switches for measured changes: page parameters, which process and compile Workers inherit
-// (processes.ts workerUrl), so a `lat --query` or e2e run selects one side for every realm. A switch
+// (process-host.ts workerUrl), so a `lat --query` or e2e run selects one side for every realm. A switch
 // that wins its matched runs becomes the code's only path and leaves this table.
 const query = typeof location === "undefined" ? null : new URLSearchParams(location.search);
 

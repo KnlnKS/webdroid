@@ -1,23 +1,13 @@
-import { WEB_FRAME, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
-import { forwardDnsMessage, proxyRequest } from "../src/shell/proxy.ts";
+import { bridgeSocket, gzipHeaders, sharedRoute, type ServeHost } from "../src/shell/serve-routes.ts";
 import { WebBridgeSession } from "./bridge.ts";
 import { tcpRelay } from "./tcp.ts";
 
 export { WebBridgeSession };
 
-const UUID = /^[a-f0-9-]{36}$/;
-
-async function bridgeCall(request: Request, env: Env, id: string): Promise<Response> {
-  if (!UUID.test(id)) return new Response("bad bridge", { status: 403 });
-  return env.WEB_BRIDGES.getByName(id).fetch(request);
-}
-
-async function dnsLookup(request: Request): Promise<Response> {
-  const host = new URL(request.url).searchParams.get("host") ?? "";
-  if (!/^[A-Za-z0-9.-]{1,253}$/.test(host)) return new Response("bad name", { status: 400 });
+async function dnsLookup(name: string): Promise<Response> {
   try {
     const endpoint = new URL("https://cloudflare-dns.com/dns-query");
-    endpoint.searchParams.set("name", host);
+    endpoint.searchParams.set("name", name);
     endpoint.searchParams.set("type", "A");
     const response = await fetch(endpoint, { headers: { accept: "application/dns-json" } });
     if (!response.ok) return new Response("DNS unavailable", { status: 502 });
@@ -72,31 +62,26 @@ async function largeAsset(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), path = url.pathname;
-    if (UUID.test(url.searchParams.get("__wd_bridge") ?? "")) return new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
-    if (path === "/proxy") return proxyRequest(request, { bridgeCall: (call) => bridgeCall(call, env, new URL(call.url).searchParams.get("id") ?? "") });
+    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), dnsLookup };
+    const shared = sharedRoute(url, host);
+    if (shared) return shared(request);
     if (path === "/tcp") return tcpRelay(request, context);
-    if (path === "/dns") return dnsLookup(request);
-    if (path === "/dns-query") return forwardDnsMessage(request);
-    if (path === "/webview") return new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
-    if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
     if (path === "/webview-origin") {
       if (!env.WEBVIEW_ORIGIN) return new Response("Configure WEBVIEW_ORIGIN on a separate hostname", { status: 503 });
       const origin = new URL(env.WEBVIEW_ORIGIN).origin;
       return origin === url.origin ? new Response("WebView origin must differ", { status: 503 }) : Response.json(origin);
     }
-    if (path === "/webview-socket" || path === "/webview-call") {
-      const id = url.searchParams.get("id") ?? "";
-      if (path === "/webview-socket" && request.headers.get("origin") !== url.origin) return new Response("bad bridge", { status: 403 });
-      return bridgeCall(request, env, id);
+    if (path === "/webview-socket") {
+      const id = bridgeSocket(url, request.headers.get("origin"));
+      return id === null ? new Response("bad bridge", { status: 403 }) : host.bridge(request, id);
     }
     if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);
-    if (path.startsWith("/vendor/microg/") && path.endsWith(".gz") && !url.searchParams.has("raw")) {
+    const gzip = path.startsWith("/vendor/microg/") ? gzipHeaders(url) : null;
+    if (gzip) {
       const asset = await env.ASSETS.fetch(request);
       if (!asset.ok) return asset;
       const headers = new Headers(asset.headers);
-      headers.set("content-encoding", "gzip");
-      headers.set("content-type", "application/octet-stream");
-      headers.set("content-disposition", "inline");
+      for (const [name, value] of Object.entries(gzip)) headers.set(name, value);
       headers.delete("content-length");
       return new Response(asset.body, { status: asset.status, headers, encodeBody: "manual" });
     }

@@ -18,8 +18,8 @@ export class WebRelay {
   reply(peer: Peer, message: string) {
     this.calls.reply(peer, message);
   }
-  async call(req: Request): Promise<Response> {
-    const id = new URL(req.url).searchParams.get("id") ?? "", peer = this.peers.get(id);
+  async call(req: Request, id: string): Promise<Response> {
+    const peer = this.peers.get(id);
     return peer ? this.calls.call(req, peer, () => this.peers.get(id) === peer)
       : new Response("bridge unavailable", { status: 410 });
   }

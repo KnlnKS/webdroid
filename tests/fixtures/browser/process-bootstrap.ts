@@ -10,7 +10,7 @@ import { callProxy } from "../../../src/shell/process-port.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
-import { workerControlMethods, type ProcessHost } from "../../../src/shell/process-host.ts";
+import { ProcessHost, workerControlMethods } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
 import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
@@ -42,7 +42,7 @@ function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: Clien
 }
 /** a process of `pkg` in a fixture Worker playing `role`, which the broker starts as it starts its own */
 function hosted(broker: ProcessBroker, pkg: string, process: string, pid: number, role: string) {
-  const worker = fixtureWorker(role), host = broker.hosts.adopt({ pid, url: fixtureUrl(role), worker, release() {} }, pkg);
+  const worker = fixtureWorker(role), host = new ProcessHost({ pid, url: fixtureUrl(role), worker, release() {} }, pkg, broker.hosts);
   return { worker, entry: broker.register(pkg, process, pid, host) };
 }
 /** what `worker` first posts under `key` */

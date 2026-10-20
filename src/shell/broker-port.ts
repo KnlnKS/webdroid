@@ -1,7 +1,7 @@
 // The broker's side of a process's command port: the serialized operations a process may ask of
 // system_server, each made as the process the port belongs to.
 import { accountAuthority } from "../android/accounts.ts";
-import { asSystem, exportBinder, ownedSystemService, type ParcelData } from "../android/binder.ts";
+import { asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
@@ -144,15 +144,13 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     notificationForeground: async request => {
       const sender = { pid, uid: caller.uid };
       if (request.kind === "stop" || !request.data) return receiveForegroundNotification(caller.pkg, sender, request);
-      let received: ParcelData | undefined;
-      try {
-        received = await broker.transferDescriptors(pid, PROCESS_PID, request.data, true);
-        broker.entry(pid);
-        await receiveForegroundNotification(caller.pkg, sender, { ...request, data: received });
-      } finally {
-        if (received) await broker.discardDescriptors(PROCESS_PID, received, false);
-        await broker.discardDescriptors(pid, request.data, true);
-      }
+      // the rights the notification did not take go back whether or not it was posted
+      await broker.withTransferred(pid, PROCESS_PID, request.data, async received => {
+        try {
+          broker.entry(pid);
+          await receiveForegroundNotification(caller.pkg, sender, { ...request, data: received });
+        } finally { await broker.discardDescriptors(PROCESS_PID, received, false); }
+      }, true);
     },
     filePrepare: async pkg => {
       if (!ownedBy(pkg, caller.uid)) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");

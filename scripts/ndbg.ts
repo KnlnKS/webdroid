@@ -16,7 +16,7 @@ if (process.env.PROF_AFTER) {
   await drv.page.evaluate(() => { (globalThis as any).wd.native.profileReset(); (globalThis as any).wd.perfReset(); });
 }
 await sleep(Number(waitMs));
-if (process.env.TAP) { await drv.page.evaluate(() => (globalThis as any).wd.tap(360, 640)); await sleep(3000); }
+if (process.env.TAP) { await drv.page.evaluate(() => (globalThis as any).wd.control(360, 640).tap(360, 640)); await sleep(3000); }
 const out = await drv.page.evaluate(() => {
   const n = (globalThis as any).wd.native;
   return {
