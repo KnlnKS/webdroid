@@ -11,7 +11,8 @@ import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { natives } from "./harness.ts";
 import { mid } from "../../src/wasm/compiler/ids.ts";
 import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module.ts";
-import { PLATFORM_PATHS, ROOT, platformJars } from "./paths.ts";
+import { ROOT, platformJars } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
 const KNOWN = [/^native: /];
 // Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.

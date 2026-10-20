@@ -15,8 +15,8 @@ import { prepareMethod } from "../src/jvm/prepared.ts";
 import "../src/natives.ts";
 import { loadDexes } from "./dexes.ts";
 import { corpusApks } from "./apk-corpus.ts";
-import { hasPlatformJars, platformDefs } from "./desccheck.ts";
-export { hasPlatformJars };
+import { hasPlatformJars } from "./aosp.ts";
+import { platformDefs } from "./desccheck.ts";
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dirname, "..");

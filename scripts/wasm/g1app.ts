@@ -15,7 +15,8 @@ import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { fakeAot, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { G1_DIR, ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
 const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
 if (!AOT || !out) throw new Error("usage: WEBDROID_AOT=<platform build> g1app --out DIR [workload ...]");

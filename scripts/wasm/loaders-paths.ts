@@ -10,7 +10,7 @@ import { definingLoader, nativeClassLookup } from "../../src/wasm/link/loaders.t
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { natives } from "./harness.ts";
-import { PLATFORM_PATHS } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
 /** `app` and `common` are the suite's dexes, `files` the dex each of `paths` (the class path of a DexClassLoader) names */

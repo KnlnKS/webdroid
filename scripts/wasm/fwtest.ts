@@ -10,7 +10,8 @@ BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 const { rt } = await import("../../src/jvm/runtime.ts");
 const { world } = await import("./lib.ts");
 const { mountPlatform, natives, nativeSource, startProcess } = await import("./harness.ts");
-const { PLATFORM_PATHS, ROOT } = await import("./paths.ts");
+const { ROOT } = await import("./paths.ts");
+const { PLATFORM_PATHS } = await import("../aosp.ts");
 
 await mountPlatform(ROOT);
 const w = world(PLATFORM_PATHS, { natives });

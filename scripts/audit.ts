@@ -8,6 +8,7 @@
 import { globSync, readFileSync, writeFileSync } from "node:fs";
 import { openApk } from "./lib.ts";
 import { loadDexes } from "./dexes.ts";
+import { AOSP } from "./aosp.ts";
 import { dexesOfZip, type DexFile } from "../src/jvm/dex.ts";
 import { argv } from "./args.ts";
 import { Program, reach } from "../src/jvm/reach.ts";
@@ -31,7 +32,7 @@ const appClasses = p.size;
 
 let fwDexes: DexFile[] = [];
 if (flag("--framework")) {
-  fwDexes = loadDexes("vendor/aosp/framework.jar");
+  fwDexes = loadDexes(`${AOSP}/framework.jar`);
   for (const d of fwDexes) p.add(d);
 }
 

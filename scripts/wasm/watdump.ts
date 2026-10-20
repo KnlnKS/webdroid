@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { G1_DIR, ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import { shellIn } from "../java.ts";
 
 const [workload, filter] = process.argv.slice(2);

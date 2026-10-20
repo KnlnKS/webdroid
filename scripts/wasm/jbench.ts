@@ -5,7 +5,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import { cutWorkloads } from "./tools.ts";
 import { androidFixture, tempDir } from "../java.ts";
 

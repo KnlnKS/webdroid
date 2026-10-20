@@ -14,7 +14,8 @@ import { buildApp } from "../../src/wasm/link/apps.ts";
 import { natives } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
-import { JAVA, PLATFORM_PATHS } from "./paths.ts";
+import { JAVA } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import { checker } from "./tools.ts";
 import { filesIn, fixture, tempDir } from "../java.ts";
 

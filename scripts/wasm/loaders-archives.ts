@@ -11,7 +11,7 @@ import { openDexes } from "../../src/wasm/host/boot.ts";
 import { world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { natives } from "./harness.ts";
-import { PLATFORM_PATHS } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
 /** `app`, `a` and `b` are the suite's dexes; `out` takes the APK built of them */

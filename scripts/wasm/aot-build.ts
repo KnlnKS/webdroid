@@ -23,7 +23,7 @@ import { synthModules } from "../../src/wasm/link/apps.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
-import { PLATFORM_PATHS } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
