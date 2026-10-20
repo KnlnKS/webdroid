@@ -1,6 +1,6 @@
 // The renderer origins a WebView's pages render on, apart from this page's window and storage, and
 // the documents the app drives there.
-import type { RendererReady, RendererTask, StorageOp } from "./webpage/protocol.ts";
+import { request, type RendererReady, type RendererTask, type StorageOp } from "./webpage/protocol.ts";
 
 /** the renderer origin pattern: a "*" label stands for each storage partition */
 let rendererTemplate: Promise<string> | null = null;
@@ -47,15 +47,14 @@ export function rendererStorage(origin: string, op: StorageOp): Promise<StorageA
   const id = crypto.randomUUID(), frame = document.createElement("iframe");
   frame.style.display = "none";
   frame.src = rendererUrl(origin, id);
+  const ended = new AbortController();
   return new Promise<StorageAnswer | null>((resolve) => {
-    let channel: MessageChannel | null = null;
     const timer = setTimeout(() => done(null), 10_000);
-    const done = (value: StorageAnswer | null) => { clearTimeout(timer); forget(); channel?.port1.close(); channel?.port2.close(); frame.remove(); resolve(value); };
+    const done = (value: StorageAnswer | null) => { clearTimeout(timer); forget(); ended.abort(); frame.remove(); resolve(value); };
     const forget = onRendererReady(id, (event, win) => {
       if (win !== frame.contentWindow || event.origin !== origin) return;
-      channel = new MessageChannel();
-      channel.port1.onmessage = ({ data }) => done({ usage: Number(data?.usage) || 0, quota: Number(data?.quota) || 0 });
-      openRenderer(win, origin, id, { kind: "storage", op }, channel.port2);
+      request({ kind: "storage", op }, (task, port) => openRenderer(win, origin, id, task, port), undefined, ended.signal)
+        .then(({ usage = 0, quota = 0 }) => done({ usage, quota }), () => {});
     });
     document.body.append(frame);
   });

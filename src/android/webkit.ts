@@ -16,7 +16,7 @@ import { runningApp } from "./apphost.ts";
 import { webCookies, thirdPartyCookies } from "./cookies.ts";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge.ts";
 import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
-import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
+import { parsePageMessage, request, type Answers, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
 import type { WebCookies } from "../shell/webcookies.ts";
 import { webRenderer } from "./webstorage.ts";
 import { webPrintAdapter } from "./printing.ts";
@@ -211,25 +211,17 @@ export class WebViewChromium extends JObj {
     frame.cookies.sent = sent;
     frame.port.postMessage({ kind: "cookies", list, ack: frame.cookies.ack } satisfies AppMessage);
   }
-  /** `message` to the page once its script listens, and the answer on a port of its own; a rejection
-   *  ("interrupted", "timed out") when the page closes or `ms` pass first */
-  private ask(message: AppMessage, ms: number): Promise<unknown> {
-    const { script, closed } = this.page, channel = new MessageChannel();
-    return new Promise((resolve, reject) => {
-      const settle = (done: () => void) => { clearTimeout(timer); closed.signal.removeEventListener("abort", interrupted); channel.port1.close(); done(); };
-      const interrupted = () => settle(() => reject("interrupted"));
-      const timer = setTimeout(() => settle(() => reject("timed out")), ms);
-      closed.signal.addEventListener("abort", interrupted);
-      channel.port1.onmessage = ({ data }) => settle(() => resolve(data));
-      void script.promise.then((port) => port.postMessage(message, [channel.port2]));
-    });
+  /** `message` to the page once its script listens, which rejects once the page closes */
+  private ask<M extends AppMessage & { kind: keyof Answers }>(message: M, ms: number) {
+    const { script, closed } = this.page;
+    return request(message, (m, answer) => void script.promise.then((port) => port.postMessage(m, [answer])), ms, closed.signal);
   }
   async bitmapSnapshot(): Promise<ImageBitmap> {
     const failed = (message: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", message);
     if (!this.hold.remote) throw failed("WebView content is unavailable for bitmap capture");
-    const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); }) as { data?: string; error?: string };
-    if (answer.error) throw failed(answer.error);
-    return createImageBitmap(await (await fetch(answer.data!)).blob());
+    const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); });
+    if ("error" in answer) throw failed(answer.error);
+    return createImageBitmap(await (await fetch(answer.data)).blob());
   }
   stop() {
     this.gen++;
@@ -346,7 +338,7 @@ export class WebViewChromium extends JObj {
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
     if (!this.hold.remote) return "null";
-    return this.ask({ kind: "eval", script: js }, 30_000).then((value) => typeof value === "string" ? value : "null", () => "null");
+    return this.ask({ kind: "eval", script: js }, 30_000).catch(() => "null");
   }
   findAll(query: string) {
     this.findQuery = query;

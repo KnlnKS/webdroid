@@ -33,7 +33,7 @@ function typefaceFaces(family: string, t: JObj | null): WebFace[] {
 let systemFaces: Promise<WebFace[]> | null = null;
 const standardFaces = new Map<string, Promise<WebFace[]>>();
 export async function webFonts(settings: WebSettingsAdapter): Promise<WebFonts> {
-  const name = String(settings.v.standardFontFamily || "sans-serif");
+  const name = settings.v.standardFontFamily || "sans-serif";
   systemFaces ??= onMain(() => after(scall("android/graphics/Typeface", "getSystemFontMap", "()Ljava/util/Map;"), (map: JObj) => rt.drive(function* (): Gen<WebFace[]> {
     const faces: WebFace[] = [];
     // an ArrayMap's entries are its iterator, so the names are read first
@@ -45,7 +45,7 @@ export async function webFonts(settings: WebSettingsAdapter): Promise<WebFonts> 
   // an unknown name is the default family's, as the font manager answers it
   if (!standard) standardFaces.set(name, standard = onMain(() => after(scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", name, 0),
     (t: JObj) => typefaceFaces("wd-standard", t))).catch(() => []));
-  const [system, std] = await Promise.all([systemFaces, standard]), size = Number(settings.v.defaultFontSize);
+  const [system, std] = await Promise.all([systemFaces, standard]), size = settings.v.defaultFontSize;
   const rules = (std.length ? "font-family:wd-standard;" : "") + (size !== 16 ? `font-size:${size}px;` : "");
   return { faces: [...system, ...std], css: rules && `:where(:root){${rules}}` };
 }

@@ -7,7 +7,7 @@ import { routeSubframes } from "./frames.ts";
 import { installWebHistory } from "./history.ts";
 import { installWebLocation } from "./location.ts";
 import { snapshotDocument } from "./snapshot.ts";
-import type { AppMessage, PageConfig, PageMessage, WebFonts } from "./protocol.ts";
+import { request, type AppMessage, type PageConfig, type PageMessage, type WebFonts } from "./protocol.ts";
 
 /** the WebView settings' faces, by their families, and the rules that use them, before the page's own */
 function installWebFonts(fonts: WebFonts): void {
@@ -29,11 +29,8 @@ function start(config: PageConfig | undefined) {
   const { id, port } = config, send = (message: PageMessage) => port.postMessage(message);
   if (config.fonts) installWebFonts(config.fonts);
   // the page's links, forms and navigations: into a frame of the page, where the app answers, or to the app
-  if (config.frames) routeSubframes(config.frames, (url, init) => new Promise((resolve) => {
-    const answer = new MessageChannel();
-    answer.port1.onmessage = (event) => { answer.port1.close(); resolve(event.data); };
-    port.postMessage({ kind: "subframe", url, init } satisfies PageMessage, [answer.port2]);
-  }), () => config.page, (url, init) => send(init?.method === "POST" ? { kind: "submit", url, init } : { kind: "navigate", url, replace: false }));
+  if (config.frames) routeSubframes(config.frames, (url, init) => request({ kind: "subframe", url, init }, (m, answer) => port.postMessage(m, [answer])),
+    () => config.page, (url, init) => send(init?.method === "POST" ? { kind: "submit", url, init } : { kind: "navigate", url, replace: false }));
   // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
   // them keeps the embedding page from reporting them as its own exceptions.
   const consoleMessage = (data: { message: string; source: string; line: number }) => send({ kind: "console", ...data });

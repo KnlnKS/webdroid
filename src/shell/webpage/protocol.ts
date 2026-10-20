@@ -53,6 +53,32 @@ export type PageMessage = Invoke
 /** the app's message to a page; "eval" and "snapshot" come with a port for the answer */
 export type AppMessage = { kind: "cookies"; list: DocumentCookie[]; ack: number } | { kind: "eval"; script: string } | { kind: "stop" } | { kind: "snapshot" };
 
+/** what each request that comes with a port answers: the app a page's ("subframe") and its worker's
+ *  ("webasset", "webcookies"), the renderer bootstrap its worker's ("webcontext"), a page the app's
+ *  ("eval", "snapshot") and a storage frame the app's ("storage") */
+export interface Answers {
+  subframe: string | null;
+  webasset: { status: number; bytes?: Uint8Array<ArrayBuffer>; type?: string };
+  webcookies: string;
+  webcontext: RendererContext;
+  eval: string;
+  snapshot: { width: number; height: number; data: string } | { error: string };
+  storage: { usage?: number; quota?: number };
+}
+/** `message` as `post` sends it with the port its answer comes back on; a rejection ("timed out",
+ *  "interrupted") when `ms` pass or `signal` aborts first */
+export function request<M extends { kind: keyof Answers }>(message: M, post: (message: M, port: MessagePort) => void,
+  ms?: number, signal?: AbortSignal): Promise<Answers[M["kind"]]> {
+  const { port1, port2 } = new MessageChannel();
+  return new Promise((resolve, reject) => {
+    const settle = (done: () => void) => { clearTimeout(timer); signal?.removeEventListener("abort", interrupted); port1.close(); done(); };
+    const interrupted = () => settle(() => reject("interrupted"));
+    const timer = ms === undefined ? undefined : setTimeout(() => settle(() => reject("timed out")), ms);
+    signal?.addEventListener("abort", interrupted);
+    port1.onmessage = ({ data }) => settle(() => resolve(data));
+    post(message, port2);
+  });
+}
 /** `html` with `script` first: after its doctype, or the document goes quirks */
 export function withPageScript(html: string, script: string): string {
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html)?.[0] ?? "";

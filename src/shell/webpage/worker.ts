@@ -2,7 +2,7 @@
 // WebView's network stack sends them (its user agent, client hints, cookie jar and client), and its
 // apk assets and device fonts come from the app.
 import { webViewBrands } from "./clienthints.ts";
-import type { RendererContext } from "./protocol.ts";
+import { request as ask, type Answers, type RendererContext } from "./protocol.ts";
 import { nextHop, type ProxyRequest } from "./redirect.ts";
 
 type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
@@ -22,19 +22,13 @@ worker.addEventListener("install", (event) => event.waitUntil(worker.skipWaiting
 worker.addEventListener("activate", (event) => event.waitUntil(worker.clients.claim()));
 // each client's load, which its renderer bootstrap answers
 const contexts = new Map<string, Promise<RendererContext>>();
-function message<T>(client: Client, data: object): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const channel = new MessageChannel();
-    const timer = setTimeout(() => { channel.port1.close(); reject(Error("WebView client unavailable")); }, 10000);
-    channel.port1.onmessage = (event) => { clearTimeout(timer); channel.port1.close(); resolve(event.data); };
-    client.postMessage(data, [channel.port2]);
-  });
-}
+/** what the client's renderer bootstrap answers, or the app through it */
+const message = <M extends { kind: keyof Answers }>(client: Client, data: M) => ask(data, (m, port) => client.postMessage(m, [port]), 10000);
 function context(client: Client): Promise<RendererContext> {
   const key = client.id + client.url;
   let value = contexts.get(key);
   if (!value) {
-    value = message<RendererContext>(client, { kind: "webcontext" }); contexts.set(key, value);
+    value = message(client, { kind: "webcontext" }); contexts.set(key, value);
     if (contexts.size > 64) contexts.delete(contexts.keys().next().value!);
     value.catch(() => contexts.delete(key));
   }
@@ -47,9 +41,9 @@ worker.addEventListener("fetch", (event) => {
     event.respondWith((async () => {
       const client = await worker.clients.get(event.clientId);
       if (!client) return fetch(request);
-      const result = await message<{ status: number; bytes?: Uint8Array<ArrayBuffer>; type?: string }>(client, { kind: "webasset", path: original.pathname }).catch(() => ({ status: 404 }) as const);
+      const result: Answers["webasset"] = await message(client, { kind: "webasset", path: original.pathname }).catch(() => ({ status: 404 }));
       if (result.status !== 200) return fetch(request);
-      return new Response("bytes" in result && result.bytes || null, { status: result.status, headers: "type" in result && result.type
+      return new Response(result.bytes || null, { status: result.status, headers: result.type
         ? { "content-type": result.type, "x-wd-local-asset": "1", "cache-control": "no-store" } : { "cache-control": "no-store" } });
     })());
     return;
@@ -94,7 +88,7 @@ worker.addEventListener("fetch", (event) => {
       const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(url).origin);
       headers.delete("x-wd-cookie");
       if (include) {
-        const value = await message<string>(client, { kind: "webcookies", url });
+        const value = await message(client, { kind: "webcookies", url });
         if (value) headers.set("x-wd-cookie", value);
       }
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
