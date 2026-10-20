@@ -102,7 +102,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   return {
     canvas,
     kbd: document.querySelector<HTMLTextAreaElement>("#kbd")!,
-    webLayer: document.querySelector<HTMLElement>("#weblayer")!,
     resizeDisplay,
     setState(next: SessionState) {
       if (session?.kind === "loading" && next.kind === "loading") {

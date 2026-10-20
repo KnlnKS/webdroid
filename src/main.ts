@@ -23,7 +23,7 @@ import { rt } from "./jvm/runtime.ts";
 import { appHost } from "./android/apphost.ts";
 import { guestClockControl } from "./guest-clock.ts";
 import { native } from "./native/debug.ts";
-import { setWebLayer, webViewInfo } from "./android/webframes.ts";
+import { webViewInfo } from "./android/webframes.ts";
 import { packagesWithData, removePackageData } from "./shell/packagedata.ts";
 import { clearUserData, deletePackage } from "./android/appdata.ts";
 import { jitStats } from "./native/core.ts";
@@ -58,7 +58,6 @@ const shell = createShell({ launch: (file, local) => { void boot(file, local); }
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
 const systemInput = systemInputLayer(canvas, () => device);
-setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();

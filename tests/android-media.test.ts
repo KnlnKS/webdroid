@@ -10,6 +10,7 @@ import { vfs } from "../src/shell/vfs.ts";
 import { onMain } from "../src/android/mainloop.ts";
 import { mkAssetFd } from "../src/android/resnative.ts";
 import { hostedService } from "../src/android/binder.ts";
+import { useAudioOut, type AudioOut } from "../src/android/audio-output.ts";
 import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec.ts";
 import { NativeFormat, annexB } from "../src/android/media-format.ts";
 
@@ -157,9 +158,7 @@ describe("sound-pool", () => {
 
   test("SoundPool.load(AssetFileDescriptor) decodes the descriptor's bytes and reports the load", async () => {
     const decoded: number[] = [];
-    (globalThis as { AudioContext?: unknown }).AudioContext ??= class {
-      decodeAudioData(b: ArrayBuffer) { decoded.push(b.byteLength); return Promise.resolve({}); }
-    };
+    useAudioOut({ decodeAudioData: async (b: ArrayBuffer) => { decoded.push(b.byteLength); return { length: 0, duration: 0 }; } } as Partial<AudioOut> as AudioOut);
     const pool = await newObj("android/media/SoundPool", "(III)V", 4, 3, 0);
     const listener = loadListener();
     await vcall(pool, "setOnLoadCompleteListener", "(Landroid/media/SoundPool$OnLoadCompleteListener;)V", listener);

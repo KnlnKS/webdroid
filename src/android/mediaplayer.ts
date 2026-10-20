@@ -32,10 +32,7 @@ export interface MediaElement {
   /** `show` gets the next frame the element presents */
   nextFrame(show: (frame: VideoFrame) => void): void;
 }
-let createElement = (): MediaElement => {
-  const el = document.createElement("video");
-  return Object.assign(el, { nextFrame: (show: (frame: VideoFrame) => void) => void el.requestVideoFrameCallback(() => show(new VideoFrame(el))) });
-};
+let createElement = (): MediaElement => { throw new Error("No media elements: the page that owns this process gives them"); };
 export const useMediaElements = (create: () => MediaElement): void => { createElement = create; };
 /** a player plays through a media element; given a surface, each video frame the element shows is presented to it */
 class Player {

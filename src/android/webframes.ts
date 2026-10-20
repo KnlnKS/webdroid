@@ -3,31 +3,19 @@
 // The page's documents talk to the app over the port their load hands them.
 import type { JObj } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { device } from "../shell/config.ts";
 import { onMain } from "./mainloop.ts";
 import { onProcessExit } from "../process-exit.ts";
 import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge.ts";
 import { rendererUrl } from "../shell/webrenderer.ts";
-import { domWebSurface, type WebSurface, type FrameIdentity } from "../shell/web-surface.ts";
+import type { WebSurface, FrameIdentity } from "../shell/web-surface.ts";
 import { webRenderer } from "./webstorage.ts";
 import { releaseFunctor, type Rect } from "./webfunctor.ts";
 import { mkError, mkRequest } from "./webrequests.ts";
 import { srcdoc, webOrigin, type Entry, type SrcEntry } from "./webnavigation.ts";
 
-// ── the frame layer (shell-owned)
+// ── the frame layer, on the page that owns the process; without it every WebView stays inert
 let surfaceFactory: (() => WebSurface) | null = null;
 export function useWebSurfaces(factory: (() => WebSurface) | null) { surfaceFactory = factory; }
-let layer: HTMLElement | null = null;
-let layerObserver: ResizeObserver | null = null;
-/** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
-export function setWebLayer(el: HTMLElement) {
-  layerObserver?.disconnect();
-  layer = el;
-  layerObserver = new ResizeObserver(([entry]) => {
-    el.style.setProperty("--wd-web-scale", String(entry.contentRect.width * device.density / device.width));
-  });
-  layerObserver.observe(el);
-}
 
 /** a document a WebView's page shows on a renderer origin: its main frame, or a subframe the page
  *  routed there, which talks to the app over `port` */
@@ -57,10 +45,10 @@ onProcessExit(() => { for (const hold of live.keys()) release(hold); live.clear(
 // an app that drops a WebView without destroy() does not keep its page. Page-side callbacks and the
 // bridge therefore reach a provider only weakly; detaching alone keeps the page, as apps reattach.
 const collected = new FinalizationRegistry<FrameHold>(hold => { live.delete(hold); release(hold); });
-/** `view`'s frame, made over the display once the shell has a layer */
+/** `view`'s frame, made over the display once the page gives this process a layer */
 export function viewFrame(view: FrameView): WebSurface | null {
-  if (view.hold.el || !layer && !surfaceFactory) return view.hold.el;
-  const el = view.hold.el = surfaceFactory ? surfaceFactory() : domWebSurface(layer!);
+  if (view.hold.el || !surfaceFactory) return view.hold.el;
+  const el = view.hold.el = surfaceFactory();
   if (view.background) el.style({background:view.background});
   collected.register(view, view.hold, view.hold);
   live.set(view.hold, new WeakRef(view));
