@@ -5,6 +5,7 @@ import net from "node:net";
 import tls from "node:tls";
 import type { RawData, WebSocket } from "ws";
 import { parseIpv4 } from "./src/shell/relay.ts";
+import { tcpReady, type TcpTarget } from "./src/shell/serve-routes.ts";
 
 const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 
@@ -21,15 +22,6 @@ const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 /** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
 const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
 
-type TcpTarget = { host: string; port: number; alpn: string[]; secure: boolean };
-/** the target a /tcp upgrade names, or why it is refused */
-export function tcpTarget(url: URL): TcpTarget | string {
-  const host = url.searchParams.get("host") ?? "", port = Number(url.searchParams.get("port")), alpn = url.searchParams.getAll("alpn");
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return "bad target";
-  if (alpn.length > 32 || alpn.some((p) => !p.length || Buffer.byteLength(p) > 255)) return "bad ALPN";
-  return { host, port, alpn, secure: url.searchParams.get("tls") === "1" };
-}
-
 export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget): void {
   let ready = false, connected = false, shut = false;
   const pending: Buffer[] = [];
@@ -40,8 +32,7 @@ export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget)
   // only once the socket can carry bytes, and anything that arrives before then is queued.
   const open = () => {
     ready = true;
-    ws.send(JSON.stringify({ type: "ready", localFamily: socket.localFamily, localAddress: socket.localAddress,
-      localPort: socket.localPort, alpn: (socket as tls.TLSSocket).alpnProtocol || "" }));
+    ws.send(tcpReady(socket.localFamily, socket.localAddress, socket.localPort, (socket as tls.TLSSocket).alpnProtocol || ""));
     for (const chunk of pending.splice(0)) socket.write(chunk);
     if (shut) socket.end();
   };
