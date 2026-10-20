@@ -5,7 +5,7 @@ import type { BrokerCalls, ProcessEndpoint } from "../../../src/shell/processes.
 export const stubEndpoint = (overrides: Partial<ProcessEndpoint> = {}): ProcessEndpoint => ({
   processDied: async () => {}, activity: async () => {}, transact: async request => ({ handled: 0, data: request.data }),
   service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-  broadcast: async (_intent, _component, _ordered, result) => result, clipboardChanged: async () => {},
+  broadcast: async (_intent, _component, _ordered, result) => result, clipboardChanged: async () => {}, cookiesChanged: async () => {},
   locationChanged: async () => {}, accountsChanged: async () => {}, settingsChanged: async () => {},
   storageChanged: async () => {}, packageRemoved: async () => {}, kill: () => {}, ...overrides,
 });

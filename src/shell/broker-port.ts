@@ -177,7 +177,11 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     accountExists: async key => accounts().accountExists(key),
     accountCached: async (key, type) => accounts().accountCached(key, type),
     accountChange: async change => accounts().accountChange(change),
-    ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }),
+    ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {
+      if (!broker.alive(pid)) return false;
+      unawaited(broker.request(broker.entry(pid), endpoint => endpoint.cookiesChanged()));
+      return true;
+    }),
     exitRecords: async pkg => {
       if (!ownedBy(pkg, caller.uid) && await permissionDenied("android.permission.DUMP", caller.pkg))
         throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");

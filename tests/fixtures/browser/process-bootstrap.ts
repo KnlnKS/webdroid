@@ -193,7 +193,7 @@ export async function endpointOwnership() {
     fileDescriptors:{opened:!!fileOpened && fileOpened.pid>0,foreign:fileOpened?.id,written:fileWritten,read:fileRead,binder:binderFile,survivor:binderSurvivor} };
 }
 
-/** Real Worker CookieManager commands share the page's WebView jar and survive a sibling's death. */
+/** A real Worker's CookieManager and WebView calls share the page's jar and survive a sibling's death. */
 export async function cookieOwnership() {
   const broker = processBroker(), pkg = "test.cookies.shared", isolated = "test.cookies.other";
   for (const [i, name] of [pkg, isolated].entries()) {
@@ -212,7 +212,8 @@ export async function cookieOwnership() {
     const session = await ask("cookieSet", url, "session=one; Path=/; HttpOnly");
     const persisted = await ask("cookieSet", url, "saved=two; Path=/; Max-Age=86400");
     const read = await peers[0].endpoint.cookieGet(url), isolatedRead = await peers[1].endpoint.cookieGet(url);
-    const document = jar.document(url).map(cookie => cookie.text);
+    const document = (await ask("cookieDocument", url, null, false) as {text: string}[]).map(cookie => cookie.text);
+    const network = await ask("cookieNetwork", url, url, [], false);
     await peers[0].endpoint.cookieAccept(false);
     const accept = await ask("cookieAccept"), denied = await ask("cookieSet", url, "denied=three");
     await peers[0].endpoint.cookieAccept(true);
@@ -234,7 +235,7 @@ export async function cookieOwnership() {
     const survivor = await peers[0].endpoint.cookieGet(url);
     await peers[0].endpoint.cookieRemove(false);
     const empty = await peers[0].endpoint.cookieHas();
-    return {session, persisted, read, isolatedRead, document, accept, denied, removed, afterSession, saved,
+    return {session, persisted, read, isolatedRead, document, network, accept, denied, removed, afterSession, saved,
       dead: failed(dead), pendingDead: failed(pending), survivor, empty, changes};
   } finally {
     unwatch(); for (const client of peers) client.close();

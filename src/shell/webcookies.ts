@@ -3,6 +3,12 @@ import { storedPackages } from "./device-storage.ts";
 import type { DocumentCookie } from "./webpage/protocol.ts";
 
 const KEY = "wd:web-cookies:";
+/** whether `url` is of the site of the page at `site`: its cookies are first-party there */
+function sameSite(url: string, site: string): boolean {
+  const target = URL.parse(url), source = URL.parse(site);
+  const domain = (u: URL) => getPublicSuffix(u.hostname, { ignoreError: true }) ?? u.hostname;
+  return !!target && !!source && target.protocol === source.protocol && domain(target) === domain(source);
+}
 
 export class WebCookies {
   accept = true;
@@ -27,22 +33,19 @@ export class WebCookies {
       return true;
     } catch { return false; }
   }
-  /** whether `url` is of the site of the page at `site`: its cookies are first-party there */
-  sameSite(url: string, site: string): boolean {
-    const target = URL.parse(url), source = URL.parse(site);
-    const domain = (u: URL) => getPublicSuffix(u.hostname, { ignoreError: true }) ?? u.hostname;
-    return !!target && !!source && target.protocol === source.protocol && domain(target) === domain(source);
-  }
   network(url: string, site: string, values: string[], thirdParty: boolean): string {
     try {
-      const same = this.sameSite(url, site);
+      const same = sameSite(url, site);
       if (!same && !thirdParty) return "";
       for (const value of values) this.set(url, value);
       return this.jar.getCookieStringSync(url, { sameSiteContext: same ? "strict" : "none" });
     } catch { return ""; }
   }
-  /** what document.cookie reads at `url` */
-  document(url: string): DocumentCookie[] {
+  /** what document.cookie reads at `url` once the document wrote `value`. A subframe of the page at
+   *  `site` sees cookies first-party to that page, and others only when `thirdParty` ones are allowed. */
+  document(url: string, site: string | null = null, thirdParty = false, value?: string): DocumentCookie[] {
+    if (site !== null && !thirdParty && !sameSite(url, site)) return [];
+    if (value !== undefined) this.set(url, value, false);
     try {
       return this.jar.getCookiesSync(url, { http: false, sort: true }).map((c) => {
         const expires = c.expiryTime() ?? Infinity;

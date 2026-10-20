@@ -29,7 +29,7 @@ import { useNotificationStore, notificationTransport } from "../android/notifica
 import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings.ts";
 import { remoteSettings } from "./settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
-import { cookieTransport, useWebCookies } from "../android/cookies.ts";
+import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard.ts";
 import { locationTransport } from "../android/locationmanager.ts";
 import { useHostUi } from "./host-ui.ts";
@@ -197,7 +197,6 @@ export function connectProcess(): ProcessEndpoint {
   if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
   const stopSettings = useSettingsStore(broker.settings);
   if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
-  useWebCookies((pkg) => broker.cookies(pkg));
   return createProcessEndpoint();
 }
 
@@ -208,6 +207,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     locationChanged: async (id,token,event) => location.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
+    cookiesChanged: async () => cookiesChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => forgetRemoved(pkg),
