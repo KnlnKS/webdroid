@@ -33,18 +33,13 @@ import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
 import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
 
 import type { FrameAnnouncement } from "../shell/web-surface.ts";
+import { domKeyOf } from "./keycodes.ts";
 
 /** the main frame's port once its page script listens, and the page's end */
 const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });
 /** whether a bridged page's renderer shares this thread, as its first interface call found */
 let sharedRenderer: boolean | undefined;
 const WV_S = "(Landroid/webkit/WebView;Ljava/lang/String;)V";
-const navigationKeys: Record<number, readonly [string, number]> = {
-  19: ["ArrowUp", 38], 20: ["ArrowDown", 40], 21: ["ArrowLeft", 37], 22: ["ArrowRight", 39],
-  23: ["Enter", 13], 61: ["Tab", 9], 62: [" ", 32], 66: ["Enter", 13], 67: ["Backspace", 8],
-  92: ["PageUp", 33], 93: ["PageDown", 34], 111: ["Escape", 27], 112: ["Delete", 46],
-  122: ["Home", 36], 123: ["End", 35],
-};
 const MS_MODE = 0xc0000000, MS_EXACTLY = 0x40000000, MS_AT_MOST = 0x80000000 | 0, MEASURED_STATE_TOO_SMALL = 0x01000000;
 
 function weakPlacement(ref: WeakRef<WebViewChromium>) {
@@ -375,7 +370,7 @@ export class WebViewChromium extends JObj {
     return rt.drive(function* (): Gen {
       const superDispatch = () => vcall(self.access, "super_dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event);
       if (yield vcall(self.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", self.view, event)) return superDispatch();
-      const code: number = yield vcall(event, "getKeyCode", "()I"), key = navigationKeys[code];
+      const code: number = yield vcall(event, "getKeyCode", "()I"), key = domKeyOf.get(code);
       if (!key || !self.hold.el || !self.loaded) return superDispatch();
       const type = (yield vcall(event, "getAction", "()I")) === 0 ? "keydown" : "keyup";
       const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,

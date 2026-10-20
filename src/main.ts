@@ -12,6 +12,7 @@ import { loadSkia } from "./android/skia.ts";
 import type { Mirror } from "./shell/frame-port.ts";
 import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device.ts";
 import { attachIme } from "./shell/input.ts";
+import { attachKeyboard } from "./shell/keyboard-input.ts";
 import { drainPointers } from "./shell/pointer-input.ts";
 import { clearRoots } from "./shell/hostfs.ts";
 import { clearPickedDocuments } from "./android/documents.ts";
@@ -39,10 +40,8 @@ import { timelineSince } from "./timeline.ts";
 import { swipe } from "./shell/gesture.ts";
 import { device } from "./shell/config.ts";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot.ts";
-import { hasFocusedWindow, hasTouchWindow, dispatchKey } from "./android/server/wm.ts";
-import { imeActive } from "./android/ime.ts";
+import { hasFocusedWindow, hasTouchWindow } from "./android/server/wm.ts";
 import { systemInputLayer } from "./shell/system-input.ts";
-import { onProcessExit } from "./process-exit.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -277,21 +276,7 @@ hostFrames(time => {
 });
 
 attachIme(canvas, kbd, systemInput.element);
-{
-  const keys = new Map([["Escape", 4], ["BrowserBack", 4], ["Enter", 66], ["Tab", 61],
-    ["ArrowUp", 19], ["ArrowDown", 20], ["ArrowLeft", 21], ["ArrowRight", 22]]);
-  const listeners = new AbortController();
-  document.addEventListener("keydown", event => {
-    if (!hasFocusedWindow() || event.isComposing) return;
-    const key = keys.get(event.key);
-    if (key === undefined || key !== 4 && event.target === kbd && imeActive()) return;
-    event.preventDefault(); event.stopImmediatePropagation();
-    void dispatchKey(key).catch(error => console.error("[input]", error));
-  }, { capture: true, signal: listeners.signal });
-  const close = () => listeners.abort();
-  window.addEventListener("pagehide", close, { once: true });
-  onProcessExit(close);
-}
+attachKeyboard(kbd);
 
 mountSystemCertificates();
 mountPlatformData();
