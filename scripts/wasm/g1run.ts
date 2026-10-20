@@ -1,7 +1,7 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex), timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
 import { readdirSync, readFileSync } from "node:fs";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
-import { FetchStore } from "../../src/wasm/link/aotstore.ts";
+import { FetchStore } from "../../src/wasm/host/aotstore.ts";
 import { compileBytes } from "../../src/wasm/link/module.ts";
 import { fakeAot, loadDexes, world } from "./lib.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";

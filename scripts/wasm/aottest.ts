@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
-import { WarmWorld, type WarmCall } from "../../src/wasm/link/warmshim.ts";
+import { WarmWorld, type WarmCall } from "../../src/wasm/host/warmshim.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { buildApp } from "../../src/wasm/link/apps.ts";

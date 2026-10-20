@@ -1,9 +1,9 @@
 // The build's files in a page: the index and the modules a start of the process loads are fetched and compiled ahead of use, off the main thread, and read
 // synchronously, the way World needs them, when the code that wants one runs. A page cannot fetch synchronously (a synchronous XMLHttpRequest on the main
-// thread is deprecated and cannot return an arraybuffer), so a module nobody asked for ahead is a miss: its code is compiled on demand (aot.ts), and the module is
+// thread is deprecated and cannot return an arraybuffer), so a module nobody asked for ahead is a miss: its code is compiled on demand (link/aot.ts), and the module is
 // fetched for the realms that ask later.
-import type { AotStore } from "./aot.ts";
-import { compileStream } from "./module.ts";
+import type { AotStore } from "../link/aot.ts";
+import { compileStream } from "../link/module.ts";
 
 /** Requests in flight at once. Chrome fails a request with ERR_INSUFFICIENT_RESOURCES once about 1,600 are pending (fetching the 2,100 files of the build together lost a quarter
  *  of them), and a page reaches its server over a few connections, so more than a few dozen in flight only queue in the network stack. */
@@ -58,7 +58,7 @@ export class FetchStore implements AotStore {
   }
   /** the file if it is here, without asking for it */
   held(file: string): Uint8Array | WebAssembly.Module | undefined { return this.files.get(file); }
-  /** adds `file` as the module compiled elsewhere (a worker: host/aotload.ts) */
+  /** adds `file` as the module compiled elsewhere (a worker: aotload.ts) */
   put(file: string, module: WebAssembly.Module): void { this.files.set(file, module); this.done(file); }
   fail(file: string): void { this.failed.push(file); this.done(file); }
   private done(file: string): void { this.settle.get(file)?.(); this.settle.delete(file); }

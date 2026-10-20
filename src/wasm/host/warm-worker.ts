@@ -1,8 +1,8 @@
-// The page's Worker that has the engine compile build code before processes call it (link/warmshim.ts). The page names the platform build, whose
+// The page's Worker that has the engine compile build code before processes call it (warmshim.ts). The page names the platform build, whose
 // methods launches ran (warm.json) it warms while nothing else is asked; each process has a port to ask for the modules and slots its app's launches
 // ran, which go first. App slots are the app's own, so each asker has its own.
 import { compileBytes } from "../link/module.ts";
-import { WarmWorld, type WarmCall } from "../link/warmshim.ts";
+import { WarmWorld, type WarmCall } from "./warmshim.ts";
 
 /** what a process asks for: the platform build's files to fetch, the app build's modules (with their bytes), and the slots to warm in them; `all` warms
  *  every method of the modules, for a build no launch has run yet. With `answer` they are warmed apart from the process's other requests and answered there. */

@@ -8,7 +8,7 @@ import type { Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
-import type { FetchStore } from "../link/aotstore.ts";
+import type { FetchStore } from "./aotstore.ts";
 import { buildFiles, appKey, LaunchRecord, SavedBuild, type Persist } from "./persist.ts";
 import { fetchBundle } from "./bundle.ts";
 import { switchOn } from "../../switches.ts";

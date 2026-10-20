@@ -21,6 +21,7 @@ import type { Compiler, FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import { hostTakeover } from "./hostclass.ts";
+import { LebReader } from "./module.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -195,7 +196,6 @@ const header = <H>(m: WebAssembly.Module): H => {
   if (h === undefined) headers.set(m, h = JSON.parse(new TextDecoder().decode(customSection(m, "aot"))));
   return h as H;
 };
-function unleb(b: Uint8Array, at: number[]): number { let n = 0, s = 1; for (;;) { const x = b[at[0]++]; n += (x & 127) * s; if (x < 128) return n; s *= 128; } }
 
 const LIVE = 1, DEAD = 2, LOADING = 3;
 
@@ -648,19 +648,19 @@ export class AotRuntime {
   private traceIn(c: number, slot: number, m: MethodInfo, name: string): FnTrace | undefined {
     let section = this.cTraces.get(c);
     if (!section) {
-      const bytes = customSection(this.cModule[c]!, "aottrace"), at = [0], starts = new Map<number, number>();
-      while (at[0] < bytes.length) { const s = unleb(bytes, at), len = unleb(bytes, at); starts.set(s, at[0]); at[0] += len; }
+      const bytes = customSection(this.cModule[c]!, "aottrace"), r = new LebReader(bytes), starts = new Map<number, number>();
+      while (r.i < bytes.length) { const s = r.u32(), len = r.u32(); starts.set(s, r.i); r.i += len; }
       this.cTraces.set(c, section = { bytes, starts });
     }
     const from = section.starts.get(slot);
     if (from === undefined) return undefined;
-    const b = section.bytes, at = [from], n = unleb(b, at), offsets = new Int32Array(n), pcs = new Int32Array(n);
+    const r = new LebReader(section.bytes, from), n = r.u32(), offsets = new Int32Array(n), pcs = new Int32Array(n);
     for (let i = 0, o = 0, p = 0; i < n; i++) {
-      offsets[i] = o += unleb(b, at);
-      const z = unleb(b, at); pcs[i] = p += (z >>> 1) ^ -(z & 1);
+      offsets[i] = o += r.u32();
+      const z = r.u32(); pcs[i] = p += (z >>> 1) ^ -(z & 1);
     }
-    const t: FnTrace = { name, m, offsets, pcs }, k = unleb(b, at);
-    if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.method(unleb(b, at))!.m, unleb(b, at), unleb(b, at)]);
+    const t: FnTrace = { name, m, offsets, pcs }, k = r.u32();
+    if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.method(r.u32())!.m, r.u32(), r.u32()]);
     this.w.stacks.traces.set(name, t);
     return t;
   }

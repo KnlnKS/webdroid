@@ -2,9 +2,9 @@
 // fetched them, which for 130 MB of modules keeps the page's main thread from anything else for hundreds of milliseconds; a compiled module crosses to the page as it is. Several
 // workers share the files, as the machine has threads for them.
 import { COMPILE_OPTIONS } from "../link/module.ts";
-import type { FetchStore } from "../link/aotstore.ts";
+import type { FetchStore } from "./aotstore.ts";
 
-// each worker keeps a few requests in flight (link/aotstore.ts WIDTH: Chrome fails requests once about 1,600 are pending)
+// each worker keeps a few requests in flight (aotstore.ts WIDTH: Chrome fails requests once about 1,600 are pending)
 const SOURCE = `onmessage = async ({ data: { base, files, options, width } }) => {
   const queue = [...files];
   await Promise.all(Array.from({ length: width }, async () => {
