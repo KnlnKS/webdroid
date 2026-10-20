@@ -3,6 +3,7 @@
 // apk assets and device fonts come from the app.
 import { webViewBrands } from "./clienthints.ts";
 import type { RendererContext } from "./protocol.ts";
+import { nextHop, type ProxyRequest } from "./redirect.ts";
 
 type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };
@@ -84,33 +85,32 @@ worker.addEventListener("fetch", (event) => {
       if (request.mode === "cors") headers.set("x-wd-origin", source.origin);
       if (request.referrerPolicy !== "no-referrer") headers.set("x-wd-referer", source.origin === new URL(target).origin ? source.href : source.origin + "/");
     }
-    let method = request.method, body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+    let hop: ProxyRequest = { url: target, method: request.method, headers,
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer() };
     for (let redirects = 0; redirects <= 20; redirects++) {
+      const { url, headers } = hop;
       // a browser sends them to secure origins
-      for (const [name, value] of clientHints) if (new URL(target).protocol === "https:") headers.set(name, value); else headers.delete(name);
-      const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(target).origin);
+      for (const [name, value] of clientHints) if (new URL(url).protocol === "https:") headers.set(name, value); else headers.delete(name);
+      const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(url).origin);
       headers.delete("x-wd-cookie");
       if (include) {
-        const value = await message<string>(client, { kind: "webcookies", url: target });
-        if (value) headers.set("x-wd-cookie", value); else headers.delete("x-wd-cookie");
+        const value = await message<string>(client, { kind: "webcookies", url });
+        if (value) headers.set("x-wd-cookie", value);
       }
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(url) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method: hop.method, headers, body: hop.body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
-      if (include && values) await message(client, { kind: "webcookies", url: target, values: JSON.parse(values) });
-      const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");
-      if (![301, 302, 303, 307, 308].includes(status) || !location) {
+      if (include && values) await message(client, { kind: "webcookies", url, values: JSON.parse(values) });
+      const next = nextHop(response, hop);
+      if (!next) {
         const clean = new Headers(response.headers);
         clean.delete("x-wd-set-cookie"); clean.delete("x-wd-status");
         return new Response(response.body, { status: response.status, statusText: response.statusText, headers: clean });
       }
       await response.body?.cancel();
-      if (status === 303 && method !== "HEAD" || (status === 301 || status === 302) && method === "POST") { method = "GET"; body = undefined; headers.delete("x-wd-content-type"); }
-      const next = new URL(location, target).href;
-      if (new URL(next).origin !== new URL(target).origin) headers.delete("x-wd-authorization");
-      target = next;
+      hop = next;
     }
     throw Error("Too many WebView redirects");
   })());
