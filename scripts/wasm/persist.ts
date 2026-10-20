@@ -23,7 +23,7 @@ import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { current, fakeAot, loadDexes } from "./lib.ts";
 import { worldOptions } from "../../src/wasm/host/boot.ts";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
 import { checker, filesIn, fixture } from "./tools.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
@@ -48,7 +48,7 @@ const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT
 const BASE = "aot://platform/";
 const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { ...worldOptions(), aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
-const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => addHostClasses(world(dexes, opts));
+const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => attachHostClasses(world(dexes, opts));
 
 // A combined image links the app's default namespace as the Program resolves it.
 {

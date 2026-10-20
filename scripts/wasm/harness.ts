@@ -8,13 +8,13 @@ import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
-import { natives, nativeSource } from "../../src/wasm/host/nativesource.ts";
+import { attachHostClasses, natives, nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { mountLocalPlatformData, platformJarBytes } from "../aosp.ts";
-export { natives, nativeSource };
+export { attachHostClasses, natives, nativeSource };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
 const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
@@ -55,12 +55,6 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
     if (f) { const value = await f.call(null); rt.registerJni(cls, key, () => value, true); }
   }
   return jars;
-}
-
-/** `w` with the classes the host implements, added after the constructor as host/boot.ts adds them */
-export function addHostClasses<W extends World>(w: W): W {
-  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
-  return w;
 }
 
 /** the process state ActivityThread.main leaves, entered asynchronously as a process starts: System's initialization reads files and the user database, which wait */

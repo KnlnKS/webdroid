@@ -11,7 +11,7 @@ import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { Block, emitBlock, St } from "../../src/wasm/compiler/hostcalls.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { loadDexes, program, world } from "./lib.ts";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
@@ -21,7 +21,7 @@ const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "hc/expected.txt"));
 
-const w = addHostClasses(world([dex, ...jars], { natives })), gaps: string[] = [];
+const w = attachHostClasses(world([dex, ...jars], { natives })), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
 const wasm = await hostCases(enter.call);
@@ -44,7 +44,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 {
   const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;
-  addHostClasses(worker);
+  attachHostClasses(worker);
   worker.link("java/net/HttpURLConnection");
   worker.classModules.repairLinked();
   const method = worker.prog.get("Hc")!.byKey.get("http()Ljava/lang/String;")!;
@@ -54,7 +54,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 // Worlds over one platform Program, as the process frames of a tab are: the host classes are each World's own, the platform's classes are not changed, and every World behaves alike
 {
-  const platform = program(jars), mk = () => addHostClasses(world(new Program(loadDexes(dex), platform), { natives }));
+  const platform = program(jars), mk = () => attachHostClasses(world(new Program(loadDexes(dex), platform), { natives }));
   const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
   for (const cls of ["java/lang/StringBuilder", "java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor"]) {
@@ -155,7 +155,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
 }
 
 {
-  const fresh = addHostClasses(world([dex, ...jars], { natives }));
+  const fresh = attachHostClasses(world([dex, ...jars], { natives }));
   fresh.sched.turnDue = () => true;
   const entry = wasmEntry(fresh);
   for (const name of ["Hc$Boot", "javax/net/ssl/HttpsURLConnection"]) {

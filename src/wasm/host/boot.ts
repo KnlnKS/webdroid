@@ -28,7 +28,7 @@ import { guestMemory } from "./guest.ts";
 import { wasmJni } from "./jni.ts";
 import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
-import { hostSpec, natives, nativeSource } from "./nativesource.ts";
+import { attachHostClasses, natives } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
@@ -76,9 +76,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
-  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
-  rt.registered = (spec) => w.addHostClass(hostSpec(spec));
-  return w;
+  return attachHostClasses(w);
 }
 
 /** The realm's World, over the platform build the tab opened and the platform Program its processes share; the app's dex files join it as they arrive. Outside a page (the

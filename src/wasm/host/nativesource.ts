@@ -4,6 +4,7 @@ import { JThrowable } from "../../jvm/natives/jthrowable.ts";
 import { splitSig } from "../../jvm/abi.ts";
 import { stringMethods } from "../../jvm/natives/jstring.ts";
 import type { HostFn, HostSpec, NativeSource } from "../link/hostapi.ts";
+import type { World } from "../link/world.ts";
 import { waitsEnded } from "../link/module.ts";
 import { Natives } from "./natives.ts";
 import { refOf } from "./bridge.ts";
@@ -14,10 +15,16 @@ const lookup = (cls: string, key: string, isStatic: boolean): HostFn | undefined
   return own ? rt.trackPlaceholder(cls + "." + key, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined;
 };
 /** a registered class, which the host implements */
-export const hostSpec = (spec: NativeSpec): HostSpec => ({
+const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Object.entries(spec.fields ?? {}),
 });
+/** `w` with the classes the host implements: those registered, and each one registered later (a module that loads later) as it is */
+export function attachHostClasses<W extends World>(w: W): W {
+  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
+  rt.registered = (spec) => w.addHostClass(hostSpec(spec));
+  return w;
+}
 export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {

@@ -13,7 +13,7 @@ import type { WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { fakeAot, loadDexes, world } from "./lib.ts";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
 
 const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
@@ -32,7 +32,7 @@ const spawn = (): WorkerPort => {
 };
 const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, key), persist, spawn, roots: { launch: [] } };
 /** a launch as the page makes one: the app over the platform's Program, the saved build attached, the host's classes */
-const launch = (code: AppCode): World => addHostClasses(world(new Program(app, platform), { natives, app: code.saved }));
+const launch = (code: AppCode): World => attachHostClasses(world(new Program(app, platform), { natives, app: code.saved }));
 const run = async (w: World, reps: number) => {
   for (const workload of workloads) {
     const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));

@@ -10,7 +10,7 @@ import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import type { World } from "../../src/wasm/link/world.ts";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
@@ -76,7 +76,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
   const w = world(prog, { natives, heapUsed: collectedHeap, app: code.saved, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
-  addHostClasses(w);
+  attachHostClasses(w);
   let startWorker: (() => Promise<void>) | undefined;
   if (worker) {
     code.start(w);
