@@ -412,16 +412,12 @@ export class AotRuntime {
     ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubs.stubImports(mod) }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
-    for (const id of head.touch) this.touch(id);
-    for (const s of head.synth) w.synthSlot(s);
+    w.units.linkHeader(head);
     return ex;
   }
-  /** makes sure the module that holds class `id` is loaded: the class's own record is made when something asks for the class, not for every class a module names */
-  private touch(id: number): void {
-    const w = this.w;
-    if (id <= this.nSeeded && w.instantiates && this.loadD(this.dOf[id - 1])) return;
-    w.link(w.nameOf(id));
-  }
+  /** loads the module that holds platform class `id`, which gives it its stubs; whether it did. The class's own record is made when something asks for the class,
+   *  not for every class a module names */
+  touch(id: number): boolean { return id <= this.nSeeded && this.w.instantiates && !!this.loadD(this.dOf[id - 1]); }
   /** puts a build's code of synthetic function `name` in its slot, with the others of its module; false if the builds have none */
   installSynth(name: string): boolean {
     const file = this.synthIn.get(name);
@@ -431,16 +427,15 @@ export class AotRuntime {
     if (!mod) return dead();
     const head = header<SHeader>(mod);
     if (!w.units.admits(head)) return dead();
-    for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
-    for (const s of head.synth) if (this.synthIn.get(s) !== file) w.synthSlot(s);
+    w.units.linkHeader(head, (s) => this.synthIn.get(s) === file);
     const imports = w.units.ofHeader(head);
     w.units.classImports(head.classImports, imports);
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
     if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
     w.instantiate(mod, imports);
     for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined && !w.slots.isStubbed(slot)) w.slots.holdsSynth(n, slot); }
-    for (const cls of head.allocs) w.allocated.add(cls);
+    w.units.recordHeader(head);
     this.synthState.set(file, LIVE);
     return true;
   }
@@ -588,10 +583,8 @@ export class AotRuntime {
       this.overriddenSeen = this.overridden.size;
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
-    w.assumptions.hold(head.held ?? []);
     if (app) this.cClasses[c] = head.classes;
-    for (const id of head.touch) this.touch(id);
-    for (const s of head.synth) w.synthSlot(s);
+    w.units.linkHeader(head);
     const imports = w.units.ofHeader(head);
     // Retired data groups bind each class's published globals instead of creating another owner.
     let bindClasses = app;
@@ -605,12 +598,7 @@ export class AotRuntime {
       const base = w.slots.blockBase[b], n = w.slots.methodsIn(b);
       for (let i = 0; i < n; i++) { const s = w.slots.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
     }
-    for (const cls of head.allocs) w.allocated.add(cls);
-    // a site that fails because a class was not there is undone if it is now
-    for (const [name, owner] of head.missing) {
-      if (w.prog.get(name)) { w.assumptions.undoCode(owner); continue; }
-      w.assumptions.absentAt(name, owner);
-    }
+    w.units.recordHeader(head);
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.assumptions.undoCode(slot); this.cAbsent[c]!.add(slot); }
     // code that holds a method of another module the host took since the build: that module may have undone the method before this one was loaded
     for (const [callee, ...by] of head.held ?? []) if (this.overridden.has(callee)) for (const x of by) w.assumptions.undoCode(x);

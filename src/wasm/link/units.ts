@@ -23,15 +23,26 @@ export class Units {
     stats.compileMs += performance.now() - clock.start - (stats.compileMs - clock.accounted);
   }
   /** instantiates a built unit, has `place` put its functions where they are called, then records what their code relies on */
-  instantiate<T>(cx: Pick<Compiler, "assumptions" | "absent" | "held">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
+  instantiate<T>(cx: Compiler | UnitHeader, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.account(clock);
     const exports = this.w.instantiate(built.bytes, imports).exports;
     if (cx instanceof Compiler) for (const [key, sig] of cx.sharedOut) if (!this.sharedHelpers.has(key)) { this.sharedHelpers.set(key, sig); this.sharedFns[key] = exports[key] as Function; }
     const placed = place(exports);
     for (const t of built.traces) if (t.m) this.w.stacks.traces.set(t.name, t);
-    this.w.assumptions.record(cx, slot);
+    if (cx instanceof Compiler) this.w.assumptions.record(cx, slot); else this.recordHeader(cx);
     return placed;
+  }
+  /** links what the code of a unit made elsewhere names, before it runs: the classes it touches (their modules), and its synthetic functions but those `own` holds */
+  linkHeader(head: Pick<UnitHeader, "touch" | "synth">, own?: (name: string) => boolean): void {
+    const w = this.w;
+    for (const id of head.touch) if (!w.aot?.touch(id)) w.link(w.nameOf(id));
+    for (const s of head.synth) if (!own?.(s)) w.synthSlot(s);
+  }
+  /** records what the code of a unit made elsewhere relies on, once it is in its slots */
+  recordHeader(head: Pick<UnitHeader, "allocs" | "assumptions" | "missing" | "held">): void {
+    for (const cls of head.allocs) this.w.allocated.add(cls);
+    this.w.assumptions.recordHeader(head);
   }
 
   /** whether a unit made elsewhere can run here: made by this version, with every native it imports bound */

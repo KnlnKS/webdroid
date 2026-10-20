@@ -2,7 +2,6 @@
 // iterations; one that uses up its budget is compiled again with its busy callees copied in (`upgrade`), here or by a compile worker (`upgradeJob`,
 // `adoptUnit`). Loose first-tier units are merged by a worker into one module, and the units merged away are dropped a batch at a time.
 import { Compiler, type CallPlan } from "../compiler/j2w.ts";
-import type { SymbolicSite } from "../compiler/sites.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import { COUNT_BASE, COUNT_SLOTS, THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
@@ -11,6 +10,7 @@ import { HotUnits } from "./hotunits.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
 import type { MethodSlot } from "./slots.ts";
+import type { UnitHeader } from "./aot.ts";
 import { hasHierarchy, type UnitResult, type UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
 
@@ -309,7 +309,7 @@ export class Tiering {
     const r = this.received(result);
     if (!r) return false;
     this.w.stats.methods += job.installed.length + job.copies.length; this.w.stats.upgrades++;
-    this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, r.unit, r.imports, r.built, slot, clock);
+    this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, r.head, r.imports, r.built, slot, clock);
     if (job.refresh !== undefined) this.hotRefreshes++;
     return true;
   }
@@ -322,19 +322,12 @@ export class Tiering {
   private received(result: UnitResult) {
     const head = result.header, n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.w.adopt(n)) return undefined;
-    for (const id of head.touch) this.w.link(this.w.nameOf(id));
-    for (const name of head.synth) this.w.synthSlot(name);
-    const target = (cls: string, key: string) => (cls ? this.w.prog.get(cls)?.byKey.get(key) : undefined);
-    const owner = (at: number) => this.w.slots.method(at)!.m;
-    const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
-      absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [],
-      held: head.held ?? [] };
+    this.w.units.linkHeader(head);
     const imports = this.w.units.ofHeader(head);
     this.w.units.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.w.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs,
       inline: t.inline?.map(([m, pc, at]): InlineFrame => [methodOf(this.w.prog, m)!, pc, at]) }));
-    for (const c of head.allocs) this.w.allocated.add(c);
-    return { unit, imports, built: { bytes: result.module, traces } };
+    return { head, imports, built: { bytes: result.module, traces } };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
@@ -347,7 +340,7 @@ export class Tiering {
     // one function of each unit holds its instance, and so its module
     this.retire(liveGroups.map((g) => this.w.table.get(g[0]) as Function));
     const kept = job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.w.table.get(at)] as const);
-    this.w.units.instantiate(r.unit, r.imports, r.built, live[0], clock, () => {
+    this.w.units.instantiate(r.head, r.imports, r.built, live[0], clock, () => {
       for (const [at, f] of kept) this.w.table.set(at, f);
       for (const at of live) this.groupOf.set(at, [at]);
     });
@@ -371,7 +364,7 @@ export class Tiering {
     (this.w.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
   }
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent" | "held"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
+  install(group: number[], hot: boolean, cx: Compiler | UnitHeader, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
     const s = this.w.slots.at(slot)!;
     const place = (exports: Record<string, any>) => {
       const set = (at: number, name: string) => {
