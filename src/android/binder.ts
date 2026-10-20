@@ -264,6 +264,8 @@ export const binderEscape = (message = UNCAUGHT_REMOTE): Escape => (e) => {
   if (iof(rt.jx(e), "java/lang/RuntimeException")) console.warn("[Binder] Caught a RuntimeException from the binder stub implementation.", rt.jx(e));
   else reportException(e, message);
 };
+/** the IBinder of AIDL interface `iface`, the key a service keeps its callbacks by */
+export const asBinder = (iface: JObj) => vcall(iface, "asBinder", "()Landroid/os/IBinder;");
 /** a oneway call to a local binder: made on a fresh turn of the caller's thread, which neither
  *  waits for the callee nor hears of its failure */
 export function oneway(target: JObj, name: string, desc: string, ...args: unknown[]): void {

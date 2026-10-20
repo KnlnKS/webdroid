@@ -1,7 +1,7 @@
 import { awaited, type JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { type JIntent, newIntent, putExtra } from "./intent.ts";
-import { exportBinder, importBinder, type ParcelData } from "./binder.ts";
+import { asBinder, exportBinder, importBinder, type ParcelData } from "./binder.ts";
 import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { encodeIntent, decodeIntent } from "./intentipc.ts";
 import type { PendingOperation } from "../shell/pendingintents.ts";
@@ -44,7 +44,7 @@ function targetId(target: unknown): number {
 }
 function* senderId$(sender: JObj): Gen<number> {
   const target = iof(sender, "android/content/IIntentSender") ? sender : yield vcall(sender, "getTarget", "()Landroid/content/IIntentSender;");
-  return targetId(yield vcall(target, "asBinder", "()Landroid/os/IBinder;"));
+  return targetId(yield asBinder(target));
 }
 /** a PendingIntent's (or IntentSender's) record, through its IIntentSender */
 export const operationId = driven(senderId$);

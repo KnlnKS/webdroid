@@ -5,9 +5,8 @@
 // Sync is answered as a device with no sync adapters.
 import { awaited, rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
-import { vcall } from "../../jvm/natives/jentry.ts";
 import { jarray } from "../../jvm/abi.ts";
-import { callingIdentity, hostService, onCallerDeath, oneway } from "../binder.ts";
+import { asBinder, callingIdentity, hostService, onCallerDeath, oneway } from "../binder.ts";
 import { mkUri, uriParts, uriText, type JUri } from "../net.ts";
 
 const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;
@@ -38,20 +37,19 @@ export const notifyContent = driven(function* notifyContent$(uri: string, origin
 
 const IObserver = "Landroid/database/IContentObserver;";
 const ACCOUNT = "Landroid/accounts/Account;", S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;";
-const binderOf = (observer: JObj) => vcall(observer, "asBinder", "()Landroid/os/IBinder;");
 hostService("content", "webdroid/ContentService", "android/content/IContentService$Stub", {
   [`registerContentObserver(Landroid/net/Uri;Z${IObserver}II)V`]: driven(function* (uri: JUri | null, descendants: number, observer: JObj | null, userId: number): Gen<void> {
     if (!uri || !observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid uri and observer");
-    const { pid } = callingIdentity(), key = yield binderOf(observer), segments = segmentsOf(yield* awaited(uriText(uri)));
+    const { pid } = callingIdentity(), key = yield asBinder(observer), segments = segmentsOf(yield* awaited(uriText(uri)));
     observers.push({ observer, key, segments, descendants: !!descendants, userId, unwatch: onCallerDeath(pid, () => stopObserving(key)) });
   }),
   [`unregisterContentObserver(${IObserver})V`]: driven(function* (observer: JObj | null): Gen<void> {
     if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid observer");
-    stopObserving(yield binderOf(observer));
+    stopObserving(yield asBinder(observer));
   }),
   [`notifyChange([Landroid/net/Uri;${IObserver}ZIIILjava/lang/String;)V`]: driven(function* (uris: JUri[] | null, observer: JObj | null, selfNotify: number, flags: number): Gen<void> {
     if (!uris) throw rt.mkThrowable("java/lang/NullPointerException", "uris");
-    const origin = observer ? yield binderOf(observer) : null;
+    const origin = observer ? yield asBinder(observer) : null;
     for (const uri of uris) yield notifyContent(yield* awaited(uriText(uri)), origin, !!selfNotify, flags);
   }),
   "getSyncAdapterTypes()[Landroid/content/SyncAdapterType;": () => jarray([], "Landroid/content/SyncAdapterType;"),

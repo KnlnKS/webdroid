@@ -1,9 +1,9 @@
 // IClipboard: ClipboardService, hosted once in system_server (SYSTEM_SERVICES) for every process's
 // ClipboardManager. It keeps the primary clip as the ClipData the caller's parcel made, which only the
 // focused app's uid reads, and tells the listeners whose uid has focus of each change.
-import { JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { JObj, driven } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, hostService, onCallerDeath, oneway } from "./binder.ts";
+import { asBinder, callingIdentity, hostService, onCallerDeath, oneway } from "./binder.ts";
 import { foreground } from "./server/atm.ts";
 import { PROCESS_UID } from "./os.ts";
 import { wallMillis } from "../guest-clock.ts";
@@ -23,7 +23,6 @@ function setPrimary(clip: JObj | null): void {
   for (const { listener, uid } of listeners.values()) if (readable(uid)) oneway(listener, "dispatchPrimaryClipChanged", "()V");
 }
 const description = (clip: JObj) => vcall(clip, "getDescription", "()Landroid/content/ClipDescription;");
-function* binderOf(listener: JObj): Gen<unknown> { return yield vcall(listener, "asBinder", "()Landroid/os/IBinder;"); }
 const P = "Ljava/lang/String;Ljava/lang/String;II", L = "Landroid/content/IOnPrimaryClipChangedListener;";
 hostService("clipboard", "webdroid/ClipboardService", "android/content/IClipboard$Stub", {
   // stamped as copied now, as setPrimaryClipInternalLocked does
@@ -42,11 +41,11 @@ hostService("clipboard", "webdroid/ClipboardService", "android/content/IClipboar
   }),
   [`clearPrimaryClip(${P})V`]: () => setPrimary(null),
   [`addPrimaryClipChangedListener(${L}${P})V`]: driven(function* (listener: JObj) {
-    const { pid, uid } = callingIdentity(), binder = yield* binderOf(listener);
+    const { pid, uid } = callingIdentity(), binder = yield asBinder(listener);
     if (!listeners.has(binder)) listeners.set(binder, { listener, uid, unwatch: onCallerDeath(pid, () => listeners.delete(binder)) });
   }),
   [`removePrimaryClipChangedListener(${L}${P})V`]: driven(function* (listener: JObj) {
-    const binder = yield* binderOf(listener);
+    const binder = yield asBinder(listener);
     listeners.get(binder)?.unwatch();
     listeners.delete(binder);
   }),

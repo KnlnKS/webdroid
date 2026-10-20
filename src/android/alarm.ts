@@ -3,12 +3,11 @@
 // OnAlarmListener's fires by a call to its IAlarmListener, unless the listener's process died first.
 // Exact alarms need the permission AlarmManagerService asks for.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
-import { vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
+import { asBinder, callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { operationId } from "./pendingintent.ts";
 import type { Alarms } from "../shell/alarms.ts";
-import { clearGuestTimeout, setSystemTimeout, uptimeMillis, wallMillis, MAX_TIMER_DELAY, type GuestTimer } from "../guest-clock.ts";
+import { clearGuestTimeout, setSystemTimeout, uptimeMillis, wallMillis, type GuestTimer } from "../guest-clock.ts";
 import { ownedBy, packages, usesSdk } from "./packages.ts";
 
 /** the PendingIntent alarms' scheduler, which system_server's realm takes from the broker */
@@ -37,7 +36,6 @@ function removeListener(binder: unknown): void {
   listenerAlarms.delete(binder); clearGuestTimeout(alarm.timer); alarm.unwatch();
 }
 let completion: JObj | Promise<JObj> | undefined;
-const asBinder = (listener: JObj) => vcall(listener, "asBinder", "()Landroid/os/IBinder;");
 const WINDOW_EXACT = 0n;
 hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$Stub", {
   "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":
@@ -56,7 +54,7 @@ hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$
       const timer = setSystemTimeout(() => {
         removeListener(binder);
         oneway(listener, "doAlarm", "(Landroid/app/IAlarmCompleteListener;)V", done);
-      }, Math.max(0, Math.min(delay, MAX_TIMER_DELAY)));
+      }, Math.max(0, delay));
       listenerAlarms.set(binder, { timer, unwatch: onCallerDeath(pid, () => removeListener(binder)) });
     }),
   "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": driven(function* (operation: JObj | null, listener: JObj | null): Gen<void> {

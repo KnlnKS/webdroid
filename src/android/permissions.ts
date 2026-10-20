@@ -78,7 +78,7 @@ function permissionHeld(store: PermissionStore, pkg: string, name: string): bool
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.requested.has(name) && store.get(pkg).has(name);
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
-export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
+const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
 /** a permission a user grants (runtime, or special access) is read from the store; any other is held */
 export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
   RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : true;

@@ -11,7 +11,7 @@ import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { once } from "../jvm/suspend.ts";
 import { bootTime, clearGuestTimeout, setSystemTimeout, uptimeMillis, type GuestTimer } from "../guest-clock.ts";
-import { asSystem, callingIdentity, hostService, hostedService, onCallerDeath, oneway, type Caller } from "./binder.ts";
+import { asBinder, asSystem, callingIdentity, hostService, hostedService, onCallerDeath, oneway, type Caller } from "./binder.ts";
 import { geocodeMethods } from "./geocoder.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { ownedBy } from "./packages.ts";
@@ -150,7 +150,6 @@ function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]
 }
 
 const LISTENER = "Landroid/location/ILocationListener;";
-const asBinder = (listener: JObj) => vcall(listener, "asBinder", "()Landroid/os/IBinder;");
 hostService("location", "webdroid/LocationManagerService", "android/location/ILocationManager$Stub", {
   // the browser's geolocation takes no provider commands (aiding data, time injection)
   "sendExtraCommand(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)V": () => {},
