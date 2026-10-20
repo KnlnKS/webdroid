@@ -99,6 +99,7 @@ export class ProcessHost {
   readonly control: WorkerControl;
   display: FrameReceiver | undefined;
   ime: ReturnType<typeof receiveIme> | undefined;
+  private web: HTMLElement | undefined;
   /** how the process ended, which diagnostics report once its Worker is gone */
   ended: { error: string; terminal: WorkerTerminal } | null = null;
   private readonly spare: SpareWorker;
@@ -162,8 +163,16 @@ export class ProcessHost {
       clearTimeout(this.focusTimer);
       this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
     });
-    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), receiveWebSurfaces(web.port1, canvas, () => device));
+    const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
+    this.web = surfaces.layer;
+    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), surfaces.close);
     return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
+  }
+  /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
+  setLayer(z: number | null, interactive: boolean): void {
+    for (const layer of [this.canvas, this.web]) if (layer) { layer.hidden = z === null; if (z !== null) layer.style.zIndex = String(z); }
+    this.canvas.style.pointerEvents = interactive ? "auto" : "none";
+    this.ime?.show(z !== null);
   }
   private fail(message: string): void { if (!this.closed) this.hosts.owner.failed(this.pid, message); }
   close(): void {

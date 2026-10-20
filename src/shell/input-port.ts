@@ -44,12 +44,12 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
   input.tabIndex = -1; input.autocomplete = "off"; input.disabled = true;
   if (!suppliedInput) (canvas.parentElement ?? document.body).append(input);
   const events = new AbortController();
-  let closed = false, pending = false;
+  let closed = false, pending = false, shown = !canvas.hidden;
   let state: ImeState = { generation: 0, text: "", start: 0, end: 0, active: false, hasAction: false };
   const queue: Edit[] = [];
   function mirror() {
     if (closed) return;
-    input.disabled = !state.active || canvas.hidden;
+    input.disabled = !state.active || !shown;
     if (!pending && !queue.length) {
       if (input.value !== state.text) input.value = state.text;
       if (input.selectionStart !== state.start || input.selectionEnd !== state.end) input.setSelectionRange(state.start, state.end);
@@ -68,15 +68,13 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
     void result.catch(error => { if (!closed) console.error("[IME]", error); }).finally(() => { pending = false; drain(); });
   }
   function enqueue(edit: Edit) {
-    if (closed || !state.active || canvas.hidden) return;
+    if (closed || !state.active || !shown) return;
     const last = queue.at(-1);
     if (last?.generation === edit.generation && last.kind === edit.kind &&
       (edit.kind === "selection" || edit.kind === "input" && last.kind === "input" && last.composing === edit.composing)) queue[queue.length - 1] = edit;
     else queue.push(edit);
     drain();
   }
-  const visibility = new MutationObserver(() => { mirror(); if (state.active && !canvas.hidden) input.focus(); });
-  visibility.observe(canvas, {attributes:true,attributeFilter:["hidden"]});
   const stop = serveCalls<ImeView>(view, { state: next => {
     if (closed) return;
     const previous = state;
@@ -85,7 +83,7 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
       queue.length = 0; input.value = state.text; input.setSelectionRange(state.start, state.end);
     }
     mirror();
-    if (state.active && !canvas.hidden && (!previous.active || previous.generation !== state.generation)) input.focus();
+    if (state.active && shown && (!previous.active || previous.generation !== state.generation)) input.focus();
   } }, () => close());
   input.addEventListener("input", event => enqueue({generation:state.generation,kind:"input",text:input.value,
     start:input.selectionStart,end:input.selectionEnd,composing:event instanceof InputEvent && event.isComposing}), {signal:events.signal});
@@ -96,7 +94,9 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
   }, {signal:events.signal});
   function close() {
     if (closed) return;
-    closed = true; queue.length = 0; visibility.disconnect(); events.abort(); stop(); input.disabled = true; input.blur(); if (!suppliedInput) input.remove();
+    closed = true; queue.length = 0; events.abort(); stop(); input.disabled = true; input.blur(); if (!suppliedInput) input.remove();
   }
-  return { close, focus() { mirror(); if (!input.disabled) input.focus(); }, input };
+  return { close, focus() { mirror(); if (!input.disabled) input.focus(); }, input,
+    /** whether its canvas shows */
+    show(visible: boolean) { if (shown === visible) return; shown = visible; mirror(); if (state.active && shown) input.focus(); } };
 }

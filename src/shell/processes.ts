@@ -372,13 +372,6 @@ export class ProcessBroker {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.host : null;
   }
-  displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
-    const layers = this.activities.shownEntries().flatMap(entry => {
-      const canvas = entry.host?.canvas;
-      return canvas && !canvas.hidden ? [canvas] : [];
-    });
-    return [...layers, root];
-  }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** every process registered, dead ones included */
   processes(): IterableIterator<Entry> { return this.entries.values(); }

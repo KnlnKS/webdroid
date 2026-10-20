@@ -1,6 +1,6 @@
 // ActivityTaskManager's part the broker plays across processes: the activities each launch stacks
 // on its caller's, which process is in front, which are shown beneath a translucent one, and their
-// visibility changes, made one at a time. The shown processes' canvases are layered to match.
+// visibility changes, made one at a time. The shown processes' hosts are layered to match.
 import type { ParcelData } from "../android/binder.ts";
 import { guestSleep } from "../guest-clock.ts";
 import type { Rotation } from "./config.ts";
@@ -188,11 +188,7 @@ export class ActivityStack {
     this.shownPids = visible;
     const layers = this.layers = [...visible].reverse();
     for (const entry of this.port.entries()) {
-      const surface = entry.host?.canvas;
-      if (!surface || entry.dead) continue;
-      surface.hidden = !visible.has(entry.pid);
-      surface.style.zIndex = String(layers.indexOf(entry.pid) + 1);
-      surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";
+      if (!entry.dead) entry.host?.setLayer(visible.has(entry.pid) ? layers.indexOf(entry.pid) + 1 : null, entry.pid === pid);
     }
     // DisplayRotation takes the orientation from the top activity that fills the display: a
     // translucent one leaves it to the one beneath, the bottom of the shown layers. The display

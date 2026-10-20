@@ -112,14 +112,13 @@ function receiveSurface(port:MessagePort, layer:HTMLElement, retired:()=>void) {
   return close;
 }
 
-/** Every DOM frame and observer is owned by this process bootstrap, including unannounced frames. */
+/** Every DOM frame and observer is owned by this process bootstrap, including unannounced frames; `layer`
+ *  holds them, starting where `canvas` is. */
 export function receiveWebSurfaces(port:MessagePort, canvas:HTMLCanvasElement, geometry:()=>{density:number;width:number}) {
   const layer = document.createElement("div");
   layer.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden;border-radius:16px";
+  layer.hidden = canvas.hidden; layer.style.zIndex = canvas.style.zIndex;
   (canvas.parentElement ?? document.body).append(layer);
-  const visibility = new MutationObserver(sync);
-  function sync() { layer.hidden = canvas.hidden; layer.style.zIndex = canvas.style.zIndex; }
-  visibility.observe(canvas,{attributes:true,attributeFilter:["hidden","style"]}); sync();
   const size = new ResizeObserver(([entry])=>layer.style.setProperty("--wd-web-scale",String(entry.contentRect.width * geometry().density / geometry().width)));
   size.observe(canvas);
   const surfaces = new Set<()=>void>();
@@ -128,7 +127,7 @@ export function receiveWebSurfaces(port:MessagePort, canvas:HTMLCanvasElement, g
     if (closed) return;
     closed = true;
     for (const end of surfaces) end();
-    surfaces.clear(); visibility.disconnect(); size.disconnect(); layer.remove();
+    surfaces.clear(); size.disconnect(); layer.remove();
     if (notify) port.postMessage({kind:"close"});
     port.close();
   }
@@ -139,5 +138,5 @@ export function receiveWebSurfaces(port:MessagePort, canvas:HTMLCanvasElement, g
     if (closed || data?.kind !== "create") { child.close(); return; }
     const end = receiveSurface(child,layer,()=>surfaces.delete(end)); surfaces.add(end);
   };
-  return close;
+  return {close,layer};
 }

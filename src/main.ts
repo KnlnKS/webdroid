@@ -178,8 +178,8 @@ const wd = {
   boot, back,
   workerProcesses: () => workerSnapshots(processBroker().processes()),
   workerAotProfiles: () => workerAotProfiles(processBroker().processes()),
-  displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
-  displayCanvases: () => processBroker().displayCanvases(canvas),
+  /** the shown processes' canvases bottom to top, then the page's */
+  displayCanvases: () => [...processBroker().activities.shownEntries().flatMap(entry => entry.host ? [entry.host.canvas] : []), canvas],
   mirrorFrames: (on: Mirror) => processBroker().hosts.mirror(on),
   foregroundWorkerSnapshot: () => foregroundWorkerSnapshot(processBroker()),
   processStarting: () => processBroker().starting(),
