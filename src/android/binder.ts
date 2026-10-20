@@ -540,18 +540,29 @@ class JServiceManager extends JObj { binder: JObj | null = null; }
 /** a hosted service's binder, made when first asked for */
 let remoteServices = new Set<string>();
 let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
+/** system_server's handle of each service asked for: it outlives every app process */
+let remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
 /** the services an app process reaches in system_server: their state is the device's */
 export const SYSTEM_SERVICES: readonly string[] = ["notification", "mount", "audio", "media_session", "media_router", "clipboard", "alarm", "location", "account", "content", "jobscheduler", "shortcut"];
 export function useSystemServiceAccess(names: readonly string[], lookup?: (name: string) => Promise<BinderHandle | null>): void {
   if (names.length && !lookup) throw new Error("System service lookup is required");
   remoteServices = new Set(names);
   serviceLookup = lookup;
+  remoteHandles = new Map();
 }
 export function ownedSystemService(name: string): BinderHandle | null | Promise<BinderHandle | null> {
   return after(localHostedService(name), exportBinder);
 }
 export function hostedService(name: string): JObj | Promise<JObj> | null {
-  if (remoteServices.has(name) && serviceLookup) return after(serviceLookup(name), importBinder);
+  if (remoteServices.has(name) && serviceLookup) {
+    let handle = remoteHandles.get(name);
+    if (!handle) {
+      const handles = remoteHandles, asked = serviceLookup(name);
+      handles.set(name, handle = asked);
+      asked.then((h) => h ? handles.set(name, h) : handles.delete(name), () => handles.delete(name));
+    }
+    return after(handle, importBinder);
+  }
   return localHostedService(name);
 }
 function localHostedService(name: string): JObj | Promise<JObj> | null {
