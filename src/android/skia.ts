@@ -7,6 +7,7 @@ import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvas
 import { after } from "../jvm/natives/jentry.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
 import { sfntTables, ownBuffer, T_COLR, T_HEAD } from "./sfnt.ts";
+import { MAX_SAMPLED_PIXELS } from "./hairline.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -129,7 +130,7 @@ export function drawSkiaText(ctx: Ctx, emoji: boolean, glyphs: Uint16Array, posi
   const typeface = emoji ? emojiFace : face;
   if (!kit || !typeface || !glyphs.length || !Number.isFinite(size) || size <= 0) return false;
   const width = ctx.canvas.width, height = ctx.canvas.height;
-  if (!width || !height || width * height > 250_000) return false;
+  if (!width || !height || width * height > MAX_SAMPLED_PIXELS) return false;
   if (!surface || surfaceWidth !== width || surfaceHeight !== height) {
     surface?.delete();
     surface = kit.MakeSurface(width, height);
