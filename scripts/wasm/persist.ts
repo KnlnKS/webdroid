@@ -6,7 +6,8 @@ import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
-import { APP_VERSION, VERSION, packModule } from "../../src/wasm/link/aot.ts";
+import { APP_VERSION, VERSION } from "../../src/wasm/link/aot.ts";
+import { packModule } from "../../src/wasm/link/aotbuild.ts";
 import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
@@ -67,49 +68,7 @@ const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => ad
   check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
 }
 
-// Optional probe for a CLI-built --app image, kept separate from the platform store.
-const combinedAt = process.argv.indexOf("--combined-image");
-if (combinedAt >= 0) {
-  const dir = process.argv[combinedAt + 1], dex = process.argv[combinedAt + 2];
-  if (!dir || !dex) throw new Error("--combined-image requires image directory and app dex");
-  const input = loadDexes(dex), store: AotStore = { get: file => { try { return new Uint8Array(readFileSync(join(dir, file))); } catch { return undefined; } } };
-  const image = world(input, { aot: store }), control = world(loadDexes(dex), { aot: undefined });
-  check("CLI combined image attaches", !!image.aot, true);
-  check("CLI combined image retains app root", image.prog.loaderOf("Pst") === image.prog.root, true);
-  for (const [name, desc, args] of [["chain", "()I", []], ["hot", "(I)I", [10]], ["viaTable", "(I)I", [3]]] as [string, string, number[]][]) {
-    const expected = await control.entryAsync("Pst", name, desc)(...args);
-    check(`CLI combined image ${name}`, await image.entryAsync("Pst", name, desc)(...args), expected);
-  }
-  const method = image.prog.resolve("Pst", "hot", "(I)I")!, module = image.aot?.platformModule(image.slots.blockOf(image.slotOf(method)));
-  check("CLI combined image executes its app code module", module !== undefined && module >= 0 && image.aot!.loaded.includes(`c${module}.wasm`), true);
-  const resolutions = image.symbolic.symbolicResolutions, expected = await control.entryAsync("Pst", "hot", "(I)I")(10);
-  check("CLI combined image warm result", await image.entryAsync("Pst", "hot", "(I)I")(10), expected);
-  check("CLI combined image warm resolutions", image.symbolic.symbolicResolutions, resolutions);
-}
-
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
-// A one-shot Builder and a refine-capable worker must produce the same numbered code.
-{
-  const run = async (oneShot: boolean, refine = false, build = true) => {
-    const responses: import("../../src/wasm/host/compile-serve.ts").CompileResponse[] = [];
-    const port: import("../../src/wasm/host/compile-serve.ts").Port = { onmessage: null, postMessage: m => responses.push(m as typeof responses[number]) };
-    serveCompile(port, env);
-    await port.onmessage!({ data: { type: "init", dexes: [["classes.dex", new Uint8Array(readFileSync(join(out, "classes.dex")))]],
-      aot: { base: BASE }, ...(build && { build: { launch: ["Pst"], limit: 500 } }), ...(oneShot && { oneShot: true }) } } as MessageEvent);
-    if (refine) await port.onmessage!({ data: { type: "refine", demand: { methods: [], classes: [], infos: [] } } } as MessageEvent);
-    return responses;
-  };
-  const initial = await run(false, true), once = await run(true), bad = await run(true, false, false);
-  const builds = initial.filter((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
-  const one = once.find((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
-  const equalBuild = (a: typeof one, b: typeof one) => !!a && !!b && a.methods === b.methods && "index" in a.part && "index" in b.part && JSON.stringify(a.part.index) === JSON.stringify(b.part.index)
-    && a.part.files.length === b.part.files.length && a.part.files.every(([name, bytes], i) => name === b.part.files[i][0] && Buffer.compare(bytes, b.part.files[i][1]) === 0);
-  check("one-shot build equals refine-capable payload", equalBuild(builds[0], one), true);
-  check("refine-capable worker remains usable", builds.length, 2);
-  check("refine-capable init retains ready", initial.filter(r => r.type === "ready").length, 1);
-  check("one-shot init finishes at built", once.map(r => r.type).join(","), "loaded,built");
-  check("one-shot without roots fails", bad.map(r => r.type).join(","), "loaded,failed");
-}
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
 /** a compile worker over a MessageChannel in this thread */
@@ -134,7 +93,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 {
   const part = (shard: number) => {
     const w = world(app, { compileOnly: true });
-    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], infos: [] }, shard, 3);
+    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], synths: [] }, shard, 3);
   };
   const [lead, ...rest] = [0, 1, 2].map(part);
   if (!("index" in lead)) throw new Error("the first shard made no index");
@@ -149,7 +108,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const producer = world(app, { compileOnly: true });
   const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
   if (name) {
-    const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], infos: [] }), files = new Map(built.files);
+    const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], synths: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
     const owner = page.link(name), slot = owner.slotBase + owner.nMethods, initialize = page.table.get(slot);
     page.link("Pst$Base");
@@ -169,7 +128,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     } });
     c.i32(slot).callIndirect(cx.sig([], "V"));
   } });
-  const built = buildApp(w, [], { classes: [], methods: [], infos: [] });
+  const built = buildApp(w, [], { classes: [], methods: [], synths: [] });
   const kept = new Set(built.index.synths.flat());
   check("partial synthetic group keeps its discovered child", kept.has("pst:child"), true);
   check("discovered synthetic group keeps its own dependency", kept.has("pst:leaf"), true);
@@ -269,7 +228,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   client.start(w, BASE, undefined);
   w.entry("Pst", "hot", "(I)I")(10);
   client.submit(w, w.slotOf(w.prog.resolve("Pst", "hot", "(I)I")!));
-  await until("the worker receives initialization", () => received.includes("init"));
+  await until("the worker receives initialization", () => received.includes("units"));
   check("app Proxy while worker initializes executes", await make(1), 12);
   await until("the worker receives a Proxy during initialization", () => received.includes("proxy"));
   initializing.resolve();
@@ -296,7 +255,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const key = (id: number) => `Pst2@${id}`;
   check("initial namespaced DEX executes", await w.entryAsync(key(first.id), "sub", "()I")(), 500);
   client.submit(w, w.slotOf(w.prog.resolve(key(first.id), "sub", "()I")!));
-  await until("namespaced worker receives initialization", () => received.includes("init"));
+  await until("namespaced worker receives initialization", () => received.includes("units"));
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), second);
   await until("namespaced DEX reaches the initializing worker", () => received.includes("add"));
   initializing.resolve();
@@ -329,7 +288,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const port = spawn(), got: { type: string; message?: string }[] = [];
   port.onmessage = ({ data }) => got.push(data);
   await until("the worker loads", () => got.some((m) => m.type === "loaded"));
-  port.postMessage({ type: "init", dexes: [], hostClasses: ["not/Hosted"], aot: { base: BASE } });
+  port.postMessage({ type: "units", dexes: [], hostClasses: ["not/Hosted"], aot: { base: BASE } });
   await until("the worker answers", () => got.some((m) => m.type === "failed" || m.type === "ready"));
   check("a worker whose host classes are not the page's fails to start", got.some((m) => m.type === "failed" && /host classes/.test(m.message ?? "")), true);
 }

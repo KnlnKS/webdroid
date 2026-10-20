@@ -7,7 +7,7 @@ import { mid } from "../compiler/ids.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { hostInfo, infoRecord } from "./classes.ts";
+import { hostInfo } from "./classes.ts";
 import { hostText } from "./members.ts";
 import { hostObject } from "./annotations.ts";
 import { ASYNC } from "./inet.ts";
@@ -17,6 +17,7 @@ import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Loo
 import { resolveCatch, resolveForName } from "./resolution.ts";
 import { validateSignatures } from "./signatures.ts";
 import type { World } from "./world.ts";
+import { chain } from "./maybe.ts";
 
 export type HostImports = Record<HostImport, Function>;
 
@@ -44,6 +45,8 @@ export function hostImports(w: World): HostImports {
     return resolveCatch(w, method, pc, throwable, sched.current());
   };
   const signatures = (id: number) => validateSignatures(w, w.nameOf(id), sched.current());
+  const [catchBlockPlain, catchBlockWait] = sched.importPair(catchBlock), [initSignatures, initSignaturesWait] = sched.importPair(signatures);
+  const javaValue = (v: unknown) => w.javaValue(v);
   const math = {} as Record<keyof typeof MATH_IMPORTS, Function>;
   for (const f of Object.keys(MATH_IMPORTS) as (keyof typeof MATH_IMPORTS)[]) math[f] = Math[f];
   return {
@@ -56,11 +59,7 @@ export function hostImports(w: World): HostImports {
     long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
-    info: (kind: number, a: number, b: number) => {
-      const synths = w.slots.synthCount, answer = hostInfo(w, kind, a, b);
-      if (w.slots.synthCount !== synths && !opts.compileOnly) w.demand.infos.push(infoRecord(w, kind, a, b));
-      return answer;
-    },
+    info: (kind: number, a: number, b: number) => hostInfo(w, kind, a, b),
     text: (kind: number, a: number) => w.javaValue(hostText(w, kind, a)),
     obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(w, a) : w.javaValue(hostObject(w, kind, a, b, filter))),
     annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(w, kind, a, b, filter), null),
@@ -69,8 +68,7 @@ export function hostImports(w: World): HostImports {
     net: (node: unknown, family: number, flags: number) => opts.net ? opts.net(w, w.hostString(node) as string, family, flags) : ASYNC,
     netByte: (found: number[][], i: number, j: number) => j < 0 ? found[i].length : found[i][j],
     mhInvoke: (mh: object, args: object, site: string, mode: InvokeMode) => {
-      const value = mhInvoke(w, mh, args, site, mode);
-      return park(value instanceof Promise ? value.then((v) => w.javaValue(v)) : w.javaValue(value), null);
+      return park(chain(mhInvoke(w, mh, args, site, mode), javaValue), null);
     },
     // a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0
     galloc: (owner: object, n: number) => {
@@ -112,9 +110,6 @@ export function hostImports(w: World): HostImports {
     // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead
     len: (answer: unknown[] | number) => typeof answer === "number" ? answer : answer.length,
     catchSync: () => w.symbolic.symbolicSync(),
-    catchBlock: (...args: Parameters<typeof catchBlock>) => w.synchronous(() => catchBlock(...args)),
-    catchBlockWait: sched.suspending(catchBlock),
-    initSignatures: (id: number) => w.synchronous(() => signatures(id)),
-    initSignaturesWait: sched.suspending(signatures),
+    catchBlock: catchBlockPlain, catchBlockWait, initSignatures, initSignaturesWait,
   } satisfies HostImports;
 }

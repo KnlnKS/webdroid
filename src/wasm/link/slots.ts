@@ -6,7 +6,7 @@ import type { Thrower } from "../compiler/exc.ts";
 import type { Tail } from "./numbers.ts";
 import type { World } from "./world.ts";
 
-export type MethodSlot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean };
+export type MethodSlot = { k: "method"; m: MethodInfo; done: boolean };
 export type Slot = MethodSlot | { k: "thrower"; name: Thrower; done: boolean } | { k: "synth"; name: string; d?: Synth; done: boolean } | { k: "ensure"; done?: boolean };
 
 export class SlotTable {
@@ -24,8 +24,6 @@ export class SlotTable {
 
   constructor(w: World, fixed: number) { this.w = w; this.reserve(fixed); }
 
-  /** how many runtime functions have slots */
-  get synthCount(): number { return this.synth.size; }
   private reserve(n: number): number {
     const base = this.entries.length, table = this.w.table;
     this.entries.length += n;

@@ -11,6 +11,7 @@ import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
@@ -49,15 +50,11 @@ function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; p
 }
 const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x.visibility === visibility);
 
-const states = new WeakMap<World, ReturnType<typeof make>>();
+const states = new PerWorld(make);
 function make(w: World) {
-  const fn = w.hostFn.bind(w);
-  const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) => {
-    let plain: Function | undefined, waiting: ReturnType<World["callFn"]> | undefined;
-    return (strand: Strand, ...args: unknown[]) => strand.canSuspend && !w.inSynchronousJava()
-      ? (waiting ??= w.callFn(name, params, ret, body))(strand, ...args)
-      : w.synchronous(() => (plain ??= fn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); })))(...args));
-  };
+  const fn = w.helpers.hostFn.bind(w.helpers);
+  const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) =>
+    (strand: Strand, ...args: unknown[]) => w.helpers.mayWait(strand, name, params, ret, body, args);
   const classOf = fn("an:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); });
   const mkExec = fn("an:mkExec", ["I", "I", "I"], "L", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "mkExec"); });
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
@@ -147,8 +144,7 @@ export function hostObject(w: World, kind: number, a: number, b: number, arg: ob
   return advance();
 }
 function* objects(w: World, strand: Strand, kind: number, a: number, b: number, arg: object | null): Generator<unknown, object | null, any> {
-  let s = states.get(w);
-  if (!s) states.set(w, s = make(w));
+  const s = states.get(w);
   const system = SYSTEM_VALUES.get(kind);
   if (system) {
     const hit = ofKind(elementOf(w, kind, a).set, SYSTEM).find((x) => x.type === system[0]), v = hit?.elements.value;
@@ -182,7 +178,7 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
   }
   const runtime = ofKind(set, RUNTIME);
   if (arg) {
-    const want = w.nameOf(w.fieldReader<number>("java/lang/Class", "dexTypeIndex", "I")(arg)), hit = runtime.find((x) => x.type === want);
+    const want = w.nameOf(w.helpers.fieldReader<number>("java/lang/Class", "dexTypeIndex", "I")(arg)), hit = runtime.find((x) => x.type === want);
     return hit ? yield* annotation(w, s, strand, hit) : null;
   }
   const annotations: object[] = [];

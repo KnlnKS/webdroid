@@ -12,6 +12,7 @@ import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { definingLoader } from "./loaders.ts";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
@@ -24,21 +25,16 @@ proxyIntrinsics.set("java/lang/reflect/Proxy.generateProxy(Ljava/lang/String;[Lj
 });
 
 interface Readers { art(method: object): bigint; classId(cls: object): number; classOf(id: number): object }
-const readers = new WeakMap<World, Readers>();
-function readersOf(w: World): Readers {
-  let r = readers.get(w);
-  if (!r) readers.set(w, r = {
-    art: w.fieldReader(EXEC, "artMethod", "J") as never, classId: w.fieldReader(CLASS, "dexTypeIndex", "I") as never,
-    classOf: w.hostFn("px:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); }),
-  });
-  return r;
-}
+const readers = new PerWorld((w): Readers => ({
+  art: w.helpers.fieldReader(EXEC, "artMethod", "J") as never, classId: w.helpers.fieldReader(CLASS, "dexTypeIndex", "I") as never,
+  classOf: w.helpers.hostFn("px:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); }),
+}));
 
 /** host.proxy(name, interfaces, loader, methods, exceptions): the Class of the proxy class `name`, made now */
 export function generateProxy(w: World, name: string, interfaces: object, object: object | null, methods: object, exceptions: object): object {
-  const r = readersOf(w), binary = name.replace(/\./g, "/"), loader = definingLoader(w, object), internal = loader === w.prog.boot || loader.id ? `${binary}@${loader.id}` : binary;
+  const r = readers.get(w), binary = name.replace(/\./g, "/"), loader = definingLoader(w, object), internal = loader === w.prog.boot || loader.id ? `${binary}@${loader.id}` : binary;
   // ART's CreateProxyClass requires InsertClass to find no existing definition; public Proxy caching happens in Java.
-  if (w.prog.definedBy(loader, binary)) throw w.exception(w.makeThrowable("java/lang/LinkageError", `duplicate proxy definition: ${binary}`));
+  if (w.prog.definedBy(loader, binary)) w.raise("java/lang/LinkageError", `duplicate proxy definition: ${binary}`);
   const entries = new Map<string, ProxyDefinition["methods"][number]>();
   for (let i = 0; i < w.bridge.arrayLength(methods); i++) {
     const method = (w.bridge.element(methods, i) as object), cookie = r.art(method), src = w.prog.get(w.nameOf(Number(cookie >> 16n)))!.methods[Number(cookie & 0xffffn)];

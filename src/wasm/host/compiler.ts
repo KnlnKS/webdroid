@@ -104,15 +104,15 @@ export class CompileClient implements CompileService {
     this.port = port;
     port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
       if (data.type !== "unit") { this.take(data); return; }
-      // the engine compiles a unit's bytes off this thread
+      // the engine compiles a unit's bytes off this thread: compiled in the handler, they kept a busy app from its frames for seconds. Bytes that do not compile fail the job
       const bytes = data.result.module as Uint8Array, merge = this.busy?.id === data.id && this.busy.job.merge;
       void compileBytes(bytes).then(async (module) => {
         data.result.module = module;
         if (merge && this.warm) this.stats.warmed += (await this.warm(module, bytes))?.warmed ?? 0;
         this.take(data);
-      }, (e) => this.take({ type: "failed", id: data.id, message: String(e) }));
+      }, (e) => this.take({ type: "failed", id: data.id, message: `${this.busy?.job.installed[0]}: ${(e as Error).message}` }));
     };
-    port.onerror = (e) => this.retire(`the compile worker failed: ${e.message}`);
+    port.onerror = (e) => this.stop(`the compile worker failed: ${e.message}`);
   }
   private take(m: CompileResponse): void { note(Ev.Upgrade, this.busy?.slot ?? 0); try { this.receive(m); } finally { note(Ev.Upgraded); } }
   get ready(): boolean { return this.state === "ready"; }
@@ -133,7 +133,7 @@ export class CompileClient implements CompileService {
     this.state = "starting";
     const t0 = performance.now(), sync = w.numbers.since(w.base), list = containers(groups.get(0) ?? []);
     this.marks = w.numbers.marks();
-    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, hostClasses: w.hostClassNames(), loaders, scopes, proxies: [...w.proxies.values()] }, [list, ...scopes.map(([, list]) => list)].flatMap(list => list.map(([, b]) => b.buffer as ArrayBuffer)));
+    this.post({ type: "units", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, hostClasses: w.hostClassNames(), loaders, scopes, proxies: [...w.proxies.values()] }, [list, ...scopes.map(([, list]) => list)].flatMap(list => list.map(([, b]) => b.buffer as ArrayBuffer)));
     this.stats.startMs = t0;
   }
   private loaded = false;
@@ -144,7 +144,7 @@ export class CompileClient implements CompileService {
   private serving(): boolean {
     if (this.state === "idle" && this.w) {
       try { this.attach((this.source as () => WorkerPort)()); this.initialize(); }
-      catch (e) { this.retire(`the compile worker could not start: ${String(e)}`); }
+      catch (e) { this.stop(`the compile worker could not start: ${String(e)}`); }
     }
     return this.started;
   }
@@ -157,12 +157,10 @@ export class CompileClient implements CompileService {
     return true;
   }
   merge(_w: World): void { if (this.serving()) this.pump(); }
-  added(dexes: DexFile[] | null, loader?: Loader): void {
-    if (this.state === "retired" || !this.w) return;
-    if (!dexes) { this.retire("something the worker cannot follow was added"); return; }
-    if (this.state === "idle") return;
+  added(dexes: DexFile[], loader?: Loader): void {
+    if (!this.started) return;
     const list = containers(dexes);
-    this.post({ type: "add", dexes: list, loader: this.w.prog.loaderId(loader ?? this.w.prog.root), loaders: this.w.prog.loaderSnapshot() }, list.map(([, b]) => b.buffer as ArrayBuffer));
+    this.post({ type: "add", dexes: list, loader: this.w!.prog.loaderId(loader ?? this.w!.prog.root), loaders: this.w!.prog.loaderSnapshot() }, list.map(([, b]) => b.buffer as ArrayBuffer));
   }
   proxy(definition: ProxyDefinition): void {
     if (this.started) this.post({ type: "proxy", definition, loaders: this.w!.prog.loaderSnapshot() });
@@ -191,11 +189,10 @@ export class CompileClient implements CompileService {
     if (m.type === "loaded") { this.loaded = true; for (const [req, transfer] of this.waiting.splice(0)) this.port!.postMessage(req, transfer); return; }
     const w = this.w!;
     if (m.type === "ready") { this.state = "ready"; this.stats.startMs = performance.now() - this.stats.startMs; this.pump(); return; }
-    if (m.type === "failed" && m.id === undefined) { this.retire(m.message); return; }
+    if (m.type === "failed" && m.id === undefined) { this.stop(m.message); return; }
     if (m.type === "built") return;
     const busy = this.busy;
     if (!busy || m.id !== busy.id) return;
-    if (m.type === "unit" && m.result.module instanceof Uint8Array) { this.compile(m); return; }
     if (m.type === "unit" && this.holding(m)) return;
     this.busy = undefined;
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
@@ -205,7 +202,7 @@ export class CompileClient implements CompileService {
         w.tiers.failedRefresh(busy.slot, busy.job.refresh);
       }
       // the method stays on its first-tier code and does not ask again; a worker that keeps failing has lost track of the numbering
-      if (++this.stats.failed > MAX_FAILURES) this.retire(m.message); else this.pump();
+      if (++this.stats.failed > MAX_FAILURES) this.stop(m.message); else this.pump();
       return;
     }
     if (m.type !== "unit") return;
@@ -218,12 +215,6 @@ export class CompileClient implements CompileService {
       if (numbered) { this.keep = true; this.marks = w.numbers.marks(); }
     } else this.stats.stale++;
     this.pump();
-  }
-  /** A unit's bytes compile off the main thread before it is taken: compiled in the handler, they kept a busy app from its frames for seconds.
-   *  Bytes that do not compile fail the job. */
-  private compile(m: Extract<CompileResponse, { type: "unit" }>): void {
-    compileBytes(m.result.module as Uint8Array).then((module) => { m.result.module = module; this.receive(m); },
-      (e) => this.receive({ type: "failed", id: m.id, message: `${this.busy?.job.installed[0]}: ${(e as Error).message}` }));
   }
   private held?: { timer: ReturnType<typeof setTimeout>; unit?: CompileResponse };
   /** Planning a job and taking a unit (`unit`) wait while the app answers input: either would spend main-thread time in the response, and a unit replaces
@@ -239,8 +230,10 @@ export class CompileClient implements CompileService {
     if (unit) this.held.unit = unit;
     return true;
   }
+  // before start, the worker is given everything the World has when it starts
+  retire(reason: string): void { if (this.w) this.stop(reason); }
   /** stops serving: what was queued is compiled inline when its method asks again */
-  private retire(reason: string): void {
+  private stop(reason: string): void {
     if (this.state === "retired") return;
     this.state = "retired"; this.retired = reason;
     if (this.held) { clearTimeout(this.held.timer); this.held = undefined; }
@@ -249,5 +242,5 @@ export class CompileClient implements CompileService {
     this.waiting = []; this.w = undefined; this.setup = undefined;
     if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
   }
-  close(): void { this.retire("closed"); }
+  close(): void { this.stop("closed"); }
 }

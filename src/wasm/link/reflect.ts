@@ -11,10 +11,12 @@ import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
 import { WIDEN, BOX } from "../compiler/primitives.ts";
-import { rt } from "../compiler/rtfns.ts";
+import { rt, type Synth } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { memberArg, synthFamily } from "./synths.ts";
+import { PerWorld } from "./perworld.ts";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";
@@ -28,9 +30,9 @@ function members(jc: JClass | undefined): string[] {
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
-const sigs = new WeakMap<World, WeakMap<MethodInfo, { params: number[]; ret: number }>>();
+const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), true);
 function sigOf(w: World, m: MethodInfo) {
-  let byMethod = sigs.get(w); if (!byMethod) sigs.set(w, byMethod = new WeakMap());
+  const byMethod = sigs.get(w);
   let s = byMethod.get(m); if (!s) byMethod.set(m, s = { params: m.params.map((p) => w.idOf(typeName(p))), ret: w.idOf(typeName(m.ret)) });
   return s;
 }
@@ -52,10 +54,7 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
     return (named = index?.get(b) ?? []).length;
   }
   if (kind === RInfo.MethodNamedAt) return named[b];
-  if (kind === RInfo.SerialInit) {
-    const init = jc?.byKey.get("<init>()V");
-    return init ? w.synthSlot(`sinit:${a}`, { params: ["L"], ret: "V", body: (cx, c) => { cx.emitEnsure(c, init.cls); c.lget(0); cx.callMethod(c, init); } }) : 0;
-  }
+  if (kind === RInfo.SerialInit) return jc?.byKey.has("<init>()V") ? w.synthSlot("sinit:" + jc.name) : 0;
   if (kind === RInfo.MemberCount) return members(jc).length;
   if (kind === RInfo.Member) return w.idOf(members(jc)[b]);
   const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
@@ -68,14 +67,25 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
     case RInfo.MethodRet: return sigOf(w, m).ret;
     case RInfo.MethodFlags: return m.flags;
     case RInfo.MethodSlot: return w.slotOf(m);
-    case RInfo.MethodInvoke: return w.synthSlot(`invoke:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, true, false) });
-    case RInfo.MethodCall: case RInfo.MethodCallDirect: {
-      const direct = kind === RInfo.MethodCallDirect;
-      return w.synthSlot(`call:${direct}:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, false, direct) });
-    }
+    case RInfo.MethodInvoke: return w.synthSlot(`invoke:${jc!.name}:${b}`);
+    case RInfo.MethodCall: return w.synthSlot(`call:${jc!.name}:${b}`);
+    case RInfo.MethodCallDirect: return w.synthSlot(`callDirect:${jc!.name}:${b}`);
   }
   return 0;
 }
+synthFamily("sinit", (w, name) => {
+  const init = w.prog.get(name)?.byKey.get("<init>()V");
+  return init && { params: ["L"], ret: "V", body: (cx, c) => { cx.emitEnsure(c, init.cls); c.lget(0); cx.callMethod(c, init); } };
+}, true);
+/** a reflective call of method `index` of a class: Method.invoke's, which checks its arguments and wraps what the method throws (`wrap`), or a plain one that
+ *  dispatches or not (`direct`) */
+const reflectiveCall = (wrap: boolean, direct: boolean) => (w: World, arg: string): Synth | undefined => {
+  const [name, index] = memberArg(arg), m = w.prog.get(name)?.methods[index];
+  return m && { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, wrap, direct) };
+};
+synthFamily("invoke", reflectiveCall(true, false), true);
+synthFamily("call", reflectiveCall(false, false), true);
+synthFamily("callDirect", reflectiveCall(false, true), true);
 
 export function methodAt(w: World, slot: number): MethodInfo {
   const entry = w.slots.at(slot);

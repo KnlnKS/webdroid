@@ -36,7 +36,7 @@ export class Planner {
         const mr = c.dex.method(ins.b), t = this.w.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
         if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
-        if (ts?.k !== "method" || ts.done || ts.pending || this.w.aot?.install(at) && ts.done) continue;
+        if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.install(at) && ts.done) continue;
         out.push(t);
       }
     }
@@ -82,7 +82,7 @@ export class Planner {
   private ran(t: MethodInfo): number {
     const slot = this.w.slotOf(t), sl = this.w.slots.method(slot)!;
     // a method that has asked for the second tier has used up a budget, whatever its count since
-    if (sl.hot || this.w.tiers.requested.has(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    if (this.w.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
     return sl.done ? this.w.tiers.count(slot) : 0;
   }
   /** a method's call sites, and the classes it allocates and refers to */

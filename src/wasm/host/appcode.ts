@@ -8,7 +8,7 @@ import type { Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
-import type { FetchStore } from "../link/aotstore.ts";
+import type { FetchStore } from "./aotstore.ts";
 import { buildFiles, appKey, LaunchRecord, SavedBuild, type Persist } from "./persist.ts";
 import { fetchBundle } from "./bundle.ts";
 import { switchOn } from "../../switches.ts";
@@ -77,7 +77,7 @@ export interface AppCode {
 export interface Built { kept: boolean; methods: number; modules: number; ms: number }
 /** a build's files, and whether they were kept */
 type Made = { files: Map<string, Uint8Array>; kept: Promise<boolean>; methods: number; ms: number };
-const NO_DEMAND: Demand = { methods: [], classes: [], infos: [] };
+const NO_DEMAND: Demand = { methods: [], classes: [], synths: [] };
 
 /** The shards of a build a launch waits for: one per two logical cores (11 shards on 14 cores, efficiency cores among them, took FitNotes 1.14 s against 0.85 s for 6),
  *  one per SHARD_METHODS method references of the app, and as many as fit in 3/8 of the device's memory up to SHARD_BUDGET_MB. A shard holds a Program and World over
@@ -163,9 +163,9 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   /** what the saved build was asked to include and what the World built on demand since, merged as the launch goes: a look at it reads only what is new.
    *  `covered` is how much of it the saved build holds. */
   const initial = saved?.index.demand;
-  const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), infos: new Map(initial?.infos.map((r) => [r.join("\0"), r])) };
-  const size = () => merged.methods.size + merged.classes.size + merged.infos.size;
-  let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
+  const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), synths: new Set(initial?.synths) };
+  const size = () => merged.methods.size + merged.classes.size + merged.synths.size;
+  let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, synths: 0 };
   const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, saved: saved ? { index: saved.index, store: saved } : undefined, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => {
       if (closed || watching) return;
@@ -194,20 +194,20 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     world.ahead.noteRuns();
     const d = world.demand, prog = world.prog, libraries = libraryLoaders(prog);
     const buildable = (m: MethodInfo) => { const l = m.dex && prog.loaderOfDex(m.dex); return !!l && (l === prog.boot || l === prog.root || l === prog.base?.root || libraries.has(l)); };
-    if (seen.world !== world) seen = { world, methods: 0, classes: 0, infos: 0 };
+    if (seen.world !== world) seen = { world, methods: 0, classes: 0, synths: 0 };
     if (d.methods.size > seen.methods) {
       let i = 0;
       for (const m of d.methods) if (i++ >= seen.methods && (m.codeOff || world.intrinsic(m)) && buildable(m)) merged.methods.add(mid(m));
       seen.methods = d.methods.size;
     }
     for (; seen.classes < d.classes.length; seen.classes++) merged.classes.add(d.classes[seen.classes]);
-    for (; seen.infos < d.infos.length; seen.infos++) { const r = d.infos[seen.infos]; merged.infos.set(r.join("\0"), r); }
+    for (; seen.synths < d.synths.length; seen.synths++) merged.synths.add(d.synths[seen.synths]);
     return size() - covered;
   }
   async function rebuild(world: World): Promise<Built> {
     // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
     const ran = !saved ? [] : world.tiers.ranBuildSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
-    const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
+    const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], synths: [...merged.synths] }, hostClasses, rootLibraries(world));
     const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);
     if (built.kept) covered = at;
@@ -296,7 +296,7 @@ class Builder {
       if (this.running !== run) throw new Error("App code closed");
       const t0 = performance.now(), init = (shard: number): [CompileRequest, Transferable[]] => {
         const dexes = containers(this.req.dexes), scopes = libraries?.scopes.map(([id, dexes]): [LoaderId, Containers] => [id, dexes.map(([name, bytes]) => [name, bytes.slice()])]);
-        return [{ type: "init", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, build: this.roots, demand, oneShot: true,
+        return [{ type: "build", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, roots: this.roots, demand,
           shard: [shard, shards], ...libraries && { loaders: libraries.loaders, scopes } }, [dexes, ...scopes?.map(([, dexes]) => dexes) ?? []].flatMap((dexes) => dexes.map(([, b]) => b.buffer as ArrayBuffer))];
       };
       const [lead, ...rest] = await Promise.race([Promise.all(Array.from({ length: shards }, (_, shard) => this.runShard(run, init(shard)))), failed]);

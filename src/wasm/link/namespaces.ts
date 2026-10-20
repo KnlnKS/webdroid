@@ -2,7 +2,9 @@
 // Code linked under the old resolution is undone; a change that would alter the dispatch or hierarchy of linked classes is refused with a LinkageError.
 import { changedTypes, declaresNaming, declaresStaticOf, javaName, type Loader } from "../compiler/program.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
+import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 
 export class Namespaces {
   private readonly w: World;
@@ -34,7 +36,7 @@ export class Namespaces {
   initiateClass(loader: Loader, name: string, key: string): void {
     const w = this.w, prog = w.prog, prior = prog.initiatedBy(loader, name);
     if (prior === key) return;
-    if (prior) throw w.exception(w.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
+    if (prior) w.raise("java/lang/LinkageError", `Class loader already initiated ${name}`);
     if (prog.lookup(loader, name) === key) { prog.initiate(loader, name, key); return; }
     this.rebind(loader, new Set([name]), () => prog.initiate(loader, name, key), () => prog.forgetInitiated(loader, name), "Class initiation");
   }
@@ -86,7 +88,7 @@ export class Namespaces {
     w.dispatch.forget();
     const refuse = (what: string, name: string) => {
       undo(); w.dispatch.forget();
-      return w.exception(w.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
+      return w.exception(w.helpers.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
     };
     // A kept app build was made under the new graph: the classes laid out by its data modules already have the new hierarchy and dispatch.
     const kept = keepApp(), builtUnderNew = (name: string) => kept && w.classes.get(name)?.from === "app";
@@ -99,10 +101,7 @@ export class Namespaces {
       })) throw refuse("dispatch", old.name);
     }
     // A changed superclass would change the physical GC layout of already linked instances. Constructor-time library binding must precede that resolution.
-    for (const old of existing) {
-      const cls = prog.get(old.name)!;
-      if (!builtUnderNew(old.name) && (cls.sup !== old.sup || cls.ifaces.join("\0") !== old.ifaces.join("\0"))) throw refuse("hierarchy", old.name);
-    }
+    for (const old of existing) if (!builtUnderNew(old.name) && !hasHierarchy(prog.get(old.name), old.sup, old.ifaces)) throw refuse("hierarchy", old.name);
     // A class's globals keep the names its module gave them: an app build made under the new graph has them already.
     for (const old of existing) {
       for (const { field, desc } of old.statics) if (desc !== field.desc) {
@@ -113,12 +112,12 @@ export class Namespaces {
     w.epoch++;
     w.opts.compiler?.namespaces();
     w.cha.reindex(); w.planner.forgetImplementations();
-    w.helpers.forgetFieldReaders();
+    w.helpers.forgetFieldReaders(); PerWorld.rebound(w);
     w.dispatch.forget();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);
     // a slot without state has never been compiled here
-    const builtUnder = (slot: number) => { const s = slots.peek(slot); return (!s || s.k === "method" && !s.hot && !w.demand.methods.has(s.m)) && !!w.aot?.fromAppBuild(slot); };
+    const builtUnder = (slot: number) => { const s = slots.peek(slot); return (!s || s.k === "method" && !w.tiers.hot(slot) && !w.demand.methods.has(s.m)) && !!w.aot?.fromAppBuild(slot); };
     for (let b = 0; b < slots.blockClass.length; b++) if (refreshed.has(slots.blockClass[b])) {
       for (let i = 0; i < slots.methodsIn(b); i++) if (!kept || !builtUnder(slots.blockBase[b] + i)) w.assumptions.undoCode(slots.blockBase[b] + i);
     }

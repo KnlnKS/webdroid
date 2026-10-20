@@ -9,6 +9,13 @@ export const compileModule = (bytes: Uint8Array): WebAssembly.Module => new (Web
 export const compileStream = (source: Promise<Response>): Promise<WebAssembly.Module> => (WebAssembly.compileStreaming as unknown as StreamWithOptions)(source, COMPILE_OPTIONS);
 export const compileBytes = (bytes: Uint8Array): Promise<WebAssembly.Module> => (WebAssembly.compile as unknown as (bytes: BufferSource, options: CompileOptions) => Promise<WebAssembly.Module>)(bytes as BufferSource, COMPILE_OPTIONS);
 
+/** reads unsigned LEB128 numbers from `b` at `i` */
+export class LebReader {
+  readonly b: Uint8Array; i: number;
+  constructor(b: Uint8Array, i = 0) { this.b = b; this.i = i; }
+  u32(): number { let r = 0, s = 1, x: number; do { x = this.b[this.i++]; r += (x & 0x7f) * s; s *= 128; } while (x & 0x80); return r; }
+}
+
 // JSPI (stack switching for Wasm): a Suspending import may wait on a promise, a promising export runs on a stack of its own and answers one
 type Jspi = { Suspending: new (fn: (...a: never[]) => unknown) => Function; promising: (f: Function) => Function };
 /** the engine's JSPI, which the tier needs (node 24 enables it with --experimental-wasm-jspi) */

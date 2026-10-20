@@ -17,11 +17,9 @@ import { rt } from "../../src/jvm/runtime.ts";
 import { hostNatives } from "../../src/wasm/host/hostnatives.ts";
 import { SERVICES } from "../../src/wasm/host/suspend.ts";
 import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
-import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";
-import { synthModules } from "../../src/wasm/link/apps.ts";
+import type { CHeader } from "../../src/wasm/link/aot.ts";
+import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
-import { compileModule } from "../../src/wasm/link/module.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 
@@ -77,14 +75,12 @@ function hotChunked(names: string[], size: (name: string) => number, limit: numb
   }
   return (name) => of.get(name) ?? rest(name);
 }
-const HARD_LIMIT = 7 * 1024 * 1024;
 // Guarded capture sites made a 3 MiB estimated media group emit 8.31 MiB.
 // Keep the physical 7 MiB cap; estimate those groups with their measured expansion.
-const C_BYTES_PER_UNIT = 14, C_BYTES_PER_METHOD = 150, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19, D_BYTES_PER_CLASS = 330;
+const HARD_LIMIT = 7 * 1024 * 1024;
 const classSize = (kind: "c" | "d") => (name: string): number => {
   const jc = prog.get(name)!;
-  if (kind === "d") return D_BYTES_PER_CLASS + jc.methods.length * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD;
-  return jc.methods.reduce((n, m) => n + (m.codeOff ? C_BYTES_PER_METHOD + C_BYTES_PER_UNIT * m.dex.code(m.codeOff).insns.length : 0), 0);
+  return kind === "d" ? dataBytes(jc) : jc.methods.reduce((n, m) => n + codeBytes(m), 0);
 };
 
 /** `names` with their superclasses and interfaces, each before the classes that need it: a class module needs the stubs of what its vtable names */
@@ -107,21 +103,12 @@ rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true 
 const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
 const aot = w.aot!;
 const t0 = performance.now();
-let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;
-/** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the constants above need re-measuring */
+let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
+/** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the estimates (link/aotbuild.ts) need re-measuring */
 const sized = (file: string, n: number) => { largest = Math.max(largest, n); if (n > HARD_LIMIT) throw new Error(`${file} is ${n} bytes, over ${HARD_LIMIT}; lower --max-module`); };
 const validate = !process.argv.includes("--no-validate");
-/** V8's verdict on a module: the function it rejects, if any */
-const check = (bytes: Uint8Array): { fn: number; message: string } | undefined => {
-  if (!validate) return undefined;
-  const t = performance.now();
-  try { compileModule(bytes); } catch (e) {
-    const message = (e as Error).message, m = /function #(\d+)/.exec(message);
-    return { fn: m ? +m[1] : -1, message };
-  } finally { v8Ms += performance.now() - t; }
-};
-const idsOf = (names: Iterable<string>) => [...names].filter((n) => n[0] !== "!").map((n) => w.idOf(n));
-const synthOf = (names: Iterable<string>) => [...names].filter((n) => n[0] === "!").map((n) => n.slice(1));
+/** V8 rejects `bytes`, when the build validates */
+const rejects = (bytes: Uint8Array) => validate && invalidFunction(bytes);
 const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k ? [i] : []));
 
 // ---- code modules first: they number the selectors, gaps and runtime functions the class modules' vtables then use
@@ -130,17 +117,11 @@ const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
   const methods = blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
-  const cx = new Compiler(w);
-  w.beginTouch();
-  const built = cx.buildUnit(methods, { install: "build" }), touch = w.endTouch();
-  const bad = check(built.bytes);
-  if (bad) {
-    const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
-    throw new Error(`C ${k}${name ? ` (${name})` : ""}: ${bad.message}`);
-  }
-  const { bytes, traces } = built;
+  let made: ReturnType<typeof codeModule>;
+  try { made = codeModule(w, methods, { strict: true, validate }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
+  const { cx, built: { bytes, traces }, header: unit } = made;
   nMethods += methods.length;
-  const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
+  const header: CHeader = { ...unit, classes: blocks, mods: [...cx.deps.keys()],
     absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, { w, traces });
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
@@ -152,12 +133,7 @@ const t1 = performance.now();
 // ---- class modules
 const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
-  const names = blocks.map((b) => w.slots.blockClass[b]);
-  w.beginTouch();
-  const bytes = w.classModules.classModule(names.map((n) => w.link(n)));
-  const touch = w.endTouch();
-  const header: DHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch) };
-  const bad = check(bytes);
+  const { bytes, header } = dataModule(w, blocks.map((b) => w.slots.blockClass[b])), bad = rejects(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
   const file = packModule(header, bytes);
   writeFileSync(join(out, `d${k}.wasm`), file); sized(`d${k}.wasm`, file.length);
@@ -166,19 +142,17 @@ dGroups.forEach((blocks, k) => {
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module, and the runtime functions the modules name, which a World would
 // otherwise make a module for each of, a few; building either can name more of both
 const extraNames = () => w.numbers.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
-let extras: number, xbytes: Uint8Array, xtouch: Set<string>, synths: string[][], nSynths: number, yBytes: number;
+let extras: number, extra: ReturnType<typeof dataModule>, synths: string[][], nSynths: number, yBytes: number;
 do {
   yBytes = 0;
   synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
   nSynths = w.slots.synths().length;
   const names = extraNames();
   extras = names.length;
-  w.beginTouch();
-  xbytes = w.classModules.classModule(names.map((n) => w.link(n)));
-  xtouch = w.endTouch();
+  extra = dataModule(w, names);
 } while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
-if (check(xbytes)) throw new Error("extra classes: module does not validate");
-const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
+if (rejects(extra.bytes)) throw new Error("extra classes: module does not validate");
+const xfile = packModule({ ...extra.header, classes: [] }, extra.bytes);
 writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;
 const t2 = performance.now();
 
@@ -191,6 +165,6 @@ writeFileSync(join(out, "prefix.json"), "null");
 writeFileSync(join(out, "warm.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
-console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
+console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${validation.ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();

@@ -21,7 +21,7 @@ export function wasmJni(w: World): JniVm {
   const classes = new Map<string, JniClass>();
   const cls = (name: string): JniClass => { let c = classes.get(name); if (!c) classes.set(name, c = { name }); return c; };
   /** a Java exception raised from the host's side of a call */
-  const fail = (name: string, msg: string): never => { throw w.exception(w.makeThrowable(name, msg)); };
+  const fail = (name: string, msg: string): never => w.raise(name, msg);
   const noSuchMethod = (name: string, sig: string) => fail("java/lang/NoSuchMethodError", name + sig);
   /** JNI names classes by binary name; a class of a loader's own namespace names them as that loader sees them */
   const view = (c: JniClass, sig: string): string => prog.viewOf(c.name, sig);
@@ -40,7 +40,7 @@ export function wasmJni(w: World): JniVm {
     return x[0] === "L" && y[0] === "L" ? isSub(x.slice(1, -1), y.slice(1, -1)) : x[0] === "[" && y[0] === "[" ? isSub(x, y) : x === y;
   };
   const mirror = (c: JniClass): unknown => classRef(w, c.name);
-  const classId = w.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
+  const classId = w.helpers.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
   /** a Class as JNI holds it, or as a native's argument holds it (the host form of the object) */
   const classOf = (mirror: unknown): JniClass | null => {
     const m = refOf(mirror) ?? mirror;
@@ -59,7 +59,7 @@ export function wasmJni(w: World): JniVm {
   const call = (o: object, name: string, desc: string, ...args: unknown[]): unknown => bridge.call(virtual(o, name, desc), o, args);
   const copy = (to: boolean, type: string) => {
     const kind = elemKindOf("[" + type);
-    return w.hostFn(`j:g${to ? "put" : "get"}_${kind}`, ["L", "I", "I", "I", "I"], "V", (cx, c) => { c.lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, `g${to ? "put" : "get"}_${kind}`); });
+    return w.helpers.hostFn(`j:g${to ? "put" : "get"}_${kind}`, ["L", "I", "I", "I", "I"], "V", (cx, c) => { c.lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, `g${to ? "put" : "get"}_${kind}`); });
   };
   const bufferField = (name: string, desc: string) => prog.resolveField("java/nio/Buffer", name, desc)!;
   /** `f` as a call into Java from guest code, on a strand of its own so that Java that waits can: the result, or a Promise of it */
@@ -181,9 +181,9 @@ export function wasmJni(w: World): JniVm {
     toGuest: (array, type, start, n, p) => copy(true, type)(array, start, n, p, 0),
     fromGuest: (array, type, start, n, p) => copy(false, type)(array, start, n, p, 0),
 
-    throwable: (name, msg) => w.makeThrowable(name, msg),
-    noClass: (name) => { rt.noteMissing("class " + name); return w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`); },
-    caught: (e) => w.throwable(w.boundary(e)) ?? w.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
+    throwable: (name, msg) => w.helpers.makeThrowable(name, msg),
+    noClass: (name) => { rt.noteMissing("class " + name); return w.helpers.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`); },
+    caught: (e) => w.throwable(w.boundary(e)) ?? w.helpers.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
     raise: (t) => bridge.toHost(t),
     describe: (t) => bridge.toHost(call(t as object, "toString", "()Ljava/lang/String;")) as string,
     monitor(o, enter) {

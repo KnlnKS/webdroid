@@ -14,6 +14,8 @@ import { PRIMS } from "../../jvm/abi.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { memberArg, synthFamily } from "./synths.ts";
+import { PerWorld } from "./perworld.ts";
 import { idOfClass } from "./classes.ts";
 
 import { rt } from "../compiler/rtfns.ts";
@@ -23,9 +25,9 @@ import { UInfo } from "../compiler/info.ts";
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
 /** the offsets handed out for fields, small so that a library which keeps them in 20 bits finds them again: field id (class id << 12 | index) to offset and back */
-const cookies = new WeakMap<World, { ofField: Map<number, number>; fields: number[] }>();
+const cookies = new PerWorld(() => ({ ofField: new Map<number, number>(), fields: [] as number[] }));
 export function fieldCookie(w: World, id: number): number {
-  let t = cookies.get(w); if (!t) cookies.set(w, t = { ofField: new Map(), fields: [] });
+  const t = cookies.get(w);
   let c = t.ofField.get(id);
   // Byte accessors align the offset down to a word before reading an int.
   if (c === undefined) { t.ofField.set(id, c = t.fields.push(id) * 8); }
@@ -36,33 +38,34 @@ type Ty = string;
 const width = (t: Ty) => (t === "L" ? 4 : PRIMS[t].size);
 const desc = (t: Ty) => (t === "L" ? "Ljava/lang/Object;" : t);
 
-/** Field accessor bodies are pure; install them before returning their slot so linking cannot split a VarHandle update. */
-const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
-
-/** an access by offset as the access by field id that names the same accessor: offsets are this World's own */
-export const byFieldId = (w: World, kind: number, a: number): [number, number] => {
-  const f = kind >= UInfo.ObjGet ? cookies.get(w)?.fields[a / 8 - 1] : undefined;
-  return f === undefined ? [kind, a] : [kind - UInfo.ObjGet + UInfo.FieldGet, f];
-};
 /** the table slot of the accessor of field `a` for the operation `kind` (the field's kind must be `b`: 0 int-like, 1 long-like, 2 reference), 0 if there is none;
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: number, a: number, b: number): number {
   // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
-  if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
+  if (kind >= UInfo.ObjGet && (a = cookies.peek(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
   if (kind === UInfo.ComponentScale) return name[0] === "#" ? PRIMS[name[1]]?.size ?? 0 : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
-    return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }, true);
+    return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, undefined, true);
   }
   const stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut;
   const f = w.prog.get(name)?.fields[a & 0xfff];
   if (!f || f.isStatic !== stat || f.kind !== (["I", "J", "L"] as const)[b]) return 0;
-  const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet || kind === UInfo.ObjGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut || kind === UInfo.ObjPut ? "put" : "cas", k = f.kind;
-  const params: Kind[] = op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k];
+  const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet || kind === UInfo.ObjGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut || kind === UInfo.ObjPut ? "put" : "cas";
+  // Field accessor bodies are pure; they are installed before their slot is returned so linking cannot split a VarHandle update
+  return w.synthSlot(`uf:${stat ? "s" : ""}${op}:${name}:${a & 0xfff}`, undefined, true);
+}
+synthFamily("alloc", (_w, name) => ({ params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }), true);
+// uf:<op>:<class>:<field index>, op get, put or cas, or sget or sput for a static field
+synthFamily("uf", (w, arg) => {
+  const at = arg.indexOf(":"), op = arg.slice(0, at), [name, index] = memberArg(arg.slice(at + 1)), f = w.prog.get(name)?.fields[index], k = f?.kind;
+  if (!f || !k) return undefined;
   // a static field's accessor takes the receiver slot too, so reflection reaches both kinds the same way
-  if (stat) return fieldAccessor(w, `uf:s${op}:${a}`, { params, ret: op === "get" ? k : "V", body: (cx, c) => { const g = cx.staticGlobal(name, f.name, f.desc); if (op === "get") c.gget(g); else c.lget(1).gset(g); } });
-  return fieldAccessor(w, `uf:${op}:${a}`, { params, ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
+  if (op[0] === "s") return { params: op === "sget" ? ["L"] : ["L", k], ret: op === "sget" ? k : "V", body: (cx, c) => {
+    const g = cx.staticGlobal(name, f.name, f.desc); if (op === "sget") c.gget(g); else c.lget(1).gset(g);
+  } };
+  return { params: op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k], ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
     const st = cx.structFor(name), at = cx.fieldIndex(name, f), o = c.newLocal(refNull(st));
     c.lget(0).refCast(st).lset(o);
     if (op === "get") c.lget(o).structGet(st, at);
@@ -71,8 +74,8 @@ export function hostUnsafe(w: World, kind: number, a: number, b: number): number
       c.lget(o).structGet(st, at).lget(1); if (k === "L") c.call(cx.helper("acmp")); else c.raw(k === "I" ? OP.i32_eq : OP.i64_eq);
       c.if_(T.i32).lget(o).lget(2).structSet(st, at).i32(1).else_().i32(0).end();
     }
-  } });
-}
+  } };
+}, true);
 
 // Nine slots per field cookie: get/put/CAS for int/long/reference. Numbering rollback clears the cache.
 rt("ufield", ["I", "I", "I"], "I", (cx, c) => {

@@ -6,6 +6,7 @@ import { ACC, type MethodInfo } from "../compiler/program.ts";
 import { failed } from "../compiler/linkage.ts";
 import type { Compiler } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import type { UnitHeader } from "./aot.ts";
 
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
@@ -22,27 +23,37 @@ export class Assumptions {
   private holders = new Map<number, Set<number>>();
   constructor(w: World) { this.w = w; }
 
-  /** records what a unit's code relies on: `slot` owns what no method of the unit does */
+  /** records what the code of a unit compiled here relies on: `slot` owns what no method of the unit does */
   record(cx: Pick<Compiler, "assumptions" | "absent" | "held">, slot?: number): void {
-    const w = this.w;
-    // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
-    const late = w.cha.late.size && cx.assumptions.length ? this.lateBy(new Set(cx.assumptions.map(([decl]) => decl)), w.cha.late) : undefined;
-    for (const [decl, name, desc, target, owner] of cx.assumptions) {
-      const at = owner ? w.slotOf(owner) : slot;
-      if (at === undefined) throw new Error("compiled assumption has no invalidation owner");
-      const tc = target?.cls ?? "", tk = target?.key ?? "", by = late?.get(decl);
-      if (by && !this.holds({ name, desc, tc, tk }, by)) { w.invalidate(at); continue; }
-      const key = `${decl}.${name}${desc}`;
-      let a = this.decisions.get(key);
-      if (!a) this.decisions.set(key, a = { decl, name, desc, tc, tk, slots: new Set() });
-      a.slots.add(at);
-    }
-    for (const [name, owner] of cx.absent) {
-      const at = owner ? w.slotOf(owner) : slot;
-      if (at === undefined) throw new Error("compiled absence has no invalidation owner");
-      this.absentAt(name, at);
-    }
+    const late = this.lateFor(cx.assumptions);
+    for (const [decl, name, desc, target, owner] of cx.assumptions) this.decide(decl, name, desc, target?.cls ?? "", target?.key ?? "", this.owner(owner, slot), late);
+    for (const [name, owner] of cx.absent) this.absentAt(name, this.owner(owner, slot));
     this.hold(cx.held);
+  }
+  /** records what the code of a unit made elsewhere relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
+  recordHeader(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
+    const late = this.lateFor(head.assumptions);
+    for (const [decl, name, desc, tc, tk, at] of head.assumptions) this.decide(decl, name, desc, tc, tk, at, late);
+    for (const [name, at] of head.missing) if (this.w.prog.get(name)) this.undoCode(at); else this.absentAt(name, at);
+    this.hold(head.held ?? []);
+  }
+  // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
+  private lateFor(decisions: readonly (readonly [string, ...unknown[]])[]): Map<string, string[]> | undefined {
+    return this.w.cha.late.size && decisions.length ? this.lateBy(new Set(decisions.map(([decl]) => decl)), this.w.cha.late) : undefined;
+  }
+  private owner(owner: MethodInfo | undefined, slot: number | undefined): number {
+    const at = owner ? this.w.slotOf(owner) : slot;
+    if (at === undefined) throw new Error("compiled code relies on something with no invalidation owner");
+    return at;
+  }
+  /** code in slot `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
+  private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: number, late: Map<string, string[]> | undefined): void {
+    const by = late?.get(decl);
+    if (by && !this.holds({ name, desc, tc, tk }, by)) { this.w.tiers.invalidate(at); return; }
+    const key = `${decl}.${name}${desc}`;
+    let a = this.decisions.get(key);
+    if (!a) this.decisions.set(key, a = { decl, name, desc, tc, tk, slots: new Set() });
+    a.slots.add(at);
   }
   /** the code of the methods after each slot of `held` holds the code of the method of that slot (Compiler.held) */
   hold(held: readonly number[][]): void {
@@ -54,7 +65,7 @@ export class Assumptions {
     for (let i = 0; i < todo.length; i++) {
       const by = this.holders.get(todo[i]);
       if (by) { this.holders.delete(todo[i]); todo.push(...by); }
-      this.w.invalidate(todo[i]);
+      this.w.tiers.invalidate(todo[i]);
     }
   }
   /** the code of `slot` fails a site because class `name` is not loaded */
@@ -116,7 +127,7 @@ export class Assumptions {
     this.absent.clear();
   }
   private undo(key: string, a: Assumption): void {
-    for (const slot of a.slots) this.w.invalidate(slot);
+    for (const slot of a.slots) this.w.tiers.invalidate(slot);
     this.decisions.delete(key);
   }
   private decls(): Set<string> { return new Set([...this.decisions.values()].map((a) => a.decl)); }

@@ -1,23 +1,21 @@
 // An app compiled ahead on top of the platform build (aot.ts `extend`): the code of the methods it is likely to run, in code modules a<k>.wasm of the classes' groups, and the
 // numbering that code relies on. A World at the platform build's state that has the app's dexes takes it as it takes the platform's own modules, and compiles the rest on demand.
 // The build may be made by shards, Worlds that each number the same seed (seedApp) and then compile their share of the modules with their numbering frozen.
-import { Compiler, NeedsNumber } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
-import { compileModule } from "./module.ts";
-import { APP_VERSION, packModule, unitHeader, type AotRuntime, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot.ts";
-import { methodCount, type MethodInfo } from "../compiler/program.ts";
+import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
+import { synthOf } from "./synths.ts";
+import { APP_VERSION, type AotRuntime, type AppIndex, type CHeader, type Demand } from "./aot.ts";
+import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import { LinkIds, type Marks, type Numbering } from "./numbers.ts";
 import { walkRefs } from "../../jvm/opcodes.ts";
 import { descToName } from "../../jvm/abi.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 
-/** the estimated size of a code module (the bytes per dex code unit and per method aot-build measured) where the next class starts another */
-const MODULE_BYTES = 1 << 20, BYTES_PER_METHOD = 150, BYTES_PER_UNIT = 14;
-/** the same for a data module: a module is loaded whole when any of its classes is first used, so these are small; the figures are aot-build's */
-const D_MODULE_BYTES = 128 << 10, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;
-/** synthetic functions to a module */
-const SYNTH_GROUP = 64;
+/** the estimated size of a code module where the next class starts another */
+const MODULE_BYTES = 1 << 20;
+/** the same for a data module: a module is loaded whole when any of its classes is first used, so these are small */
+const D_MODULE_BYTES = 128 << 10;
 /** the code bytes whose compile takes as long as building a class's data (measured over a whole app) */
 const D_COST_PER_CLASS = 350;
 export interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
@@ -26,62 +24,6 @@ export interface ShardPart { files: AppBuild["files"]; cOf: AppIndex["cOf"]; pat
 /** the first shard's part, which also has the build's index but for what `mergeApp` adds */
 export interface LeadPart extends ShardPart { index: Omit<AppIndex, "id" | "cOf" | "patches"> }
 export type AppPart = ShardPart | LeadPart;
-
-/** why V8 rejects `bytes`, if it rejects the module, and the name of the function of `cx`'s module it names ("" for none) */
-function invalidFunction(bytes: Uint8Array, cx?: Compiler): { name: string; message: string } | undefined {
-  try { compileModule(bytes); } catch (e) {
-    const message = (e as Error).message, m = /function #(\d+)/.exec(message);
-    return { name: m && cx ? cx.mb.funcNames[+m[1] - cx.mb.nImportedFuncs] ?? "" : "", message };
-  }
-  return undefined;
-}
-/** the World's synthetic functions as modules of a few dozen, which load together; a function V8 rejects is left to the on-demand compiler, as in `compileChecked` */
-export function synthModules(w: World, emit: (module: number, bytes: Uint8Array) => void): string[][] {
-  const synths: string[][] = [];
-  // building a group can name more synthetic functions (one that calls another): the list is read again for the next group
-  for (let at = 0, all = w.slots.synths(); at < all.length; all = w.slots.synths()) {
-    const end = Math.min(at + SYNTH_GROUP, all.length);
-    let group = all.slice(at, end);
-    for (;;) {
-      const cx = new Compiler(w);
-      w.beginTouch();
-      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
-      if (!bad) {
-        if (built.kept.length) {
-          const header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };
-          emit(synths.length, packModule(header, built.bytes));
-          synths.push(built.kept);
-        }
-        break;
-      }
-      const name = bad.name.slice(1);
-      if (!name || !group.some((g) => g.name === name)) break;
-      group = group.filter((g) => g.name !== name);
-    }
-    at = end;
-  }
-  return synths;
-}
-/** `methods` as a module that installs them: a method the compiler emits invalid code for (`check` says so), or that a frozen World cannot number, is left out, to the on-demand
- *  compiler, which fails the same way if it is ever called */
-function compileChecked(w: World, methods: MethodInfo[]): { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
-  const skipped = new Map<string, string>();
-  for (;;) {
-    const cx = new Compiler(w);
-    w.beginTouch();
-    let built: ReturnType<Compiler["buildUnit"]>;
-    try { built = cx.buildUnit(methods.filter((m) => !skipped.has(mid(m))), { install: "build" }); } catch (e) {
-      w.endTouch();
-      if (!(e instanceof NeedsNumber) || !e.method || skipped.has(mid(e.method))) throw e;
-      skipped.set(mid(e.method), e.message);
-      continue;
-    }
-    const touch = w.endTouch(), bad = invalidFunction(built.bytes, cx);
-    if (!bad) return { cx, built, touch, skipped };
-    if (!bad.name || skipped.has(bad.name)) throw new Error(bad.message);
-    skipped.set(bad.name, bad.message);
-  }
-}
 
 /** Numbers what the code of `methods` names, in the same order in every World at the same state: their classes first (so that the likely ones have the low slots, which count
  *  calls), then the classes, array classes and interface selectors their instructions name. A World that has numbered this seed compiles the methods without numbering more,
@@ -140,7 +82,7 @@ function planApp(w: World, methods: MethodInfo[], demand: Demand, shards: number
   const grouped = (lists: MethodInfo[][], over: number): Group[] => {
     const groups: Group[] = [{ methods: [], over, bytes: 0 }];
     for (const list of lists) {
-      const size = list.reduce((n, m) => n + BYTES_PER_METHOD + BYTES_PER_UNIT * (m.codeOff ? m.dex.code(m.codeOff).insns.length : 0), 0);
+      const size = list.reduce((n, m) => n + codeBytes(m), 0);
       let last = groups[groups.length - 1];
       if (last.bytes && last.bytes + size > MODULE_BYTES) groups.push(last = { methods: [], over, bytes: 0 });
       last.methods.push(...list); last.bytes += size;
@@ -169,11 +111,11 @@ function compileShard(w: World, plan: AppPlan, shard: number, frozen: boolean): 
   const files: AppBuild["files"] = [], cOf: AppIndex["cOf"] = [], patches: AppIndex["patches"] = [];
   const compile = () => plan.groups.forEach(({ methods: group, over }, module) => {
     if (plan.shardOf[module] !== shard) return;
-    const { cx, built, touch, skipped } = compileChecked(w, group);
+    const { built, header: unit, skipped } = codeModule(w, group);
     const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.slots.blockOf(w.link(c).slotBase));
     const wanted = new Set(group);
     const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
-    const header: CHeader = { ...unitHeader(w, cx, touch), classes, mods: [], absent };
+    const header: CHeader = { ...unit, classes, mods: [], absent };
     files.push([`a${module}.wasm`, packModule(header, built.bytes, { w, traces: built.traces })]);
     if (over < 0) for (const b of classes) cOf.push([b, module]); else patches.push([module, over]);
   });
@@ -187,25 +129,22 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   let group: string[] = [], size = 0, dModules = 0;
   const flush = () => {
     if (!group.length) return;
-    w.beginTouch();
-    const bytes = w.classModules.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.slots.blockOf(w.link(n).slotBase));
+    const { bytes, header } = dataModule(w, group);
     group = []; size = 0;
     // a module V8 rejects leaves its classes to the on-demand builder
     if (invalidFunction(bytes)) return;
-    const header: DHeader = { classes: blocks, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)) };
-    for (const b of blocks) dOf.push([b, dModules]);
+    for (const b of header.classes) dOf.push([b, dModules]);
     files.push([`e${dModules++}.wasm`, packModule(header, bytes)]);
   };
   // the classes a code module names are all linked when it is loaded, so their modules are wanted as soon as it is
   for (const name of plan.dNames) {
-    const jc = w.prog.get(name);
-    const bytes = D_BYTES_PER_CLASS + (jc ? methodCount(jc) * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD : 0);
+    const bytes = dataBytes(w.prog.get(name));
     if (size && size + bytes > D_MODULE_BYTES) flush();
     group.push(name); size += bytes;
   }
   flush();
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
-  w.replay(demand.infos);
+  for (const name of demand.synths) { const d = synthOf(w, name); if (d) w.synthSlot(name, d); }
   const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
   const { aot, prefix, base } = plan;
   return { ...part, links: w.numbers.links.since(base.links), index: { version: APP_VERSION, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount,

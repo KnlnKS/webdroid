@@ -141,7 +141,7 @@ function makeEntry(w: World): Entry {
   const invoke = (m: MethodInfo, recv: object | null, args: unknown[]): unknown => onStrand((s) => bridge.invokeOn(s, m, recv, args));
   /** a call made of `body` */
   const call = (key: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]): unknown =>
-    onStrand((s) => w.callFn(key, params, ret, body)(s, ...args));
+    onStrand((s) => w.helpers.callFn(key, params, ret, body)(s, ...args));
   const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
   /** a JThread (what host code holds of a thread) is the Java Thread of its strands: the main thread's is made by its first Thread.currentThread() */
   const threadObject = (t: JThread): object => {
@@ -183,19 +183,19 @@ function makeEntry(w: World): Entry {
     cls = {
       name,
       new: () => scoped(() => enter(() => {
-        const allocate = w.hostFn("e:alloc:" + name, [], "L", (cx, c) => cx.emitNew(c, name));
+        const allocate = w.helpers.hostFn("e:alloc:" + name, [], "L", (cx, c) => cx.emitNew(c, name));
         return bridge.toHost(allocate()) as object;
       })),
       static: (field, desc) => {
         const f = staticOf(name, field, desc);
         if (!f) return undefined;
-        const read = w.hostFn(`e:sget:${f.owner}.${f.name}:${f.desc}`, [], f.kind, (cx, c) => { c.gget(cx.staticGlobal(f.owner, f.name, f.desc)); });
+        const read = w.helpers.hostFn(`e:sget:${f.owner}.${f.name}:${f.desc}`, [], f.kind, (cx, c) => { c.gget(cx.staticGlobal(f.owner, f.name, f.desc)); });
         return scoped(() => f.kind === "L" ? bridge.toHost(read(), f.desc) : fromBits(read(), f.desc));
       },
       setStatic: (field, value, desc) => {
         const f = staticOf(name, field, desc);
         if (!f) return false;
-        const write = w.hostFn(`e:sset:${f.owner}.${f.name}:${f.desc}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(f.owner, f.name, f.desc)); });
+        const write = w.helpers.hostFn(`e:sset:${f.owner}.${f.name}:${f.desc}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(f.owner, f.name, f.desc)); });
         scoped(() => write(f.kind === "L" ? bridge.toJava(value, f.desc) : toBits(value, f.desc)));
         return true;
       },
@@ -203,7 +203,7 @@ function makeEntry(w: World): Entry {
         const fs = entries.map(([field, value]) => [staticOf(name, field, desc), value] as const).filter((e): e is readonly [FieldInfo, unknown] => !!e[0]);
         if (!fs.length) return;
         // one module for all of them: the function takes the index of the field and its value (a chain of tests is smaller for the engine to compile than a jump table of nested blocks)
-        const kind = fs[0][0].kind, write = w.hostFn(`e:ssets:${name}:${desc}:${fs.map(([f]) => f.name).join()}`, ["I", kind], "V", (cx, c) => {
+        const kind = fs[0][0].kind, write = w.helpers.hostFn(`e:ssets:${name}:${desc}:${fs.map(([f]) => f.name).join()}`, ["I", kind], "V", (cx, c) => {
           fs.forEach(([f], i) => { c.lget(0).i32(i).raw(OP.i32_eq).if_().lget(1).gset(cx.staticGlobal(f.owner, f.name, f.desc)).ret().end(); });
         });
         scoped(() => fs.forEach(([f, value], i) => write(i, kind === "L" ? bridge.toJava(value, f.desc) : toBits(value, f.desc))));
@@ -276,9 +276,9 @@ export function hostThrowable(cls: string, msg: string | null): JThrowable {
   return e;
 }
 /** the Class object of `cls`, a Java reference */
-export const classRef = (w: World, cls: string): object => w.hostFn("j:class:" + cls, [], "L", (cx, c) => { cx.constClass(c, cls); })() as object;
+export const classRef = (w: World, cls: string): object => w.helpers.hostFn("j:class:" + cls, [], "L", (cx, c) => { cx.constClass(c, cls); })() as object;
 /** the box `valueOf` of primitive type `desc` makes of the host value `v`, a Java reference: a host function, so a first call's link cannot suspend it */
-export const boxRef = (w: World, desc: string, v: number | bigint): object => w.hostFn("j:box:" + desc, [kindOf(desc)], "L", (cx, c) => { c.lget(0); box(cx, c, desc); })(toBits(v, desc)) as object;
+export const boxRef = (w: World, desc: string, v: number | bigint): object => w.helpers.hostFn("j:box:" + desc, [kindOf(desc)], "L", (cx, c) => { c.lget(0); box(cx, c, desc); })(toBits(v, desc)) as object;
 /** an instance of the Java class `cls` made by the host, as `rt.make` makes one for a native that fills in a result (a Struct*) or an exception (UnixException)
  *  by field name; the Bridge copies it into Java */
 export const hostObject = (w: World, cls: string): JObj => new (hostClass(cls, w.prog.isSubclass(cls, "java/lang/Throwable") ? JThrowable : JObj))();

@@ -42,7 +42,7 @@ export class StackTraces {
   /** a call from the host into Java on strand `s` begins (HostFunctions.callFn): its Java callers' frames are captured if it suspends, and dropped once it ends */
   bridge(s: Strand): { suspended(): void; leave(): void } {
     // Java callers stay on the physical stack until the call suspends; only then are their frames captured.
-    const w = this.w, javaCaller = !w.sched.current().root || w.inSynchronousJava();
+    const w = this.w, javaCaller = w.sched.inJava();
     const caller: BridgeStack = { prior: this.bridgeStacks.get(s), done: false };
     this.bridgeStacks.set(s, caller);
     return {

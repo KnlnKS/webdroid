@@ -11,8 +11,8 @@ import { Cha } from "../compiler/cha.ts";
 import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
 import { Sched, defaultLoop, type HostLoop, type Strand } from "./sched.ts";
-import { rtfns, type Synth } from "../compiler/rtfns.ts";
-import { replayInfo, type InfoRecord } from "./classes.ts";
+import type { Synth } from "../compiler/rtfns.ts";
+import { askedSynth, synthOf } from "./synths.ts";
 import { HostClasses } from "./hostclass.ts";
 import type { ProxyDefinition } from "./proxy.ts";
 import { initiatedInstruction, resolveClass } from "./resolution.ts";
@@ -87,6 +87,8 @@ export interface ClassRt { name: string; id: number; mod: string; from: "own" | 
 export type Clock = { start: number; accounted: number };
 export type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] };
 
+/** the classes (ids) and synthetic functions code names the table slots of */
+export interface Touched { touch: number[]; synth: string[] }
 export class World {
   opts: WorldOptions;
   /** whether code is instantiated and runs here: a build's World and a compile worker's only number and name what code links */
@@ -116,8 +118,9 @@ export class World {
   readonly assumptions = new Assumptions(this);
   readonly namespaces = new Namespaces(this);
   classes = new Map<string, ClassRt>();
-  /** what this World built because no saved code had it: the methods compiled at their first call and the classes whose modules it made, in order (an app build made later includes them) */
-  readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], infos: [] as InfoRecord[] };
+  /** what this World built because no saved code had it: the methods compiled at their first call, the classes whose modules it made and the synthetic functions the
+   *  host made when asked, in order (an app build made later includes them) */
+  readonly demand = { methods: new Set<MethodInfo>(), classes: [] as string[], synths: [] as string[] };
   /** the Method objects of proxy classes, which their compiled code reads by index (proxy.ts) */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
@@ -177,9 +180,15 @@ export class World {
     for (const t of tail) if (typeof t !== "string") this.classes.delete(t[0]);
     this.slots.rollback(tail);
   }
-  /** the classes (and, as "!name", runtime functions) whose slots code made between `beginTouch` and `endTouch` names: they need their stubs before the code runs */
-  beginTouch(): void { this.touching = new Set(); }
-  endTouch(): Set<string> { const t = this.touching!; this.touching = null; return t; }
+  /** runs `make`, which makes code, and what that code names the table slots of: classes (by id) and synthetic functions, which need their stubs before it runs */
+  touched<T>(make: () => T): [T, Touched] {
+    const names = this.touching = new Set();
+    let value: T;
+    try { value = make(); } finally { this.touching = null; }
+    const touched: Touched = { touch: [], synth: [] };
+    for (const n of names) if (n[0] === "!") touched.synth.push(n.slice(1)); else touched.touch.push(this.idOf(n));
+    return [value, touched];
+  }
 
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {
@@ -234,23 +243,22 @@ export class World {
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called;
    *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
-  synthSlot(name: string, d: Synth, eager = false): number {
+  synthSlot(name: string, d?: Synth, eager = false): number {
     this.touching?.add("!" + name);
     const { slot, fresh } = this.slots.synthSlot(name);
     if (!fresh) return slot;
+    d ??= synthOf(this, name);
+    if (!d) throw new Error(`no synthetic function ${name}`);
     const s = { k: "synth" as const, name, d, done: false };
     this.slots.set(slot, s);
     if (!this.instantiates) return slot;
+    if (askedSynth(name)) this.demand.synths.push(name);
     // the app build may hold its code, which its module puts in the slot
     if (this.aot?.installSynth(name)) { s.done = true; return slot; }
     if (eager) { this.tiers.linkSlot(slot); return slot; }
     this.table.set(slot, this.stubs.stubsFor([d])[0]);
     return slot;
   }
-  /** asks again for the synthetic functions the hosts asked for in a World whose classes have other ids */
-  replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
-  /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
-  ensureSynth(name: string): void { if (!this.dispatch.ensureNamed(name)) this.synthSlot(name, rtfns.get(name)!); }
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
@@ -334,7 +342,7 @@ export class World {
   /** whether the guest memory is shared, which a module that imports it must declare */
   get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
-  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.added(null); }
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.retire(`host class ${spec.name} was added`); }
   /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
   private settlingHosts = false;
@@ -347,7 +355,7 @@ export class World {
     // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
     if (proxy) {
       this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
-    } else if (!this.settlingHosts) this.opts.compiler?.added(null);
+    } else if (!this.settlingHosts) this.opts.compiler?.retire(`class ${jc.name} was added without a dex`);
     this.assumptions.joined(this.cha.index([jc.name]));
     this.loaded([jc.name]);
   }
@@ -357,24 +365,12 @@ export class World {
     this.settlingHosts = true;
     try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
   }
-  /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
-  invalidate(slot: number): void {
-    this.tiers.hotUnits.forget(slot);
-    if (this.helpers.invalidate(slot)) { this.stats.invalidated++; return; }
-    for (const x of this.tiers.groupOf.get(slot) ?? [slot]) {
-      // a slot without state holds compiled code only if a loaded build module installed it
-      const s = this.slots.peek(x) ?? (this.aot?.installed(x) ? this.slots.at(x) : undefined);
-      if (s?.k === "ensure" || !s?.done || !this.stubs.restoreStub(x, s)) continue;
-      s.done = false; if (s.k === "method") s.hot = false; this.stats.invalidated++;
-      this.tiers.groupOf.delete(x);
-    }
-  }
 
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
     const { slot, ensure, params, ret } = this.entryCall(cls, name, desc), call = this.helpers.invoker(params, ret);
-    return (...args) => this.synchronous(() => {
+    return (...args) => this.sched.synchronous(() => {
       this.tiers.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
@@ -409,6 +405,8 @@ export class World {
   }
   /** the Wasm exception that throws Java throwable `t` */
   exception(t: object): WebAssembly.Exception { return new WebAssembly.Exception(this.rt.tag, [t]); }
+  /** throws a new Java throwable of class `cls` with `msg`: the way a native raises one */
+  raise(cls: string, msg: string | null): never { throw this.exception(this.helpers.makeThrowable(cls, msg)); }
   /** the class of a Java object that crossed to JS */
   classNameOf(obj: object): string { return this.nameOf(this.rt.classId(obj)); }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
@@ -419,21 +417,4 @@ export class World {
     try { this.rt.callee.value = SLOT.soe; (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; } finally { this.rt.depth.value = depth; }
     return e;
   }
-  private synchronousEntries = 0;
-  inSynchronousJava(): boolean { return this.synchronousEntries > 0; }
-  synchronous<T>(run: () => T): T {
-    this.synchronousEntries++;
-    try { return run(); } finally { this.synchronousEntries--; }
-  }
-  freshStack<T>(run: () => T): T {
-    this.tiers.refreshHotUnits();
-    const prior = this.synchronousEntries; this.synchronousEntries = 0;
-    try { return run(); } finally { this.synchronousEntries = prior; }
-  }
-  // ---------- functions over Java values that the host calls (hostfns.ts)
-  hostFn(...a: Parameters<HostFunctions["hostFn"]>): ReturnType<HostFunctions["hostFn"]> { return this.helpers.hostFn(...a); }
-  callFn(...a: Parameters<HostFunctions["callFn"]>): ReturnType<HostFunctions["callFn"]> { return this.helpers.callFn(...a); }
-  fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T { return this.helpers.fieldReader<T>(cls, name, desc); }
-  /** a Java throwable of class `cls` with `msg`: the way a native raises one */
-  makeThrowable(cls: string, msg: string | null): object { return this.helpers.makeThrowable(cls, msg); }
 }

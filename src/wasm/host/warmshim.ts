@@ -6,6 +6,7 @@
 import { MATH_ARITY } from "../compiler/consts.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import { COUNT_SLOTS, WARM_AT } from "../compiler/exc.ts";
+import { LebReader } from "../link/module.ts";
 
 const K = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, refNull: 0x63, ref: 0x64 } as const;
 /** a method is called with zeros and nulls */
@@ -14,11 +15,7 @@ type Zero = 0 | 0n | null;
 export type WarmCall = [slot: number, f: Function, args: Zero[]];
 
 const text = new TextDecoder();
-class Reader {
-  i = 8;
-  readonly b: Uint8Array;
-  constructor(b: Uint8Array) { this.b = b; }
-  u32(): number { let r = 0, s = 0, x: number; do { x = this.b[this.i++]; r += (x & 0x7f) * 2 ** s; s += 7; } while (x & 0x80); return r; }
+class Reader extends LebReader {
   s32(): number { let r = 0, s = 0, x: number; do { x = this.b[this.i++]; r |= (x & 0x7f) << s; s += 7; } while (x & 0x80); return s < 32 && x & 0x40 ? r | (-1 << s) : r; }
   skipLeb(): void { while (this.b[this.i++] & 0x80); }
   name(): string { const n = this.u32(); return text.decode(this.b.subarray(this.i, this.i += n)); }
@@ -70,7 +67,7 @@ export class WarmWorld {
   /** Instantiates `module` (compiled from `bytes`) here and returns its first-tier methods in the module's order (a build module's table entries are its
    *  methods: Compiler.buildUnit); or why it cannot: an import without a default (a non-nullable global, a shared memory) */
   load(module: WebAssembly.Module, bytes: Uint8Array): WarmCall[] | string {
-    const r = new Reader(bytes), imports: WebAssembly.Imports = {};
+    const r = new Reader(bytes, 8), imports: WebAssembly.Imports = {};
     const put = (mod: string, field: string, value: unknown) => { (imports[mod] ??= {})[field] = value as WebAssembly.ImportValue; };
     let types: Uint8Array | undefined, params: (Zero[] | undefined)[] = [], tableNeeds = 0;
     const funcTypes: number[] = [], entries: [number, number][] = [];

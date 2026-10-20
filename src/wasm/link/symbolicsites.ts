@@ -9,6 +9,7 @@ import { initiatedInstruction, resolveInstruction } from "./resolution.ts";
 import { decodeInstruction } from "../../jvm/prepared.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
 import type { World } from "./world.ts";
+import { chain } from "./maybe.ts";
 
 export class SymbolicSites {
   private readonly w: World;
@@ -16,7 +17,7 @@ export class SymbolicSites {
   symbolicResolutions = 0;
   private symbolicOperations = new Map<string, Function>();
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
-  symbolicSites = new Map<string, { slot: WebAssembly.Global; ready?: boolean }>();
+  private readonly symbolicSites = new Map<string, WebAssembly.Global>();
   symbolicStubModules = 0;
   symbolicImports(sites: SymbolicSite[]): Record<string, unknown> {
     const out: Record<string, unknown> = { table: this.symbolicTable };
@@ -45,16 +46,16 @@ export class SymbolicSites {
       this.w.stats.units++;
       this.w.units.instantiate(cx, imports, built, this.w.slotOf(pending[0].method), clock, (exports) => {
         for (const { name, slot } of pending) {
-          this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot) });
+          this.symbolicSites.set(name, new WebAssembly.Global({ value: "i32" }, slot));
           this.symbolicTable.set(slot, exports[name] as Function);
         }
       });
       this.symbolicStubModules++;
     }
-    for (const [name] of sites) out[name] = this.symbolicSites.get(name)!.slot;
+    for (const [name] of sites) out[name] = this.symbolicSites.get(name)!;
     return out;
   }
-  symbolicSync(): number { return +(this.w.inSynchronousJava() || this.w.sched.current().root); }
+  symbolicSync(): number { return +!this.w.sched.canWait(); }
   private symbolicResolver(method: MethodInfo, pc: number, slot: number, inputs: SymbolicSite[4], output: SymbolicSite[5]) {
     const run = () => {
       this.symbolicResolutions++;
@@ -85,15 +86,12 @@ export class SymbolicSites {
           if (this.symbolicOperations.size > 2048) this.symbolicOperations.delete(this.symbolicOperations.keys().next().value!);
         }
         this.symbolicTable.set(slot, operation);
-        if (initiated) {
-          const binding = this.symbolicSites.get(`${method.cls}:${method.index}:${pc}`);
-          if (binding) binding.ready = true;
-          this.w.tiers.hotUnits.resolved(`${method.cls}:${method.index}:${pc}`);
-        }
+        if (initiated) this.w.tiers.resolved(`${method.cls}:${method.index}:${pc}`);
       };
       const ready = resolveInstruction(this.w, method, ins, owner);
-      return ready instanceof Promise ? ready.then(install) : install();
+      return chain(ready, install);
     };
-    return { plain: () => this.w.synchronous(run), wait: this.w.sched.suspending(run) };
+    const [plain, wait] = this.w.sched.importPair(run);
+    return { plain, wait };
   }
 }

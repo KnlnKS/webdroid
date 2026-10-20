@@ -3,7 +3,7 @@
 import { mark, perf } from "../../perf.ts";
 import { switchValue } from "../../switches.ts";
 import { note } from "../../timeline.ts";
-import { FetchStore } from "../link/aotstore.ts";
+import { FetchStore } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
 import type { Entry } from "../../jvm/natives/jentry.ts";
 import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";

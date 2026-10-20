@@ -6,7 +6,9 @@ import { T } from "../compiler/wasmbin.ts";
 import { causedThrowable, resolveType } from "./resolution.ts";
 import { type Strand } from "./sched.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { emitSave } from "../compiler/hostcalls.ts";
+import { caught, chain, each } from "./maybe.ts";
 
 type Declaration = { cls: string; key: string; flags: number };
 type Pair = [Declaration, Declaration];
@@ -78,7 +80,7 @@ function constraints(w: World, cls: string): Pair[] {
 export const hasSignatureConstraints = (w: World, cls: string): boolean => constraints(w, cls).length > 0;
 
 type Validation = { thread: Strand["thread"]; wait: Promise<void> } | { ready: true } | { failed: true };
-const validations = new WeakMap<World, Map<string, Validation>>();
+const validations = new PerWorld(() => new Map<string, Validation>());
 
 function signature(m: MethodInfo): string[] {
   if (!m.dex || m.methodIdx < 0) return [m.ret, ...m.params];
@@ -87,12 +89,11 @@ function signature(m: MethodInfo): string[] {
 }
 
 export function validateSignatures(w: World, cls: string, owner: Strand): void | Promise<void> {
-  let states = validations.get(w);
-  if (!states) validations.set(w, states = new Map());
+  const states = validations.get(w);
   const prior = states.get(cls);
   if (prior) {
     if ("ready" in prior) return;
-    const erroneous = (): never => { throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `Could not initialize class ${javaName(cls)}`)); };
+    const erroneous = (): never => w.raise("java/lang/NoClassDefFoundError", `Could not initialize class ${javaName(cls)}`);
     if ("failed" in prior) return erroneous();
     if (prior.thread !== owner.thread) return prior.wait.catch(error => {
       if (w.throwable(error)) return erroneous();
@@ -103,7 +104,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
   const linkage = (message: string, error?: unknown): never => {
     const cause = error === undefined ? undefined : w.throwable(error);
     if (error !== undefined && !cause) throw error;
-    throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.makeThrowable("java/lang/LinkageError", message));
+    throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.helpers.makeThrowable("java/lang/LinkageError", message));
   };
   const type = (m: MethodInfo, descriptor: string): string | Promise<string> => {
     if (descriptor[0] !== "L" && descriptor[0] !== "[") return descriptor;
@@ -111,35 +112,22 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     if (!m.dex || m.methodIdx < 0) return descToName(descriptor);
     return resolveType(w, w.prog.loaderOf(m.cls), descToName(descriptor), owner);
   };
-  const nextPair = (at: number): void | Promise<void> => {
-    if (at === pairs.length) return;
-    const [targetDecl, baseDecl] = pairs[at];
-    const hydrate = (d: Declaration): MethodInfo => {
-      const at = d.key.indexOf("(");
-      return symbolicMethod(w.prog.require(d.cls), d.key.slice(0, at), d.key.slice(at))!;
-    };
+  const hydrate = (d: Declaration): MethodInfo => {
+    const at = d.key.indexOf("(");
+    return symbolicMethod(w.prog.require(d.cls), d.key.slice(0, at), d.key.slice(at))!;
+  };
+  const pair = ([targetDecl, baseDecl]: Pair): void | Promise<void> => {
     const target = hydrate(targetDecl), base = hydrate(baseDecl);
     const a = signature(target), b = signature(base);
     const message = `Class ${javaName(cls)} method ${javaName(target.key)} signature against ${javaName(base.cls)}`;
-    const nextType = (index: number): void | Promise<void> => {
-      if (index === a.length) return nextPair(at + 1);
-      const resolved = (m: MethodInfo, descriptor: string): string | Promise<string> => {
-        const failed = (error: unknown): never => linkage(`${message}: failed to resolve signature type`, error);
-        try { const value = type(m, descriptor); return value instanceof Promise ? value.catch(failed) : value; }
-        catch (error) { return failed(error); }
-      };
-      const other = (key: string): void | Promise<void> => {
-        const compare = (otherKey: string) => {
-          if (key !== otherKey) linkage(`${message} resolves differently: ${key} vs ${otherKey}`);
-          return nextType(index + 1);
-        };
-        const value = resolved(base, b[index]);
-        return value instanceof Promise ? value.then(compare) : compare(value);
-      };
-      const value = resolved(target, a[index]);
-      return value instanceof Promise ? value.then(other) : other(value);
+    const failed = (error: unknown): never => linkage(`${message}: failed to resolve signature type`, error);
+    const resolved = (m: MethodInfo, descriptor: string): string | Promise<string> => {
+      try { return caught(type(m, descriptor), failed); }
+      catch (error) { return failed(error); }
     };
-    return nextType(0);
+    return each(a, (descriptor, index) => chain(resolved(target, descriptor), (key) => chain(resolved(base, b[index]), (otherKey) => {
+      if (key !== otherKey) linkage(`${message} resolves differently: ${key} vs ${otherKey}`);
+    })));
   };
   const ready = () => { states!.set(cls, { ready: true }); };
   const failed = (error: unknown): never => {
@@ -147,7 +135,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     throw error;
   };
   try {
-    const value = nextPair(0);
+    const value = each(pairs, pair);
     if (value instanceof Promise) {
       const wait = value.then(ready, failed);
       if (!prior) states.set(cls, { thread: owner.thread, wait });
