@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime.ts";
+import { awaited, rt, JObj, type NativeSpec, driven, declaredField, getDeclared, type Gen } from "../runtime.ts";
 import { newArrayList, toJsArray } from "./jcoll.ts";
 import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry.ts";
 import { checkFromIndexSize } from "./jlang.ts";
@@ -27,8 +27,8 @@ async function dial(host: string, port: number): Promise<JSSLSocket> {
 }
 /** a libcore Socket's descriptor, -1 before it has one */
 const socketFd = (socket: JObj): number => {
-  const impl = (socket as unknown as Record<string, JObj | null>)[declaredField("java/net/Socket", "impl")];
-  return impl ? fdInt((impl as unknown as Record<string, JObj | null>)[declaredField("java/net/SocketImpl", "fd")]) : -1;
+  const impl = getDeclared<JObj | null>(socket, "java/net/Socket", "impl");
+  return impl ? fdInt(getDeclared<JObj | null>(impl, "java/net/SocketImpl", "fd")) : -1;
 };
 class JSSLSocketFactory extends JObj {}
 const sslSocketFactory = new JSSLSocketFactory();

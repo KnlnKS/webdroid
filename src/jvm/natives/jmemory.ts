@@ -167,7 +167,7 @@ export function memorySync(address: bigint, n: number): Uint8Array {
 }
 
 /** the bytes of `count` elements of `array` from `offset`, bounds-checked as JNI's Get/SetArrayRegion */
-function region(array: Elements | null, offset: number, count: number): Uint8Array {
+export function region(array: Elements | null, offset: number, count: number): Uint8Array {
   if (array === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   if (offset < 0 || count < 0 || offset > array.length - count) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   const size = array.BYTES_PER_ELEMENT;

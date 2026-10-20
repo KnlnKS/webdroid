@@ -6,19 +6,17 @@ import { inflateSync } from "fflate";
 import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
-import { rt, type JObj, declaredField } from "../runtime.ts";
+import { rt, type JObj, setDeclared } from "../runtime.ts";
 import { utf8, u8 } from "../abi.ts";
 import { after } from "./jentry.ts";
-import { checkFromIndexSize } from "./jlang.ts";
 import { readFully, type FileSource } from "../../shell/lazyfile.ts";
 import { handle, deref, release } from "../../android/handles.ts";
-import { memoryAt } from "./jmemory.ts";
+import { memoryAt, region } from "./jmemory.ts";
 
 const Z_OK = 0, Z_STREAM_END = 1, Z_NEED_DICT = 2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5, Z_PARTIAL_FLUSH = 1, Z_BLOCK = 5;
 type Stream = InstanceType<typeof ZStream> & { state: any; msg: string; adler: number };
 const EMPTY = new Uint8Array(0);
 const stream = (h: bigint) => deref<Stream>(h);
-const view = (a: Int8Array, off: number, len: number) => { checkFromIndexSize(off, len, a.length, "java/lang/ArrayIndexOutOfBoundsException"); return u8(a, off, len); };
 /** one zlib call over [input, output): the counts it consumed and produced */
 function run(s: Stream, input: Uint8Array, output: Uint8Array, call: (s: Stream) => number): [number, number, number] {
   s.input = input; s.next_in = 0; s.avail_in = input.length;
@@ -31,15 +29,13 @@ const pack = (read: number, written: number, a: boolean, b: boolean) =>
   BigInt(read) | BigInt(written) << 31n | (a ? 1n << 62n : 0n) | (b ? 1n << 63n : 0n);
 
 // ── Inflater (Inflater.c): Z_PARTIAL_FLUSH, input and output counts packed with finished and needDict
-let consumedFields: [string, string] | undefined;
 function inflateBytes(this: JObj, h: bigint, input: Uint8Array, output: Uint8Array): bigint {
   const [code, read, written] = run(stream(h), input, output, (s) => zInflate.inflate(s, Z_PARTIAL_FLUSH));
   switch (code) {
     case Z_STREAM_END: case Z_OK: case Z_NEED_DICT: return pack(read, written, code === Z_STREAM_END, code === Z_NEED_DICT);
     case Z_BUF_ERROR: return 0n;
     case Z_DATA_ERROR: {
-      const [inField, outField] = consumedFields ??= [declaredField("java/util/zip/Inflater", "inputConsumed"), declaredField("java/util/zip/Inflater", "outputConsumed")];
-      (this as unknown as Record<string, number>)[inField] = read; (this as unknown as Record<string, number>)[outField] = written;
+      setDeclared(this, "java/util/zip/Inflater", { inputConsumed: read, outputConsumed: written });
       throw rt.mkThrowable("java/util/zip/DataFormatException", stream(h).msg || null);
     }
     default: throw rt.mkThrowable("java/lang/InternalError", stream(h).msg || null);
@@ -56,16 +52,16 @@ rt.registerJnis("java/util/zip/Inflater", {
     if (zInflate.inflateInit2(s, nowrap ? -15 : 15) !== Z_OK) throw rt.mkThrowable("java/lang/InternalError", s.msg || null);
     return handle(s);
   },
-  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, view(b, off, len), zInflate.inflateSetDictionary),
+  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zInflate.inflateSetDictionary),
   "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zInflate.inflateSetDictionary)),
   "inflateBytesBytes(J[BII[BII)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
-    return inflateBytes.call(this, h, view(i, io, il), view(o, oo, ol));
+    return inflateBytes.call(this, h, region(i, io, il), region(o, oo, ol));
   },
   "inflateBytesBuffer(J[BIIJI)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
-    return after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, view(i, io, il), o));
+    return after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, region(i, io, il), o));
   },
   "inflateBufferBytes(JJI[BII)J": function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
-    return after(memoryAt(input, il), (i) => inflateBytes.call(this, h, i, view(o, oo, ol)));
+    return after(memoryAt(input, il), (i) => inflateBytes.call(this, h, i, region(o, oo, ol)));
   },
   "inflateBufferBuffer(JJIJI)J": function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
     return after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, i, o)));
@@ -127,14 +123,14 @@ rt.registerJnis("java/util/zip/Deflater", {
     if (code !== Z_OK) throw rt.mkThrowable(code === -2 ? "java/lang/IllegalArgumentException" : "java/lang/InternalError", s.msg || null);
     return handle(s);
   },
-  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, view(b, off, len), zDeflate.deflateSetDictionary),
+  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zDeflate.deflateSetDictionary),
   "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary)),
   "deflateBytesBytes(J[BII[BIIII)J": (h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
-    deflateBytes(h, view(i, io, il), view(o, oo, ol), flush, params),
+    deflateBytes(h, region(i, io, il), region(o, oo, ol), flush, params),
   "deflateBytesBuffer(J[BIIJIII)J": (h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
-    after(memoryAt(out, ol), (o) => deflateBytes(h, view(i, io, il), o, flush, params)),
+    after(memoryAt(out, ol), (o) => deflateBytes(h, region(i, io, il), o, flush, params)),
   "deflateBufferBytes(JJI[BIIII)J": (h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
-    after(memoryAt(input, il), (i) => deflateBytes(h, i, view(o, oo, ol), flush, params)),
+    after(memoryAt(input, il), (i) => deflateBytes(h, i, region(o, oo, ol), flush, params)),
   "deflateBufferBuffer(JJIJIII)J": (h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
     after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => deflateBytes(h, i, o, flush, params))),
   "getAdler(J)I": (h: bigint) => stream(h).adler | 0,

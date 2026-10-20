@@ -1,6 +1,6 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { awaited, rt, type JObj, driven, declaredField, waits, type Gen } from "../runtime.ts";
+import { awaited, rt, type JObj, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
 import { concat } from "../abi.ts";
 import { vcall, after, newObj } from "./jentry.ts";
 import { E, ERRSTR } from "../../native/abi.ts";
@@ -21,9 +21,8 @@ export const newFile = (path: string): JObj | Promise<JObj> => newObj("java/io/F
 const BAOS = "java/io/ByteArrayOutputStream";
 /** the bytes a ByteArrayOutputStream holds, without copying */
 export function baosBytes(s: JObj): Uint8Array {
-  const o = s as unknown as Record<string, Int8Array | number>;
-  const buf = o[declaredField(BAOS, "buf")] as Int8Array;
-  return new Uint8Array(buf.buffer, buf.byteOffset, o[declaredField(BAOS, "count")] as number);
+  const buf = getDeclared<Int8Array>(s, BAOS, "buf");
+  return new Uint8Array(buf.buffer, buf.byteOffset, getDeclared<number>(s, BAOS, "count"));
 }
 /** every byte an InputStream has left, through its virtual read */
 export const readStreamFully = driven(function* (s: unknown): Gen<Uint8Array> {
@@ -89,7 +88,7 @@ rt.registerJni("java/io/FileDescriptor", "sync()V", waits(function (this: JObj) 
 }));
 /** OpenJDK's FileInputStream natives (io_util_md.c) over the stream's descriptor */
 function streamFd(stream: JObj): number {
-  const fd = fdInt((stream as unknown as Record<string, JObj | null>)[declaredField("java/io/FileInputStream", "fd")]);
+  const fd = fdInt(getDeclared<JObj | null>(stream, "java/io/FileInputStream", "fd"));
   if (fd < 0) throw rt.mkThrowable("java/io/IOException", "Stream Closed");
   return fd;
 }
@@ -244,9 +243,8 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   }),
 });
 rt.registerJni("sun/nio/ch/FileKey", "init(Ljava/io/FileDescriptor;)V", driven(function* (this: JObj, d: JObj): Gen {
-  const st = yield* awaited(javaFdStat(openFd(d))), o = this as unknown as Record<string, bigint>;
-  o[declaredField("sun/nio/ch/FileKey", "st_dev")] = 1n;
-  o[declaredField("sun/nio/ch/FileKey", "st_ino")] = BigInt(st?.path ? inoOf(st.path) : openFd(d));
+  const st = yield* awaited(javaFdStat(openFd(d)));
+  setDeclared(this, "sun/nio/ch/FileKey", { st_dev: 1n, st_ino: BigInt(st?.path ? inoOf(st.path) : openFd(d)) });
 }));
 rt.registerJnis("sun/nio/ch/IOUtil", {
   "fdVal(Ljava/io/FileDescriptor;)I": (d: JObj) => fdInt(d),

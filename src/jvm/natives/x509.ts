@@ -1,12 +1,11 @@
 // X.509 certificates (RFC 5280) as BoringSSL parses them for conscrypt's natives: the raw fields,
 // the extensions it caches (key usage, basic constraints, ...), and names printed per RFC 2253.
 
-import { concat } from "../abi.ts";
+import { concat, sameBytes } from "../abi.ts";
 import {
   children, parseOne, expect, oidToString, tlv, bytesToBig, DerError,
   SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID, BOOLEAN, type Tlv,
 } from "./der.ts";
-import { equal } from "./pkey.ts";
 
 export type Extension = { oid: string; critical: boolean; value: Uint8Array; raw: Uint8Array };
 export type Time = { ms: number; fields: [number, number, number, number, number, number] };
@@ -98,7 +97,7 @@ export function exFlags(x: X509, selfSigned: () => boolean): number {
   if (x.ext(KEY_USAGE)) flags |= EXFLAG_KUSAGE;
   if (x.ext(EXT_KEY_USAGE)) flags |= EXFLAG_XKUSAGE;
   if (x.exts.some((e) => e.critical && !SUPPORTED.has(e.oid))) flags |= EXFLAG_CRITICAL;
-  if (equal(x.issuer, x.subject)) {
+  if (sameBytes(x.issuer, x.subject)) {
     flags |= EXFLAG_SI;
     if (selfSigned()) flags |= EXFLAG_SS;
     if (flags & EXFLAG_V1) flags |= EXFLAG_CA;

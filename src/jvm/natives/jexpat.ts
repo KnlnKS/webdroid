@@ -6,6 +6,7 @@
 import { rt, driven, type Gen } from "../runtime.ts";
 import { vcall } from "./jentry.ts";
 import { charsToString } from "../abi.ts";
+import { handle, ownedHandle, deref, release } from "../../android/handles.ts";
 
 interface Name { uri: string; local: string; qName: string }
 interface Attribute extends Name { value: string }
@@ -23,11 +24,6 @@ interface Context {
   rootSeen: boolean;
   rootClosed: boolean;
 }
-
-const contexts = new Map<bigint, Context>();
-const attributeSets = new Map<bigint, Attribute[]>();
-let nextHandle = 1n;
-const store = <T>(map: Map<bigint, T>, value: T) => { const h = nextHandle++; map.set(h, value); return h; };
 
 const PREDEFINED: Record<string, string> = { lt: "<", gt: ">", amp: "&", apos: "'", quot: "\"" };
 const expatError = (message: string) => rt.mkThrowable("org/apache/harmony/xml/ExpatException", message);
@@ -163,9 +159,9 @@ const parse = driven(function* (parser: unknown, c: Context, final: boolean): Ge
       const name = resolve(c, m[1], false);
       c.rootSeen = true;
       c.open.push({ qName: m[1], declared });
-      const pointer = store(attributeSets, attributes);
+      const pointer = handle(attributes);
       try { yield vcall(parser, "startElement", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JI)V", name.uri, name.local, name.qName, pointer, attributes.length); }
-      finally { attributeSets.delete(pointer); }
+      finally { release(pointer); }
       if (empty) {
         c.open.pop();
         yield* endElement(parser, c, name, declared);
@@ -179,7 +175,7 @@ const parse = driven(function* (parser: unknown, c: Context, final: boolean): Ge
 });
 
 function context(pointer: bigint): Context {
-  const c = contexts.get(pointer);
+  const c = deref<Context | undefined>(pointer);
   if (!c) throw rt.mkThrowable("java/lang/IllegalStateException", "released parser");
   return c;
 }
@@ -193,13 +189,14 @@ const append = (parser: unknown, pointer: bigint, text: string, final: boolean) 
   return parse(parser, c, final);
 };
 
+const at = (pointer: bigint) => deref<Attribute[] | undefined>(pointer) ?? [];
 const parserNatives: Record<string, (...args: never[]) => unknown> = {
   "staticInitialize(Ljava/lang/String;)V": () => {},
-  "initialize(Ljava/lang/String;Z)J": (encoding: string | null, namespaces: number) => store(contexts, newContext(encoding, !!namespaces)),
+  "initialize(Ljava/lang/String;Z)J": (encoding: string | null, namespaces: number) => ownedHandle(newContext(encoding, !!namespaces)),
   "createEntityParser(JLjava/lang/String;)J": (pointer: bigint) => {
     const c = context(pointer), entity = newContext(c.encoding, c.namespaces);
     entity.scopes = c.scopes.map((s) => new Map(s));
-    return store(contexts, entity);
+    return ownedHandle(entity);
   },
   "appendString(JLjava/lang/String;Z)V": function (this: unknown, pointer: bigint, xml: string, final: number) { return append(this, pointer, xml, !!final); },
   "appendChars(J[CII)V": function (this: unknown, pointer: bigint, text: Uint16Array, offset: number, length: number) {
@@ -213,13 +210,12 @@ const parserNatives: Record<string, (...args: never[]) => unknown> = {
   },
   "line(J)I": (pointer: bigint) => context(pointer).line,
   "column(J)I": (pointer: bigint) => context(pointer).column,
-  "cloneAttributes(JI)J": (pointer: bigint, count: number) => store(attributeSets, (attributeSets.get(pointer) ?? []).slice(0, count)),
-  "release(J)V": (pointer: bigint) => { contexts.delete(pointer); },
-  "releaseParser(J)V": (pointer: bigint) => { contexts.delete(pointer); },
+  "cloneAttributes(JI)J": (pointer: bigint, count: number) => ownedHandle(at(pointer).slice(0, count)),
+  "release(J)V": release,
+  "releaseParser(J)V": release,
 };
 rt.registerJnis("org/apache/harmony/xml/ExpatParser", parserNatives);
 
-const at = (pointer: bigint) => attributeSets.get(pointer) ?? [];
 const attributeNatives: Record<string, (...args: never[]) => unknown> = {
   "getURI(JJI)Ljava/lang/String;": (_c: bigint, pointer: bigint, i: number) => at(pointer)[i]?.uri ?? null,
   "getLocalName(JJI)Ljava/lang/String;": (_c: bigint, pointer: bigint, i: number) => at(pointer)[i]?.local ?? null,
@@ -230,6 +226,6 @@ const attributeNatives: Record<string, (...args: never[]) => unknown> = {
   "getValue(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (pointer: bigint, uri: string, local: string) =>
     at(pointer).find((a) => a.uri === uri && a.local === local)?.value ?? null,
   "getValueForQName(JLjava/lang/String;)Ljava/lang/String;": (pointer: bigint, qName: string) => at(pointer).find((a) => a.qName === qName)?.value ?? null,
-  "freeAttributes(J)V": (pointer: bigint) => { attributeSets.delete(pointer); },
+  "freeAttributes(J)V": release,
 };
 rt.registerJnis("org/apache/harmony/xml/ExpatAttributes", attributeNatives);

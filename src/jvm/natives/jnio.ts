@@ -3,7 +3,7 @@
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, type JObj, declaredField, waits } from "../runtime.ts";
+import { rt, type JObj, declaredField, getDeclared, waits } from "../runtime.ts";
 import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared } from "../../native/mappings.ts";
@@ -139,7 +139,7 @@ const unmappers = new FinalizationRegistry<() => void | Promise<void>>((unmap) =
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
 function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void | Promise<void>): JBuffer | Promise<JBuffer> {
   return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
-    unmappers.register((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], unmap);
+    unmappers.register(getDeclared<object>(b, "java/nio/DirectByteBuffer", "memoryRef"), unmap);
     return b;
   });
 }
