@@ -8,7 +8,8 @@ import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { type XmlNode, attrStr, attr } from "./axml.ts";
 import { appHost } from "./apphost.ts";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
-import { type PackageRecord, packages, signaturePermissions, storedPackages, usesSdk } from "./packages.ts";
+import { type PackageRecord, packages, signaturePermissions, usesSdk } from "./packages.ts";
+import { persisted } from "../shell/device-storage.ts";
 import { hostStub } from "./binder.ts";
 import { permissionInfo$ } from "./pm.ts";
 
@@ -27,29 +28,25 @@ const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CA
   "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
   "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
   .map((n) => "android.permission." + n));
+/** the runtime grants of each package; corrupt state remains denied */
+const savedGrants = persisted("wd:permissions:", (saved) => Array.isArray(saved) ? saved.filter((name): name is string => typeof name === "string") : null);
 export class PermissionStore {
   private grants = new Map<string, Set<string>>();
   get(pkg: string): Set<string> {
     let grants = this.grants.get(pkg);
-    if (!grants) {
-      grants = new Set(); this.grants.set(pkg, grants);
-      try {
-        const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:permissions:" + pkg) ?? "[]");
-        if (Array.isArray(saved)) for (const value of saved) if (typeof value === "string") grants.add(value);
-      } catch { /* corrupt permission state remains denied */ }
-    }
+    if (!grants) this.grants.set(pkg, grants = new Set(savedGrants.get(pkg)));
     return grants;
   }
   /** the packages with grants persisted */
-  packages(): string[] { return storedPackages("wd:permissions:"); }
+  packages(): string[] { return savedGrants.packages(); }
   /** a package's data clear: resetRuntimePermissions, every runtime grant the package's requests made */
   clear(pkg: string) {
     this.grants.delete(pkg);
-    try { globalThis.localStorage?.removeItem("wd:permissions:" + pkg); } catch { /* storage can be unavailable */ }
+    savedGrants.remove(pkg);
   }
   grant(pkg: string, names: string[]) {
     const grants = this.get(pkg); for (const name of names) grants.add(name);
-    globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
+    savedGrants.set(pkg, [...grants]);
   }
 }
 export interface PermissionAccess {

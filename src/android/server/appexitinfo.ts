@@ -9,7 +9,7 @@ import { appHost } from "../apphost.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { foreground } from "./atm.ts";
 import { logLine } from "../../native/libc.ts";
-import { storedPackages } from "../packages.ts";
+import { persisted } from "../../shell/device-storage.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
@@ -40,20 +40,12 @@ const crashedRecently = (pkg: string, process: string, now: number): boolean => 
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 /** this process's RunningAppProcessInfo importance: foreground while it is in front, else cached */
 export const processImportance = (): number => foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED;
-const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
+const savedRecords = persisted("wd:exit-info:", (saved) => Array.isArray(saved) ? saved as ExitRecord[] : null);
 
 /** the packages with records, which AppExitInfoTracker.onPackageRemoved drops */
-export const exitRecordData: PackageState = {
-  remove(pkg) { try { globalThis.localStorage?.removeItem(storageKey(pkg)); } catch { /* storage can be unavailable */ } },
-  packages: () => storedPackages(PREFIX),
-};
+export const exitRecordData: PackageState = { remove: (pkg) => savedRecords.remove(pkg), packages: () => savedRecords.packages() };
 /** a package's records, newest first */
-export function exitRecords(pkg: string): ExitRecord[] {
-  try {
-    const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(storageKey(pkg)) ?? "[]");
-    return Array.isArray(saved) ? saved as ExitRecord[] : [];
-  } catch { return []; }
-}
+export const exitRecords = (pkg: string): ExitRecord[] => savedRecords.get(pkg) ?? [];
 /** Workers query/publish through the page owner; no localStorage replica is authoritative. */
 export const exitRecordTransport: {
   records?: (pkg: string) => Promise<ExitRecord[]>;
@@ -68,8 +60,7 @@ export function recordRemoteExit(record: ExitRecord): ExitRecord {
   return canonical;
 }
 function save(record: ExitRecord): void {
-  try { globalThis.localStorage?.setItem(storageKey(record.pkg), JSON.stringify([record, ...exitRecords(record.pkg)].slice(0, HISTORY))); }
-  catch (error) { console.warn("[AppExitInfoTracker] not persisted", error); }
+  if (!savedRecords.set(record.pkg, [record, ...exitRecords(record.pkg)].slice(0, HISTORY))) console.warn("[AppExitInfoTracker] not persisted");
 }
 
 /** the reason a kill noted, which the process's death then carries (ProcessList.noteAppKill) */

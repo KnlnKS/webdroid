@@ -246,7 +246,7 @@ export const componentProcess = (c: Component): string => c.owner.process(c.node
 const directBootAware = (c: Component) => c.owner.flag(c.node, "directBootAware", c.owner.flag(c.owner.application, "directBootAware", false));
 
 function componentEnabled(c: Component): boolean {
-  const state = componentState.get({ pkg: c.owner.pkg, cls: c.name });
+  const state = componentState.get({ pkg: c.owner.pkg, cls: c.name }) ?? 0;
   return state === 1 || state === 0 && c.owner.flag(c.node, "enabled", true);
 }
 function visible(c: Component, flags: number): boolean {
@@ -691,7 +691,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`getComponentEnabledSetting(${CN}I)I`]: driven(function* getComponentEnabledSetting$(c: JObj): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
-    return componentState.get({ pkg, cls: qualifyComponent(cls, pkg) });
+    return componentState.get({ pkg, cls: qualifyComponent(cls, pkg) }) ?? 0;
   }),
   [`setComponentEnabledSetting(${CN}IIILjava/lang/String;)V`]: driven(function* setComponentEnabledSetting$(c: JObj, state: number): Gen {
     const [pkg, cls] = yield* componentArgs$(c);

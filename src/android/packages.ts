@@ -3,6 +3,7 @@ import { normRV, resString, type Resources } from "./res.ts";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
+import { persisted } from "../shell/device-storage.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 /** PackageManager's flags, which IPackageManager takes as a long */
@@ -106,24 +107,21 @@ export class PackageRecord {
 
 export const packages = new Map<string, PackageRecord>();
 export const signaturePermissions = new Set<string>();
+/** the uids packages were given (wd:package-uids) */
+const savedUids = persisted("wd:", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
+  Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null);
 const uids = new Map<string, number>();
 let nextUid = 10001;
-try {
-  const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:package-uids") ?? "[]");
-  if (Array.isArray(saved)) for (const entry of saved) {
-    if (!Array.isArray(entry) || typeof entry[0] !== "string" || !Number.isInteger(entry[1]) || entry[1] < 10001) continue;
-    uids.set(entry[0], entry[1]); nextUid = Math.max(nextUid, entry[1] + 1);
-  }
-} catch { /* storage can be unavailable */ }
+for (const [pkg, uid] of savedUids.get("package-uids") ?? []) { uids.set(pkg, uid); nextUid = Math.max(nextUid, uid + 1); }
 
-
-/** PackageManager component enabled states an app set (DEFAULT until then); part of the
+/** what is kept with an install, by pkg (+ ":" + more): its install time and component states */
+const install = persisted("wd:install:", (saved) => typeof saved === "number" ? saved : null);
+/** PackageManager component enabled states an app set (none, DEFAULT, until then); part of the
  *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
 type Component = { pkg: string; cls: string };
 export const componentState = {
-  key: (c: Component) => "wd:install:" + c.pkg + ":component:" + c.cls,
-  get(c: Component): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
-  set(c: Component, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
+  get: (c: Component): number | null => install.get(c.pkg + ":component:" + c.cls) ?? null,
+  set: (c: Component, st: number): void => { install.set(c.pkg + ":component:" + c.cls, st); },
 };
 
 /**
@@ -133,25 +131,12 @@ export const componentState = {
  * (a request in flight across its removal) records none.
  */
 export function installTime(pkg: string): bigint {
-  const key = "wd:install:" + pkg;
-  let ms = Number(globalThis.localStorage?.getItem(key) ?? 0);
+  let ms = install.get(pkg);
   if (!ms) {
     ms = Date.now();
-    try { if (packages.has(pkg)) globalThis.localStorage?.setItem(key, String(ms)); } catch { /* private mode */ }
+    if (packages.has(pkg)) install.set(pkg, ms);
   }
   return BigInt(ms);
-}
-
-/** the packages named by the persisted keys `prefix` + pkg (+ ":" + more) */
-export function storedPackages(prefix: string): string[] {
-  const names = new Set<string>(), storage = globalThis.localStorage;
-  try {
-    for (let i = 0; storage && i < storage.length; i++) {
-      const key = storage.key(i)!, pkg = key.startsWith(prefix) ? key.slice(prefix.length).split(":")[0] : "";
-      if (pkg) names.add(pkg);
-    }
-  } catch { /* storage can be unavailable */ }
-  return [...names];
 }
 /** `pkg` is installed under `uid`: a caller's claim to a package, as checkPackage verifies it */
 export const ownedBy = (pkg: string | null, uid: number): boolean => pkg !== null && packages.get(pkg)?.uid === uid;
@@ -160,19 +145,14 @@ export const knownUid = (pkg: string): number | undefined => packages.get(pkg)?.
 /** the packages installed or with an install kept, whose removal drops the install state (its
  *  install time and what is kept with it) */
 export const installData: PackageState = {
-  remove(pkg) {
-    const storage = globalThis.localStorage, key = "wd:install:" + pkg;
-    try {
-      for (let i = storage?.length ?? 0; i--;) { const k = storage!.key(i)!; if (k === key || k.startsWith(key + ":")) storage!.removeItem(k); }
-    } catch { /* storage can be unavailable */ }
-  },
-  packages: () => [...packages.keys(), ...storedPackages("wd:install:")],
+  remove(pkg) { for (const key of install.keys(pkg)) if (key === pkg || key.startsWith(pkg + ":")) install.remove(key); },
+  packages: () => [...packages.keys(), ...install.packages()],
 };
 export function packageUid(pkg: string): number {
   const old = uids.get(pkg);
   if (old !== undefined) return old;
   const uid = nextUid++;
   uids.set(pkg, uid);
-  try { globalThis.localStorage?.setItem("wd:package-uids", JSON.stringify([...uids])); } catch { /* storage can be unavailable */ }
+  savedUids.set("package-uids", [...uids]);
   return uid;
 }
