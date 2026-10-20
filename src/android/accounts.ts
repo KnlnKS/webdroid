@@ -11,7 +11,7 @@ import { boxInt } from "../jvm/natives/jbox.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { appHost } from "./apphost.ts";
 import { PROCESS_PID, PROCESS_UID } from "./os.ts";
-import { packages, qualifyComponent } from "./packages.ts";
+import { packages, qualifyComponent, ownedBy } from "./packages.ts";
 import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountCalls, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts.ts";
 import { attr, attrStr, parseAXML } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
@@ -61,7 +61,7 @@ export const accountAuthority = (pkg = caller(), uid = PROCESS_UID) => ({ caller
 let accountAccess: AccountAccess;
 export function useAccountAccess(calls: AccountCalls): void { stopAccountUpdates(); accountAccess = calls; }
 const caller = () => appHost?.pkg ?? "";
-const sameUid = (a: string, b: string) => packages.get(a) !== undefined && packages.get(a)?.uid === packages.get(b)?.uid;
+const sameUid = (a: string, b: string) => ownedBy(b, packages.get(a)?.uid ?? -1);
 useAccountStore(new AccountStore());
 /** an account's visibility to `pkg`: its owner's uid always sees it */
 const visibilityFor = (s: AccountSummary, pkg: string) => sameUid(s.owner, pkg) ? 1 : s.visibility[pkg] ?? 4;

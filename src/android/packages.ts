@@ -153,6 +153,8 @@ export function storedPackages(prefix: string): string[] {
   } catch { /* storage can be unavailable */ }
   return [...names];
 }
+/** `pkg` is installed under `uid`: a caller's claim to a package, as checkPackage verifies it */
+export const ownedBy = (pkg: string | null, uid: number): boolean => pkg !== null && packages.get(pkg)?.uid === uid;
 /** the uid a package was given, without assigning one */
 export const knownUid = (pkg: string): number | undefined => packages.get(pkg)?.uid ?? uids.get(pkg);
 /** the packages installed or with an install kept, whose removal drops the install state (its

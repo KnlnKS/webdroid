@@ -18,7 +18,7 @@ import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-cl
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
 import type { DataClear } from "../shell/packagedata.ts";
-import { packages } from "./packages.ts";
+import { packages, ownedBy } from "./packages.ts";
 import { FileDescriptors } from "../shell/file-descriptors.ts";
 import { StoredParcel } from "../shell/stored-parcel.ts";
 import { processRights } from "../native/process-fd.ts";
@@ -113,9 +113,8 @@ function* sliceItems(slice: JObj | null): Gen<JObj[]> {
 
 // ── callers
 const SYSTEM_UIDS = new Set([0, 1000, 1001]);
-const ownsPackage = (pkg: string | null, uid: number) => pkg !== null && packages.get(pkg)?.uid === uid;
 function checkCallerIsSameApp(pkg: string | null, uid = callingIdentity().uid): void {
-  if (!(uid === 0 && pkg === "root") && !ownsPackage(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
+  if (!(uid === 0 && pkg === "root") && !ownedBy(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
 }
 function checkCallerIsSystemOrSameApp(pkg: string | null): void {
   if (!SYSTEM_UIDS.has(callingIdentity().uid)) checkCallerIsSameApp(pkg);
@@ -125,7 +124,7 @@ function denyPermission(permission: string, message: string): never {
   return fail("java/lang/SecurityException", `${message}: Neither user ${callingIdentity().uid} nor current process has ${permission}.`);
 }
 function enforceSystemOrSystemUIOrSamePackage(pkg: string | null, message: string): void {
-  if (SYSTEM_UIDS.has(callingIdentity().uid) || ownsPackage(pkg, callingIdentity().uid)) return;
+  if (SYSTEM_UIDS.has(callingIdentity().uid) || ownedBy(pkg, callingIdentity().uid)) return;
   denyPermission("android.permission.STATUS_BAR_SERVICE", message);
 }
 function enforceSystemOrSystemUI(message: string): void {
@@ -583,11 +582,11 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
 }
 /** resolveNotificationUid: an app posts as itself, or for a package that made it its delegate */
 function resolveNotificationUid(opPkg: string | null, pkg: string, uid: number, userId: number): number | Promise<number> {
-  if (ownsPackage(pkg, uid) && (opPkg === pkg || ownsPackage(opPkg, uid))) return uid;
+  if (ownedBy(pkg, uid) && (opPkg === pkg || ownedBy(opPkg, uid))) return uid;
   const owner = packages.get(pkg);
   if (owner && SYSTEM_UIDS.has(uid) && pkg === "android") return owner.uid;
   return after(delegateOf(pkg), delegate => {
-    if (owner && delegate === opPkg && ownsPackage(opPkg, uid)) return owner.uid;
+    if (owner && delegate === opPkg && ownedBy(opPkg, uid)) return owner.uid;
     return fail("java/lang/SecurityException", `Caller ${opPkg}:${uid} cannot post for pkg ${pkg} in user ${userId}`);
   });
 }

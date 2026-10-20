@@ -5,7 +5,7 @@ import { type JUri, mkUri, uriText, clipUris } from "./net.ts";
 import { PROCESS_UID } from "./os.ts";
 import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { packages } from "./packages.ts";
+import { ownedBy } from "./packages.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
@@ -75,7 +75,7 @@ export function checkUriPermission(u: string, uid: number, modes: number): numbe
   if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
     grantedUri(u, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
   for (const pkg of transientUriGrants.keys()) {
-    if (packages.get(pkg)?.uid !== uid) continue;
+    if (!ownedBy(pkg, uid)) continue;
     if ((transientFlags(pkg, u) & requested) === requested) return 0;
   }
   return -1;

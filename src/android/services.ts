@@ -19,7 +19,7 @@ import { GL_ES_VERSION } from "./pm.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
 import { deviceConfiguration, systemResource } from "./resnative.ts";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, parceledList } from "./binder.ts";
-import { packages } from "./packages.ts";
+import { packages, ownedBy } from "./packages.ts";
 import { getPrefs } from "./sharedprefs.ts";
 import { broadcastQueueMethods, stickyBroadcasts } from "./server/broadcastqueue.ts";
 import { activityManagerMethods } from "./server/am.ts";
@@ -349,7 +349,6 @@ rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}
 // uid does not own reads as the op's default when checked and MODE_ERRORED when noted or started,
 // as the reference AVD's services.jar answers. Mode changes are not reported to watchers.
 const AOM = "android/app/AppOpsManager", MODE_ALLOWED = 0, MODE_IGNORED = 1, MODE_ERRORED = 2;
-const owns = (uid: number, pkg: string | null) => pkg !== null && packages.get(pkg)?.uid === uid;
 const defaultMode = (code: number): Promise<number> => scall(AOM, "opToDefaultMode", "(I)I", code);
 const opPermission = (code: number) => scall(AOM, "opToPermission", "(I)Ljava/lang/String;", code);
 function* opMode(code: number, pkg: string): Gen<number> {
@@ -359,10 +358,10 @@ function* opMode(code: number, pkg: string): Gen<number> {
   return yield* awaited(defaultMode(op));
 }
 const checkOp = driven(function* (code: number, uid: number, pkg: string | null): Gen<number> {
-  return owns(uid, pkg) ? yield* opMode(code, pkg!) : yield* awaited(defaultMode(code));
+  return ownedBy(pkg, uid) ? yield* opMode(code, pkg!) : yield* awaited(defaultMode(code));
 });
 const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
-  return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
+  return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", ownedBy(pkg, uid) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
 });
 const startOp = (_token: unknown, code: number, uid: number, pkg: string | null, tag: string | null) => noteOp(code, uid, pkg, tag);
 const sourceField = <T>(state: JObj, name: string) => getDeclared<T>(state, "android/content/AttributionSourceState", name);
@@ -379,7 +378,7 @@ rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: 
   "checkOperationRaw(IILjava/lang/String;Ljava/lang/String;)I": checkOp,
   "checkOperationRawForDevice(IILjava/lang/String;Ljava/lang/String;I)I": checkOp,
   "checkAudioOperation(IIILjava/lang/String;)I": (code: number, _usage: number, uid: number, pkg: string | null) => checkOp(code, uid, pkg),
-  "checkPackage(ILjava/lang/String;)I": (uid: number, pkg: string | null) => owns(uid, pkg) ? MODE_ALLOWED : MODE_ERRORED,
+  "checkPackage(ILjava/lang/String;)I": (uid: number, pkg: string | null) => ownedBy(pkg, uid) ? MODE_ALLOWED : MODE_ERRORED,
   "noteOperation(IILjava/lang/String;Ljava/lang/String;ZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
   "noteOperationForDevice(IILjava/lang/String;Ljava/lang/String;IZLjava/lang/String;Z)Landroid/app/SyncNotedAppOp;": noteOp,
   "startOperation(Landroid/os/IBinder;IILjava/lang/String;Ljava/lang/String;ZZLjava/lang/String;ZII)Landroid/app/SyncNotedAppOp;": startOp,

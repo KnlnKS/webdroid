@@ -17,7 +17,7 @@ import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
 import { callingIdentity, newStub, parceledList } from "../binder.ts";
-import { packages, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
+import { packages, ownedBy, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
 import { clearUserData } from "../appdata.ts";
@@ -169,11 +169,11 @@ export const activityManagerMethods = {
   },
   // the package's own uid clears its data; another's needs CLEAR_APP_USER_DATA
   "clearApplicationUserData(Ljava/lang/String;ZLandroid/content/pm/IPackageDataObserver;I)Z": driven(function* (pkg: string | null, keepState: number, observer: JObj | null): Gen<number> {
-    const { pid, uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
-    if (record?.uid !== uid && (yield* awaited(checkUidPermission(CLEAR_APP_USER_DATA, uid))) !== 0)
+    const { pid, uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg), own = ownedBy(pkg, uid);
+    if (!own && (yield* awaited(checkUidPermission(CLEAR_APP_USER_DATA, uid))) !== 0)
       throw rt.mkThrowable("java/lang/SecurityException", `PID ${pid} does not have permission ${CLEAR_APP_USER_DATA} to clear data of package ${pkg}`);
     if (!record) console.warn("[ActivityManager] Invalid packageName: " + pkg);
-    yield clearUserData(pkg ?? "", record?.uid === uid, !!keepState, observer);
+    yield clearUserData(pkg ?? "", own, !!keepState, observer);
     return record ? 1 : 0;
   }),
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": driven(function* (pkg: string | null, pid: number, maxNum: number): Gen<JObj> {

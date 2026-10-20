@@ -5,7 +5,7 @@ import { asSystem, exportBinder, ownedSystemService, type ParcelData } from "../
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
-import { packages } from "../android/packages.ts";
+import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
 import { canonicalPreferenceCommands, createAppData } from "../android/sharedprefs.ts";
@@ -33,7 +33,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const accounts = () => { broker.watchAccounts(pid); return accountCommands; };
   const permissions = canonicalPermissionCommands(broker.permissions, pkg => {
     broker.entry(pid);
-    if (privileged || packages.get(pkg)?.uid === caller.uid || holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
+    if (privileged || ownedBy(pkg, caller.uid) || holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
     throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
   });
   const authorizePreference = (name: string, write: boolean) => {
@@ -41,7 +41,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     const notification = name.startsWith("android:notification-policy:");
     const pkg = notification ? name.slice("android:notification-policy:".length) : name.split(":", 1)[0];
     const publicRead = notification || name === `${pkg}:__system_power`;
-    if (privileged || packages.get(pkg)?.uid === caller.uid || !write && publicRead) return;
+    if (privileged || ownedBy(pkg, caller.uid) || !write && publicRead) return;
     throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
   };
   const webStorage = canonicalWebStorage(caller.pkg);
@@ -155,7 +155,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       }
     },
     filePrepare: async pkg => {
-      if (packages.get(pkg)?.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
+      if (!ownedBy(pkg, caller.uid)) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
       await broker.files.prepare(pkg);
       broker.entry(pid);
       await createAppData(pkg);
@@ -181,7 +181,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     accountChange: async change => accounts().accountChange(change),
     ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }),
     exitRecords: async pkg => {
-      if (packages.get(pkg)?.uid !== caller.uid && await permissionDenied("android.permission.DUMP", caller.pkg))
+      if (!ownedBy(pkg, caller.uid) && await permissionDenied("android.permission.DUMP", caller.pkg))
         throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");
       broker.entry(pid);
       return exitRecords(pkg);
