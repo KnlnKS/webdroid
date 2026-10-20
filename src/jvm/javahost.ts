@@ -19,11 +19,16 @@ export interface JavaHost {
   box(desc: BoxDesc, v: number | bigint): unknown;
   /** the property a facade holds `cls`'s instance field `name` under */
   fieldName(cls: string, name: string): string | undefined;
+  /** the Java frames calling into the runtime here, innermost first */
+  javaFrames(): string[];
+  /** the loader of the innermost Java frame whose class is not the platform's */
+  userClassLoader(): object | null;
 }
 
 /** from here host code reaches Java through `host` */
 export function useJavaHost(host: JavaHost): void {
   useEntry(host.entry); useJniVm(host.jni);
   rt.mkThrowable = host.throwable; rt.make = host.make; rt.classFor = host.classFor;
+  rt.javaFrames = host.javaFrames; rt.userClassLoader = host.userClassLoader;
   wasmBox.make = host.box; fieldNames.find = host.fieldName;
 }

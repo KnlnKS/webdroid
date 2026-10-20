@@ -156,7 +156,7 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
-  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (set by the World) */
+  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (JavaHost's) */
   javaFrames: () => string[] = () => [];
   userClassLoader: () => object | null = () => null;
   /** where each missing entry was first reached */
