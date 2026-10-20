@@ -48,9 +48,9 @@ const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.ac
 function accountsChanged(): void {
   for (const action of CHANGED) asSystem(() => after(newIntent(action), (intent) => broadcastIntent(intent, [], false))).catch(logUncaught);
 }
-export function useAccountStore(store: AccountStore): void {
+export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountAccess = canonicalAccountCommands(store, accountAuthority);
-  stopAccountUpdates = store.watch(accountsChanged);
+  return stopAccountUpdates = store.watch(accountsChanged);
 }
 function accountAuthority(): AccountAuthority {
   const { uid } = callingIdentity();

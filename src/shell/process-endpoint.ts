@@ -150,9 +150,9 @@ export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
   useFocusedUid(() => broker.foregroundUid());
   useAlarmScheduler(broker.alarms);
   useGeolocation(broker.location);
-  useAccountStore(broker.accounts);
-  const stopSettings = useSettingsStore(broker.settings);
-  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
+  // system_server announces the stores' changes, and its watches of them end with it
+  const stops = [useAccountStore(broker.accounts), useSettingsStore(broker.settings)];
+  if (broker.alive(PROCESS_PID)) for (const stop of stops) broker.watch(PROCESS_PID, stop);
   return createProcessEndpoint();
 }
 
