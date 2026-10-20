@@ -13,7 +13,8 @@ import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
-import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
+import { isStackOverflow } from "./exc.ts";
+import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
 import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
@@ -25,8 +26,6 @@ type InvokeSite = { name: string; desc: string; decl: string; target: MethodInfo
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
 type Binding = { k: "fixed"; m: MethodInfo; body?: Trivial } | { k: "virtual"; only?: MethodInfo } | { k: "string" };
-/** the calls of a method that may count its frame around themselves instead of in a prologue */
-const MAX_SITES = 2;
 /** the Wasm instruction of each binary operation that is one, by operand kind */
 const WASM_BINOP: Record<number, Partial<Record<Binop, number>>> = {
   [KI]: { add: OP.i32_add, sub: OP.i32_sub, mul: OP.i32_mul, div: OP.i32_div_s, rem: OP.i32_rem_s, and: OP.i32_and, or: OP.i32_or, xor: OP.i32_xor, shl: OP.i32_shl, shr: OP.i32_shr_s, ushr: OP.i32_shr_u },
@@ -194,7 +193,8 @@ export class MC {
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
     this.loops?.declare();
-    if (this.loops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (!this.loops) this.frame = planDepth(this);
+    if (this.frame.whole) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (cx.counting) cx.emitCount(c, m);
@@ -246,60 +246,21 @@ export class MC {
     const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
     const own = (this.loops?.build(types) ? 5 : 4) + types.length;
     for (const at of this.weights) this.code.patch(at, own);
-    if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
+    if (this.entryDepth < 0 && this.frame.boundable) this.cx.bound.set(mid(this.m), own + this.frame.calleeWeight);
     this.loops?.finish();
     this.root.materialize();
     return this.root;
   }
-  /** the weight of the heaviest method this one calls, once it counts no depth */
-  private calleeWeight = 0;
-  /** the calls that count the frame around themselves (planDepth) */
-  private sites = new Set<string>();
-  /** whether the calls that count their own frame are all on paths that throw, so a caller need not count its frame for the method */
-  private boundable = true;
-  private siteLocal = -1;
-  private enterSite() { if (this.siteLocal < 0) this.siteLocal = this.code.newLocal(T.i32); this.weights.push(...this.cx.emitEnter(this.code, this.siteLocal)); }
-  private leaveSite() { this.cx.emitLeave(this.code, this.siteLocal, false); }
-  /** how the method counts its frame against the depth limit (exc.ts MAX_DEPTH): not at all when it calls only methods of its unit that count none and is small with
-   *  them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that are
-   *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
-  private planDepth(): boolean {
-    const { instructions, first, last } = this.prepared;
-    if (instructions.some(ins => this.deferredSite(ins))) return true;
-    if (!instructions.some((i) => isInvoke(i.op))) return false;
-    if (this.tries) return true;
-    const open: string[] = [], cold: string[] = [];
-    // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue; an irreducible cycle crosses regions
-    let looped = false;
-    const bounded = (m: MethodInfo) => { const w = this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
-    for (let blk = 0; blk < first.length; blk++) {
-      const thrown = instructions[last[blk]].op === 0x27, opened = open.length;
-      for (let i = first[blk]; i <= last[blk]; i++) {
-        const ins = instructions[i];
-        if (!isInvoke(ins.op)) continue;
-        if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
-        const b = this.binding(ins), key = String(ins.pc);
-        if (!b) continue;
-        if (b.k === "virtual") {
-          // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
-          const guards = this.guards(ins, b);
-          for (const g of guards) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
-          if (guards.length) { cold.push(key + ":f"); continue; }
-        }
-        // a check calls its method for a null argument, which the method rejects
-        const body = b.k === "fixed" ? b.body : undefined;
-        if (body?.k === "check") { cold.push(key); continue; }
-        const callee = b.k !== "fixed" ? undefined : body ? this.innerCall(body) : b.m;
-        if (callee === null) continue;
-        // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
-        if (!callee || !bounded(callee)) (thrown ? cold : open).push(key);
-      }
-      if (open.length > opened && (this.flow.loopOf[blk] >= 0 || this.flow.regions.length > 1)) looped = true;
-    }
-    if (looped || this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
-    this.sites = new Set([...open, ...cold]);
-    this.boundable = open.length === 0;
-    return false;
+  /** how the method counts its frame (depth.ts) */
+  private frame: DepthPlan = WHOLE_FRAME;
+  private enterSite() { this.weights.push(...this.cx.emitEnter(this.code, this.scratchLocal("site", T.i32))); }
+  private leaveSite() { this.cx.emitLeave(this.code, this.scratchLocal("site", T.i32), false); }
+  private scratchLocals = new Map<string, number>();
+  /** the local made on first use under `key`, for a value that one instruction's translation keeps */
+  scratchLocal(key: string, vt: VT): number {
+    let l = this.scratchLocals.get(key);
+    if (l === undefined) this.scratchLocals.set(key, l = this.code.newLocal(vt));
+    return l;
   }
   /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
   deferredSite(ins: Ins): boolean {
@@ -323,12 +284,12 @@ export class MC {
   /** what a call of `m`, bound statically, runs in place (inline.ts) */
   private bodyOf(m: MethodInfo): Trivial | undefined { return this.cx.inlines(m) ? trivialOf(this.cx.prog, m) : undefined; }
   /** the call a body run in place makes, if it makes one: a call of a method whose body is empty only initializes a static one's class */
-  private innerCall(t: Seq): MethodInfo | null {
+  innerCall(t: Seq): MethodInfo | null {
     const s = t.steps.find((s) => "call" in s);
     return s && "call" in s && !isEmpty(this.bodyOf(s.call)) ? s.call : null;
   }
   /** the implementations a virtual call tests for before it dispatches: the only one, else the unit's likely ones (Compiler.guards), if the unit has them */
-  private guards(ins: Ins, b: Extract<Binding, { k: "virtual" }>): MethodInfo[] {
+  guards(ins: Ins, b: Extract<Binding, { k: "virtual" }>): MethodInfo[] {
     if (b.only) return this.cx.directFunc(b.only) === undefined ? [] : [b.only];
     const { decl, name, desc } = this.invoke(ins);
     return this.cx.guards(decl, name, desc);
@@ -400,13 +361,14 @@ export class MC {
     const last = instructions[end];
     if (!endsBlock(last.op)) {
       const target = this.flow.fallTarget(b, last.op >= 0x32 && last.op <= 0x3d ? blockAt[ifTarget(last)] : -1);
-      if (target >= 0) this.jump(start[target], true);
+      if (target >= 0) this.jump(b, start[target], true);
     }
   }
-  jump(targetPc: number, final: boolean) {
-    const go = this.flow.go(this.block, this.prepared.blockAt[targetPc], final), c = this.code;
+  /** the branch of block `from` to `targetPc`; `final` is one that ends the block rather than one inside a test */
+  jump(from: number, targetPc: number, final: boolean) {
+    const go = this.flow.go(from, this.prepared.blockAt[targetPc], final), c = this.code;
     const label = go === Go.Continue ? "L" + targetPc : go === Go.Break ? "B" + targetPc : "$disp";
-    if (this.loops?.exit(targetPc, final, go, label)) return;
+    if (this.loops?.exit(from, targetPc, final, go, label)) return;
     switch (go) {
       case Go.Next: return;
       case Go.Break: c.br(this.depth("B" + targetPc)); return;
@@ -543,7 +505,7 @@ export class MC {
         return;
       }
       case 0x27: this.nonNull(a); c.throw_(cx.tag); return;
-      case 0x28: case 0x29: case 0x2a: this.jump(ins.pc + a, true); return; // goto
+      case 0x28: case 0x29: case 0x2a: this.jump(this.block, ins.pc + a, true); return; // goto
       case 0x2b: case 0x2c: this.emitSwitch(ins); return;
       case 0x2d: case 0x2e: this.num(KF, b); this.num(KF, ins.c); c.call(cx.helper(op === 0x2d ? "cmplf" : "cmpgf")); this.set("I"); return;
       case 0x2f: case 0x30: this.num(KD, b); this.num(KD, ins.c); c.call(cx.helper(op === 0x2f ? "cmpld" : "cmpgd")); this.set("I"); return;
@@ -553,12 +515,10 @@ export class MC {
     }
     throw new Error(`no translation of ${ins.name} at ${ins.pc}`);
   }
-  private monObj = -1; private monHdr = -1;
   /** monitor-enter or -exit of the object on the stack: the uncontended lock of a free object, and the release of a lock held once, inline; the rest is the helper's (j2w.ts menter) */
   private monitor(enter: boolean) {
     const c = this.code, cx = this.cx, tObj = cx.tObj;
-    if (this.monObj < 0) { this.monObj = c.newLocal(ref(tObj)); this.monHdr = c.newLocal(T.i64); }
-    const o = this.monObj, w = this.monHdr, tok = () => c.gget(cx.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or);
+    const o = this.scratchLocal("monitor", ref(tObj)), w = this.scratchLocal("header", T.i64), tok = () => c.gget(cx.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or);
     c.lset(this.tmpL).lget(this.tmpL).refCast(tObj).lset(o).lget(o).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64);
     if (enter) c.raw(OP.i32_eqz); else { tok(); c.raw(OP.i32_eq); }
     c.if_();
@@ -595,8 +555,7 @@ export class MC {
     for (let i = 0; i < ELEM_KINDS.length - 1; i++) c.end();
   }
   /** the local of each element kind that holds the data array of the array being accessed */
-  dataLocal = new Map<ElemKind, number>();
-  dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(ref(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
+  private dloc(k: ElemKind): number { return this.scratchLocal(k, ref(this.cx.tData[k])); }
   idxCheck(k: ElemKind, idxReg: number) {
     const c = this.code, d = this.dloc(k);
     this.get("I", idxReg); c.lget(d).arrayLen().raw(OP.i32_ge_u).if_();
@@ -693,8 +652,8 @@ export class MC {
     const fall = ins.pc + ins.len;
     if (this.prepared.blockAt[target] === this.prepared.blockAt[fall]) return;
     cond();
-    if (flow.inverted.has(this.block)) { c.raw(OP.i32_eqz).if_(); this.push("if"); this.jump(fall, false); }
-    else { c.if_(); this.push("if"); this.jump(target, false); }
+    if (flow.inverted.has(this.block)) { c.raw(OP.i32_eqz).if_(); this.push("if"); this.jump(this.block, fall, false); }
+    else { c.if_(); this.push("if"); this.jump(this.block, target, false); }
     this.pop(); c.end();
   }
   emitSwitch(ins: Ins) {
@@ -722,7 +681,7 @@ export class MC {
         return;
       }
       for (const [key, target] of sorted.slice(from, to + 1)) {
-        this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
+        this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(this.block, target, false); this.pop(); c.end();
       }
     };
     search(0, sorted.length - 1);
@@ -756,10 +715,10 @@ export class MC {
     const p = this.dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     if (target === "clone") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
-    const b = this.binding(ins)!, site = this.sites.has(String(ins.pc));
+    const b = this.binding(ins)!, sites = this.frame.sites, site = sites.has(String(ins.pc));
     if (b.k === "fixed" && b.body) { this.emitBody(ins, b.m, b.body, retK, site); return; }
     if (site) this.enterSite();
-    const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
+    const wrap = (key: string, emit: () => void) => { const on = sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (b.k === "string") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
@@ -782,7 +741,7 @@ export class MC {
       } else {
         const sel = cx.w.selectorId(target.key), s = sel % H.IMT_N;
         // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
-        const vtl = this.vtLocal();
+        const vtl = this.scratchLocal("vt", ref(cx.tVT));
         c.lset(vtl);
         c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
           .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
@@ -791,7 +750,7 @@ export class MC {
       // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
       const type = cx.descSig(desc, false);
       if (guards.length) {
-        const slot = this.slotLocal();
+        const slot = this.scratchLocal("slot", T.i32);
         c.lset(slot);
         for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => cx.callMethod(c, g)); c.else_(); }
         c.lget(slot); wrap("f", () => c.callIndirect(type));
@@ -865,10 +824,6 @@ export class MC {
     if (c.marks.length !== marks) (this.root.inline ??= []).push([m, pc, at]);
     return r;
   }
-  slotl = -1;
-  slotLocal() { if (this.slotl < 0) this.slotl = this.code.newLocal(T.i32); return this.slotl; }
-  vtl = -1;
-  vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(ref(this.cx.tVT)); return this.vtl; }
 
   /** unary (0x7b-0x8f) and binary (0x90-0xe2) arithmetic, in the operand kinds infer.ts gives them */
   emitArith(ins: Ins) {

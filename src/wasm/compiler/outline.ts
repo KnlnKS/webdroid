@@ -109,14 +109,14 @@ export class Outliner {
     this.status(ChunkStatus.Return);
     return true;
   }
-  /** a jump out of the chunk being emitted: a dispatch within its cycle, or one of its exits, which the code calling it takes; answers whether it was one */
-  exit(targetPc: number, final: boolean, go: Go, label: string): boolean {
+  /** a jump of block `from` out of the chunk being emitted: a dispatch within its cycle, or one of its exits, which the code calling it takes; answers whether it was one */
+  exit(from: number, targetPc: number, final: boolean, go: Go, label: string): boolean {
     const mc = this.mc, c = mc.code, ch = this.chunk;
     if (!ch) return false;
     if (go === Go.Dispatch && ch.cycle?.includes(mc.regionOfPc.get(targetPc)!)) { c.i32(mc.regionOfPc.get(targetPc)!).lset(mc.regionLocal).br(mc.depth("$cycleDisp")); return true; }
     if (go === Go.Next || mc.nest.includes(label)) return false;
-    let i = ch.exits.findIndex((e) => e.pc === targetPc && e.block === mc.block && e.final === final);
-    if (i < 0) { i = ch.exits.length; ch.exits.push({ pc: targetPc, block: mc.block, final }); }
+    let i = ch.exits.findIndex((e) => e.pc === targetPc && e.block === from && e.final === final);
+    if (i < 0) { i = ch.exits.length; ch.exits.push({ pc: targetPc, block: from, final }); }
     this.status(ChunkStatus.Exit + i);
     return true;
   }
@@ -256,8 +256,8 @@ export class Outliner {
     c.lget(this.controlLocal).i32(ChunkStatus.Throw).raw(OP.i32_eq).if_().lget(mc.excLocal).throw_(cx.tag).end();
     for (let i = 0; i < ch.exits.length; i++) {
       c.lget(this.controlLocal).i32(ChunkStatus.Exit + i).raw(OP.i32_eq).if_(); mc.push("if");
-      const saved = mc.block, exit = ch.exits[i]; mc.block = exit.block;
-      mc.jump(exit.pc, exit.final); mc.block = saved; mc.pop(); c.end();
+      const exit = ch.exits[i];
+      mc.jump(exit.block, exit.pc, exit.final); mc.pop(); c.end();
     }
     mc.pop(); c.end();
   }
