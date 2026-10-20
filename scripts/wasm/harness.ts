@@ -13,7 +13,7 @@ import { rt } from "../../src/jvm/runtime.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
-import { mountLocalPlatformData, platformJarBytes } from "../aosp.ts";
+import { localPlatformData, platformJarBytes } from "../aosp.ts";
 export { attachHostClasses, natives, nativeSource };
 
 /** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
@@ -37,7 +37,7 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
   const jars = typeof from === "string" ? platformJarBytes(aosp) : from;
   jars.forEach((bytes, i) => { if (bytes) mountPlatformJar(bytes, i); });
   // a page reads the data by range requests to its server
-  if (page) mountPlatformData(); else mountLocalPlatformData(aosp);
+  mountPlatformData(page ? undefined : localPlatformData(aosp));
   // A mapped file faults its pages in asynchronously, which a synchronous entry cannot wait for: the ICU data files are read first into
   // the pages every mapping of them shares, as a warm page cache would hold them
   for (const path of Object.keys(PLATFORM_DATA).filter((p) => /\.(dat|res)$/.test(p))) {

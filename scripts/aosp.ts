@@ -1,6 +1,7 @@
-// The reference build in a checkout's vendor/aosp: its platform jars and the /apex data, as node reads them (and a harness page, over the files it preloaded)
+// The reference build in a checkout's vendor/aosp: its platform jars and the /apex data, as node reads them (and a harness page, over the files it preloaded).
+// It imports no runtime module, so a script that needs only these paths (aot-key.ts, and through it the production build) does not load the emulator.
 import { existsSync, openSync, readFileSync, readSync } from "node:fs";
-import { mountPlatformData } from "../src/shell/apex.ts";
+import type { FileSource } from "../src/shell/lazyfile.ts";
 import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
 
 /** the checkout's vendor/aosp */
@@ -13,10 +14,8 @@ export const hasPlatformJars = (): boolean => PLATFORM_PATHS.every((path) => exi
 export const platformJarBytes = (aosp = AOSP): (Uint8Array | undefined)[] =>
   PLATFORM_JARS.map((jar) => existsSync(`${aosp}/${jar}`) ? new Uint8Array(readFileSync(`${aosp}/${jar}`)) : undefined);
 
-/** the reference build's files (ICU, tz, bionic) at their device paths, each opened at its first read from `aosp` */
-export function mountLocalPlatformData(aosp = AOSP): void {
-  mountPlatformData((path, size) => {
-    let fd: number | undefined;
-    return { size, read: (at, length) => { const b = new Uint8Array(length); return b.subarray(0, readSync(fd ??= openSync(aosp + path, "r"), b, 0, length, at)); } };
-  });
-}
+/** the reference build's files (ICU, tz, bionic) for apex.ts's `mountPlatformData`: each read from `aosp`, opened at its first read */
+export const localPlatformData = (aosp = AOSP) => (path: string, size: number): FileSource => {
+  let fd: number | undefined;
+  return { size, read: (at, length) => { const b = new Uint8Array(length); return b.subarray(0, readSync(fd ??= openSync(aosp + path, "r"), b, 0, length, at)); } };
+};

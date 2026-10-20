@@ -27,7 +27,8 @@ import { setTimeout } from "node:timers/promises";
 import { unzipSync } from "fflate";
 import { constObject, writeGenerated } from "./lib.ts";
 import { loadDexes } from "./dexes.ts";
-import { mountLocalPlatformData, platformJarBytes } from "./aosp.ts";
+import { localPlatformData, platformJarBytes } from "./aosp.ts";
+import { mountPlatformData } from "../src/shell/apex.ts";
 import "../src/natives.ts";
 import { loadTier } from "../src/jvm/tier.ts";
 import { descToName } from "../src/jvm/abi.ts";
@@ -238,7 +239,7 @@ async function recordCharsets() {
 async function recordSettings() {
   await loadTier();
   platformJarBytes(OUT).forEach((bytes, i) => loadPlatformJar(bytes!, i));
-  mountLocalPlatformData();
+  mountPlatformData(localPlatformData());
   const { publicSettings } = await import("../src/android/settings.ts");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
     .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const);

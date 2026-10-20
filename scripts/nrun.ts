@@ -7,7 +7,8 @@
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
 import { openApk } from "./lib.ts";
 import { dexesOfZip } from "../src/jvm/dex.ts";
-import { mountLocalPlatformData, platformJarBytes } from "./aosp.ts";
+import { localPlatformData, platformJarBytes } from "./aosp.ts";
+import { mountPlatformData } from "../src/shell/apex.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import { loadDex, loadTier } from "../src/jvm/tier.ts";
 import { loadPlatformJar } from "../src/android/framework.ts";
@@ -27,7 +28,7 @@ platformJarBytes().forEach((bytes, i) => bytes && loadPlatformJar(bytes, i));
 for (const dex of dexesOfZip(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
-mountLocalPlatformData();
+mountPlatformData(localPlatformData());
 
 // the ABIs this apk actually ships this library for, in the order the tree lists them
 const abis = Object.keys(rt.classpath).flatMap((k) => {
