@@ -2,6 +2,7 @@
 // Code linked under the old resolution is undone; a change that would alter the dispatch or hierarchy of linked classes is refused with a LinkageError.
 import { changedTypes, declaresNaming, declaresStaticOf, javaName, type Loader } from "../compiler/program.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
+import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
 
 export class Namespaces {
@@ -99,10 +100,7 @@ export class Namespaces {
       })) throw refuse("dispatch", old.name);
     }
     // A changed superclass would change the physical GC layout of already linked instances. Constructor-time library binding must precede that resolution.
-    for (const old of existing) {
-      const cls = prog.get(old.name)!;
-      if (!builtUnderNew(old.name) && (cls.sup !== old.sup || cls.ifaces.join("\0") !== old.ifaces.join("\0"))) throw refuse("hierarchy", old.name);
-    }
+    for (const old of existing) if (!builtUnderNew(old.name) && !hasHierarchy(prog.get(old.name), old.sup, old.ifaces)) throw refuse("hierarchy", old.name);
     // A class's globals keep the names its module gave them: an app build made under the new graph has them already.
     for (const old of existing) {
       for (const { field, desc } of old.statics) if (desc !== field.desc) {

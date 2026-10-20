@@ -5,9 +5,15 @@
 import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/ids.ts";
 import type { InlineFrame } from "../compiler/code.ts";
+import type { JClass } from "../compiler/program.ts";
 import { unitHeader, type UnitHeader } from "./aot.ts";
 import type { Marks, Numbering } from "./numbers.ts";
 import type { World } from "./world.ts";
+
+/** whether `cls` exists with superclass `sup` and interfaces `ifaces`, in order */
+export function hasHierarchy(cls: JClass | undefined, sup: string | null, ifaces: readonly string[]): boolean {
+  return !!cls && cls.sup === sup && cls.ifaces.length === ifaces.length && cls.ifaces.every((name, i) => name === ifaces[i]);
+}
 
 /** the second-tier compile of a method, as Tiering.upgradeJob describes it */
 export interface UpgradeJob {
@@ -62,10 +68,7 @@ export class UnitCompiler {
     if (job.resolved?.length && !job.prepared?.length) return "missing prepared worker hierarchies";
     const prepared = new Set((job.prepared ?? []).map(([key]) => key));
     for (const [, , key] of job.resolved ?? []) if (!prepared.has(key)) return `missing prepared worker hierarchy ${key}`;
-    for (const [key, sup, ifaces] of job.prepared ?? []) {
-      const cls = w.prog.get(key);
-      if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
-    }
+    for (const [key, sup, ifaces] of job.prepared ?? []) if (!hasHierarchy(w.prog.get(key), sup, ifaces)) return `mismatched prepared worker hierarchy ${key}`;
     for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
     const cx = new Compiler(w), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));

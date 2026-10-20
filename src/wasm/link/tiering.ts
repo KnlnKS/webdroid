@@ -11,7 +11,7 @@ import { HotUnits } from "./hotunits.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
 import type { MethodSlot } from "./slots.ts";
-import type { UnitResult, UpgradeJob } from "./unit.ts";
+import { hasHierarchy, type UnitResult, type UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
 
 /** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
@@ -304,10 +304,7 @@ export class Tiering {
         if (!refresh!.slots.includes(at) && this.w.slots.peek(at)?.done) return false;
       }
       for (const [referrer, name, key] of job.resolved ?? []) if (this.w.prog.initiatedBy(this.w.prog.loaderOf(referrer), name) !== key || !definitionReady(this.w, key)) return false;
-      for (const [key, sup, ifaces] of job.prepared ?? []) {
-        const cls = this.w.prog.get(key);
-        if (!cls || !definitionReady(this.w, key) || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return false;
-      }
+      for (const [key, sup, ifaces] of job.prepared ?? []) if (!definitionReady(this.w, key) || !hasHierarchy(this.w.prog.get(key), sup, ifaces)) return false;
     }
     const r = this.received(result);
     if (!r) return false;
