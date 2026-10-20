@@ -332,7 +332,7 @@ const DOZE_EXEMPTION = "__system_power";
 registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", driven(function* (intent: JObj) {
   const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
   const pkg: string | null = data && (yield vcall(data, "getScheme", "()Ljava/lang/String;")) === "package" ? yield vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") : null;
-  if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
+  if (!pkg || !packages.get(pkg)?.requested.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
   yield* awaited(getPrefs(pkg, DOZE_EXEMPTION).set("exempt", 1));
   return newIntent();
 }));

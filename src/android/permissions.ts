@@ -75,10 +75,10 @@ const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "andro
 export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
 /** special access held without its screen: by a requesting app targeting below 23 or a system one */
 const specialAtInstall = (record: PackageRecord | undefined, name: string): boolean =>
-  !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
+  !!record && (record.grants.has(name) || record.requested.has(name) && (record.system || record.sdk.target < 23));
 function permissionHeld(store: PermissionStore, pkg: string, name: string): boolean {
   const record = packages.get(pkg);
-  if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.permissions.has(name) && store.get(pkg).has(name);
+  if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.requested.has(name) && store.get(pkg).has(name);
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
 export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
@@ -90,7 +90,7 @@ export const permissionGranted = (pkg: string, name: string): boolean | Promise<
 export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
   const record = packages.get(pkg);
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name);
-  return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
+  return !!record && (record.grants.has(name) || record.system && record.requested.has(name));
 };
 export function grantPermissions(names: string[]): Int32Array | Promise<Int32Array> {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
@@ -117,7 +117,7 @@ registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(f
 // intent names is not preselected since Android 11), answered by the same policy for that app
 registerSystemActivity("android.settings.action.MANAGE_OVERLAY_PERMISSION", () => {
   const pkg = appHost?.pkg ?? "", name = "android.permission.SYSTEM_ALERT_WINDOW";
-  return packages.get(pkg)?.permissions.has(name) ? after(grantPrompted(pkg, name), () => null) : null;
+  return packages.get(pkg)?.requested.has(name) ? after(grantPrompted(pkg, name), () => null) : null;
 });
 const declaration = (owner: PackageRecord, name: string) => owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
@@ -131,7 +131,7 @@ const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
 export function checkPermission(permission: string, pkg: string): number | Promise<number> {
   const record = packages.get(pkg);
   if (record?.grants.has(permission)) return 0;
-  if (!record?.permissions.has(permission)) return -1;
+  if (!record?.requested.has(permission)) return -1;
   if (signaturePermissions.has(permission)) return signerHolds(record, permission);
   return after(permissionGranted(pkg, permission), granted => granted ? 0 : -1);
 }

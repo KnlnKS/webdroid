@@ -139,7 +139,7 @@ const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === 
 function hasPermission(uid: number): boolean | Promise<boolean> {
   if (SYSTEM_UIDS.has(uid)) return true;
   const pkg = packageOf(uid);
-  return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
+  return pkg !== null && !!packages.get(pkg)?.requested.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
 /** the system's view of packages: the application's PackageManager over the hosted service */
 function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
@@ -277,7 +277,7 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
  *  front. The dialog's answer follows the grant policy runtime permissions follow. */
 function promptNeeded(pkg: string): boolean | Promise<boolean> {
   const record = packages.get(pkg), target = targetSdk(pkg);
-  return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
+  return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.requested.has(POST_NOTIFICATIONS)
     && after(new Preferences(pkg).ids(CHANNEL_KEY), ids => ids.length > 0 && after(permissionGranted(pkg, POST_NOTIFICATIONS), granted => !granted));
 }
 function showNotificationPrompt(pkg: string): unknown {
@@ -494,7 +494,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   for (const key of ["android.allowDuringSetup", "android.substName"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
   if (getDeclared<JObj | null>(n, N, "fullScreenIntent") && !canUseFullScreenIntent(pkg, target)) {
     // makeStickyHun: the full-screen intent becomes the content intent of a persistent heads-up
-    if (packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
+    if (packages.get(pkg)?.requested.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
     if (!getDeclared<JObj | null>(n, N, "contentIntent")) setDeclared(n, N, { contentIntent: getDeclared<JObj | null>(n, N, "fullScreenIntent") });
     setDeclared(n, N, { fullScreenIntent: null });
   }
@@ -512,7 +512,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
 }
 /** checkUseFullScreenIntentPermission: free below Android 10, then USE_FULL_SCREEN_INTENT and its app op */
 function canUseFullScreenIntent(pkg: string, target: number): boolean {
-  return target < 29 || !!packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT");
+  return target < 29 || !!packages.get(pkg)?.requested.has("android.permission.USE_FULL_SCREEN_INTENT");
 }
 /** a package's enqueue rate (NotificationUsageStats' RateEstimator), updated per accepted enqueue */
 function enqueueRate(pkg: string, now: number, update: boolean): number {

@@ -458,17 +458,6 @@ function* signingInfo$(certificates: Uint8Array[]): Gen<JObj> {
   const details = yield newObj(PKG + "SigningDetails", "([Landroid/content/pm/Signature;I)V", yield* signatureArray$(certificates), 0);
   return yield newObj(PKG + "SigningInfo", "(Landroid/content/pm/SigningDetails;)V", details);
 }
-function requestedPermissions(root: XmlNode): string[] {
-  const names = new Set<string>();
-  for (const node of root.children) {
-    if (node.name !== "uses-permission" && node.name !== "uses-permission-sdk-23" && node.name !== "uses-permission-sdk-m") continue;
-    const max = attr(node, "maxSdkVersion")?.data ?? 0;
-    if (max && max < device.sdk) continue;
-    const name = attrStr(node, "name");
-    if (name) names.add(name);
-  }
-  return [...names];
-}
 function* featureInfo$(name: string | null, flags = 0, glEs = 0): Gen<JObj> {
   const info: JObj = yield newObj(PKG + "FeatureInfo");
   setDeclared(info, PKG + "FeatureInfo", { name, flags, reqGlEsVersion: glEs });
@@ -511,7 +500,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   if (flags & GET_PERMISSIONS) {
     const declared = root.children.filter((n) => n.name === "permission");
     if (declared.length) setDeclared(pi, PACKAGE, { permissions: jarray(yield* all$(declared, (n) => permissionInfo$(record, n, flags)), "Landroid/content/pm/PermissionInfo;") });
-    const requested = requestedPermissions(root), granted: number[] = [];
+    const requested = [...record.requested], granted: number[] = [];
     for (const name of requested) granted.push(yield* awaited(checkPermission(name, record.pkg)));
     // REQUESTED_PERMISSION_REQUIRED, and REQUESTED_PERMISSION_GRANTED when held
     if (requested.length) setDeclared(pi, PACKAGE, { requestedPermissions: jarray(requested, "Ljava/lang/String;"),
@@ -742,7 +731,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   // installs need no user approval here, so a package asking for the permission may request them
   [`canRequestPackageInstalls(${S}I)Z`]: (pkg: string) =>
-    after(packageRecord(pkg), (record) => record?.permissions.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),
+    after(packageRecord(pkg), (record) => record?.requested.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),
   [`isInstantApp(${S}I)Z`]: () => 0,
   [`isPackageSuspendedForUser(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => {
     if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown target package: " + pkg);

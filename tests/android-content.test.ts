@@ -223,9 +223,13 @@ describe("package-permissions", () => {
 
   test("PackageInfo aligns requested permission flags with actual package grants", async () => {
     const pkg = "test.permissions", denied = "test.permissions.SIGNATURE";
+    const int = (name: string, data: number): XmlAttr => ({ name, str: null, ns: "", resId: 0, type: TV.INT_DEC, data });
     const root: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
+      { name: "uses-sdk", attrs: [int("targetSdkVersion", 35)], children: [] },
       { name: "application", attrs: [], children: [] },
       ...["android.permission.INTERNET", denied].map(name => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
+      // requested only through API 28
+      { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
     const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
     packages.set(pkg, record); signaturePermissions.add(denied);

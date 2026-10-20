@@ -1,6 +1,7 @@
 import { attr, attrStr, TV, type XmlNode } from "./axml.ts";
 import { normRV, resString, type Resources } from "./res.ts";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
+import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
@@ -10,13 +11,35 @@ export const qualifyComponent = (name: string, pkg: string): string => {
 };
 
 /** CompatibilityPermissionInfo.COMPAT_PERMS: permissions later releases split out of default behaviour */
-const COMPAT_PERMISSIONS: [string, number][] = [["android.permission.WRITE_EXTERNAL_STORAGE", 4],
-  ["android.permission.READ_PHONE_STATE", 4], ["android.permission.POST_NOTIFICATIONS", 33]];
+const COMPAT_PERMISSIONS: [string, number][] = [["android.permission.POST_NOTIFICATIONS", 33],
+  ["android.permission.WRITE_EXTERNAL_STORAGE", 4], ["android.permission.READ_PHONE_STATE", 4]];
 /** <uses-sdk>: targetSdkVersion defaults to minSdkVersion, which defaults to 1 */
 export function usesSdk(root: XmlNode): { min: number; target: number } {
   const sdk = root.children.find((c) => c.name === "uses-sdk");
   const min = sdk && attr(sdk, "minSdkVersion")?.data || 1;
   return { min, target: sdk && attr(sdk, "targetSdkVersion")?.data || min };
+}
+const USES_PERMISSION = new Set(["uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m"]);
+/** parseMinOrMaxSdkVersion: an integer attribute, else `def` */
+const sdkAttr = (node: XmlNode, name: string, def: number): number => {
+  const value = attr(node, name);
+  return value && value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4 ? value.data : def;
+};
+/** ParsingPackageUtils.parseUsesPermission: what each <uses-permission> (-sdk-23, or its -sdk-m alias)
+ *  requests on this release, within its minSdkVersion and maxSdkVersion, with its required features
+ *  present and its required-not features absent; then the permissions convertCompatPermissions
+ *  requests implicitly for an app targeting below their release */
+function requestedPermissions(root: XmlNode, target: number): Set<string> {
+  const requested = new Set<string>(), present = (feature: string) => device.features.includes(feature);
+  for (const node of root.children) {
+    const name = USES_PERMISSION.has(node.name) ? attrStr(node, "name") : null;
+    if (!name || device.sdk < sdkAttr(node, "minSdkVersion", -Infinity) || device.sdk > sdkAttr(node, "maxSdkVersion", Infinity)) continue;
+    const features = (tag: string, attribute: string) => [attrStr(node, attribute), ...node.children.filter((c) => c.name === tag).map((c) => attrStr(c, "name"))]
+      .filter((feature) => feature !== null);
+    if (features("required-feature", "requiredFeature").every(present) && !features("required-not-feature", "requiredNotFeature").some(present)) requested.add(name);
+  }
+  for (const [name, since] of COMPAT_PERMISSIONS) if (target < since) requested.add(name);
+  return requested;
 }
 
 export class PackageRecord {
@@ -26,7 +49,8 @@ export class PackageRecord {
   readonly components: Record<ComponentKind, Map<string, XmlNode>> = {
     activity: new Map(), service: new Map(), receiver: new Map(), provider: new Map(),
   };
-  readonly permissions = new Set<string>();
+  /** the permissions the package requests (PackageInfo.requestedPermissions) */
+  readonly requested: Set<string>;
   readonly grants = new Set<string>();
   system = false;
   compatibilityCertificates: Uint8Array[] | null = null;
@@ -42,13 +66,7 @@ export class PackageRecord {
       const name = attrStr(node, "name");
       if (name) this.components[kind].set(qualifyComponent(name, this.pkg), node);
     }
-    for (const node of root.children) if (node.name === "uses-permission" || node.name === "uses-permission-sdk-23") {
-      const name = attrStr(node, "name");
-      if (name) this.permissions.add(name);
-    }
-    // ParsingPackageUtils: an app targeting below the release that introduced one of these requests it implicitly
-    const { target } = usesSdk(root);
-    for (const [name, since] of COMPAT_PERMISSIONS) if (target < since) this.permissions.add(name);
+    this.requested = requestedPermissions(root, usesSdk(root).target);
   }
 
   process(node: XmlNode): string {

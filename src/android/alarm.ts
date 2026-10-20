@@ -26,8 +26,8 @@ function canScheduleExact(pkg: string): boolean {
   const record = packages.get(pkg);
   if (!record) return false;
   const target = usesSdk(record.root).target;
-  return target < 31 || target >= 33 && record.permissions.has("android.permission.USE_EXACT_ALARM")
-    || target < 34 && record.permissions.has("android.permission.SCHEDULE_EXACT_ALARM");
+  return target < 31 || target >= 33 && record.requested.has("android.permission.USE_EXACT_ALARM")
+    || target < 34 && record.requested.has("android.permission.SCHEDULE_EXACT_ALARM");
 }
 const listenerAlarms = new Map<unknown, GuestTimer>();
 const WINDOW_EXACT = 0n;
