@@ -6,7 +6,7 @@
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
 import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
-import { once, shareable } from "../../jvm/suspend.ts";
+import { once } from "../../jvm/suspend.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
 import { notifyDisplayChanged } from "../display.ts";
@@ -82,7 +82,7 @@ function pause(r: ActivityRecord): Promise<void> {
   r.state = "pausing";
   const reported = Promise.withResolvers<void>();
   // every pause of `r` waits on it
-  const done = shareable(rt.drive(function* (): Gen<void> {
+  const done = Promise.resolve(rt.drive(function* (): Gen<void> {
     yield* schedule(r.app, yield topResumedItem(r, false), yield pauseItem(r, r.finishing));
     yield reported.promise;
   }()));

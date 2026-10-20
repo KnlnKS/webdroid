@@ -9,7 +9,6 @@ import { vfs } from "../../shell/vfs.ts";
 import { processFileBytes } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
-import { shareable } from "../suspend.ts";
 import type { JThrowable } from "./jthrowable.ts";
 // String and its builders, java.lang's natives with these
 import "./jstring.ts";
@@ -63,7 +62,7 @@ function nativeLoad(file: string, loader: unknown, caller: unknown = null): stri
   if (have) return have.thread === curThread ? null : have.pending;
   const thread = curThread;
   // driven: each step continues on the asking thread and chain (a <clinit>'s, when it loads its library)
-  const pending = shareable(rt.drive(function* (): Gen<string | null> {
+  const pending = Promise.resolve(rt.drive(function* (): Gen<string | null> {
     let abi: string | null, bytes: Uint8Array | null;
     if (file.startsWith("/")) {
       bytes = yield* libraryFile(file);

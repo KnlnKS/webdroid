@@ -1,7 +1,8 @@
 // The registry host code shares with the Wasm tier: the native specs and JNI functions the natives modules register, what Java reaches that
 // nothing implements, the class path's resources, and the conversions natives make (strings, thrown JS errors).
 
-import { Strand, suspendWith } from "./suspend.ts";
+import { Strand } from "./suspend.ts";
+import { never, processExited } from "../process-exit.ts";
 import { decodeString } from "./charset.ts";
 import { charsToString, dotName, oomMessage } from "./abi.ts";
 import { isBytecode, isStageD } from "./provenance.ts";
@@ -86,7 +87,7 @@ export class Runtime {
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
    * resumed native runs as the strand that entered it and releases it when it finishes or
-   * suspends again.
+   * suspends again; nothing resumes once the process has exited.
    */
   drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
   private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
@@ -98,10 +99,15 @@ export class Runtime {
       const value = step.value;
       if (value instanceof Promise) {
         if (resumed) this.su();
-        return suspendWith(value, (v, threw) => { this.st(strand); return this.driveStep(g, v, threw, strand, true); }) as Promise<T>;
+        return value.then((v) => this.resumeStep(g, v, false, strand), (e) => this.resumeStep(g, e, true, strand));
       }
       input = value; threw = false;
     }
+  }
+  private resumeStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand): T | Promise<T> {
+    if (processExited()) return never();
+    this.st(strand);
+    return this.driveStep(g, input, threw, strand, true);
   }
   /** a class the host implements, once */
   register(spec: NativeSpec) {

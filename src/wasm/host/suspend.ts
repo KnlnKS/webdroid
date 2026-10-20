@@ -17,39 +17,8 @@ export const mayWait = (fn: HostFn): boolean => (fn as Native).$g !== undefined 
 /** natives found answering a Promise from a plain import: the report in run.json (`nativeSuspended`) */
 export const suspendedNatives = new Set<string>();
 
-/** the context of the Suspending import being called, for the generator driver that starts inside it */
-let calling: HostContext | null = null;
-
 /** whether native `fn` answers a Promise on every call, which only a Suspending import can take */
 export const waitsAlways = (fn: HostFn): boolean => fn.constructor === AsyncFunction;
-
-/** the Wasm tier's form of a registered native: a generator native runs under an async driver of its own, not Runtime.drive */
-export function hostForm(fn: HostFn): HostFn {
-  const g = (fn as Native).$g;
-  if (!g) return fn;
-  return function (this: unknown, ...a: unknown[]) { return drive(g.apply(this, a), calling); };
-}
-/** runs a generator native: each value it yields is awaited, an exception of a rejected one is thrown into it; the strand is the running one again after each wait,
- *  until the native waits again (other turns run at the top level then), as Runtime.drive keeps it. A step that follows a value yielded at once is still
- *  the strand's: without it, Java the native enters there runs as the host's current thread */
-async function drive(it: Generator<unknown, unknown, unknown>, ctx: HostContext | null): Promise<unknown> {
-  const strand = ctx?.sched.running ?? null;
-  let resumed = false;
-  try {
-    let step = it.next();
-    while (!step.done) {
-      let v = step.value, threw = false;
-      if (v instanceof Promise) {
-        if (resumed) ctx!.sched.running = null;
-        try { v = await v; } catch (e) { v = e; threw = true; }
-        resumed = ctx !== null;
-      }
-      if (resumed) ctx!.sched.running = strand;
-      step = threw ? it.throw(v) : it.next(v);
-    }
-    return step.value;
-  } finally { if (resumed) ctx!.sched.running = null; }
-}
 
 /** a plain import answered a Promise: it is reported, as a native that waits is declared */
 export function reportSuspended(id: string): void {
@@ -65,10 +34,5 @@ export function reportSuspendError(e: unknown): void {
 /** installs a native as a Wasm import: `build(false)` is the plain form, `build(true)` the one that may wait, wrapped for the engine so the strand that
  *  called it waits for the Promise it answers (the globals that name the strand are restored by the generated call, natives.ts) */
 export function adaptImport(build: (suspending: boolean) => HostFn, ctx: HostContext, suspending: boolean): HostFn {
-  if (!suspending) return build(false);
-  const f = build(true);
-  return ctx.sched.suspending((...a: unknown[]) => {
-    calling = ctx;
-    try { return f(...a); } finally { calling = null; }
-  }) as HostFn;
+  return suspending ? ctx.sched.suspending(build(true)) as HostFn : build(false);
 }

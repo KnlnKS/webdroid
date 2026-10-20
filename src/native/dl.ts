@@ -10,7 +10,6 @@ import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { curThread } from "../jvm/natives/jentry.ts";
-import { shareable } from "../jvm/suspend.ts";
 import { vfs } from "../shell/vfs.ts";
 
 export const modules: Module[] = [];
@@ -58,7 +57,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   const p = inflight.get(name);
   if (p) return p;
   // driven: initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
-  const q = shareable(rt.drive(function* (): Gen<Module> {
+  const q = Promise.resolve(rt.drive(function* (): Gen<Module> {
     const source = bytes ? null : libSource(name), b: Uint8Array | null = bytes ?? (source ? yield source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);

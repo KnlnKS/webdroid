@@ -88,13 +88,11 @@ function makeEntry(w: World): Entry {
       if (typeof name === "string") nameThread(jthreadOf(rec), name);
     },
   };
-  /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
+  /** the strand whose native is entering Java, while it lives: the one running on this stack, or the one a native resumed as after a wait (Runtime.drive), as rt.cur names it.
+   *  The globals name a strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own */
   const nativeOf = (): Strand | null => {
-    // the globals name the strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own
-    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s.host === rt.cur ? s : null;
-    if (running) return running;
-    const captured = javaStrands.get(rt.cur);
-    return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
+    const s = javaStrands.get(rt.cur);
+    return s && !s.root && sched.strands[s.id] === s ? s : null;
   };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
   let entering: ThreadRec | null = null, enteringParent: Strand | null = null;
@@ -112,7 +110,7 @@ function makeEntry(w: World): Entry {
   };
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
-    if (sched.current().root && !sched.running) hostCurrent = curThread;
+    if (sched.current().root && !nativeOf()) hostCurrent = curThread;
     const thread = threadNow(), s = sched.strand(thread, parentOf(thread));
     // A JNI guest slice can own a host strand while the Wasm globals are idle.
     const caller = rt.cur;
