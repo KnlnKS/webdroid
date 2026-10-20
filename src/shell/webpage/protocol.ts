@@ -53,6 +53,12 @@ export type PageMessage = Invoke
 /** the app's message to a page; "eval" and "snapshot" come with a port for the answer */
 export type AppMessage = { kind: "cookies"; list: DocumentCookie[]; ack: number } | { kind: "eval"; script: string } | { kind: "stop" } | { kind: "snapshot" };
 
+/** `html` with `script` first: after its doctype, or the document goes quirks */
+export function withPageScript(html: string, script: string): string {
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html)?.[0] ?? "";
+  return doctype + script + html.slice(doctype.length);
+}
+
 type Fields = Record<string, unknown>;
 const text = (v: unknown): v is string => typeof v === "string", count = (v: unknown): v is number => typeof v === "number";
 const fields = (data: unknown): Fields | null => typeof data === "object" && data !== null ? data as Fields : null;

@@ -2,7 +2,7 @@
 import { rt, JObj } from "../jvm/runtime.ts";
 import { runningApp } from "./apphost.ts";
 import { WEB_INJECT } from "../shell/webinject.ts";
-import type { FrameDocument, FrameInit } from "../shell/webpage/protocol.ts";
+import { withPageScript, type FrameDocument, type FrameInit } from "../shell/webpage/protocol.ts";
 
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
 export function srcFor(url: string): string {
@@ -25,12 +25,10 @@ export function webOrigin(e: Entry): string {
   const url = "doc" in e ? e.base ?? "" : e.url;
   return /^https?:/i.test(url) ? new URL(url).origin : /^file:/i.test(url) ? "file://" : "null";
 }
-/** srcdoc payload: the bridge bootstrap first (after a doctype, or the document goes quirks), then the base */
+/** srcdoc payload: the bridge bootstrap first, then the base */
 export function srcdoc(data: string, enc: string | null, base: string | null): string {
   if (/^base64$/i.test(enc ?? "")) data = new TextDecoder().decode(Uint8Array.fromBase64(data));
-  const inject = WEB_INJECT + (base ? `<base href="${base.replace(/"/g, "&quot;")}">` : "");
-  const dt = /^\s*<!doctype[^>]*>/i.exec(data);
-  return dt ? dt[0] + inject + data.slice(dt[0].length) : inject + data;
+  return withPageScript(data, WEB_INJECT + (base ? `<base href="${base.replace(/"/g, "&quot;")}">` : ""));
 }
 class JWebHistoryItem extends JObj {
   entry: Entry;

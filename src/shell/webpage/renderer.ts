@@ -2,7 +2,8 @@
 // announces itself to the app's window, which hands it its task and a port: load the page (fetched
 // through this origin's proxy worker, or written by the app), or work on the origin's storage.
 import { holdFrames } from "./frames.ts";
-import type { AppMessage, LoadMessage, PageConfig, PageMessage, RendererContext, RendererReady, RendererTask, StorageOp } from "./protocol.ts";
+import { withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
+  type StorageOp } from "./protocol.ts";
 
 /** the page script, as the renderer bootstrap writes it into an apk asset's document */
 declare const WEB_INJECT: string;
@@ -83,10 +84,7 @@ function start() {
       // an android_asset page's relative URLs and its own location.search belong to the asset, not /webview
       if ("src" in doc && doc.src.startsWith("/asset/")) history.replaceState(null, "", doc.src);
       let html = "html" in doc ? doc.html : await response!.text();
-      if (response?.headers.get("x-wd-local-asset") === "1") {
-        const doctype = /^\s*<!doctype[^>]*>/i.exec(html)?.[0] ?? "";
-        html = doctype + WEB_INJECT + html.slice(doctype.length);
-      }
+      if (response?.headers.get("x-wd-local-asset") === "1") html = withPageScript(html, WEB_INJECT);
       // its frames load through the app: the parser must not start their navigations
       if (context.frames) html = holdFrames(html);
       (window as { __wdWebView?: PageConfig }).__wdWebView = { ...context, port };
