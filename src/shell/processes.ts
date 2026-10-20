@@ -155,26 +155,6 @@ export class ProcessSession {
   }
 }
 export class ProcessBroker {
-  /** the page realm's lifecycle, under ?perfProbe=1 (scripts/lat): a process Worker reports its
-   *  counters in its snapshot instead */
-  private counterEvents: { sequence: number; kind: "created" | "retired"; at: number; pid: number; pkg: string; process: string; url: string }[] = [];
-  private counterEvent(entry: Entry, kind: "created" | "retired"): void {
-    if (entry.pid !== PROCESS_PID || typeof window === "undefined" || !window.__wdCounterReceipt) return;
-    this.counterEvents.push({ sequence: this.counterEvents.length + 1, kind, at: performance.timeOrigin + performance.now(),
-      pid: entry.pid, pkg: entry.pkg, process: entry.process, url: location.href });
-  }
-  counterReceipts() {
-    if (typeof window === "undefined" || !window.__wdCounterReceipt) return null;
-    const entry = this.entries.get(PROCESS_PID), rows = [];
-    if (entry) {
-      let receipt = null, error = null;
-      try { receipt = window.__wdCounterReceipt(); } catch (e) { error = String(e); }
-      rows.push(Object.freeze({ owner: Object.freeze({ pid: entry.pid, pkg: entry.pkg, process: entry.process, url: location.href }),
-        dead: false, processDead: entry.dead, receipt, error }));
-    }
-    return Object.freeze({ schema: 1, source: import.meta.url, at: performance.timeOrigin + performance.now(), sequence: this.counterEvents.length,
-      dropped: 0, events: Object.freeze(this.counterEvents.map(e => Object.freeze({ ...e }))), rows: Object.freeze(rows) });
-  }
   readonly files = new PrivateFiles();
   readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
@@ -286,11 +266,7 @@ export class ProcessBroker {
     return entry;
   }
   /** the page's own process, which serves its endpoint once its Java has booted */
-  registerSystemServer(): Entry {
-    const entry = this.register("android", "system_server", PROCESS_PID);
-    this.counterEvent(entry, "created");
-    return entry;
-  }
+  registerSystemServer(): Entry { return this.register("android", "system_server", PROCESS_PID); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
@@ -373,7 +349,6 @@ export class ProcessBroker {
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
-    this.counterEvent(entry, "retired");
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message), host = entry.host;
     if (host) host.ended = { error: message, terminal: { cause: message, record: record && copyExitRecord(record), expected: !!record && !death.crashed &&

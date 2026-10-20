@@ -2,23 +2,13 @@
 export function installLatencyObserver(counters: string[]) {
   if (window !== window.top || location.pathname !== "/") return;
   const host = window as any;
+  const probe = new URLSearchParams(location.search).get("perfProbe") === "1";
   const snapshot = () => {
     const wd = host.wd, wasm = window.__wdWasm;
-    const rows = [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
+    return [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
       perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
-      compilerWorker: wasm?.worker ? { ...wasm.worker } : null, appBuilds: wasm?.appBuilds?.map(build => ({ ...build })) ?? [] }];
-    if (new URLSearchParams(location.search).get("perfProbe") !== "1") return rows;
-    const registry = host.wd?.counterReceipts?.();
-    const found = new Map(rows.map(row => [row.url, row]));
-    return [...(registry?.rows ?? []).map((record: any) => {
-      const row = found.get(record.owner.url); found.delete(record.owner.url);
-      const receipt = record.receipt;
-      return { ...row, url: record.owner.url, pid: String(record.owner.pid), pkg: record.owner.pkg, runtimePkg: row?.pkg ?? null,
-        available: !!receipt,
-        perf: receipt ? { ...row?.perf, ...receipt.counters } : row?.perf ?? null, receiptProbe: true,
-        proof: { schema: registry.schema, source: registry.source, sequence: registry.sequence, dropped: registry.dropped, events: registry.events,
-          owner: record.owner, dead: record.dead, processDead: record.processDead, error: record.error, receipt } };
-    }), ...[...found.values()].map(row => ({ ...row, receiptProbe: true, proof: null }))];
+      compilerWorker: wasm?.worker ? { ...wasm.worker } : null, appBuilds: wasm?.appBuilds?.map(build => ({ ...build })) ?? [],
+      ...probe ? { receipt: window.__wdCounterReceipt?.() ?? null } : {} }];
   };
   const shown = (canvas: HTMLCanvasElement) => {
     if (document.visibilityState !== "visible" || !host.wd?.displayCanvases?.().includes(canvas)) return false;

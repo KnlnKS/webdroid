@@ -36,7 +36,7 @@ export const perf = {
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,
   bootMs: 0,
 };
-const recordCounterReset = installCounterReceipt(perf, import.meta.url);
+const recordCounterReset = installCounterReceipt(perf);
 export function perfReset() {
   recordCounterReset?.();
   for (const k of Object.keys(perf) as (keyof typeof perf)[]) if (k !== "bootMs") perf[k] = 0;
