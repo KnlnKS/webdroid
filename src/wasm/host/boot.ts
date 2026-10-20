@@ -246,7 +246,11 @@ export function openDexes(path: string, app: DexFile[], opened: Map<string, DexF
     const own = appArchives.has(path) && app.length > 0;
     const packed = own ? undefined : packedArchives.get(path);
     const bytes = own || packed ? null : vfs.readFile(path);
-    const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? jarDexes(bytes, path) : dexesIn(bytes, path);
+    const decode = (bytes: Uint8Array | null) => {
+      if (bytes === null) return own ? app : undefined;
+      try { return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? jarDexes(bytes, path) : dexesIn(bytes, path); }
+      catch (e) { throw rt.mkThrowable("java/io/IOException", `Failed to open dex files from ${path} because: ${e instanceof Error ? e.message : e}`); }
+    };
     const dexes = packed ? packed.prepare(true).then(() => dexesOfZip(packed.zip, path))
       : bytes instanceof Promise ? bytes.then(decode) : decode(bytes);
     opened.set(path, dexes instanceof Promise ? dexes.catch(error => { opened.delete(path); throw error; }) : dexes);
