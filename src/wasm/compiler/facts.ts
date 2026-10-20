@@ -61,7 +61,7 @@ export class MethodFacts {
   /** applies the effect of `ins` to `f`, once it has been emitted */
   step(ins: Ins, f: Facts): void {
     const mc = this.mc, reg = checkedReg(ins);
-    if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && this.isStringInit(ins))) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
+    if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && mc.binding(ins)?.k === "string")) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
     const d = mc.typing.def(ins.pc);
     for (const c of this.initedBy(ins)) f.inited.add(c);
     const shadow = this.shadowKey(ins);
@@ -125,10 +125,6 @@ export class MethodFacts {
     if (ins.op <= 0x6d) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
-  }
-  private isStringInit(ins: Ins): boolean {
-    const { decl, name } = this.mc.invoke(ins);
-    return name === "<init>" && decl === STRING;
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {

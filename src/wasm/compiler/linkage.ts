@@ -2,7 +2,7 @@
 // common_throws.cc): NoClassDefFoundError, NoSuchFieldError, NoSuchMethodError and IncompatibleClassChangeError, with ART's messages. These are
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex.ts";
-import { PRIMS, descToName } from "../../jvm/abi.ts";
+import { PRIMS, descToName, dotName } from "../../jvm/abi.ts";
 import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
@@ -14,7 +14,7 @@ export interface LinkFailure {
   absent?: string;
 }
 
-const dotted = (n: string) => javaName(n).replace(/\//g, ".");
+const dotted = (n: string) => dotName(javaName(n));
 /** a descriptor as ART's PrettyDescriptor prints it */
 export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]?.name ?? "void");
 const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);

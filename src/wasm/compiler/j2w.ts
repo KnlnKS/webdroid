@@ -36,7 +36,7 @@ export function declareBase(mb: ModuleBuilder): Base {
     tData[k] = mb.addType({ k: "array", elem: { t: dataElem[k], mut: true } });
     tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData[k]), mut: false }], sup: tObj, final: false });
   }
-  // a String when it is a struct (structstrings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
+  // a String when it is a struct (strings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
   const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
@@ -499,9 +499,9 @@ export class Compiler implements Base {
   constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
   /** call the method of `cls` that `name` and `desc` resolve to */
   callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
-  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
   /** the element array of the array object on the stack */
   arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
+  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
   vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
   /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
   emitStoreCheck(c: Code, arr: number, value: () => void): void {

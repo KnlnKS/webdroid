@@ -470,7 +470,7 @@ export class Program {
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
   private layouts = new Map<string, readonly FieldInfo[]>();
   private chains = new Map<string, readonly string[]>();
-  /** what the compiler resolved per reference of a dex (MethodCompiler.resolved), by reference index and use */
+  /** what the compiler resolved per reference of a dex (MC.resolved), by reference index and use */
   readonly refMemo = new Map<DexFile, Map<number, unknown>>();
   /** what a call of each method runs in place, or null (inline.ts trivialOf) */
   readonly trivials = new Map<MethodInfo, Trivial | null>();
