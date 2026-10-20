@@ -2,7 +2,7 @@ import { awaited, rt, type JObj, type Gen } from "../jvm/runtime.ts";
 import { after, vcall, scall } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { onMain } from "./mainloop.ts";
-import { isPlatformFont, platformFontBytes, typefaceOf, ITAL, WGHT } from "./fonts.ts";
+import { isPlatformFont, platformFontBytes, typefaceOf, ITAL, WDTH, WGHT } from "./fonts.ts";
 import { localAsset } from "../shell/localassets.ts";
 import type { WebSettingsAdapter } from "./websettings.ts";
 import type { WebFonts } from "../shell/webpage/protocol.ts";
@@ -14,7 +14,6 @@ import type { WebFonts } from "../shell/webpage/protocol.ts";
 // as Skia's Android font manager resolves a page's family names.
 type WebFace = { family: string; path: string; weight: string; style: string; stretch: string };
 const GENERIC = new Set(["sans-serif", "serif", "monospace", "cursive", "fantasy"]);
-const WDTH = 0x77647468;
 /** the faces of `t`'s first family, named `family`. A variable face's weight is its wght range, an
  *  alias's (sans-serif-light) its base weight; an italic made by its ital axis is left to the
  *  browser's oblique, and a set wdth is the face's stretch. */

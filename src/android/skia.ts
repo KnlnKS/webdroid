@@ -6,6 +6,7 @@ import canvasKitPackage from "canvaskit-wasm/package.json" with { type: "json" }
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { after } from "../jvm/natives/jentry.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
+import { sfntTables, ownBuffer, T_COLR, T_HEAD } from "./sfnt.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -87,15 +88,9 @@ function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Flo
 }
 
 function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
-  const font = new DataView(data), tables = font.getUint16(4);
-  let head = 0, colr = 0;
-  for (let i = 0; i < tables; i++) {
-    const entry = 12 + i * 16, tag = font.getUint32(entry);
-    if (tag === 0x68656164) head = font.getUint32(entry + 8);
-    if (tag === 0x434f4c52) colr = font.getUint32(entry + 8);
-  }
-  const clips = new Map<number, [number, number]>();
-  if (!head || !colr || font.getUint16(colr) !== 1) return clips;
+  const tables = sfntTables(new Uint8Array(data), 0), clips = new Map<number, [number, number]>();
+  const font = tables?.dv, head = tables?.at.get(T_HEAD), colr = tables?.at.get(T_COLR);
+  if (!font || !head || !colr || font.getUint16(colr) !== 1) return clips;
   const units = font.getUint16(head + 18), list = colr + font.getUint32(colr + 22);
   for (let i = 0, count = font.getUint32(list + 1); i < count; i++) {
     const record = list + 5 + i * 7;
@@ -108,10 +103,6 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
   return clips;
 }
 
-
-/** the bytes as a buffer of their own, which CanvasKit and the CPAL reader take whole */
-const ownBuffer = (b: Uint8Array): ArrayBuffer =>
-  b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer as ArrayBuffer : b.slice().buffer;
 /** CanvasKit and the faces it draws bitmap text in, loaded once per realm; text falls back to Canvas2D
  *  without them */
 export function loadSkia(): Promise<void> {

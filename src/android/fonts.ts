@@ -159,7 +159,7 @@ export const fontOf = (h: bigint) => deref<FontWrapper>(h).font;
 export const wrapFont = (f: NativeFont) => handle(new FontWrapper(f));
 /** minikin's FontFakery bits */
 export const FAKE_BOLD = 1, FAKE_ITALIC = 2;
-export const WGHT = 0x77676874, ITAL = 0x6974616c;
+export const WGHT = 0x77676874, ITAL = 0x6974616c, WDTH = 0x77647468;
 /** minikin's FakedFont: a font, its fakery bits, and the wght/ital values a variable font is set
  *  to in place of faking (-1 where the font has no such axis) */
 export class FakedFont {
