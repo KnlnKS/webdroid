@@ -3,7 +3,7 @@
 // before the queue (ViewRootImpl arms its BLAST sync there), the commit and complete callbacks
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
-import { rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
+import { rt, JObj, driven, noEffect, type Gen } from "../jvm/runtime.ts";
 import { vcall, scall, callOn, JThread } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, refBaseHandle } from "./handles.ts";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode.ts";
@@ -129,7 +129,7 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
     if (!enabled) rt.noteMissing("android/graphics/HardwareRenderer.nSetRtAnimationsEnabled(false)");
   },
   // what tunes a GPU renderer and its process: lights, caches, priorities and profiling
-  ...Object.fromEntries([
+  ...noEffect(
     "nSetName(JLjava/lang/String;)V", "nSetLightGeometry(JFFFF)V", "nSetLightAlpha(JFF)V", "nSetSdrWhitePoint(JF)V",
     "nSetTargetSdrHdrRatio(JF)V", "nFence(J)V", "nStopDrawing(J)V", "nNotifyFramePending(J)V", "nNotifyCallbackPending(J)V",
     "nNotifyExpensiveFrame(J)V", "nSetContentDrawBounds(JIIII)V", "nForceDrawNextFrame(J)V", "nAllocateBuffers(J)V",
@@ -142,5 +142,5 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
     "nSetPrepareSurfaceControlForWebviewCallback(JLandroid/graphics/HardwareRenderer$PrepareSurfaceControlForWebviewCallback;)V",
     "nSetPictureCaptureCallback(JLandroid/graphics/HardwareRenderer$PictureCapturedCallback;)V",
     "nRegisterAnimatingRenderNode(JJ)V", "nRegisterVectorDrawableAnimator(JJ)V",
-  ].map((sig) => [sig, () => {}])),
+  ),
 });

@@ -41,6 +41,11 @@ export function stubs(value: unknown, ...sigs: string[]): Record<string, () => u
   return Object.fromEntries(sigs.map((s) => [s, fn]));
 }
 export const noops = (...sigs: string[]) => stubs(undefined, ...sigs);
+/** natives that by design do nothing here: no placeholder, so reaching one is no gap */
+export function noEffect(...sigs: string[]): Record<string, () => void> {
+  const fn = () => {};
+  return Object.fromEntries(sigs.map((s) => [s, fn]));
+}
 export const isPlaceholderMethod = (value: unknown): boolean =>
   typeof value === "function" && placeholderMethods.has(value);
 type Accessor = (this: any, v?: unknown) => unknown;

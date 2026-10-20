@@ -7,7 +7,7 @@
 // executing; a browser that runs that renderer on this thread gets only the calls that return
 // nothing, posted.
 
-import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, stubs, noEffect, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime.ts";
 import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
@@ -497,9 +497,9 @@ rt.register({
     "getRendererRequestedPriority()I": () => 2,
     "getRendererPriorityWaivedWhenNotVisible()Z": () => 0,
     // what Chromium accepts and keeps no visible state for here
-    ...Object.fromEntries(["setHorizontalScrollbarOverlay(Z)V", "setVerticalScrollbarOverlay(Z)V", "setMapTrackballToArrowKeys(Z)V",
+    ...noEffect("setHorizontalScrollbarOverlay(Z)V", "setVerticalScrollbarOverlay(Z)V", "setMapTrackballToArrowKeys(Z)V",
       "notifyFindDialogDismissed()V", "freeMemory()V", "clearView()V", "setInitialScale(I)V", "setRendererPriorityPolicy(IZ)V",
-      "setPictureListener(Landroid/webkit/WebView$PictureListener;)V"].map((sig) => [sig, () => {}])),
+      "setPictureListener(Landroid/webkit/WebView$PictureListener;)V"),
     ...stubs(undefined, "setNetworkAvailable(Z)V", "pauseTimers()V", "resumeTimers()V", "clearCache(Z)V", "clearFormData()V",
       "clearSslPreferences()V", "flingScroll(II)V", "invokeZoomPicker()V",
       "setWebViewRenderProcessClient(Ljava/util/concurrent/Executor;Landroid/webkit/WebViewRenderProcessClient;)V"),
@@ -550,13 +550,13 @@ rt.register({
     "getAccessibilityNodeProvider()Landroid/view/accessibility/AccessibilityNodeProvider;": () => null,
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;": () => null,
     // placement follows the draw functor, so attachment, visibility and scroll need nothing more
-    ...Object.fromEntries(["onAttachedToWindow()V", "onDetachedFromWindow()V", "onVisibilityChanged(Landroid/view/View;I)V",
+    ...noEffect("onAttachedToWindow()V", "onDetachedFromWindow()V", "onVisibilityChanged(Landroid/view/View;I)V",
       "onWindowVisibilityChanged(I)V", "onWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V",
       "onScrollChanged(IIII)V", "onOverScrolled(IIZZ)V", "setOverScrollMode(I)V", "setScrollBarStyle(I)V", "setLayerType(ILandroid/graphics/Paint;)V",
       "preDispatchDraw(Landroid/graphics/Canvas;)V", "onStartTemporaryDetach()V", "onFinishTemporaryDetach()V",
       "onConfigurationChanged(Landroid/content/res/Configuration;)V", "onProvideVirtualStructure(Landroid/view/ViewStructure;)V",
       "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
-      "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"].map((sig) => [sig, () => {}])),
+      "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"),
     ...stubs(undefined, "onActivityResult(IILandroid/content/Intent;)V"),
 
     // ── ScrollDelegate: the page scrolls inside its frame, so the view itself never scrolls

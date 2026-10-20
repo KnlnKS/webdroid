@@ -1,6 +1,6 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
-import { rt, isWaiting, waits } from "../jvm/runtime.ts";
+import { rt, isWaiting, noEffect, waits } from "../jvm/runtime.ts";
 import { curThread, threadSwitch } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, position, limit, elementShift } from "../jvm/natives/jnio.ts";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap.ts";
@@ -424,8 +424,8 @@ export function invert(inv: Float32Array, io: number, src: Float32Array, so: num
 rt.registerJnis("android/os/GraphicsEnvironment", {
   "isDebuggable()Z": () => 0,
   "setInjectLayersPrSetDumpable()Z": () => 0,
-  ...Object.fromEntries(["hintActivityLaunch()V", "nativeSetAngleInfo(Ljava/lang/String;ZLjava/lang/String;[Ljava/lang/String;)V",
+  ...noEffect("hintActivityLaunch()V", "nativeSetAngleInfo(Ljava/lang/String;ZLjava/lang/String;[Ljava/lang/String;)V",
     "nativeToggleAngleAsSystemDriver(Z)V", "setDebugLayers(Ljava/lang/String;)V", "setDebugLayersGLES(Ljava/lang/String;)V",
     "setDriverPathAndSphalLibraries(Ljava/lang/String;Ljava/lang/String;)V", "setGpuStats(Ljava/lang/String;Ljava/lang/String;JJLjava/lang/String;I)V",
-    "setLayerPaths(Ljava/lang/ClassLoader;Ljava/lang/String;)V"].map((sig) => [sig, () => {}])),
+    "setLayerPaths(Ljava/lang/ClassLoader;Ljava/lang/String;)V"),
 });
