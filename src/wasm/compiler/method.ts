@@ -3,7 +3,7 @@ import { STRING } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
-import type { Compiler } from "./j2w.ts";
+import { staticallyBound, type Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
@@ -12,7 +12,7 @@ import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
-import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
+import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
@@ -22,8 +22,6 @@ import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
 import { KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
-/** what an invoke names: the method's name and descriptor, the class whose methods it searches, and the resolved target */
-type InvokeSite = { name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
 type Binding = { k: "fixed"; m: MethodInfo; body?: Trivial } | { k: "virtual"; only?: MethodInfo } | { k: "string" };
@@ -280,7 +278,7 @@ export class MC {
     const { decl, name, target } = this.invoke(ins), kind = invokeKind(ins.op);
     if (target === "clone" || failed(target)) return null;
     if (kind === Invoke.Direct && decl === STRING && name === "<init>") return { k: "string" };
-    if (kind !== Invoke.Virtual && kind !== Invoke.Interface || this.cx.staticallyBound(decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
+    if (staticallyBound(this.cx.w, kind, decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
     const only = this.cx.devirt(decl, name, target.desc);
     return { k: "virtual", only: only === "many" ? undefined : only };
   }
@@ -301,12 +299,7 @@ export class MC {
   /** the reference of an invoke other than invoke-polymorphic and invoke-custom, and what it resolves to, read once per site */
   invoke(ins: Ins): InvokeSite {
     let s = this.invokes.get(ins.pc);
-    if (s) return s;
-    const types = this.types, mr = this.dex.method(ins.b), desc = types.methodDesc(ins.b), declared = types.typeName(mr.cls);
-    // an array's methods are Object's, except clone, which copies the array
-    const decl = declared[0] === "[" ? "java/lang/Object" : declared;
-    const target = declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;" ? "clone" : this.invokeTarget(ins.b, invokeKind(ins.op), declared, mr.name, desc);
-    this.invokes.set(ins.pc, s = { name: mr.name, desc, decl, target });
+    if (!s) this.invokes.set(ins.pc, s = invokeSite(this.cx.prog, this.m, ins.b, invokeKind(ins.op)));
     return s;
   }
   push(l: string) { this.nest.push(l); }
@@ -588,19 +581,7 @@ export class MC {
     c.lget(d); this.get("I", ins.c); this.get(kind, ins.a);
     c.arraySet(cx.tData[k]);
   }
-  fieldOf(idx: number, isStatic: boolean) { return this.resolved(this.refs.fields, 2 * idx + +isStatic, () => resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls)); }
-  /** the method invoke `kind` of method reference `idx` names; invoke-super's depends on the caller */
-  private invokeTarget(idx: number, kind: Invoke, declared: string, name: string, desc: string): MethodInfo | LinkFailure {
-    const resolve = () => resolveInvoke(this.cx.prog, kind, declared, name, desc, this.m.cls);
-    return kind === Invoke.Super ? resolve() : this.resolved(this.refs.invokes, 8 * idx + kind, resolve);
-  }
-  private get refs() { return this.cx.prog.refsOf(this.dex); }
-  /** a resolution of a reference of this method's dex: what succeeded is the same for every caller while the Program's classes hold (Program.refsOf), a failure names its caller */
-  private resolved<T extends object>(memo: Map<number, T>, key: number, resolve: () => T | LinkFailure): T | LinkFailure {
-    let r: T | LinkFailure | undefined = memo.get(key);
-    if (r === undefined) { r = resolve(); if (!failed(r)) memo.set(key, r); }
-    return r;
-  }
+  fieldOf(idx: number, isStatic: boolean) { return resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls); }
   /** the field an iget or iput names; String's representation has no fields to translate an access of */
   private instanceField(ins: Ins) {
     const r = this.fieldOf(ins.c, false);

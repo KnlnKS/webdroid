@@ -2,6 +2,7 @@
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import type { Program } from "../compiler/program.ts";
 import { OP } from "../compiler/code.ts";
+import { f32bits, f64bits } from "../compiler/consts.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
@@ -47,12 +48,8 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
   switch (type) {
     case 0: case 2: case 3: case 4: case 0x1f: c.i32(Number(value)); box(cx, c, "I"); return true;
     case 6: c.i64(value as bigint); box(cx, c, "J"); return true;
-    case 0x10: case 0x11: {
-      const bits = new DataView(new ArrayBuffer(8));
-      if (type === 0x10) { bits.setFloat32(0, value as number, true); c.i32(bits.getInt32(0, true)); box(cx, c, "F"); }
-      else { bits.setFloat64(0, value as number, true); c.i64(bits.getBigInt64(0, true)); box(cx, c, "D"); }
-      return true;
-    }
+    case 0x10: c.i32(f32bits(value as number)); box(cx, c, "F"); return true;
+    case 0x11: c.i64(f64bits(value as number)); box(cx, c, "D"); return true;
     case 0x17: cx.str.literal(c, value as string); return true;
     case 0x18: {
       const desc = cx.prog.typesOf(dex).type((value as { idx: number }).idx), failure = typeFailure(cx.prog, desc);

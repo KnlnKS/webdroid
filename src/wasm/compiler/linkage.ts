@@ -156,8 +156,29 @@ export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, 
   return m;
 }
 
+/** what an invoke names: the method's name and descriptor, the class whose methods it searches (an array's are Object's) and the resolved target, except an array's clone, which copies it */
+export interface InvokeSite { name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" }
+/** the site that invoke `kind` of method reference `ref` makes in `m`, as the compiler binds it (MC.binding) and the planner plans it (Planner.calls) */
+export function invokeSite(prog: Program, m: MethodInfo, ref: number, kind: Invoke): InvokeSite {
+  const types = prog.typesOf(m.dex), mr = m.dex.method(ref), desc = types.methodDesc(ref), declared = types.typeName(mr.cls);
+  const decl = declared[0] === "[" ? "java/lang/Object" : declared;
+  if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return { name: mr.name, desc, decl, target: "clone" };
+  const resolve = () => resolveInvoke(prog, kind, declared, mr.name, desc, m.cls);
+  // invoke-super's target depends on the caller
+  return { name: mr.name, desc, decl, target: kind === Invoke.Super ? resolve() : resolved(prog.refsOf(m.dex).invokes, 8 * ref + kind, resolve) };
+}
+/** a resolution of a reference of a dex: what succeeded is the same for every caller while the Program's classes hold (Program.refsOf), a failure names its caller */
+function resolved<T extends object>(memo: Map<number, T>, key: number, resolve: () => T | LinkFailure): T | LinkFailure {
+  let r: T | LinkFailure | undefined = memo.get(key);
+  if (r === undefined) { r = resolve(); if (!failed(r)) memo.set(key, r); }
+  return r;
+}
+
 /** the field an iget/iput/sget/sput names, or why it does not resolve */
 export function resolveFieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
+  return resolved(prog.refsOf(dex).fields, 2 * idx + +isStatic, () => fieldRef(prog, dex, idx, isStatic, referrer));
+}
+function fieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
   const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
   if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
   const f = resolveSymbolicField(prog, decl, fr.name, type);

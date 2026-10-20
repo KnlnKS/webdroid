@@ -10,7 +10,7 @@ import { descToName } from "../../jvm/abi.ts";
 import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
-import { WIDEN, BOX } from "../compiler/primitives.ts";
+import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
@@ -142,9 +142,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
     c.callIndirect(sig);
   }
   if (m.ret === "V") c.anyNull();
-  else if (BOX[m.ret]) {
-    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); cx.callNamed(c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
-  }
+  else if (BOX[m.ret]) box(cx, c, m.ret);
 }
 
 const execField = (cx: Compiler, cls: string, name: string, d: string) => cx.fieldIndex(cls, { owner: EXEC, name, desc: d });

@@ -7,6 +7,7 @@ import { mid } from "./ids.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
@@ -128,6 +129,12 @@ const NO_PLAN: CallPlan = new Map();
 function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
   const d = prog.get(decl);
   return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
+}
+/** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
+ *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
+export function staticallyBound(w: Pick<LinkEnv, "prog" | "aot">, kind: Invoke, decl: string, target: MethodInfo): boolean {
+  if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
+  return !!w.aot && finalDispatch(w.prog, decl, target) && !w.aot.hostDispatch(decl, target);
 }
 export class Compiler implements Base {
   w: LinkEnv;
@@ -373,12 +380,6 @@ export class Compiler implements Base {
     if (f === undefined) { c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m)); return; }
     c.call(f);
     if (this.install) this.dependsOn(m);
-  }
-  /** whether a virtual call of `target` through `decl` runs `target`'s slot whatever the receiver: it dispatches finally and reaches no host spec's native. Only a
-   *  build knows every spec (a split bundle registers some late), so a World without one binds none */
-  staticallyBound(decl: string, target: MethodInfo): boolean {
-    const a = this.w.aot;
-    return !!a && finalDispatch(this.prog, decl, target) && !a.hostDispatch(decl, target);
   }
   /** whether a call of `m` may run its bytecode in place (inline.ts): the code is the method's, not an intrinsic's or the host's */
   inlines(m: MethodInfo): boolean { return !this.intrinsic(m) && this.mayHold(m); }

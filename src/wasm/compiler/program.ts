@@ -307,7 +307,7 @@ export class Program extends LoaderGraph {
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
   private layouts = new Map<string, readonly FieldInfo[]>();
   private chains = new Map<string, readonly string[]>();
-  /** what the compiler resolved of each dex's references (MC.resolved) */
+  /** what resolved of each dex's references (linkage.ts invokeSite, resolveFieldRef) */
   private refs = new Map<DexFile, ResolvedRefs>();
   refsOf(dex: DexFile): ResolvedRefs { let r = this.refs.get(dex); if (!r) this.refs.set(dex, r = { invokes: new Map(), fields: new Map() }); return r; }
   /** what a call of each method runs in place, or null (inline.ts trivialOf) */
