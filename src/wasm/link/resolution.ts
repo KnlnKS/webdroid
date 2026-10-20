@@ -21,7 +21,7 @@ export function resolveHandleReference(w: World, method: MethodInfo, index: numb
   const signature = () => {
     const member = resolveHandleMember(w.prog, method, index);
     if ("thrower" in member || "errorClass" in member) {
-      throw w.exception(w.makeThrowable("thrower" in member ? THROWERS[member.thrower].cls : member.errorClass, member.message));
+      w.raise("thrower" in member ? THROWERS[member.thrower].cls : member.errorClass, member.message);
     }
     return resolveSignatureTypes(w, handleSignatureTypes(method, index, "field" in member ? member.field : undefined), owner);
   };
@@ -30,8 +30,8 @@ export function resolveHandleReference(w: World, method: MethodInfo, index: numb
 
 /** a throwable of `cls` with `message` whose cause is the Java throwable `cause` */
 export function causedThrowable(w: World, cls: string, message: string, cause: object): object {
-  const throwable = w.makeThrowable(cls, message);
-  w.hostFn("throwable:cause", ["L", "L"], "V", (cx, c) => {
+  const throwable = w.helpers.makeThrowable(cls, message);
+  w.helpers.hostFn("throwable:cause", ["L", "L"], "V", (cx, c) => {
     const t = "java/lang/Throwable", st = cx.structFor(t);
     c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(t, { owner: t, name: "cause", desc: "Ljava/lang/Throwable;" }));
   })(throwable, cause);
@@ -42,7 +42,7 @@ export function resolveType(w: World, loader: Loader, name: string, owner: Stran
   const symbolic = name[0] === "[" ? name : `L${name};`, component = symbolic.replace(/^\[+/, "");
   const message = `Failed resolution of: ${symbolic}`;
   if (!objectOfLoader(w, loader) && component[0] === "L" && !w.prog.lookup(loader, descToName(component))) {
-    throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", message));
+    w.raise("java/lang/NoClassDefFoundError", message);
   }
   const fail = (error: unknown): never => {
     const cause = w.throwable(error);
@@ -114,12 +114,12 @@ export function resolveForName(w: World, name: string, object: object | null, ow
   const element = name.replace(/^\[+/, ""), binary = name[0] === "[" && element[0] === "L" && element.endsWith(";") ? element.slice(1, -1) : name;
   const valid = name[0] === "[" && /^[ZBCSIJFD]$/.test(element)
     || (!/[\/;\[\u0000]/.test(binary) && binary.split(".").every(part => part.length > 0) && (name[0] !== "[" || element === `L${binary};`));
-  if (!valid) throw w.exception(w.makeThrowable("java/lang/ClassNotFoundException", `Invalid name: ${name}`));
+  if (!valid) w.raise("java/lang/ClassNotFoundException", `Invalid name: ${name}`);
   const wrap = (error: unknown): never | Promise<never> => {
     const cause = w.throwable(error);
     if (!cause) throw error;
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
-    if (!ctor) throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)"));
+    if (!ctor) w.raise("java/lang/UnsatisfiedLinkError", "ClassNotFoundException(String, Throwable)");
     const value = handleThunk(w, "resolve:forName:failure", ["L", "L"], "L", (cx, c, arg) => cx.construct(c, ctor, () => { arg(0); arg(1); }), owner)(w.javaString(name), cause);
     return chain(value, (value): never => { throw w.exception(value as object); });
   };
@@ -150,7 +150,7 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
   if (prior) {
     if (prior.state === "ready") return key;
     if (prior.state === "failed") throw prior.error;
-    if (prior.owner === owner.thread) throw w.exception(w.makeThrowable("java/lang/ClassCircularityError", javaName(key)));
+    if (prior.owner === owner.thread) w.raise("java/lang/ClassCircularityError", javaName(key));
     return prior.wait;
   }
   let complete!: (key: string) => void, reject!: (error: unknown) => void;
@@ -172,7 +172,7 @@ export function resolvedMirror(w: World, key: string, owner: Strand): object | P
 
 /** Resolve one executed symbolic request without linking its class module. */
 export function resolveClass(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
-  const missing = (): never => { throw w.exception(w.makeThrowable("java/lang/ClassNotFoundException", name.replace(/\//g, "."))); };
+  const missing = (): never => w.raise("java/lang/ClassNotFoundException", name.replace(/\//g, "."));
   if (name.startsWith("[")) {
     const component = name.replace(/^\[+/, "");
     if (/^[ZBCSIJFD]$/.test(component)) return name;
@@ -187,7 +187,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
   if (!object) {
     // The boot namespace and the host's startup namespace have no Java loader peer yet.
     const key = w.prog.lookup(loader, name);
-    if (!key) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", name));
+    if (!key) w.raise("java/lang/NoClassDefFoundError", name);
     w.namespaces.initiateClass(loader, name, key);
     return key;
   }
@@ -197,18 +197,18 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     return prepareDefinition(w, native, owner);
   }
   const method = w.prog.implFor(w.classNameOf(object), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-  if (!method) throw w.exception(w.makeThrowable("java/lang/AbstractMethodError", "ClassLoader.loadClass"));
+  if (!method) w.raise("java/lang/AbstractMethodError", "ClassLoader.loadClass");
   // Java owns custom delegation and denial. Do not deduplicate pending calls in JS.
-  const body: Parameters<World["callFn"]>[3] = (cx, c, arg) => {
+  const body: Parameters<World["helpers"]["callFn"]>[3] = (cx, c, arg) => {
     arg(0); arg(1); cx.callMethod(c, method);
   };
   const accept = (mirror: unknown): string | Promise<string> => {
-    if (!mirror) throw w.exception(w.makeThrowable("java/lang/NullPointerException", `ClassLoader.loadClass returned null for ${name.replace(/\//g, ".")}`));
-    const id = w.hostFn("resolve:classId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(mirror) as number;
+    if (!mirror) w.raise("java/lang/NullPointerException", `ClassLoader.loadClass returned null for ${name.replace(/\//g, ".")}`);
+    const id = w.helpers.hostFn("resolve:classId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(mirror) as number;
     const key = w.nameOf(id);
     const winner = w.prog.initiatedBy(loader, name);
     if (winner) return prepareDefinition(w, winner, owner);
-    if (javaName(key) !== name) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `${name} (wrong name: ${javaName(key)})`));
+    if (javaName(key) !== name) w.raise("java/lang/NoClassDefFoundError", `${name} (wrong name: ${javaName(key)})`);
     w.namespaces.initiateClass(loader, name, key);
     return prepareDefinition(w, key, owner);
   };

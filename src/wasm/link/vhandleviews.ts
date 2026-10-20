@@ -13,7 +13,7 @@ import { box, unbox } from "../compiler/primitives.ts";
 export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
   const BB = "java/nio/ByteBuffer", array = storage === "java/lang/invoke/ByteArrayViewVarHandle";
   const element = varHandleValues(mode) ? params[2] : ret, K = kindOf(element), width = element === "S" || element === "C" ? 2 : element === "J" || element === "D" ? 8 : 4;
-  const nativeOrder = w.fieldReader<number>(storage, "nativeByteOrder", "Z")(handle);
+  const nativeOrder = w.helpers.fieldReader<number>(storage, "nativeByteOrder", "Z")(handle);
   return handleThunk(w, `vh:view:${array ? "array" : "buffer"}:${mode}:${element}:${nativeOrder}`, ["L"], "L", (cx, c, arg) => {
     const value = (index: number) => { arg(0); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(index).arrayGet(cx.tData.ref); };
     const field = (local: number, owner: string, name: string, desc: string) => {

@@ -93,7 +93,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
   const prior = states.get(cls);
   if (prior) {
     if ("ready" in prior) return;
-    const erroneous = (): never => { throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `Could not initialize class ${javaName(cls)}`)); };
+    const erroneous = (): never => w.raise("java/lang/NoClassDefFoundError", `Could not initialize class ${javaName(cls)}`);
     if ("failed" in prior) return erroneous();
     if (prior.thread !== owner.thread) return prior.wait.catch(error => {
       if (w.throwable(error)) return erroneous();
@@ -104,7 +104,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
   const linkage = (message: string, error?: unknown): never => {
     const cause = error === undefined ? undefined : w.throwable(error);
     if (error !== undefined && !cause) throw error;
-    throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.makeThrowable("java/lang/LinkageError", message));
+    throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.helpers.makeThrowable("java/lang/LinkageError", message));
   };
   const type = (m: MethodInfo, descriptor: string): string | Promise<string> => {
     if (descriptor[0] !== "L" && descriptor[0] !== "[") return descriptor;

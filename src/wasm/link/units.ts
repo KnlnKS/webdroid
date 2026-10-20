@@ -74,6 +74,6 @@ export class Units {
   }
   private hostContext(): HostContext {
     const w = this.w;
-    return this.hostCtx ??= { mem: w.mem, sp: w.sp, bridge: w.bridge, gap: (what) => w.onGap(what), sched: w.sched, throwable: (cls, msg) => w.makeThrowable(cls, msg), raise: (e) => w.exception(e) };
+    return this.hostCtx ??= { mem: w.mem, sp: w.sp, bridge: w.bridge, gap: (what) => w.onGap(what), sched: w.sched, throwable: (cls, msg) => w.helpers.makeThrowable(cls, msg), raise: (e) => w.exception(e) };
   }
 }

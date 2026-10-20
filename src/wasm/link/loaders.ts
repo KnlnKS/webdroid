@@ -37,7 +37,7 @@ interface State {
 const states = new WeakMap<World, State>();
 function stateOf(w: World): State {
   let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
+  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.helpers.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
   return s;
 }
 
@@ -105,7 +105,7 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
     if (loaded) return loaded;
     active.add(object);
     const libraries = (field: string): string | undefined | false => {
-      const array = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", field, "[Ljava/lang/ClassLoader;")(object);
+      const array = w.helpers.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", field, "[Ljava/lang/ClassLoader;")(object);
       for (let i = 0; array && i < w.bridge.arrayLength(array); i++) {
         const key = find(w.bridge.element(array, i) as object | null);
         if (key !== undefined) return key;
@@ -116,12 +116,12 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
       if (key !== undefined) return key;
       key = libraries("sharedLibraryLoaders");
       if (key !== undefined) return key;
-      const path = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(object);
-      const elements = path && w.fieldReader<object | null>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(path);
+      const path = w.helpers.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(object);
+      const elements = path && w.helpers.fieldReader<object | null>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(path);
       for (let i = 0; elements && i < w.bridge.arrayLength(elements); i++) {
         const element = w.bridge.element(elements, i) as object | null;
-        const file = element && w.fieldReader<object | null>("dalvik/system/DexPathList$Element", "dexFile", "Ldalvik/system/DexFile;")(element);
-        const cookie = file && w.fieldReader<object | null>("dalvik/system/DexFile", "mCookie", "Ljava/lang/Object;")(file);
+        const file = element && w.helpers.fieldReader<object | null>("dalvik/system/DexPathList$Element", "dexFile", "Ldalvik/system/DexFile;")(element);
+        const cookie = file && w.helpers.fieldReader<object | null>("dalvik/system/DexFile", "mCookie", "Ljava/lang/Object;")(file);
         if (!cookie) continue;
         const opened = s.cookies.get(cookie);
         if (!current || opened?.loader !== current) return false;
@@ -145,7 +145,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const mark = w.bridge.begin();
   try {
     const read = (name: string): Loader[] => {
-      const array = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", name, "[Ljava/lang/ClassLoader;")(object);
+      const array = w.helpers.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", name, "[Ljava/lang/ClassLoader;")(object);
       const values = array ? w.bridge.toHost(array, "[Ljava/lang/ClassLoader;") as unknown[] : [];
       return values.map(value => loaderFor(w, w.bridge.toJava(value, "Ljava/lang/ClassLoader;") as object));
     };
@@ -190,12 +190,12 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
   const file = w.hostString(path) as string;
   if (!w.opts.dexes) {
     w.onGap("DexFile.openDexFileNative: the host has no dex files to open");
-    throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative"));
+    w.raise("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative");
   }
   const dexes = w.opts.dexes(file);
   return chain(dexes, open);
   function open(dexes: DexFile[] | undefined): object {
-    if (!dexes) throw w.exception(w.makeThrowable("java/io/IOException", `Unable to open DEX file '${file}'`));
+    if (!dexes) w.raise("java/io/IOException", `Unable to open DEX file '${file}'`);
     return openDexes(w, dexes, loaderObject);
   }
 }
@@ -242,14 +242,14 @@ export function dexOpenMemory(w: World, buffers: object, arrays: object, starts:
     const from = w.bridge.toHost(starts, "[I") as Int32Array, to = w.bridge.toHost(ends, "[I") as Int32Array;
     for (let i = 0; i < w.bridge.arrayLength(buffers); i++) {
       const start = from[i], n = to[i] - start, array = w.bridge.element(arrays, i) as object | null;
-      if (n <= 0) throw w.exception(w.makeThrowable("java/io/IOException", "Bad range"));
+      if (n <= 0) w.raise("java/io/IOException", "Bad range");
       if (array) {
-        if (start < 0 || start > w.bridge.arrayLength(array) - n) throw w.exception(w.makeThrowable("java/lang/ArrayIndexOutOfBoundsException", "DEX buffer range"));
+        if (start < 0 || start > w.bridge.arrayLength(array) - n) w.raise("java/lang/ArrayIndexOutOfBoundsException", "DEX buffer range");
         const view = w.bridge.toHost(array, "[B", [start, n]) as Int8Array;
         bytes.push(new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice());
       } else {
         const buffer = w.bridge.element(buffers, i) as object | null;
-        if (!buffer) throw w.exception(w.makeThrowable("java/io/IOException", "dexFileBuffer not direct"));
+        if (!buffer) w.raise("java/io/IOException", "dexFileBuffer not direct");
         bytes.push(w.bridge.readBuffer(buffer, start, n));
       }
     }
@@ -257,7 +257,7 @@ export function dexOpenMemory(w: World, buffers: object, arrays: object, starts:
   const open = (copies: Uint8Array[]) => {
     let dexes: DexFile[];
     try { dexes = copies.flatMap((bytes, i) => dexesIn(bytes, `memory:${i}`)); }
-    catch (e) { throw w.exception(w.makeThrowable("java/io/IOException", String(e))); }
+    catch (e) { w.raise("java/io/IOException", String(e)); }
     return openDexes(w, dexes, loader);
   };
   return bytes.some(bytes => bytes instanceof Promise) ? Promise.all(bytes).then(open) : open(bytes as Uint8Array[]);

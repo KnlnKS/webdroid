@@ -106,7 +106,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   out.worldSetupMs = performance.now() - setupAt;
   const gaps: string[] = [], b0 = performance.now();
   w.onGap = gap => gaps.push(gap);
-  try { await startProcess(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); }
+  try { await startProcess(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.helpers.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); }
   out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats);
   out.prestartedWorker = !!startWorker;
   if (startWorker) { const t = performance.now(); await startWorker(); out.workerStartMs = performance.now() - t; }

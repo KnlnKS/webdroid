@@ -95,7 +95,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 // ---- stack traces: the Java frames of a throwable thrown three calls deep come back as method, DEX pc and source line
 {
   const w = world([join(out, "classes.dex"), ...jars]), callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
-  const backtrace = w.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;"), state = backtrace(callA(1) as object) as object;
+  const backtrace = w.helpers.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;"), state = backtrace(callA(1) as object) as object;
   const frames = w.stacks.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
   check("frames", frames.slice(0, 3).map((f) => `${f.cls}.${f.method}`).join(" "), "Ex.c Ex.b Ex.a");
   for (const f of frames.slice(0, 3)) {

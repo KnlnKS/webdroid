@@ -25,7 +25,7 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
     const construct = async (cls = "dalvik/system/DexClassLoader", path = paths[0], parent: object | null = null) => {
       const desc = cls.includes("$") ? "(Ljava/lang/String;Ljava/lang/ClassLoader;)V" : "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V";
       const ctor = p.resolve(cls, "<init>", desc)!;
-      const make = target.callFn("native-path:" + cls, ["L", "L"], "L", (cx, c, arg) => {
+      const make = target.helpers.callFn("native-path:" + cls, ["L", "L"], "L", (cx, c, arg) => {
         cx.emitEnsure(c, cls); cx.emitNew(c, cls); const o = c.newLocal(T.anyref); c.ltee(o); arg(0);
         if (!cls.includes("$")) c.anyNull().anyNull(); arg(1);
         cx.callMethod(c, ctor); c.lget(o);
@@ -33,7 +33,7 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
       const strand = target.sched.strand();
       try { return await make(strand, target.javaString(path), parent) as object; } finally { strand.end(); }
     };
-    const set = (obj: object, cls: string, field: string, desc: string, value: object | null) => target.hostFn("native-path:set:" + cls + field, ["L", "L"], "V", (cx, c) => {
+    const set = (obj: object, cls: string, field: string, desc: string, value: object | null) => target.helpers.hostFn("native-path:set:" + cls + field, ["L", "L"], "V", (cx, c) => {
       const st = cx.structFor(cls); c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(cls, {owner:cls, name:field, desc}));
     })(obj, value);
     const appPeer = await construct("dalvik/system/DexClassLoader", appPath), appLoader = definingLoader(target, appPeer);
@@ -73,7 +73,7 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
     try { if (await target.resolveClass(multiLoader, "Sub", later) !== multiSub || managed) fail("later DEX resolution entered Java"); }
     finally { later.end(); }
     const inactive = await construct(), inactiveLoader = definingLoader(target, inactive);
-    const path = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(inactive);
+    const path = target.helpers.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(inactive);
     set(path, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava([], "[Ldalvik/system/DexPathList$Element;") as object);
     if (nativeClassLookup(target, inactiveLoader, "Shared")) fail("metadata-only class bypassed the live path");
     managed = 0;
@@ -83,8 +83,8 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
     finally { blocked.end(); }
     if (!managed) fail("empty path skipped canonical loader failure");
     const reordered = await construct("dalvik/system/DexClassLoader", paths.join(":")), reorderedLoader = definingLoader(target, reordered);
-    const reorderedPath = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(reordered);
-    const elements = target.fieldReader<object>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(reorderedPath);
+    const reorderedPath = target.helpers.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(reordered);
+    const elements = target.helpers.fieldReader<object>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(reorderedPath);
     const reversed = [];
     for (let i = target.bridge.arrayLength(elements) - 1; i >= 0; i--) reversed.push(target.bridge.toHost(target.bridge.element(elements, i)));
     set(reorderedPath, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava(reversed, "[Ldalvik/system/DexPathList$Element;") as object);
@@ -110,7 +110,7 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
     try { if (await target.resolveClass(sharingLoader, "Shared", shared) !== expected || managed) fail("shared-before resolution entered Java"); }
     finally { shared.end(); }
     const afterPeer = await construct(), afterLoader = definingLoader(target, afterPeer);
-    const afterPath = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(afterPeer);
+    const afterPath = target.helpers.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(afterPeer);
     set(afterPath, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava([], "[Ldalvik/system/DexPathList$Element;") as object);
     set(afterPeer, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoadersAfter", "[Ljava/lang/ClassLoader;", libraries([peer]));
     if (nativeClassLookup(target, afterLoader, "Shared") !== expected) fail("live shared-after path lost");

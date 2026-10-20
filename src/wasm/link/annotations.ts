@@ -51,7 +51,7 @@ const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x
 
 const states = new WeakMap<World, ReturnType<typeof make>>();
 function make(w: World) {
-  const fn = w.hostFn.bind(w);
+  const fn = w.helpers.hostFn.bind(w.helpers);
   const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) =>
     (strand: Strand, ...args: unknown[]) => w.helpers.mayWait(strand, name, params, ret, body, args);
   const classOf = fn("an:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); });
@@ -178,7 +178,7 @@ function* objects(w: World, strand: Strand, kind: number, a: number, b: number, 
   }
   const runtime = ofKind(set, RUNTIME);
   if (arg) {
-    const want = w.nameOf(w.fieldReader<number>("java/lang/Class", "dexTypeIndex", "I")(arg)), hit = runtime.find((x) => x.type === want);
+    const want = w.nameOf(w.helpers.fieldReader<number>("java/lang/Class", "dexTypeIndex", "I")(arg)), hit = runtime.find((x) => x.type === want);
     return hit ? yield* annotation(w, s, strand, hit) : null;
   }
   const annotations: object[] = [];

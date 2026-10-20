@@ -184,7 +184,7 @@ if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,me
   const info = probe.host.info;
   let calls = 0;
   probe.host.info = (...args: [number, number, number]) => { calls++; return info(...args); };
-  const lookup = probe.hostFn("unsafe:cache", ["I", "I", "I"], "I", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "ufield"); });
+  const lookup = probe.helpers.hostFn("unsafe:cache", ["I", "I", "I"], "I", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "ufield"); });
   probe.tiers.linkSlot(probe.slots.synthSlotOf("ufield")!);
   const mark = probe.numbers.marks();
   let first = 0, cookie = 0;
@@ -281,7 +281,7 @@ console.log(`${suspendedCases} suspended handle cases preserve thread, monitor o
 {
   try {
     const buffer = await w.entryAsync("Vh", "artViewAllocate", "()Ljava/nio/ByteBuffer;")();
-    const setAddress = w.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
+    const setAddress = w.helpers.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
       const owner = "java/nio/Buffer", f = cx.prog.resolveField(owner, "address", "J")!;
       c.lget(0).refCast(cx.structFor(owner)).lget(1).structSet(cx.structFor(owner), cx.fieldIndex(owner, f));
     });
@@ -323,7 +323,7 @@ console.log("4 ART collector/retry/racing cases match");
 }
 console.log("2 synchronous handle callbacks reject blocking without orphan strands");
 // Missing bootstrap classes fail resolution; libcore LambdaMetafactory returns null and ART wraps that CCE in BME.
-const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.bridge.toHost(w.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t))}` : String(e); } };
+const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.bridge.toHost(w.helpers.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t))}` : String(e); } };
 const concat = outcome("concat"), lambda = outcome("lambda");
 suite.check("concat", concat, "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;");
 if (!lambda.startsWith("java/lang/BootstrapMethodError")) suite.fail(`lambda: ${lambda}`);
@@ -383,7 +383,7 @@ async function checkDeferredSignatures(): Promise<void> {
     const owner = tier.sched.strand();
     let key: string;
     try { key = await tier.resolveClass(definingLoader(tier, object), "Mh$Signature", owner); } finally { owner.end(); }
-    const id = tier.hostFn("fixture:signatureId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(returnType as object);
+    const id = tier.helpers.hostFn("fixture:signatureId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(returnType as object);
     if (id !== tier.idOf(key)) throw new Error(`deferred constant signature identity: got=${id}, expected=${tier.idOf(key)}`);
     const handle = await tier.entryAsync(name, "handle", "()Ljava/lang/invoke/MethodHandle;")();
     if (await tier.entryAsync(name, "poly", tier.prog.viewOf(name, "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;"))(handle) !== null) throw new Error("deferred polymorphic prototype must match its handle");

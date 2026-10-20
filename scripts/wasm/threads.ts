@@ -149,7 +149,7 @@ if (substrate) {
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
     (heap.host as Record<string, Function>).heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
-    const allocate = heap.hostFn("substrate:heap:" + mode, [], "V", (cx, c) => {
+    const allocate = heap.helpers.hostFn("substrate:heap:" + mode, [], "V", (cx, c) => {
       if (mode === "bridge") c.call(bridge);
       else { cx.emitNewArray(c, "[B", () => c.i32(ALLOC_WINDOW)); c.drop(); }
     }, cx => { bridge = cx.mb.importFunc("host", "heapBridge", cx.sig([], "V")); });
@@ -165,7 +165,7 @@ if (substrate) {
   }
   const importStrand = w.sched.strand(w.sched.hostThread()), globals = w.rtImports();
   try {
-    await importStrand.call(w.hostFn("substrate:import-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
+    await importStrand.call(w.helpers.hostFn("substrate:import-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
     for (const mode of ["immediate", "rejected", "interposed"] as const) {
       const deferred = mode !== "immediate";
       const error = new Error("suspending import failure");
@@ -189,7 +189,7 @@ if (substrate) {
         expect(`${mode} import catch retains depth`, globals.depth.value, 23);
         if (!deferred) expect("immediate import catch retains native owner", w.sched.running === importStrand, true);
       };
-      const f = w.hostFn("substrate:import-throw:" + mode, [], "V", (_cx, c) => {
+      const f = w.helpers.hostFn("substrate:import-throw:" + mode, [], "V", (_cx, c) => {
         c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]);
         if (mode === "interposed") emitRestored(_cx, c, [], [], () => { c.call(fail); });
         else c.call(fail);
@@ -211,7 +211,7 @@ if (substrate) {
   const oldLookup = w.host.classByName, oldWait = w.host.annotationWait, oldSuspending = w.sched.suspending;
   const lookupError = new Error("class lookup rejected");
   try {
-    await lookupStrand.call(w.hostFn("substrate:lookup-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
+    await lookupStrand.call(w.helpers.hostFn("substrate:lookup-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
     // Interpose another completion after settle's rejection handler, before the engine's catch.
     const suspending = oldSuspending.bind(w.sched);
     w.sched.suspending = fn => suspending((...args) => {
@@ -237,7 +237,7 @@ if (substrate) {
     let prepare = 0, caught = 0;
     const key = "java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;";
     const m = w.prog.resolve("java/lang/Class", "classForName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")!;
-    const lookup = w.hostFn("substrate:lookup-reject", ["L", "I", "L"], "V", (cx, c) => {
+    const lookup = w.helpers.hostFn("substrate:lookup-reject", ["L", "I", "L"], "V", (cx, c) => {
       c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]);
       classIntrinsics.get(key)!(cx, m, c); c.drop();
       c.end().br(1).end().call(caught).throwRef().end();
@@ -274,7 +274,7 @@ if (substrate) {
     expect("two admitted callers observe the winning link", (await Promise.all([sameSlot(3), sameSlot(7)])).join(), "4,8");
     expect("the admitted slot is compiled only once", w.stats.methods - methods, 1);
     const before = admissionTurns;
-    const helper = w.hostFn("admission:plain", ["I"], "I", (cx, c) => {
+    const helper = w.helpers.hostFn("admission:plain", ["I"], "I", (cx, c) => {
       c.lget(0); cx.callMethod(c, w.prog.resolve("Th", "linkAdmissionPlain", "(I)I")!);
     });
     expect("fresh plain helper links synchronously with an exhausted budget", helper(0), 11);

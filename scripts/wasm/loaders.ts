@@ -70,7 +70,7 @@ let got: number;
 try { got = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number; } catch (e) {
   const t = w.throwable(e);
   if (!t) throw e;
-  const detail = w.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t);
+  const detail = w.helpers.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t);
   fail(`Ldr.check threw ${w.classNameOf(t)}: ${detail ? w.hostString(detail) : null}; gaps hit: ${[...gaps].join("; ") || "none"}`);
   process.exit(1);
 }
@@ -144,7 +144,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     method.flags = flags;
     try {
       const selector = w.selectorId(method.key), slot = w.host.imtMiss(w.idOf(owner), selector) as number;
-      const call = w.hostFn(`interface-access:${flags}`, ["L", "L"], "I", (cx, c) => c.lget(0).lget(1).i32(slot).callIndirect(cx.sig(["L", "L"], "I")));
+      const call = w.helpers.hostFn(`interface-access:${flags}`, ["L", "L"], "I", (cx, c) => c.lget(0).lget(1).i32(slot).callIndirect(cx.sig(["L", "L"], "I")));
       let error: unknown;
       const strand = w.sched.strand();
       try { await strand.call(call, null, null); } catch (e) { error = e; } finally { strand.end(); }
@@ -218,8 +218,8 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
       const failure = typeFailure(cx.w.prog, `L${later};`);
       if (failure) cx.linkError(c, failure); else c.i32(42);
     };
-    const helper = w.hostFn("helper:late:sync", [], "I", helperBody);
-    const waitingHelper = w.callFn("helper:late:async", [], "I", helperBody);
+    const helper = w.helpers.hostFn("helper:late:sync", [], "I", helperBody);
+    const waitingHelper = w.helpers.callFn("helper:late:async", [], "I", helperBody);
     const checkMissing = (error: unknown) => {
       const value = w.throwable(error);
       if (!value || w.classNameOf(value) !== "java/lang/NoClassDefFoundError") throw error;
@@ -238,14 +238,14 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     } finally { resumed.end(); }
     console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
     const accountingWorld = world(w.prog, { natives }), initial = { ...accountingWorld.stats };
-    const throwable = accountingWorld.makeThrowable("java/lang/IllegalStateException", "accounted helper");
+    const throwable = accountingWorld.helpers.makeThrowable("java/lang/IllegalStateException", "accounted helper");
     if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs) fail("throwable helper compilation unaccounted");
-    const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
+    const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.helpers.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
     if (accountingWorld.stats.units !== beforeReader.units + 1 || accountingWorld.stats.bytes <= beforeReader.bytes || accountingWorld.stats.compileMs <= beforeReader.compileMs) fail("field reader compilation unaccounted");
     if (accountingWorld.hostString(reader(throwable)!) !== "accounted helper") fail("accounted throwable detail changed");
     const warmHelpers = { ...accountingWorld.stats };
-    const again = accountingWorld.makeThrowable("java/lang/IllegalStateException", null);
-    if (reader(again) !== null || accountingWorld.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;") !== reader || accountingWorld.stats.units !== warmHelpers.units || accountingWorld.stats.bytes !== warmHelpers.bytes || accountingWorld.stats.compileMs !== warmHelpers.compileMs) fail("warm throwable or reader helper compiled again");
+    const again = accountingWorld.helpers.makeThrowable("java/lang/IllegalStateException", null);
+    if (reader(again) !== null || accountingWorld.helpers.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;") !== reader || accountingWorld.stats.units !== warmHelpers.units || accountingWorld.stats.bytes !== warmHelpers.bytes || accountingWorld.stats.compileMs !== warmHelpers.compileMs) fail("warm throwable or reader helper compiled again");
     console.log("helper accounting: throwable and field reader record units and bytes; warm calls unchanged");
     {
       const stubs: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [];
@@ -420,7 +420,7 @@ for (const asynchronous of [false, true]) {
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {
     const value = resolver.throwable(error);
-    if (value) console.log("Class.forName fixture failure", resolver.classNameOf(value), resolver.hostString(resolver.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(value)), resolver.stacks.stackTrace(resolver.fieldReader<object>("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(value)));
+    if (value) console.log("Class.forName fixture failure", resolver.classNameOf(value), resolver.hostString(resolver.helpers.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(value)), resolver.stacks.stackTrace(resolver.helpers.fieldReader<object>("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(value)));
     throw error;
   }
   check("Class.forName loader/error boundaries", forName, 63);

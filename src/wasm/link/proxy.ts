@@ -28,8 +28,8 @@ const readers = new WeakMap<World, Readers>();
 function readersOf(w: World): Readers {
   let r = readers.get(w);
   if (!r) readers.set(w, r = {
-    art: w.fieldReader(EXEC, "artMethod", "J") as never, classId: w.fieldReader(CLASS, "dexTypeIndex", "I") as never,
-    classOf: w.hostFn("px:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); }),
+    art: w.helpers.fieldReader(EXEC, "artMethod", "J") as never, classId: w.helpers.fieldReader(CLASS, "dexTypeIndex", "I") as never,
+    classOf: w.helpers.hostFn("px:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); }),
   });
   return r;
 }
@@ -38,7 +38,7 @@ function readersOf(w: World): Readers {
 export function generateProxy(w: World, name: string, interfaces: object, object: object | null, methods: object, exceptions: object): object {
   const r = readersOf(w), binary = name.replace(/\./g, "/"), loader = definingLoader(w, object), internal = loader === w.prog.boot || loader.id ? `${binary}@${loader.id}` : binary;
   // ART's CreateProxyClass requires InsertClass to find no existing definition; public Proxy caching happens in Java.
-  if (w.prog.definedBy(loader, binary)) throw w.exception(w.makeThrowable("java/lang/LinkageError", `duplicate proxy definition: ${binary}`));
+  if (w.prog.definedBy(loader, binary)) w.raise("java/lang/LinkageError", `duplicate proxy definition: ${binary}`);
   const entries = new Map<string, ProxyDefinition["methods"][number]>();
   for (let i = 0; i < w.bridge.arrayLength(methods); i++) {
     const method = (w.bridge.element(methods, i) as object), cookie = r.art(method), src = w.prog.get(w.nameOf(Number(cookie >> 16n)))!.methods[Number(cookie & 0xffffn)];

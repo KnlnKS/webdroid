@@ -271,8 +271,8 @@ export class Sched {
     this.root = this.strands[ROOT] = new Strand(ROOT, this.main, true, this);
     let get: Function | undefined, set: Function | undefined;
     const header: Header = {
-      lock: (o) => (get ??= w.hostFn("lock:get", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).raw(OP.i32_wrap_i64); }))(o),
-      setLock: (o, l) => (set ??= w.hostFn("lock:set", ["L", "I"], "V", (cx, c) => {
+      lock: (o) => (get ??= w.helpers.hostFn("lock:get", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).raw(OP.i32_wrap_i64); }))(o),
+      setLock: (o, l) => (set ??= w.helpers.hostFn("lock:set", ["L", "I"], "V", (cx, c) => {
         c.lget(0).refCast(cx.tObj).lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).i64(0xffffffff00000000n).raw(OP.i64_and).lget(1).raw(OP.i64_extend_i32_u, OP.i64_or).structSet(cx.tObj, 1);
       }))(o, l),
     };
@@ -379,7 +379,7 @@ export class Sched {
       case Sync.ContextSet: this.pendingContext.delete(obj!); return 0;
       case Sync.SystemLoaderReady: {
         if (obj && this.pendingContext.size) {
-          const set = this.w.hostFn("thread:context", ["L", "L"], "V", (cx, c) => {
+          const set = this.w.helpers.hostFn("thread:context", ["L", "L"], "V", (cx, c) => {
             c.lget(0).refCast(cx.structFor(THREAD)).lget(1); setContextLoader(cx, c);
           });
           for (const peer of this.pendingContext) set(peer, obj);
@@ -453,7 +453,7 @@ export class Sched {
   private async run(s: Strand, obj: object): Promise<void> {
     const w = this.w, virtual = (name: string, desc: string) => {
       const m = w.prog.implFor(w.classNameOf(obj), name, desc)!;
-      return this.threadFn(`${m.cls}.${name}${desc}`, () => w.hostFn(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], "V", (cx, c) => {
+      return this.threadFn(`${m.cls}.${name}${desc}`, () => w.helpers.hostFn(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], "V", (cx, c) => {
         c.lget(0); if (m.params.length) c.lget(1);
         cx.callMethod(c, m);
       }));
@@ -464,11 +464,11 @@ export class Sched {
       if (!t) console.error("[wasm thread]", e);
       else try { await s.call(virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V"), obj, t); } catch { /* the handler's own failure ends the thread, as in ART */ }
     } finally {
-      const exit = this.threadFn("exit", () => w.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
+      const exit = this.threadFn("exit", () => w.helpers.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
       try { await s.call(exit, obj); } catch { /* a failing exit leaves the thread over all the same */ }
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
       s.thread.alive = false; this.started.delete(s.thread);
-      const done = this.threadFn("finish", () => w.hostFn("thr:finish", ["L"], "V", (cx, c) => {
+      const done = this.threadFn("finish", () => w.helpers.hostFn("thr:finish", ["L"], "V", (cx, c) => {
         const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
         c.lget(0); setPeer(cx, c, 0n);
         c.lget(0).refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);

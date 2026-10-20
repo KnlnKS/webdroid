@@ -409,6 +409,8 @@ export class World {
   }
   /** the Wasm exception that throws Java throwable `t` */
   exception(t: object): WebAssembly.Exception { return new WebAssembly.Exception(this.rt.tag, [t]); }
+  /** throws a new Java throwable of class `cls` with `msg`: the way a native raises one */
+  raise(cls: string, msg: string | null): never { throw this.exception(this.helpers.makeThrowable(cls, msg)); }
   /** the class of a Java object that crossed to JS */
   classNameOf(obj: object): string { return this.nameOf(this.rt.classId(obj)); }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
@@ -419,10 +421,4 @@ export class World {
     try { this.rt.callee.value = SLOT.soe; (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; } finally { this.rt.depth.value = depth; }
     return e;
   }
-  // ---------- functions over Java values that the host calls (hostfns.ts)
-  hostFn(...a: Parameters<HostFunctions["hostFn"]>): ReturnType<HostFunctions["hostFn"]> { return this.helpers.hostFn(...a); }
-  callFn(...a: Parameters<HostFunctions["callFn"]>): ReturnType<HostFunctions["callFn"]> { return this.helpers.callFn(...a); }
-  fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T { return this.helpers.fieldReader<T>(cls, name, desc); }
-  /** a Java throwable of class `cls` with `msg`: the way a native raises one */
-  makeThrowable(cls: string, msg: string | null): object { return this.helpers.makeThrowable(cls, msg); }
 }

@@ -24,7 +24,6 @@ import { chain } from "./maybe.ts";
 
 /** what a handle invocation answers: the boxed result, or the Promise of it when the call waited */
 type Answer = object | null | Promise<object | null>;
-const fail = (w: World, cls: string, message: string | null): never => { throw w.exception(w.makeThrowable(cls, message)); };
 
 export interface SignatureType { owner: string; descriptor: string }
 
@@ -72,9 +71,9 @@ function state(w: World): State {
   const kinds = handleKinds(w.prog);
   s = {
     kinds,
-    handleKind: w.fieldReader<number>(MH, "handleKind", "I"), art: w.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.fieldReader<object>(MH, "type", `L${MT};`),
-    ptypes: w.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
-    newArray: w.hostFn("mh:new", ["I"], "L", (cx, c) => cx.emitNewArray(c, OBJECTS, () => c.lget(0))),
+    handleKind: w.helpers.fieldReader<number>(MH, "handleKind", "I"), art: w.helpers.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.helpers.fieldReader<object>(MH, "type", `L${MT};`),
+    ptypes: w.helpers.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.helpers.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.helpers.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
+    newArray: w.helpers.hostFn("mh:new", ["I"], "L", (cx, c) => cx.emitNewArray(c, OBJECTS, () => c.lget(0))),
   };
   states.set(w, s);
   return s;
@@ -106,7 +105,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   const s = state(w);
   const { params: sp, ret: sr } = parseMethodDesc(siteId), { params: np, ret: nr } = signatureOf(w, s.typeOf(mh!));
   if (np.length !== sp.length || !np.every((d, i) => d === sp[i]) || nr !== sr) {
-    if (mode === InvokeMode.Exact) fail(w, "java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
+    if (mode === InvokeMode.Exact) w.raise("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
     const adapted = handleThunk(w, `mh:asType:${w.classNameOf(mh!)}:${siteId}`, ["L"], "L", (cx, c, arg) => {
       arg(0); emitMethodType(cx, c, sr, sp);
       const m = cx.prog.implFor(w.classNameOf(mh!), "asType", `(L${MT};)L${MH};`)!; cx.callMethod(c, m);
@@ -157,15 +156,15 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     }
   }
   w.onGap(`MethodHandle invocation kind ${kind}`);
-  return fail(w, "java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
+  return w.raise("java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
 }
 
 /** ART DoVarHandleInvokeTranslation obtains the access-mode type, checks exact invokers, then dispatches the accessor. */
 function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, params: string[], ret: string, parent: Strand): Answer {
   const s = state(w), VH = "java/lang/invoke/VarHandle", AM = `${VH}$AccessMode`;
-  if (params[0] !== `L${VH};`) fail(w, "java/lang/invoke/WrongMethodTypeException", "Expected leading VarHandle parameter");
+  if (params[0] !== `L${VH};`) w.raise("java/lang/invoke/WrongMethodTypeException", "Expected leading VarHandle parameter");
   const handle = w.bridge.element(args, 0) as object;
-  if (!handle) fail(w, "java/lang/NullPointerException", "Expected argument 1 to be a non-null VarHandle");
+  if (!handle) w.raise("java/lang/NullPointerException", "Expected argument 1 to be a non-null VarHandle");
   const method = w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)], mode = method.name;
   const accessMode = (cx: Compiler, c: Code) => {
     cx.emitEnsure(c, AM); cx.str.literal(c, mode);
@@ -176,12 +175,12 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
   }, parent)(handle) as object | Promise<object>;
   return chain(type, type => {
     const actual = signatureOf(w, type), match = ret === actual.ret && params.length === actual.params.length + 1 && actual.params.every((p, i) => p === params[i + 1]);
-    if (exact && !match) fail(w, "java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(actual.params, actual.ret)} but was ${prettySig(params.slice(1), ret)}`);
+    if (exact && !match) w.raise("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(actual.params, actual.ret)} but was ${prettySig(params.slice(1), ret)}`);
     const supported = handleThunk(w, `mh:varHandleSupported:${mode}`, ["L"], "I", (cx, c, arg) => {
       arg(0); accessMode(cx, c); cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${AM};)Z`)!);
     }, parent)(handle) as number | Promise<number>;
     return chain(supported, supported => {
-      if (!supported) fail(w, "java/lang/UnsupportedOperationException", null);
+      if (!supported) w.raise("java/lang/UnsupportedOperationException", null);
       if (!match) {
         const normalized = handleThunk(w, `mh:varHandleInvoker:${art}:${actual.params.join("")}:${actual.ret}`, [], "L", (cx, c) => {
           const impl = "java/lang/invoke/MethodHandleImpl", local = c.newLocal(T.anyref);
@@ -196,7 +195,7 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
       if (storage === "java/lang/invoke/ByteArrayViewVarHandle" || storage === "java/lang/invoke/ByteBufferViewVarHandle") return invokeVarHandleView(w, handle, args, storage, mode, actual.params, actual.ret, parent);
       if (storage !== "java/lang/invoke/FieldVarHandle" && storage !== "java/lang/invoke/StaticFieldVarHandle" && storage !== "java/lang/invoke/ArrayElementVarHandle") {
         w.onGap(`VarHandle storage ${storage}`);
-        fail(w, "java/lang/UnsatisfiedLinkError", `VarHandle storage ${storage}`);
+        w.raise("java/lang/UnsatisfiedLinkError", `VarHandle storage ${storage}`);
       }
       return handleThunk(w, `mh:varHandleAccess:${mode}:(${actual.params.join("")})${actual.ret}`, ["L"], "L", (cx, c, arg) => {
         const value = (index: number) => { arg(0); cx.arrayData(c).i32(index).arrayGet(cx.tData.ref); };
@@ -264,7 +263,7 @@ function frameArgs(w: World, frame: object, params: string[], parent: Strand): o
   }, parent)(frame) as object | Promise<object>;
 }
 function invokeFrame(w: World, mh: object, frame: object, parent: Strand): Answer {
-  const type = w.fieldReader<object>(FRAME, "type", `L${MT};`)(frame), { params, ret } = signatureOf(w, type);
+  const type = w.helpers.fieldReader<object>(FRAME, "type", `L${MT};`)(frame), { params, ret } = signatureOf(w, type);
   return chain(frameArgs(w, frame, params, parent), args => chain(mhInvoke(w, mh, args, `(${params.join("")})${ret}`, InvokeMode.Exact, parent), value => {
     if (ret === "V") return null;
     return chain(handleThunk(w, `mh:frameReturn:${ret}`, ["L", "L"], "V", (cx, c, arg) => {

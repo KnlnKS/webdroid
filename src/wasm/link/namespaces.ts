@@ -34,7 +34,7 @@ export class Namespaces {
   initiateClass(loader: Loader, name: string, key: string): void {
     const w = this.w, prog = w.prog, prior = prog.initiatedBy(loader, name);
     if (prior === key) return;
-    if (prior) throw w.exception(w.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
+    if (prior) w.raise("java/lang/LinkageError", `Class loader already initiated ${name}`);
     if (prog.lookup(loader, name) === key) { prog.initiate(loader, name, key); return; }
     this.rebind(loader, new Set([name]), () => prog.initiate(loader, name, key), () => prog.forgetInitiated(loader, name), "Class initiation");
   }
@@ -86,7 +86,7 @@ export class Namespaces {
     w.dispatch.forget();
     const refuse = (what: string, name: string) => {
       undo(); w.dispatch.forget();
-      return w.exception(w.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
+      return w.exception(w.helpers.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
     };
     // A kept app build was made under the new graph: the classes laid out by its data modules already have the new hierarchy and dispatch.
     const kept = keepApp(), builtUnderNew = (name: string) => kept && w.classes.get(name)?.from === "app";

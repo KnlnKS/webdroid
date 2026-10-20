@@ -85,7 +85,7 @@ function resolveBootstrapArguments(w: World, referrer: MethodInfo, index: number
 }
 function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand): object | Promise<object> {
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
-  const fail = (message: string): never => { throw w.exception(w.makeThrowable("java/lang/BootstrapMethodError", message)); };
+  const fail = (message: string): never => w.raise("java/lang/BootstrapMethodError", message);
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
   if (first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
   return chain(resolveHandleReference(w, referrer, first.idx, parent), () => {
@@ -128,7 +128,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   let dexes = linked.get(w); if (!dexes) linked.set(w, dexes = new WeakMap());
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
   const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
-  const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
+  const targetOf = w.helpers.fieldReader<object | null>(CS, "target", `L${MH};`);
   const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), InvokeMode.Exact, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
   const validate = (candidate: object | null): object | Promise<object> => {

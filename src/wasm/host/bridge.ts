@@ -36,7 +36,7 @@ const bitsOf = (m: MethodInfo, args: unknown[]): unknown[] => args.map((a, i) =>
 const javaResult = (m: MethodInfo, rk: Kind | "V", r: unknown): unknown => rk === "V" ? undefined : rk === "L" ? r : fromBits(r as number | bigint, m.ret);
 
 /** a new instance of class `cls`, initialized but not constructed */
-export const newInstance = (w: World, cls: string): object => w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
+export const newInstance = (w: World, cls: string): object => w.helpers.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
 
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
@@ -69,12 +69,12 @@ export class Bridge implements HostBridge {
   private get op() {
     if (this.ops) return this.ops;
     const w = this.w;
-    const alen = w.hostFn("b:alen", ["L"], "I", (cx, c) => {
+    const alen = w.helpers.hostFn("b:alen", ["L"], "I", (cx, c) => {
       for (const k of ELEM_KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
       c.i32(-1);
     });
     // acopy(array, pointer, toMemory, from, count): elements [from, from + count) of a primitive array to or from linear memory
-    const acopy = w.hostFn("b:acopy", ["L", "I", "I", "I", "I"], "V", (cx, c) => {
+    const acopy = w.helpers.hostFn("b:acopy", ["L", "I", "I", "I", "I"], "V", (cx, c) => {
       cx.scratch();
       for (const k of ["i8", "i16", "i32", "i64"] as const) {
         const t = cx.tArr[k], data = c.newLocal({ ht: cx.tData[k], nullable: true });
@@ -83,9 +83,9 @@ export class Bridge implements HostBridge {
         c.lget(2).if_(); copy(true); c.else_(); copy(false); c.end().ret().end();
       }
     });
-    const js = w.hostFn("b:js", ["L"], "L", (cx, c) => { c.lget(0); cx.str.toHost(c); c.anyConvertExtern(); });
-    const aget = w.hostFn("b:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); });
-    const aset = w.hostFn("b:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
+    const js = w.helpers.hostFn("b:js", ["L"], "L", (cx, c) => { c.lget(0); cx.str.toHost(c); c.anyConvertExtern(); });
+    const aget = w.helpers.hostFn("b:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); });
+    const aset = w.helpers.hostFn("b:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
     return this.ops = { alen, acopy, aget, aset, js };
   }
 
@@ -125,7 +125,7 @@ export class Bridge implements HostBridge {
     for (const [key, v] of Object.entries(stored)) {
       const [name, desc] = key.split(":"), f = this.w.prog.get(cls)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
       if (!f) continue;
-      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name, f.desc)); })(f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc));
+      this.w.helpers.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name, f.desc)); })(f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc));
     }
   }
 
@@ -173,7 +173,7 @@ export class Bridge implements HostBridge {
     let fn = this.accessors[op].get(f);
     if (fn) return fn;
     const same = this.w.prog.require(f.owner).fields.filter((x) => !x.isStatic && x.kind === f.kind), i = same.indexOf(f);
-    const any = this.w.hostFn(`b:${op}:${f.owner}:${f.kind}`, op === "get" ? ["L", "I"] : ["L", "I", f.kind], op === "get" ? f.kind : "V", (cx, c) => {
+    const any = this.w.helpers.hostFn(`b:${op}:${f.owner}:${f.kind}`, op === "get" ? ["L", "I"] : ["L", "I", f.kind], op === "get" ? f.kind : "V", (cx, c) => {
       const st = cx.structFor(f.owner);
       for (let k = 0; k <= same.length; k++) c.block();
       c.lget(1).brTable(same.map((_, k) => k), same.length);
@@ -276,7 +276,7 @@ export class Bridge implements HostBridge {
   /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
   private method(o: object, cls: string, mangled: string): Fn | undefined {
     const nd = demangle(mangled), impl = nd && this.w.prog.dispatchFor(cls, nd[0], nd[1]);
-    if (impl && failed(impl)) return () => this.w.hostFn("b:conflict:" + cls + "." + mangled, [], "V", (cx, c) => cx.linkError(c, impl))();
+    if (impl && failed(impl)) return () => this.w.helpers.hostFn("b:conflict:" + cls + "." + mangled, [], "V", (cx, c) => cx.linkError(c, impl))();
     return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
   }
   private callers = new WeakMap<MethodInfo, Caller>();
@@ -354,7 +354,7 @@ export class Bridge implements HostBridge {
   private staticAccessor(op: "get" | "set", f: FieldInfo): Fn {
     const cache = this.accessors[op === "get" ? "gets" : "sets"];
     let fn = cache.get(f);
-    if (!fn) cache.set(f, fn = this.w.hostFn(`b:${op}s:${f.owner}.${f.name}:${f.desc}`, op === "get" ? [] : [f.kind], op === "get" ? f.kind : "V", (cx, c) => {
+    if (!fn) cache.set(f, fn = this.w.helpers.hostFn(`b:${op}s:${f.owner}.${f.name}:${f.desc}`, op === "get" ? [] : [f.kind], op === "get" ? f.kind : "V", (cx, c) => {
       const g = cx.staticGlobal(f.owner, f.name, f.desc);
       if (op === "get") c.gget(g); else c.lget(0).gset(g);
     }));
@@ -366,7 +366,7 @@ export class Bridge implements HostBridge {
     const fail = (e: unknown): never => {
       const t = this.src?.thrown(e);
       if (!t) throw e;
-      const java = t.java ?? this.w.makeThrowable(t.cls, t.msg);
+      const java = t.java ?? this.w.helpers.makeThrowable(t.cls, t.msg);
       if (t.obj && !t.java) this.scoped(() => this.copyFields(t.obj as Record<string, unknown>, java, t.cls));
       throw this.w.exception(java);
     };
@@ -398,7 +398,7 @@ export class Bridge implements HostBridge {
     if (java) return java;
     const cls = this.src?.classOf?.(o);
     // a throwable a native raised without Java code (hostThrowable) becomes a Java one with its message
-    if (cls && o instanceof JThrowable) return this.w.makeThrowable(cls, o.msg);
+    if (cls && o instanceof JThrowable) return this.w.helpers.makeThrowable(cls, o.msg);
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
     throw new Error(`a native returned a host value of no Java class (${(o as { constructor?: { name?: string } }).constructor?.name}) where ${desc} was expected`);
   }
@@ -415,7 +415,7 @@ export class Bridge implements HostBridge {
     this.transfer(j, host.BYTES_PER_ELEMENT, this.bases.get(host) ?? 0, host.length, new Uint8Array(host.buffer, host.byteOffset, host.byteLength), !toJava);
   }
   private newArrayOf(name: string): Fn {
-    return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
+    return this.w.helpers.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
   }
   private newPrimArray(a: ArrayBufferView & { length: number }): object {
     const name = "[" + Object.entries(PRIMS).find(([, p]) => a instanceof p.array)![0], j = this.newArrayOf(name)(a.length);

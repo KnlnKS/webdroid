@@ -95,8 +95,8 @@ if (!await collected(await made())) fail("a host-made object and its Java object
 if (!await collected(await madeByJava())) fail("a Java-made object and its host object outlive their last reference");
 // The pending callFn path must release its result/throw globals after completion.
 async function madeByPendingBridge(thrown: boolean): Promise<WeakRef<object>[]> {
-  const java = thrown ? w.makeThrowable("java/lang/IllegalStateException", "lifetime") : w.bridge.toJava(new JCounter(), "Lwdtest/Counter;") as object;
-  const later = w.callFn("lifetime:" + thrown, ["L"], thrown ? "V" : "L", (cx, c, arg) => {
+  const java = thrown ? w.helpers.makeThrowable("java/lang/IllegalStateException", "lifetime") : w.bridge.toJava(new JCounter(), "Lwdtest/Counter;") as object;
+  const later = w.helpers.callFn("lifetime:" + thrown, ["L"], thrown ? "V" : "L", (cx, c, arg) => {
     emitBlock(cx, c, Block.Yield, null, null, () => c.i32(1)); c.drop(); arg(0);
     if (thrown) c.throw_(cx.tag);
   });
@@ -114,7 +114,7 @@ if (!await collected(await madeByPendingBridge(true))) fail("pending bridge reta
 // The World keeps the executable bridge, not the Compiler used to build it.
 async function bridgeCompiler(): Promise<WeakRef<object>[]> {
   const refs: WeakRef<object>[] = [];
-  const call = w.callFn("lifetime:compiler", [], "I", (_cx, c) => { c.i32(7); }, cx => refs.push(new WeakRef(cx)));
+  const call = w.helpers.callFn("lifetime:compiler", [], "I", (_cx, c) => { c.i32(7); }, cx => refs.push(new WeakRef(cx)));
   const strand = w.sched.strand();
   try { if (await call(strand) !== 7) fail("compiler lifetime bridge result"); }
   finally { strand.end(); }
@@ -138,8 +138,8 @@ if (await handleAfter("own")) fail("a handle stored in a field of a class that f
 if (!await handleAfter("plain")) fail("a handle stored in a field of a class that does not free it is released with the object");
 
 {
-  const callback = w.callFn("callback:context", [], "I", (_cx, c) => { c.i32(42); });
-  const lock = w.hostFn("callback:lock", [], "L", (cx, c) => cx.emitNew(c, "java/lang/Object"))() as object;
+  const callback = w.helpers.callFn("callback:context", [], "I", (_cx, c) => { c.i32(42); });
+  const lock = w.helpers.hostFn("callback:lock", [], "L", (cx, c) => cx.emitNew(c, "java/lang/Object"))() as object;
   const owner = w.sched.strand();
   w.sched.become(owner);
   const caller = rt.cur;
