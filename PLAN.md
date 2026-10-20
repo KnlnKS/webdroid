@@ -52,6 +52,13 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
+After the code-quality pass (2026-10-20, `06f79ff3a`; history, "Code-quality pass (2026-10-20)"): typecheck passes, along
+with 1,180 unit tests, all 16 `wasm all` suites, `fwtest` (31 of 31), desccheck (two baseline mismatches), `build:prod`
+and the Worker dry run. On an unprofiled build (`pnpm aot`) the `--jobs 1` quick gate reaches 7 of 7 flows in 160 s with
+no missing APIs, errors or required natives. Matched cold and warm `lat` passes against `c1354b8f7`, both sides built
+from the same `hot.json`, put every Calculator M, FitNotes and Komikku tap within 150 ms with first-frame medians
+within 3% of the base; Mihon's launch was unavailable on both sides.
+
 On `knlnks/perf-build-tier` after its review fixes (2026-10-20, `a217ecc3`): typecheck passes, along with 1,171 unit
 tests, `fwtest` (31 of 31) and all 16 `wasm all` suites. On build `9a68aa31` (`pnpm aot`, then `aot-profile`, whose
 first run lost Calculator's renderer once in its settled phase; the rerun was healthy), the `--jobs 1` quick gate
