@@ -7,28 +7,23 @@ import type { HostFn, HostSpec, NativeSource } from "../link/hostapi.ts";
 import { waitsEnded } from "../link/module.ts";
 import { Natives } from "./natives.ts";
 import { refOf } from "./bridge.ts";
-import { hostNatives } from "./hostnatives.ts";
 import { mayWait } from "./suspend.ts";
 
-export const lookup = (cls: string, key: string, isStatic: boolean) => {
-  const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key], id = cls + "." + key;
-  const own = (typeof spec === "function" ? spec : typeof spec === "string" ? owner!.ctor.prototype[spec] : undefined) as HostFn | undefined;
+const lookup = (cls: string, key: string, isStatic: boolean): HostFn | undefined => {
+  const own = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key] as HostFn | undefined;
   // a registered JNI function is tracked already; a spec's placeholder is recorded here
-  return hostNatives.get(id) ?? (own ? rt.trackPlaceholder(id, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined);
+  return own ? rt.trackPlaceholder(cls + "." + key, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined;
 };
-/** the values of natives that read the ICU data asynchronously, resolved once before they run (a native cannot suspend yet) */
-export const settled = new Map<string, unknown>();
 /** a registered class, which the host implements */
 export const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
-  fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
+  fields: Object.entries(spec.fields ?? {}),
 });
 export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
     if (cls === "java/lang/String") { const f = stringMethods.get(key) as HostFn | undefined; if (f || hasBody) return f; }
-    if (settled.has(cls + "." + key)) return () => settled.get(cls + "." + key);
     if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return () => {};
     const own = lookup(cls, key, isStatic);
     if (own || hasBody) return own;
@@ -61,7 +56,6 @@ export function waitingNatives(): string[] {
   const ids = new Set<string>();
   const add = (id: string, fn: unknown) => { if (typeof fn === "function" && mayWait(fn as HostFn)) ids.add(id); };
   for (const [key, fn] of rt.jni) add(key.replace("|", "."), fn);
-  for (const [cls, spec] of rt.natives) for (const [key, impl] of Object.entries(spec.methods ?? {})) add(`${cls}.${key.replace(/^static /, "")}`, typeof impl === "string" ? spec.ctor.prototype[impl] : impl);
-  for (const [id, fn] of hostNatives) add(id, fn);
+  for (const [cls, spec] of rt.natives) for (const [key, impl] of Object.entries(spec.methods ?? {})) add(`${cls}.${key.replace(/^static /, "")}`, impl);
   return [...ids].sort();
 }

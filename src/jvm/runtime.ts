@@ -20,11 +20,11 @@ export interface NativeSpec {
   sup?: string;
   ifaces?: string[];
   ctor: new (...args: any[]) => object;
-  /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) or alias to prototype prop */
-  methods?: Record<string, ((...a: never[]) => unknown) | string>;
+  /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) */
+  methods?: Record<string, (...a: never[]) => unknown>;
   statics?: Record<string, unknown>;
   /** java-visible public instance fields: java name → JS property name on the TS class */
-  fields?: Record<string, string> | string[];
+  fields?: Record<string, string>;
   /** the platform class's `<clinit>` runs at init, so its statics are the platform's */
   platformClinit?: boolean;
 }
@@ -103,11 +103,13 @@ export class Runtime {
       input = value; threw = false;
     }
   }
+  /** a class the host implements, once */
   register(spec: NativeSpec) {
     if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
       if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
       return;
     }
+    if (this.natives.has(spec.name)) throw new Error(`${spec.name} is registered twice`);
     this.natives.set(spec.name, spec);
     this.registered?.(spec);
   }
@@ -118,8 +120,10 @@ export class Runtime {
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
-  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) {
+  /** `replace`: `fn` replaces the native registered before (JNI's RegisterNatives does), which is otherwise a conflict */
+  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown, replace = false) {
     const key = cls + "|" + sig;
+    if (!replace && this.jni.has(key)) throw new Error(`${cls}.${sig} is registered twice`);
     this.jni.set(key, this.trackPlaceholder(`${cls}.${sig}`, fn, (f) => { if (this.jni.get(key) === f) this.jni.set(key, fn); }));
   }
   /** register the native halves of one class, by their exact descriptors */

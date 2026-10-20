@@ -1,5 +1,6 @@
 // Registered TS descriptors that AOSP does not declare: every native spec method must exist on
-// its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
+// its class or an AOSP supertype with the same name, descriptor and staticness, every String
+// method implemented over JS strings must be an instance method of String, and every JNI
 // delegate must be a native method its class declares. A spec method standing in for an AOSP
 // bytecode body is a reimplementation (docs/architecture.md) unless provenance's TS_SPECS allows its class.
 //   pnpm desccheck [--write-baseline]
@@ -11,9 +12,10 @@ import { descToName } from "../src/jvm/abi.ts";
 import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
 import { jarDexes } from "../src/android/framework.ts";
 import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
+import { stringMethods } from "../src/jvm/natives/jstring.ts";
 import "../src/natives.ts";
 
-const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
+const NO_INDEX = 0xffffffff, PRIVATE = 0x2, STRING = "java/lang/String";
 /** a method declaration: its access flags, and whether it has a bytecode body */
 type Declared = { flags: number; hasCode: boolean };
 const aosp = (jar: string) => resolve(import.meta.dirname, "../vendor/aosp", jar);
@@ -87,6 +89,11 @@ export function descriptorMismatches(): Map<string, string[]> {
       else if (!!(found.flags & ACC.STATIC) !== isStatic) report(spec.name, `${isStatic ? "static" : "instance"} ${sig} is ${isStatic ? "instance" : "static"} in AOSP`);
       else if (found.hasCode && tsSpecViolation(spec.name, true)) report(spec.name, `reimplements ${key}`);
     }
+  }
+  for (const sig of stringMethods.keys()) {
+    const found = resolve(STRING, sig);
+    if (!found) report(STRING, "string " + missing(STRING, sig, sig));
+    else if (found.flags & ACC.STATIC) report(STRING, `string ${sig} is static in AOSP`);
   }
   for (const key of rt.jni.keys()) {
     const [cls, sig] = key.split("|");

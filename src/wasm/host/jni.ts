@@ -164,7 +164,7 @@ export function wasmJni(w: World): JniVm {
       const critical = m.isStatic && !!jc.dex?.classAnnotations(jc.def!).methods.get(m.methodIdx)?.some((a) => a.type === "dalvik/annotation/optimization/CriticalNative");
       return { isStatic: m.isStatic, critical };
     },
-    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + view(c, sig), entry); },
+    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + view(c, sig), entry, true); },
 
     string: (js) => w.javaString(js),
     chars: (s) => bridge.toHost(s) as string,

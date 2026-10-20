@@ -18,8 +18,8 @@ export function nativeMethodSupport(runtime: Runtime, key: string): NativeSuppor
   const [cls, signature] = splitMember(key);
   let fn: unknown = runtime.jniFn(cls, signature);
   for (let c: string | undefined = cls; !fn && c; c = runtime.natives.get(c)?.sup) {
-    const spec = runtime.natives.get(c), impl = spec?.methods?.[signature] ?? spec?.methods?.["static " + signature];
-    fn = typeof impl === "string" ? spec!.ctor.prototype[impl] : impl;
+    const methods = runtime.natives.get(c)?.methods;
+    fn = methods?.[signature] ?? methods?.["static " + signature];
   }
   return typeof fn !== "function" ? "missing" : isPlaceholderMethod(fn) ? "placeholder" : "delegate";
 }
@@ -28,8 +28,7 @@ export function nativeFieldSupport(runtime: Runtime, key: string): NativeSupport
   const [cls, name] = splitMember(key);
   const spec = runtime.natives.get(cls);
   if (!spec) return "missing";
-  const fields = Array.isArray(spec.fields) ? spec.fields : Object.keys(spec.fields ?? {});
-  return name in (spec.statics ?? {}) || fields.includes(name) ? "delegate" : "missing";
+  return name in (spec.statics ?? {}) || name in (spec.fields ?? {}) ? "delegate" : "missing";
 }
 
 export const rankCalls = (calls: Map<string, number>, keep: (key: string) => boolean): [string, number][] =>

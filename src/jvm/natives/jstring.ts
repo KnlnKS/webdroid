@@ -10,7 +10,10 @@ import { after, linkInit, scall, vcall } from "./jentry.ts";
 
 /** String's methods implemented here, by `name(desc)` */
 export const stringMethods = new Map<string, (this: string, ...a: any[]) => unknown>();
-const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => { stringMethods.set(sig, fn); };
+const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => {
+  if (stringMethods.has(sig)) throw new Error(`String.${sig} is registered twice`);
+  stringMethods.set(sig, fn);
+};
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }

@@ -1,7 +1,7 @@
 // java.lang's natives: System's clocks and properties, Runtime's library loading and memory, and the process a fork would make.
 // Java booleans are 0/1 numbers, longs are BigInt.
 
-import { awaited, rt, type Gen } from "../runtime.ts";
+import { awaited, driven, rt, type Gen } from "../runtime.ts";
 import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
@@ -123,3 +123,18 @@ rt.registerJnis("java/lang/Runtime", {
 rt.registerJni("dalvik/system/VMStack", "getClosestUserClassLoader()Ljava/lang/ClassLoader;", () => rt.userClassLoader());
 // libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock
 rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);
+
+/** Class.getPublicFieldRecursive, as ART searches: the public fields the class declares, then its interfaces', then its superclass's */
+function* publicField(cls: object, name: string): Gen<object | null> {
+  const fields = yield* awaited<object[]>(vcall(cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;"));
+  for (const f of fields) {
+    const modifiers = yield* awaited<number>(vcall(f, "getModifiers", "()I"));
+    if (modifiers & 1 && (yield* awaited<string>(vcall(f, "getName", "()Ljava/lang/String;"))) === name) return f;
+  }
+  const interfaces = yield* awaited<object[]>(vcall(cls, "getInterfaces", "()[Ljava/lang/Class;"));
+  for (const i of interfaces) { const f = yield* publicField(i, name); if (f) return f; }
+  const sup = yield* awaited<object | null>(vcall(cls, "getSuperclass", "()Ljava/lang/Class;"));
+  return sup && (yield* publicField(sup, name));
+}
+rt.registerJni("java/lang/Class", "getPublicFieldRecursive(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+  driven(function* (this: object, name: string): Gen<object | null> { return yield* publicField(this, name); }));

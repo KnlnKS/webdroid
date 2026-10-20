@@ -13,7 +13,6 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
-import { hostNatives } from "../../src/wasm/host/hostnatives.ts";
 import { SERVICES } from "../../src/wasm/host/suspend.ts";
 import { waitingNatives } from "../../src/wasm/host/nativesource.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
@@ -35,7 +34,7 @@ const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(joi
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
-  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...[SERVICES, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });

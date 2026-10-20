@@ -8,7 +8,8 @@ import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
-import { lookup, natives, nativeSource, settled } from "../../src/wasm/host/nativesource.ts";
+import { natives, nativeSource } from "../../src/wasm/host/nativesource.ts";
+import { rt } from "../../src/jvm/runtime.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
@@ -49,7 +50,10 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
   icu.addExterns(externs);
   // the natives are called as host code, on a World of the ICU jars: none of a harness's Worlds sees them run
   world(icu, { natives, aot: undefined });
-  for (const [cls, key] of ICU_VERSIONS) { const f = lookup(cls, key, true); if (f) settled.set(cls + "." + key, await f.call(null)); }
+  for (const [cls, key] of ICU_VERSIONS) {
+    const f = rt.jniFn(cls, key);
+    if (f) { const value = await f.call(null); rt.registerJni(cls, key, () => value, true); }
+  }
   return jars;
 }
 

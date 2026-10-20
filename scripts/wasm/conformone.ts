@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";
 import { vcall } from "../../src/jvm/natives/jentry.ts";
-import { extraBootEntries } from "../../src/wasm/host/hostnatives.ts";
+import { extraBootEntries } from "../../src/jvm/natives/jvmruntime.ts";
 import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
 import { world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";

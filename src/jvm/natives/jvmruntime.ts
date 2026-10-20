@@ -5,6 +5,7 @@ import { libraryAbi } from "./jlang.ts";
 import { ABIS_32 } from "../../shell/properties.ts";
 import { device } from "../../shell/config.ts";
 import { BOOT_JAR_PATHS } from "../bootclasspath.ts";
+import { handle } from "../../android/handles.ts";
 
 const is32Bit = (names: Iterable<string>) => ABIS_32.includes(libraryAbi(names) ?? "");
 let wide: boolean | null = null, bitnessFixed!: () => void;
@@ -53,7 +54,13 @@ rt.registerJnis("dalvik/system/VMRuntime", {
   "classPath()Ljava/lang/String;": () => ".",
   "vmVersion()Ljava/lang/String;": () => "2.1.0",
   "properties()[Ljava/lang/String;": () => jarray([`user.locale=${device.locale}`], "Ljava/lang/String;"),
+  // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (wasm/host/bridge.ts)
+  "addressOf(Ljava/lang/Object;)J": Object.assign((array: object) => handle(array), { javaValues: true }),
 });
+/** archives the host adds to the boot class path after the platform's, for the resources of classes it runs on it (conformance suites) */
+export const extraBootEntries: string[] = [];
+// the archives of the boot class path, which BootClassLoader looks resources up in
+rt.registerJni("java/lang/VMClassLoader", "getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS, ...extraBootEntries], "Ljava/lang/String;"));
 
 // what ActivityThread tells ART about the process, and the heap and JIT controls it uses: the JS
 // engine owns the heap, the JIT and the scheduling, so these only record or answer ART's defaults
