@@ -13,7 +13,6 @@
 // so its first match in ICU's search order uses the sentinel exactly when the flag was set.
 
 import { rt, driven, type Gen } from "../runtime.ts";
-import { jarray } from "../abi.ts";
 import { javaClassSets } from "../regex-sets.ts";
 import { newObj } from "./jentry.ts";
 import { handle, deref, release } from "../../android/handles.ts";
@@ -672,34 +671,4 @@ export function stringReplace(s: string, source: string, replacement: string, al
     for (const part of parts) out += typeof part === "string" ? part : match[part] ?? "";
     return out;
   });
-}
-
-const LITERAL = /^[^\\[\](){}.*+?^$|]+$/;
-export function stringSplit(s: string, source: string, limit: number): string[] | Promise<never> {
-  const parts: string[] = [];
-  let end = 0;
-  // String.split's fastpath also takes an escaped non-alphanumeric character
-  const literal = source.length === 2 && source[0] === "\\" ? (/[^0-9A-Za-z]/.test(source[1]) ? source[1] : null) : LITERAL.test(source) ? source : null;
-  if (literal !== null) {
-    for (let at; (limit <= 0 || parts.length < limit - 1) && (at = s.indexOf(literal, end)) >= 0; end = at + literal.length) parts.push(s.slice(end, at));
-  } else {
-    const p = stringPattern(source);
-    if (p instanceof Promise) return p;
-    const re = p.all;
-    re.lastIndex = 0;
-    for (let m; (limit <= 0 || parts.length < limit - 1) && (m = re.exec(s));) {
-      const at = m.index, length = m[0].length;
-      if (!length) {
-        re.lastIndex = nextIndex(s, at);
-        // a zero-width match at the start gives no leading empty string
-        if (!at) continue;
-      }
-      parts.push(s.slice(end, at));
-      end = at + length;
-    }
-  }
-  if (!end) return jarray([s], "Ljava/lang/String;");
-  parts.push(s.slice(end));
-  if (!limit) while (parts.length && !parts[parts.length - 1]) parts.pop();
-  return jarray(parts, "Ljava/lang/String;");
 }

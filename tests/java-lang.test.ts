@@ -57,6 +57,22 @@ describe("regex", () => {
     await expect(vcallAsync("abc", "replaceAll", `(${S}${S})${S}`, "b", "$2")).rejects.toBeDefined();
   });
 
+  test("String's matches, replaceAll and replaceFirst answer as the Pattern and Matcher of their AOSP bodies", async () => {
+    const S = "Ljava/lang/String;", CS = "Ljava/lang/CharSequence;";
+    const outcome = (call: () => unknown) => Promise.resolve().then(call).then((v) => v, () => "throws");
+    const cases: [string, string, string][] = [["a\nb", ".", "x"], ["a1b22c333", "\\d+", "<$0>"], ["a1b2", "(?<d>\\d)", "[${d}\\$\\\\]"], ["aaa", "a*", "-"],
+      ["x😀y", "", "|"], ["Hello World", "(?i)o", "0"], ["abc", "b", "$2"], ["abc", "b", "\\"], ["l1\r\nl2\n", "$", "!"], ["ab12", "(\\w)(\\d)", "$2$1"], ["a+b", "[", "x"]];
+    for (const [s, regex, replacement] of cases) {
+      const matcher = async () => vcall(await compile(regex), "matcher", `(${CS})Ljava/util/regex/Matcher;`, s);
+      expect([s, regex, await outcome(() => vcall(s, "matches", `(${S})Z`, regex))])
+        .toEqual([s, regex, await outcome(() => scall("java/util/regex/Pattern", "matches", `(${S}${CS})Z`, regex, s))]);
+      for (const name of ["replaceAll", "replaceFirst"]) {
+        expect([s, regex, name, await outcome(() => vcall(s, name, `(${S}${S})${S}`, regex, replacement))])
+          .toEqual([s, regex, name, await outcome(async () => vcall(await matcher(), name, `(${S})${S}`, replacement))]);
+      }
+    }
+  });
+
   test("atomic groups commit alternatives and hide internal captures", async () => {
     const matcher = async (pattern: string, input: string) => vcall(await compile(pattern), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
     expect(await vcall(await matcher("^(?>a+)a$", "aaa"), "matches", "()Z")).toBe(0);
