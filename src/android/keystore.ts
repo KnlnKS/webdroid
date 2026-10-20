@@ -21,6 +21,7 @@ import {
 } from "../jvm/natives/pkey.ts";
 import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
 import type { PackageState } from "../shell/packagedata.ts";
+import { persisted } from "../shell/device-storage.ts";
 
 // KeyMint's constants (android.hardware.security.keymint)
 const TAG = {
@@ -85,31 +86,20 @@ const encodeParam = (p: Param): [number, number, string] =>
   [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
-const storeKey = (uid = PROCESS_UID) => "wd:keystore2:" + uid;
+const savedEntries = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
 /** AppDataHelper.clearKeystoreData: every key of the app's uid */
 export const keystoreData: PackageState = {
-  clear(_pkg, uid) {
-    if (uid !== undefined) try { globalThis.localStorage?.removeItem(storeKey(uid)); } catch { /* storage can be unavailable */ }
-  },
+  clear(_pkg, uid) { if (uid !== undefined) savedEntries.remove(String(uid)); },
 };
-let cache: { raw: string | null; entries: Entry[] } = { raw: null, entries: [] };
+/** the entries, kept for this session where storage is unavailable; a corrupt store is empty */
+let session: Entry[] = [];
 function entries(): Entry[] {
-  let raw: string | null = null;
-  try {
-    if (!globalThis.localStorage) return cache.entries;
-    raw = globalThis.localStorage.getItem(storeKey());
-  } catch { return cache.entries; }
-  if (raw !== cache.raw) {
-    let parsed: Entry[] = [];
-    try { parsed = raw ? JSON.parse(raw) : []; } catch { /* corrupt: an empty keystore */ }
-    cache = { raw, entries: parsed };
-  }
-  return cache.entries;
+  const saved = savedEntries.get(String(PROCESS_UID));
+  return saved === undefined ? session : saved ?? [];
 }
 function save(list: Entry[]) {
-  const raw = JSON.stringify(list);
-  cache = { raw, entries: list };
-  try { globalThis.localStorage?.setItem(storeKey(), raw); } catch { /* quota: kept for this session */ }
+  session = list;
+  savedEntries.set(String(PROCESS_UID), list);
 }
 const newId = () => BigInt.asIntN(64, bytesToBig(crypto.getRandomValues(new Uint8Array(8)))).toString();
 

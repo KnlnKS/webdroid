@@ -24,7 +24,7 @@ export function provisionPackages(): Promise<void> {
     for (const name of spec.disabledComponents) {
       if (!Object.values(record.components).some(components => components.has(name))) throw new Error("Provisioned component unavailable: " + name);
       const component = { pkg: record.pkg, cls: name };
-      if (globalThis.localStorage?.getItem(componentState.key(component)) === null) componentState.set(component, 2);
+      if (componentState.get(component) === null) componentState.set(component, 2);
     }
     for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }
     for (const permission of spec.defaultGrants) record.grants.add(permission);

@@ -7,11 +7,10 @@
 import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry.ts";
 import { callingIdentity, parceledList, hostStub, serviceContext } from "./binder.ts";
-import { packages } from "./packages.ts";
+import { ownedBy, GET_META_DATA, MATCH_DIRECT_BOOT_AWARE, MATCH_DIRECT_BOOT_UNAWARE } from "./packages.ts";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";
-const GET_META_DATA = 0x80, MATCH_DIRECT_BOOT_AWARE = 0x40000, MATCH_DIRECT_BOOT_UNAWARE = 0x80000;
 
 /** R.styleable.AppWidgetProviderInfo: [index, field, kind, default] in parseAppWidgetProviderInfo's order */
 const ATTRIBUTES: [number, string, "dimension" | "int" | "resource", number | string][] = [
@@ -80,7 +79,7 @@ function* installedProviders(): Gen<JObj[]> {
 }
 /** AppWidgetServiceImpl.enforceCallFromPackage */
 function enforceCallFromPackage(pkg: string): void {
-  if (packages.get(pkg)?.uid !== callingIdentity().uid) throw rt.mkThrowable("java/lang/SecurityException", `Package ${pkg} does not belong to ${callingIdentity().uid}`);
+  if (!ownedBy(pkg, callingIdentity().uid)) throw rt.mkThrowable("java/lang/SecurityException", `Package ${pkg} does not belong to ${callingIdentity().uid}`);
 }
 
 const enforceProviderPackage = driven(function* (provider: JObj): Gen<void> {

@@ -17,7 +17,7 @@ import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
 import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
-import { scheduleOnApp, compatInfo, pms, runsHere, GET_SHARED_LIBRARY_FILES } from "./am.ts";
+import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./am.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
 import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords.ts";
 
@@ -57,7 +57,7 @@ const starts = () => serviceTransport.starts();
 
 interface Target { info: JObj; name: JObj; pkg: string; process: string }
 function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null> {
-  const resolved = yield vcall(yield* awaited(pms()), "resolveService", `(${INTENT}Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;`, intent, resolvedType, GET_SHARED_LIBRARY_FILES, 0);
+  const resolved = yield vcall(yield* awaited(pms()), "resolveService", `(${INTENT}Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;`, intent, resolvedType, STOCK_PM_FLAGS, 0);
   const info = resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "serviceInfo");
   if (!info) return null;
   const pkg = getDeclared<string>(info, SI, "packageName");

@@ -203,12 +203,12 @@ describe("package-intent-filters", () => {
     ] }] };
     packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
     try {
-      const { resolveActivity } = await import("../src/android/pm.ts");
+      const pms = await hostedService("package");
       const resolve = async (url: string) => {
         const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", "android.intent.action.VIEW", await mkUri(url));
         await vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
-        const match = await resolveActivity(intent);
-        return match && match !== "system" ? match.name : null;
+        const info: JObj | null = await vcall(pms, "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, 0x10000n, 0);
+        return info && getDeclared<string>(getDeclared<JObj>(info, "android/content/pm/ResolveInfo", "activityInfo"), "android/content/pm/ActivityInfo", "name");
       };
       expect(await resolve("https://www.example.com/item/7")).toBe(pkg + ".Glob");
       expect(await resolve("https://www.example.com/blocked?x=1")).toBeNull();
@@ -223,9 +223,13 @@ describe("package-permissions", () => {
 
   test("PackageInfo aligns requested permission flags with actual package grants", async () => {
     const pkg = "test.permissions", denied = "test.permissions.SIGNATURE";
+    const int = (name: string, data: number): XmlAttr => ({ name, str: null, ns: "", resId: 0, type: TV.INT_DEC, data });
     const root: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
+      { name: "uses-sdk", attrs: [int("targetSdkVersion", 35)], children: [] },
       { name: "application", attrs: [], children: [] },
       ...["android.permission.INTERNET", denied].map(name => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
+      // requested only through API 28
+      { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
     const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
     packages.set(pkg, record); signaturePermissions.add(denied);

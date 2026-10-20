@@ -4,12 +4,12 @@
 // will carry, and a crash within MIN_CRASH_INTERVAL of the process's last one repeats, which shows
 // the crash dialog (a first crash shows none).
 import { onProcessExit, type ExitStatus } from "../../process-exit.ts";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os.ts";
+import { PROCESS_PID, PROCESS_UID, processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { foreground } from "./atm.ts";
 import { logLine } from "../../native/libc.ts";
-import { storedPackages } from "../packages.ts";
+import { persisted } from "../../shell/device-storage.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
@@ -38,20 +38,14 @@ const crashedRecently = (pkg: string, process: string, now: number): boolean => 
   return !!last && now - last.timestamp < MIN_CRASH_INTERVAL_MS;
 };
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
-const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
+/** this process's RunningAppProcessInfo importance: foreground while it is in front, else cached */
+export const processImportance = (): number => foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED;
+const savedRecords = persisted("wd:exit-info:", (saved) => Array.isArray(saved) ? saved as ExitRecord[] : null);
 
 /** the packages with records, which AppExitInfoTracker.onPackageRemoved drops */
-export const exitRecordData: PackageState = {
-  remove(pkg) { try { globalThis.localStorage?.removeItem(storageKey(pkg)); } catch { /* storage can be unavailable */ } },
-  packages: () => storedPackages(PREFIX),
-};
+export const exitRecordData: PackageState = { remove: (pkg) => savedRecords.remove(pkg), packages: () => savedRecords.packages() };
 /** a package's records, newest first */
-export function exitRecords(pkg: string): ExitRecord[] {
-  try {
-    const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(storageKey(pkg)) ?? "[]");
-    return Array.isArray(saved) ? saved as ExitRecord[] : [];
-  } catch { return []; }
-}
+export const exitRecords = (pkg: string): ExitRecord[] => savedRecords.get(pkg) ?? [];
 /** Workers query/publish through the page owner; no localStorage replica is authoritative. */
 export const exitRecordTransport: {
   records?: (pkg: string) => Promise<ExitRecord[]>;
@@ -66,11 +60,9 @@ export function recordRemoteExit(record: ExitRecord): ExitRecord {
   return canonical;
 }
 function save(record: ExitRecord): void {
-  try { globalThis.localStorage?.setItem(storageKey(record.pkg), JSON.stringify([record, ...exitRecords(record.pkg)].slice(0, HISTORY))); }
-  catch (error) { console.warn("[AppExitInfoTracker] not persisted", error); }
+  if (!savedRecords.set(record.pkg, [record, ...exitRecords(record.pkg)].slice(0, HISTORY))) console.warn("[AppExitInfoTracker] not persisted");
 }
 
-const processName = () => PROCESS_NAME || appHost?.pkg || "";
 /** the reason a kill noted, which the process's death then carries (ProcessList.noteAppKill) */
 let noted: { reason: number; description: string; dialog: boolean } | null = null;
 /** IActivityManager.setProcessStateSummary's bytes, recorded with the exit */
@@ -120,7 +112,7 @@ function recordExit(status: ExitStatus): void {
     pid: PROCESS_PID, uid: PROCESS_UID, process: processName(), pkg: appHost?.pkg ?? processName(), reason,
     // a Java crash keeps no status; the others carry the exit code or the signal
     status: reason === REASON_CRASH ? 0 : status.code ?? status.signal,
-    importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED, timestamp: wallMillis(),
+    importance: processImportance(), timestamp: wallMillis(),
     description: noted?.description ?? null, state: stateSummary && stateSummary.toBase64(),
     tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
     ...(fatalCrash ? {crash:copyCrashInfo(fatalCrash)} : {}),

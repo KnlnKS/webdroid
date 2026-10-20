@@ -15,10 +15,10 @@ import { appHost } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
 import { grantResultUris } from "../urigrants.ts";
 import { attached, thisApp, userLaunched, pms, runsHere } from "./am.ts";
+import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
-const GET_META_DATA = 0x80n, MATCH_DEFAULT_ONLY = 0x10000n;
 
 /** a start in another process, and the result target there when it asked for one */
 export type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
@@ -56,8 +56,8 @@ export const PROCESS_STATE_SERVICE = 10, PROCESS_STATE_RECEIVER = 11;
 export const foreground = (): boolean => stack.some((r) => r.state === "resumed");
 export const processState = (component: number): number => foreground() ? PROCESS_STATE_TOP : component;
 /** PackageManager.resolveIntent's activity */
-function* resolveActivity(intent: JObj, resolvedType: string | null, flags: bigint): Gen<JObj | null> {
-  const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, resolvedType, flags, 0);
+function* resolveActivity(intent: JObj, resolvedType: string | null, flags: number): Gen<JObj | null> {
+  const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, resolvedType, BigInt(flags), 0);
   return resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "activityInfo");
 }
 const activityClientController = once(() => newObj("webdroid/ActivityClientController"));
@@ -379,7 +379,7 @@ export const coverTop = driven(function* (): Gen<void> {
 /** the broker's launch of one of this process's activities for another process */
 export const startActivityInProcess = driven(function* (component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Gen<void> {
   const name = yield* awaited(mkComponentName(appHost!.pkg, component.replaceAll("/", ".")));
-  const info = yield vcall(yield* awaited(pms()), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
+  const info = yield vcall(yield* awaited(pms()), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, BigInt(GET_META_DATA), 0);
   if (!info) throw new Error("Activity not installed: " + component);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
   yield* startActivity(thisApp(), intent, info, null, null, -1, { id: remoteId, caller });

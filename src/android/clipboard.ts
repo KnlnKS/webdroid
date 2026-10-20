@@ -2,7 +2,7 @@
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { parcelledWithRights, releaseRights, unparcelled, type ParcelData } from "./binder.ts";
+import { parcelled, releaseRights, unparcelled, type ParcelData } from "./binder.ts";
 import { processRights } from "../native/process-fd.ts";
 import { postMain } from "./mainloop.ts";
 
@@ -32,7 +32,7 @@ rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, su
   // ClipboardService stamps the clip as copied now
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    const data=yield* awaited(parcelledWithRights(clip,processRights));
+    const data=yield* awaited(parcelled(clip,processRights));
     try {yield* awaited(clipboardTransport.set(data));}
     finally {yield* awaited(releaseRights(data,processRights,true));}
   }),

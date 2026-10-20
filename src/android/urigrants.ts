@@ -5,35 +5,29 @@ import { type JUri, mkUri, uriText, clipUris } from "./net.ts";
 import { PROCESS_UID } from "./os.ts";
 import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { packages } from "./packages.ts";
+import { ownedBy } from "./packages.ts";
 import type { PackageState } from "../shell/packagedata.ts";
+import { persisted } from "../shell/device-storage.ts";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
-const grantsKey = (pkg: string) => "wd:install:" + pkg + ":uriperms";
+const savedGrants = persisted("wd:install:", (saved) => Array.isArray(saved) ? saved.flatMap((entry): PersistedUriGrant[] => {
+  if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
+  if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
+    "flags" in entry && typeof entry.flags === "number")
+    return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
+  return [];
+}) : null);
+const grantsKey = (pkg: string) => pkg + ":uriperms";
 /** removeUriPermissionsForPackage's persisted share: the grants the package holds, which a clear
  *  that keeps the package's state keeps */
 export const uriGrantData: PackageState = {
-  clear(pkg, _uid, how) {
-    if (!how.keepState) try { globalThis.localStorage?.removeItem(grantsKey(pkg)); } catch { /* storage can be unavailable */ }
-  },
+  clear(pkg, _uid, how) { if (!how.keepState) savedGrants.remove(grantsKey(pkg)); },
 };
 const uriGrants = {
   key: () => grantsKey(appHost?.pkg ?? ""),
-  all(): PersistedUriGrant[] {
-    try {
-      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]");
-      if (!Array.isArray(saved)) return [];
-      return saved.flatMap((entry) => {
-        if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
-        if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
-          "flags" in entry && typeof entry.flags === "number")
-          return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
-        return [];
-      });
-    } catch { return []; }
-  },
-  set(v: PersistedUriGrant[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
+  all: (): PersistedUriGrant[] => savedGrants.get(uriGrants.key()) ?? [],
+  set: (v: PersistedUriGrant[]) => savedGrants.set(uriGrants.key(), v),
 };
 const transientUriGrants = new Map<string, Map<string, number>>();
 const grantedUri = (target: string, granted: string, flags: number) =>
@@ -75,7 +69,7 @@ export function checkUriPermission(u: string, uid: number, modes: number): numbe
   if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
     grantedUri(u, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
   for (const pkg of transientUriGrants.keys()) {
-    if (packages.get(pkg)?.uid !== uid) continue;
+    if (!ownedBy(pkg, uid)) continue;
     if ((transientFlags(pkg, u) & requested) === requested) return 0;
   }
   return -1;

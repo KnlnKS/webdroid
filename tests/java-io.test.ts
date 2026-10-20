@@ -1,7 +1,7 @@
 import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { mkPfd, pfdBackingBytes, fdContents, ashmemFd } from "../src/android/os.ts";
-import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder.ts";
+import { parcelled, unparcelled, exportParcel, importParcel, copyParcelable } from "../src/android/binder.ts";
 import { StoredParcel } from "../src/shell/stored-parcel.ts";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel.ts";
 import { handle, release as releaseHandle, take } from "../src/android/handles.ts";
@@ -148,7 +148,7 @@ describe("file-descriptor", () => {
       descriptorTransport.calls=()=>proxies[0].endpoint;
       const fd=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",path,2,0);
       const pfd=await newObj("android/os/ParcelFileDescriptor","(Ljava/io/FileDescriptor;)V",fd);
-      try {stored=await StoredParcel.retain(kernel,1001,await parcelledWithRights(pfd,processRights));}
+      try {stored=await StoredParcel.retain(kernel,1001,await parcelled(pfd,processRights));}
       finally {await vcall(pfd,"close","()V");}
       kernel.close(1001);descriptorTransport.calls=()=>proxies[1].endpoint;
       for(let i=0;i<2;i++) {
@@ -189,7 +189,7 @@ describe("file-descriptor", () => {
       const decoded = await vcall(lazy, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
       duplicate = await vcall(decoded, "dup", "()Landroid/os/ParcelFileDescriptor;");
       const rights = kernel.rights(1001);
-      stored = await StoredParcel.retain(kernel, 1001, await parcelledWithRights(lazy, rights));
+      stored = await StoredParcel.retain(kernel, 1001, await parcelled(lazy, rights));
       scope.close(); scope.close();
       expect(file.references).toBe(2);
       expect(fdInt(await vcall(duplicate, "getFileDescriptor", FD))).toBe(-1);
@@ -197,7 +197,7 @@ describe("file-descriptor", () => {
       expect(file.references).toBe(1);
       const recipientScope = new FdScope();
       try {
-        const replayed = await stored.readLocal(1002, (data, rights) => unparcelledScoped("android/os/Bundle", data, recipientScope, rights));
+        const replayed = await stored.readLocal(1002, (data, rights) => unparcelled("android/os/Bundle", data, rights, recipientScope));
         recipient = await vcall(replayed, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
         recipientScope.transfer();
       } finally { recipientScope.close(); }
@@ -228,13 +228,13 @@ describe("file-descriptor", () => {
       for (const key of ["a", "b"]) await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", key, pfd);
       let stages = 0;
       const rights = { ...kernel.rights(1001), stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.stageLocal(1001, n); } };
-      await expect(Promise.resolve(parcelledWithRights(bundle, rights))).rejects.toThrow("stage failure");
+      await expect(Promise.resolve(parcelled(bundle, rights))).rejects.toThrow("stage failure");
       expect(file.references).toBe(1);
-      const data = await parcelledWithRights(bundle, { ...rights, stage: (n: number) => kernel.stageLocal(1001, n) });
+      const data = await parcelled(bundle, { ...rights, stage: (n: number) => kernel.stageLocal(1001, n) });
       data.bytes[4] = 0; // Corrupt Bundle's magic so its real CREATOR rejects the imported rights.
       stored = await StoredParcel.retain(kernel, 1001, data);
       let failed = false;
-      try { await stored.readLocal(1002, (data, rights) => unparcelledScoped("android/os/Bundle", data, scope, rights)); }
+      try { await stored.readLocal(1002, (data, rights) => unparcelled("android/os/Bundle", data, rights, scope)); }
       catch { failed = true; }
       expect(failed).toBe(true);
       scope.close(); await stored.close();
@@ -404,7 +404,7 @@ describe("file-descriptor", () => {
         const original=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",renamed,2,0);
         const outgoing=await scall("android/os/Parcel","obtain","()Landroid/os/Parcel;");
         await vcall(outgoing,"writeFileDescriptor","(Ljava/io/FileDescriptor;)V",original);
-        const data=await exportBinderParcel(nativeParcel(outgoing));
+        const data=await exportParcel(nativeParcel(outgoing),processRights);
         await vcall(outgoing,"recycle","()V");
         const right=data.objects[0]![1];
         if(!right || !("descriptor" in right))throw new Error("canonical Binder right missing");

@@ -23,7 +23,10 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages.ts";
+import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind,
+  GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
+  GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
+  MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
 import { digestBytes } from "../jvm/natives/digest.ts";
 import { hostStub, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
@@ -37,12 +40,6 @@ const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
 const SERVICE = PKG + "ServiceInfo", PROVIDER = PKG + "ProviderInfo", PACKAGE = PKG + "PackageInfo", RESOLVE = PKG + "ResolveInfo";
 
-
-// PackageManager flags, as IPackageManager receives them
-const GET_ACTIVITIES = 1, GET_RECEIVERS = 2, GET_SERVICES = 4, GET_PROVIDERS = 8, GET_INSTRUMENTATION = 16, GET_SIGNATURES = 64;
-const GET_META_DATA = 0x80, GET_SHARED_LIBRARY_FILES = 0x400, GET_PERMISSIONS = 0x1000, GET_CONFIGURATIONS = 0x4000;
-const MATCH_DISABLED_COMPONENTS = 0x200, MATCH_DEFAULT_ONLY = 0x10000, MATCH_DIRECT_BOOT_UNAWARE = 0x40000, MATCH_DIRECT_BOOT_AWARE = 0x80000;
-const MATCH_SYSTEM_ONLY = 0x100000, GET_SIGNING_CERTIFICATES = 0x8000000;
 export const FLAG_IS_GAME = 0x02000000;
 /** the GLES version the WebGL2 context offers, which getSystemAvailableFeatures and ConfigurationInfo report */
 export const GL_ES_VERSION = 0x30000;
@@ -249,7 +246,7 @@ export const componentProcess = (c: Component): string => c.owner.process(c.node
 const directBootAware = (c: Component) => c.owner.flag(c.node, "directBootAware", c.owner.flag(c.owner.application, "directBootAware", false));
 
 function componentEnabled(c: Component): boolean {
-  const state = componentState.get({ pkg: c.owner.pkg, cls: c.name });
+  const state = componentState.get({ pkg: c.owner.pkg, cls: c.name }) ?? 0;
   return state === 1 || state === 0 && c.owner.flag(c.node, "enabled", true);
 }
 function visible(c: Component, flags: number): boolean {
@@ -411,11 +408,6 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
     infos.push(setDeclared(yield newObj(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
   return infos;
 }
-/** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
-export const resolveActivity = driven(function* resolveActivity$(intent: JObj): Gen<Match | "system" | null> {
-  const q = yield* intentQuery$(intent);
-  return (yield* queryComponents$(q, MATCH_DEFAULT_ONLY, "activity"))[0] ?? (answersSystem(q) ? "system" : null);
-});
 export const resolveService = driven(function* resolveService$(intent: JObj): Gen<Match | null> {
   return (yield* queryComponents$(yield* intentQuery$(intent), 0, "service"))[0] ?? null;
 });
@@ -457,17 +449,6 @@ function* signatureArray$(certificates: Uint8Array[]): Gen<JObj[]> {
 function* signingInfo$(certificates: Uint8Array[]): Gen<JObj> {
   const details = yield newObj(PKG + "SigningDetails", "([Landroid/content/pm/Signature;I)V", yield* signatureArray$(certificates), 0);
   return yield newObj(PKG + "SigningInfo", "(Landroid/content/pm/SigningDetails;)V", details);
-}
-function requestedPermissions(root: XmlNode): string[] {
-  const names = new Set<string>();
-  for (const node of root.children) {
-    if (node.name !== "uses-permission" && node.name !== "uses-permission-sdk-23" && node.name !== "uses-permission-sdk-m") continue;
-    const max = attr(node, "maxSdkVersion")?.data ?? 0;
-    if (max && max < device.sdk) continue;
-    const name = attrStr(node, "name");
-    if (name) names.add(name);
-  }
-  return [...names];
 }
 function* featureInfo$(name: string | null, flags = 0, glEs = 0): Gen<JObj> {
   const info: JObj = yield newObj(PKG + "FeatureInfo");
@@ -511,7 +492,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   if (flags & GET_PERMISSIONS) {
     const declared = root.children.filter((n) => n.name === "permission");
     if (declared.length) setDeclared(pi, PACKAGE, { permissions: jarray(yield* all$(declared, (n) => permissionInfo$(record, n, flags)), "Landroid/content/pm/PermissionInfo;") });
-    const requested = requestedPermissions(root), granted: number[] = [];
+    const requested = [...record.requested], granted: number[] = [];
     for (const name of requested) granted.push(yield* awaited(checkPermission(name, record.pkg)));
     // REQUESTED_PERMISSION_REQUIRED, and REQUESTED_PERMISSION_GRANTED when held
     if (requested.length) setDeclared(pi, PACKAGE, { requestedPermissions: jarray(requested, "Ljava/lang/String;"),
@@ -710,7 +691,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`getComponentEnabledSetting(${CN}I)I`]: driven(function* getComponentEnabledSetting$(c: JObj): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
-    return componentState.get({ pkg, cls: qualifyComponent(cls, pkg) });
+    return componentState.get({ pkg, cls: qualifyComponent(cls, pkg) }) ?? 0;
   }),
   [`setComponentEnabledSetting(${CN}IIILjava/lang/String;)V`]: driven(function* setComponentEnabledSetting$(c: JObj, state: number): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
@@ -742,7 +723,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   // installs need no user approval here, so a package asking for the permission may request them
   [`canRequestPackageInstalls(${S}I)Z`]: (pkg: string) =>
-    after(packageRecord(pkg), (record) => record?.permissions.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),
+    after(packageRecord(pkg), (record) => record?.requested.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),
   [`isInstantApp(${S}I)Z`]: () => 0,
   [`isPackageSuspendedForUser(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => {
     if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown target package: " + pkg);

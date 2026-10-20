@@ -13,12 +13,12 @@ import { systemResource } from "./resnative.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseRights, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
 import type { DataClear } from "../shell/packagedata.ts";
-import { packages } from "./packages.ts";
+import { packages, ownedBy } from "./packages.ts";
 import { FileDescriptors } from "../shell/file-descriptors.ts";
 import { StoredParcel } from "../shell/stored-parcel.ts";
 import { processRights } from "../native/process-fd.ts";
@@ -52,6 +52,12 @@ interface PostedNotification {
 }
 /** GroupHelper's view of an ungrouped notification; `icon` identifies its small icon as Icon.sameAs compares */
 interface Ungrouped { flags: number; icon: string; color: number; visibility: number }
+/** the scope a broker's call holds the descriptors of the notifications it reads in */
+function brokerScope() {
+  const scope = parcelScope();
+  if (!scope) throw new Error("Notification decode requires broker descriptor scope");
+  return scope;
+}
 /** NotificationManagerService's notification list and the state its posting rules keep, shared by
  *  every process through the broker */
 export class NotificationStore {
@@ -62,19 +68,14 @@ export class NotificationStore {
   async capture(notification: JObj): Promise<StoredParcel> {
     this.kernel.ensureReceiver(PROCESS_PID);
     const kernel = this.kernel;
-    const data = await parcelledWithRights(notification, kernel.rights(PROCESS_PID));
+    const data = await parcelled(notification, kernel.rights(PROCESS_PID));
     return StoredParcel.retain(kernel, PROCESS_PID, data);
   }
   readStored(data: StoredParcel): Promise<JObj> {
-    const scope = parcelScope();
-    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    return data.readLocal(PROCESS_PID, (data, rights) => unparcelledScoped(N, data, scope, rights));
+    const scope = brokerScope();
+    return data.readLocal(PROCESS_PID, (data, rights) => unparcelled(N, data, rights, scope));
   }
-  decode(data: ParcelData): JObj | Promise<JObj> {
-    const scope = parcelScope();
-    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    return unparcelledScoped(N, data, scope, this.kernel.rights(PROCESS_PID));
-  }
+  decode(data: ParcelData): JObj | Promise<JObj> { return unparcelled(N, data, this.kernel.rights(PROCESS_PID), brokerScope()); }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */
@@ -113,9 +114,8 @@ function* sliceItems(slice: JObj | null): Gen<JObj[]> {
 
 // ── callers
 const SYSTEM_UIDS = new Set([0, 1000, 1001]);
-const ownsPackage = (pkg: string | null, uid: number) => pkg !== null && packages.get(pkg)?.uid === uid;
 function checkCallerIsSameApp(pkg: string | null, uid = callingIdentity().uid): void {
-  if (!(uid === 0 && pkg === "root") && !ownsPackage(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
+  if (!(uid === 0 && pkg === "root") && !ownedBy(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
 }
 function checkCallerIsSystemOrSameApp(pkg: string | null): void {
   if (!SYSTEM_UIDS.has(callingIdentity().uid)) checkCallerIsSameApp(pkg);
@@ -125,7 +125,7 @@ function denyPermission(permission: string, message: string): never {
   return fail("java/lang/SecurityException", `${message}: Neither user ${callingIdentity().uid} nor current process has ${permission}.`);
 }
 function enforceSystemOrSystemUIOrSamePackage(pkg: string | null, message: string): void {
-  if (SYSTEM_UIDS.has(callingIdentity().uid) || ownsPackage(pkg, callingIdentity().uid)) return;
+  if (SYSTEM_UIDS.has(callingIdentity().uid) || ownedBy(pkg, callingIdentity().uid)) return;
   denyPermission("android.permission.STATUS_BAR_SERVICE", message);
 }
 function enforceSystemOrSystemUI(message: string): void {
@@ -139,7 +139,7 @@ const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === 
 function hasPermission(uid: number): boolean | Promise<boolean> {
   if (SYSTEM_UIDS.has(uid)) return true;
   const pkg = packageOf(uid);
-  return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
+  return pkg !== null && !!packages.get(pkg)?.requested.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
 /** the system's view of packages: the application's PackageManager over the hosted service */
 function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
@@ -277,7 +277,7 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
  *  front. The dialog's answer follows the grant policy runtime permissions follow. */
 function promptNeeded(pkg: string): boolean | Promise<boolean> {
   const record = packages.get(pkg), target = targetSdk(pkg);
-  return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
+  return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.requested.has(POST_NOTIFICATIONS)
     && after(new Preferences(pkg).ids(CHANNEL_KEY), ids => ids.length > 0 && after(permissionGranted(pkg, POST_NOTIFICATIONS), granted => !granted));
 }
 function showNotificationPrompt(pkg: string): unknown {
@@ -494,7 +494,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   for (const key of ["android.allowDuringSetup", "android.substName"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
   if (getDeclared<JObj | null>(n, N, "fullScreenIntent") && !canUseFullScreenIntent(pkg, target)) {
     // makeStickyHun: the full-screen intent becomes the content intent of a persistent heads-up
-    if (packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
+    if (packages.get(pkg)?.requested.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
     if (!getDeclared<JObj | null>(n, N, "contentIntent")) setDeclared(n, N, { contentIntent: getDeclared<JObj | null>(n, N, "fullScreenIntent") });
     setDeclared(n, N, { fullScreenIntent: null });
   }
@@ -512,7 +512,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
 }
 /** checkUseFullScreenIntentPermission: free below Android 10, then USE_FULL_SCREEN_INTENT and its app op */
 function canUseFullScreenIntent(pkg: string, target: number): boolean {
-  return target < 29 || !!packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT");
+  return target < 29 || !!packages.get(pkg)?.requested.has("android.permission.USE_FULL_SCREEN_INTENT");
 }
 /** a package's enqueue rate (NotificationUsageStats' RateEstimator), updated per accepted enqueue */
 function enqueueRate(pkg: string, now: number, update: boolean): number {
@@ -583,11 +583,11 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
 }
 /** resolveNotificationUid: an app posts as itself, or for a package that made it its delegate */
 function resolveNotificationUid(opPkg: string | null, pkg: string, uid: number, userId: number): number | Promise<number> {
-  if (ownsPackage(pkg, uid) && (opPkg === pkg || ownsPackage(opPkg, uid))) return uid;
+  if (ownedBy(pkg, uid) && (opPkg === pkg || ownedBy(opPkg, uid))) return uid;
   const owner = packages.get(pkg);
   if (owner && SYSTEM_UIDS.has(uid) && pkg === "android") return owner.uid;
   return after(delegateOf(pkg), delegate => {
-    if (owner && delegate === opPkg && ownsPackage(opPkg, uid)) return owner.uid;
+    if (owner && delegate === opPkg && ownedBy(opPkg, uid)) return owner.uid;
     return fail("java/lang/SecurityException", `Caller ${opPkg}:${uid} cannot post for pkg ${pkg} in user ${userId}`);
   });
 }
@@ -612,7 +612,7 @@ export function receiveForegroundNotification(pkg: string, caller: Caller, reque
 }
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
   if (notificationTransport.foreground) {
-    const data = notification && (yield* awaited(parcelledWithRights(notification, processRights)));
+    const data = notification && (yield* awaited(parcelled(notification, processRights)));
     try { yield* awaited(notificationTransport.foreground({ kind: "start", id, data })); }
     finally { if (data) yield* awaited(releaseRights(data, processRights, true)); }
     return;

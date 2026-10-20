@@ -2,47 +2,44 @@
 
 import { vfs } from "../shell/vfs.ts";
 import { after } from "../jvm/natives/jentry.ts";
-import { storedPackages } from "./packages.ts";
+import { persisted } from "../shell/device-storage.ts";
 
 /** the platform's preference files of a package that a data clear keeps: DeviceIdleController's
  *  allowlist (ActivityTaskManager's per-app night mode and locales go, onPackageDataCleared) */
 const KEPT_ON_CLEAR = new Set(["__system_power"]);
 
 export type PreferenceValue = string | number | bigint | boolean | null | readonly string[];
+/** a preference file's entries, as JSON with a long as {$l} and a string set as an array (or {$s}) */
+const savedFiles = persisted<[string, PreferenceValue][]>("wd:prefs:", (saved) => {
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
+  const values: [string, PreferenceValue][] = [];
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") values.push([key, value]);
+    else if (typeof value === "object") {
+      if ("$l" in value && typeof value.$l === "string") values.push([key, BigInt(value.$l)]);
+      else {
+        const strings = "$s" in value ? value.$s : value;
+        if (Array.isArray(strings) && strings.every((v): v is string => typeof v === "string")) values.push([key, strings]);
+      }
+    }
+  }
+  return values;
+}, (values) => Object.fromEntries(values.map(([key, value]) => [key, typeof value === "bigint" ? { $l: value.toString() } : value])));
 export class PreferenceStore {
   private files = new Map<string, Map<string, PreferenceValue>>();
   open(name: string): Map<string, PreferenceValue> {
     let values = this.files.get(name);
-    if (values) return values;
-    values = new Map(); this.files.set(name, values);
-    try {
-      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:prefs:" + name) ?? "{}");
-      if (!saved || typeof saved !== "object" || Array.isArray(saved)) return values;
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") values.set(key, value);
-        else if (value && typeof value === "object") {
-          if ("$l" in value && typeof value.$l === "string") values.set(key, BigInt(value.$l));
-          else {
-            const strings = "$s" in value ? value.$s : value;
-            if (Array.isArray(strings) && strings.every((v): v is string => typeof v === "string")) values.set(key, strings);
-          }
-        }
-      }
-    } catch { /* corrupt */ }
+    if (!values) this.files.set(name, values = new Map(savedFiles.get(name)));
     return values;
   }
   /** a package's files, held or persisted */
   named(pkg: string): string[] {
     const prefix = pkg + ":", names = new Set([...this.files.keys()].filter((name) => name.startsWith(prefix)));
-    const storage = globalThis.localStorage;
-    for (let i = 0; storage && i < storage.length; i++) {
-      const key = storage.key(i)!;
-      if (key.startsWith("wd:prefs:" + prefix)) names.add(key.slice("wd:prefs:".length));
-    }
+    for (const name of savedFiles.keys(prefix)) names.add(name);
     return [...names];
   }
   /** the packages with files persisted */
-  packages(): string[] { return storedPackages("wd:prefs:"); }
+  packages(): string[] { return savedFiles.packages(); }
   /** a package's data clear takes its files but the platform's that a clear keeps */
   clear(pkg: string): void {
     for (const name of this.named(pkg)) if (!KEPT_ON_CLEAR.has(name.slice(pkg.length + 1))) this.delete(name);
@@ -50,16 +47,11 @@ export class PreferenceStore {
   remove(pkg: string): void { for (const name of this.named(pkg)) this.delete(name); }
   delete(name: string): void {
     this.files.delete(name);
-    try { globalThis.localStorage?.removeItem("wd:prefs:" + name); } catch { /* storage can be unavailable */ }
+    savedFiles.remove(name);
   }
   persist(name: string, values: Map<string, PreferenceValue>): boolean {
     this.files.set(name, values);
-    try {
-      const saved: Record<string, unknown> = Object.create(null);
-      for (const [key, value] of values) saved[key] = typeof value === "bigint" ? { $l: value.toString() } : value;
-      globalThis.localStorage?.setItem("wd:prefs:" + name, JSON.stringify(saved));
-      return true;
-    } catch { return false; }
+    return savedFiles.set(name, [...values]);
   }
 }
 export type PreferenceChange = { kind: "put"; key: string; value: PreferenceValue } | { kind: "remove"; key: string };

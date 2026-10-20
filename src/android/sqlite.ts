@@ -15,6 +15,7 @@ import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sql
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow.ts";
 import { processFailure, processError, type ProcessFailure } from "../shell/process-port.ts";
 import type { PackageState } from "../shell/packagedata.ts";
+import { storedKeys, storedText, storeText } from "../shell/device-storage.ts";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 /** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
@@ -127,7 +128,7 @@ async function save(file: SharedDatabase) {
     vfs.write(file.path, bytes);
     file.mtime = vfs.mtime(file.path);
     await vfs.flush();
-    globalThis.localStorage?.removeItem("wd:db:" + file.path);
+    storeText("wd:db:" + file.path, null);
   } catch (e) { console.warn("[sqlite] persist failed", e); }
 }
 /** an Emscripten file no longer at its path, once its last connection closes */
@@ -139,21 +140,13 @@ function retire(file: SharedDatabase) {
 /** the snapshots an older build kept for an app's databases, which go with its data */
 export const legacySnapshotData: PackageState = {
   clear(pkg) {
-    const storage = globalThis.localStorage, dirs = ["/data/data/", "/data/user/0/", "/data/user_de/0/"].map((root) => "wd:db:" + root + pkg + "/");
-    try {
-      for (let i = storage?.length ?? 0; i--;) {
-        const key = storage!.key(i)!;
-        if (dirs.some((dir) => key.startsWith(dir))) storage!.removeItem(key);
-      }
-    } catch { /* storage can be unavailable */ }
+    for (const root of ["/data/data/", "/data/user/0/", "/data/user_de/0/"]) for (const key of storedKeys("wd:db:" + root + pkg + "/")) storeText(key, null);
   },
 };
 /** a snapshot an older build kept in localStorage */
 function legacySnapshot(path: string): Uint8Array | null {
-  try {
-    const raw = globalThis.localStorage?.getItem("wd:db:" + path);
-    return raw ? Uint8Array.fromBase64(raw) : null;
-  } catch { return null; }
+  const raw = storedText("wd:db:" + path);
+  try { return raw ? Uint8Array.fromBase64(raw) : null; } catch { return null; }
 }
 
 // ── collations: register_android_functions' UNICODE and register_localized_collators' LOCALIZED (ICU, primary strength)

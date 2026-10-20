@@ -49,3 +49,55 @@ export function useStorageReplica(entries: [string, string][], write: (key: stri
 }
 /** another process changed an entry this one reads */
 export const storageChanged = (key: string, value: string | null): void => replica?.changed(key, value);
+
+// localStorage throws outright in some privacy modes and on quota: a read that fails finds the
+// storage unavailable (undefined), and a write that fails answers false
+/** the stored keys that begin with `start` */
+export function storedKeys(start: string): string[] {
+  const keys: string[] = [];
+  try {
+    const storage = globalThis.localStorage;
+    for (let i = 0; storage && i < storage.length; i++) { const key = storage.key(i)!; if (key.startsWith(start)) keys.push(key); }
+  } catch { /* unavailable */ }
+  return keys;
+}
+/** the packages named by the stored keys `prefix` + pkg (+ ":" + more) */
+export const storedPackages = (prefix: string): string[] =>
+  [...new Set(storedKeys(prefix).map((key) => key.slice(prefix.length).split(":", 1)[0]).filter((pkg) => pkg))];
+export function storedText(key: string): string | null | undefined {
+  try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : undefined; } catch { return undefined; }
+}
+/** stores `text`, or with null removes the entry */
+export function storeText(key: string, text: string | null): boolean {
+  try {
+    if (text === null) globalThis.localStorage?.removeItem(key); else globalThis.localStorage?.setItem(key, text);
+    return true;
+  } catch { return false; }
+}
+/** the entries `prefix` + key, each the JSON of what `encode` makes of a value and `decode` reads back
+ *  (null when absent or malformed). `get` answers the value it last read or wrote while the entry
+ *  is unchanged, so its callers share that value and leave it as it is. */
+export function persisted<T>(prefix: string, decode: (saved: unknown) => T | null, encode: (value: T) => unknown = (value) => value) {
+  let lastKey: string | null = null, lastText: string | null = null, last: T | null = null;
+  return {
+    get(key: string): T | null | undefined {
+      const text = storedText(prefix + key);
+      if (text == null) return text;
+      if (key !== lastKey || text !== lastText) {
+        let value: T | null = null;
+        try { value = decode(JSON.parse(text)); } catch { /* malformed */ }
+        lastKey = key; lastText = text; last = value;
+      }
+      return last;
+    },
+    set(key: string, value: T): boolean {
+      const text = JSON.stringify(encode(value));
+      lastKey = key; lastText = text; last = value;
+      return storeText(prefix + key, text);
+    },
+    remove: (key: string): boolean => storeText(prefix + key, null),
+    /** the stored keys that begin with `start`, without the prefix */
+    keys: (start = ""): string[] => storedKeys(prefix + start).map((key) => key.slice(prefix.length)),
+    packages: (): string[] => storedPackages(prefix),
+  };
+}

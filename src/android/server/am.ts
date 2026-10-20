@@ -6,7 +6,7 @@ import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from ".
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { hostedService } from "../binder.ts";
-import { PROCESS_NAME, PROCESS_UID } from "../os.ts";
+import { PROCESS_UID, processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { configurations } from "./wm.ts";
 import { startMainActivity } from "./atm.ts";
@@ -17,20 +17,21 @@ import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
 import { callingIdentity, newStub, parceledList } from "../binder.ts";
-import { packages } from "../packages.ts";
+import { packages, ownedBy, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
 import { clearUserData } from "../appdata.ts";
 import { COMPAT_CHANGES } from "../compat-changes.ts";
 
-export const GET_SHARED_LIBRARY_FILES = 0x400n;
+/** ActivityManagerService.STOCK_PM_FLAGS, what its package queries ask for */
+export const STOCK_PM_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES);
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
  *  MATCH_DIRECT_BOOT_AUTO, without meta-data (a provider asks for its own) */
-const APP_PROVIDER_FLAGS = GET_SHARED_LIBRARY_FILES | 0x800n | 0x10000000n;
+const APP_PROVIDER_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES | GET_URI_PERMISSION_PATTERNS | MATCH_DIRECT_BOOT_AUTO);
 /** the package manager, as system_server's services reach it */
 export const pms = () => hostedService("package") as Promise<JObj>;
 /** a component of `pkg` in `process` runs in this process */
-export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === (PROCESS_NAME || pkg);
+export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === processName();
 
 let appThread: JObj | null = null, launcher = false;
 /** whether this is the app the user launched, whose launcher activity starts with it */
@@ -57,10 +58,10 @@ const disabledChanges = (target: number) =>
 export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 const bind = driven(function* (app: JObj): Gen<void> {
-  const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
+  const pkg = appHost!.pkg, process = processName();
   appThread = app;
   const pm = yield* awaited(pms());
-  const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
+  const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, STOCK_PM_FLAGS, 0);
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
   const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, APP_PROVIDER_FLAGS, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
@@ -124,11 +125,11 @@ export const providerProcesses: { get: (pkg: string, process: string, authority:
 const contentProvider = driven(function* (name: string, userId: number): Gen<JObj | null> {
   const own = published.get(name) ?? (yield* awaited(systemProviderHolder(name)));
   if (own) return own;
-  const info: JObj | null = yield vcall(yield* awaited(pms()), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
+  const info: JObj | null = yield vcall(yield* awaited(pms()), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, STOCK_PM_FLAGS, userId);
   if (!info) return null;
   const app = getDeclared<JObj>(info, COMPONENT_INFO, "applicationInfo"), process = getDeclared<string>(info, COMPONENT_INFO, "processName");
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
-  if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === (PROCESS_NAME || appHost!.pkg)))
+  if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === processName()))
     return setDeclared(holder, HOLDER, { mLocal: 1 });
   const binder = yield* awaited(providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name));
   if (!binder) return null;
@@ -168,11 +169,11 @@ export const activityManagerMethods = {
   },
   // the package's own uid clears its data; another's needs CLEAR_APP_USER_DATA
   "clearApplicationUserData(Ljava/lang/String;ZLandroid/content/pm/IPackageDataObserver;I)Z": driven(function* (pkg: string | null, keepState: number, observer: JObj | null): Gen<number> {
-    const { pid, uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
-    if (record?.uid !== uid && (yield* awaited(checkUidPermission(CLEAR_APP_USER_DATA, uid))) !== 0)
+    const { pid, uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg), own = ownedBy(pkg, uid);
+    if (!own && (yield* awaited(checkUidPermission(CLEAR_APP_USER_DATA, uid))) !== 0)
       throw rt.mkThrowable("java/lang/SecurityException", `PID ${pid} does not have permission ${CLEAR_APP_USER_DATA} to clear data of package ${pkg}`);
     if (!record) console.warn("[ActivityManager] Invalid packageName: " + pkg);
-    yield clearUserData(pkg ?? "", record?.uid === uid, !!keepState, observer);
+    yield clearUserData(pkg ?? "", own, !!keepState, observer);
     return record ? 1 : 0;
   }),
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": driven(function* (pkg: string | null, pid: number, maxNum: number): Gen<JObj> {

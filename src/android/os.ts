@@ -10,6 +10,7 @@ import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
 import { device } from "../shell/config.ts";
 import { androidGroupId } from "./identity.ts";
+import { appHost } from "./apphost.ts";
 import { uuidFromString } from "../jvm/natives/jvalues.ts";
 import { vcall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
 import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
@@ -74,6 +75,8 @@ function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
+/** this process's name, its package's when it was given none (the application's default process) */
+export const processName = (): string => PROCESS_NAME || appHost?.pkg || "";
 /** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
 export const processTransport = { signal: (_pid: number, _signal: number): void | Promise<void> => {} };
 // Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.
@@ -88,7 +91,9 @@ function sendSignal(pid: number, signal: number): void | Promise<void> {
   return never();
 }
 const threadPriorities = new Map<number, number>();
-const totalMemory = () => BigInt(device.cpu.memKb) * 1024n;
+/** the device profile's memory in bytes, half of it free as /proc/meminfo's MemFree has it */
+export const totalMemory = (): bigint => BigInt(device.cpu.memKb) * 1024n;
+export const freeMemory = (): bigint => totalMemory() / 2n;
 const idForName = (name: string | null) => androidGroupId(name ?? rt.npe());
 rt.registerJnis("android/os/Process", {
   "getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
@@ -104,7 +109,7 @@ rt.registerJnis("android/os/Process", {
   "setThreadGroup(II)V": () => {}, "setThreadGroupAndCpuset(II)V": () => {},
   "setArgV0Native(Ljava/lang/String;)V": (name: string) => { procIdentity.name = name; },
   "getTotalMemory()J": totalMemory,
-  "getFreeMemory()J": () => totalMemory() / 2n,
+  "getFreeMemory()J": freeMemory,
   "sendSignal(II)V": sendSignal,
   "sendSignalQuiet(II)V": sendSignal,
 });
