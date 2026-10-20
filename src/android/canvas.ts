@@ -12,7 +12,7 @@ import { NativePath, inversePath, pathAt } from "./path.ts";
 import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
 import { BlurMask } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
-import { NativePaint, copyPaint, beginPaintShadow } from "./paint.ts";
+import { NativePaint, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, PLANE, canvasLocalBounds, shaderIdentity, recolor } from "./graphics.ts";
 import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds } from "./matrix.ts";
 
@@ -82,9 +82,7 @@ export class NativeCanvas {
     if (replayed) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = replayed.pattern(c)!; });
     if (stroke) {
       if (!replayed) ctx.strokeStyle = p.fillStyle(ctx);
-      ctx.lineWidth = Math.max(p.strokeWidth, 1);
-      ctx.lineCap = p.strokeCapN;
-      ctx.lineJoin = p.strokeJoinN;
+      applyStroke(ctx, p.strokeWidth, p.antiAlias, p.strokeCapN, p.strokeJoinN, p.strokeMiter);
       // Skia dashes a stroke only, not a stroke-and-fill
       if (p.dash && p.style === 1) { ctx.setLineDash(p.dash); ctx.lineDashOffset = p.dashPhase; } else ctx.setLineDash(NO_DASH);
     } else {

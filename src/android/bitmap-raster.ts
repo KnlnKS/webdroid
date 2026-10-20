@@ -1,7 +1,7 @@
 import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline.ts";
 import type { NativePath } from "./path.ts";
 import { isRecording, type Ctx2D } from "./recording.ts";
-import type { NativePaint } from "./paint.ts";
+import { type NativePaint, applyStroke } from "./paint.ts";
 import type { NativeCanvas } from "./canvas.ts";
 
 function eligible(canvas: NativeCanvas, paint: NativePaint): boolean {
@@ -44,9 +44,7 @@ function shapeMask(canvas: NativeCanvas, paint: NativePaint,
   const ctx = image.getContext("2d")!;
   ctx.setTransform(canvas.ctx.getTransform());
   ctx.fillStyle = ctx.strokeStyle = "white";
-  ctx.lineWidth = Math.max(paint.strokeWidth, 1);
-  ctx.lineCap = paint.strokeCapN;
-  ctx.lineJoin = paint.strokeJoinN;
+  applyStroke(ctx, paint.strokeWidth, paint.antiAlias, paint.strokeCapN, paint.strokeJoinN, paint.strokeMiter);
   ctx.setLineDash(paint.dash ?? []);
   if (paint.style !== 1) fill(ctx);
   if (paint.style === 1 || paint.style === 2 && paint.strokeWidth !== 0) stroke(ctx);
@@ -229,9 +227,7 @@ export function tryBitmapPath(canvas: NativeCanvas, paint: NativePaint, path: Na
     layer.setTransform(m);
     if (strokeInverse) {
       layer.strokeStyle = "white";
-      layer.lineWidth = paint.strokeWidth;
-      layer.lineCap = paint.strokeCapN;
-      layer.lineJoin = paint.strokeJoinN;
+      applyStroke(layer, paint.strokeWidth, paint.antiAlias, paint.strokeCapN, paint.strokeJoinN, paint.strokeMiter);
       layer.stroke(path.path());
     } else {
       layer.fillStyle = "white";

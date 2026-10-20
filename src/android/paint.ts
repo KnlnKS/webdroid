@@ -17,7 +17,7 @@ import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./pathef
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
 import { strokeCommands } from "./skia.ts";
 import { deviceScale } from "./matrix.ts";
-import type { Ctx2D } from "./recording.ts";
+import { isRecording, recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
 
 const PAINT = "android/graphics/Paint";
 /** Paint's flag bits hwui keeps (getJavaFlags): LCD_RENDER_TEXT and VERTICAL_TEXT are not */
@@ -191,6 +191,22 @@ function textBounds(p: NativePaint, bidi: number, s: string, r: object) {
   return after(layoutBounds(s, isRtl(bidi, s), p), (b) => {
     setEdges(r, b ? { left: Math.floor(b[0]), top: Math.floor(b[1]), right: Math.ceil(b[2]), bottom: Math.ceil(b[3]) } : emptyBox);
   });
+}
+
+// ── strokes
+/** SkDrawTreatAsHairline: under one device pixel a stroke is a hairline, as wide as that pixel; an
+ *  anti-aliased stroke narrower still keeps its width, which the 2D context draws as Skia does, at reduced coverage */
+const strokeWidthOn = (ctx: Ctx2D, width: number, antiAlias: boolean): number => {
+  const pixel = 1 / (deviceScale(transformOf(ctx)) || 1);
+  return width >= pixel || antiAlias && width > 0 ? width : pixel;
+};
+/** a stroke's width, cap, join and miter limit on `ctx`; a recording takes the device pixel of the transform it is drawn under */
+export function applyStroke(ctx: Ctx2D, width: number, antiAlias: boolean, cap: CanvasLineCap, join: CanvasLineJoin, miter: number): void {
+  if (antiAlias && width > 0) ctx.lineWidth = width;
+  else if (isRecording(ctx)) recordOrRun(ctx, (c) => { c.lineWidth = strokeWidthOn(c, width, antiAlias); });
+  else ctx.lineWidth = strokeWidthOn(ctx, width, antiAlias);
+  ctx.lineCap = cap; ctx.lineJoin = join;
+  if (join === "miter") ctx.miterLimit = miter;
 }
 
 // ── shadows
