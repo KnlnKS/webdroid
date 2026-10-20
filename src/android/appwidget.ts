@@ -6,7 +6,7 @@
 // unsupported.
 import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, parceledList, hostStub, serviceContext } from "./binder.ts";
+import { callingIdentity, parceledList, hostService, serviceContext } from "./binder.ts";
 import { ownedBy, GET_META_DATA, MATCH_DIRECT_BOOT_AWARE, MATCH_DIRECT_BOOT_UNAWARE } from "./packages.ts";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
@@ -86,7 +86,7 @@ const enforceProviderPackage = driven(function* (provider: JObj): Gen<void> {
   enforceCallFromPackage(yield vcall(provider, "getPackageName", `()${S}`));
 });
 
-rt.register({ name: "webdroid/AppWidgetService", ctor: class extends JObj {}, sup: "com/android/internal/appwidget/IAppWidgetService$Stub", methods: {
+hostService("appwidget", "webdroid/AppWidgetService", "com/android/internal/appwidget/IAppWidgetService$Stub", {
   [`getInstalledProvidersForProfile(II${S})Landroid/content/pm/ParceledListSlice;`]: driven(function* (categories: number, _profile: number, pkg: string | null) {
     const matching: JObj[] = [];
     for (const info of yield* installedProviders()) {
@@ -109,5 +109,4 @@ rt.register({ name: "webdroid/AppWidgetService", ctor: class extends JObj {}, su
   "isRequestPinAppWidgetSupported()Z": () => 0,
   [`requestPinAppWidget(${S}${CN}Landroid/os/Bundle;Landroid/content/IntentSender;)Z`]: () => 0,
   ...noops(`notifyProviderInheritance([${CN})V`),
-} });
-hostStub("appwidget", "webdroid/AppWidgetService");
+});

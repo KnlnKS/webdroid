@@ -16,7 +16,7 @@ import { uptimeMillis } from "../guest-clock.ts";
 import { perf } from "../perf.ts";
 import { resetDrawn } from "./webfunctor.ts";
 import type { NativeBitmap } from "./bitmap.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 import { note, Ev } from "../timeline.ts";
 
@@ -79,10 +79,9 @@ function armAnimation(p: Proxy): void {
 
 // IGraphicsStats: GraphicsStatsService hands each process a buffer for hwui's jank statistics; no
 // frame here records hwui's per-stage timings, so the buffer stays empty
-rt.register({ name: "webdroid/GraphicsStatsService", ctor: class extends JObj {}, sup: "android/view/IGraphicsStats$Stub", methods: {
+hostService("graphicsstats", "webdroid/GraphicsStatsService", "android/view/IGraphicsStats$Stub", {
   "requestBufferForProcess(Ljava/lang/String;Landroid/view/IGraphicsStatsCallback;)Landroid/os/ParcelFileDescriptor;": () => mkPfd(new Uint8Array(0), null),
-} });
-hostStub("graphicsstats", "webdroid/GraphicsStatsService");
+});
 
 // a frame-metrics observer: no frame here reports hwui's per-stage timings, so none is ever delivered
 rt.registerJnis("android/graphics/HardwareRendererObserver", {

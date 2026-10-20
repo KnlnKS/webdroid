@@ -29,6 +29,7 @@ import { openFd, javaOnLastClose, javaCloseFd, javaDupFd, javaFdSource, javaFdSt
   javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, javaChangeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
   fdsanTagType, fdsanTagValue, type FileStat } from "../native/fd.ts";
 import { javaPipeFds } from "../native/pipe.ts";
+import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch } from "../native/inotify.ts";
 import { inoOf } from "../native/kernel.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
 import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory.ts";
@@ -249,6 +250,27 @@ rt.registerJnis("android/os/SharedMemory", {
   "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": waits((_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); })),
   "nGetSize(Ljava/io/FileDescriptor;)I": waits((d: JObj | null) => ashmemSize(fdInt(d))),
   "nSetProt(Ljava/io/FileDescriptor;I)I": waits((d: JObj | null, prot: number) => after(ashmemSetProt(fdInt(d), prot), n => -n)),
+});
+// FileObserver's inotify instance, over the descriptor table's, which the VFS reports its changes to
+rt.registerJnis("android/os/FileObserver$ObserverThread", {
+  "init()I": () => javaInotifyInit(),
+  // android_os_FileObserver.cpp's loop: each event to onEvent(wd, mask, name) until a read fails
+  "observe(I)V": driven(function* (this: JObj, fd: number): Gen {
+    const buf = new Uint8Array(512), view = new DataView(buf.buffer);
+    for (let n: number; (n = yield* awaited(javaReadFd(fd, buf))) >= 16;) {
+      for (let at = 0; at + 16 <= n;) {
+        const len = view.getUint32(at + 12, true), name = buf.subarray(at + 16, at + 16 + len);
+        const path = len ? utf8.dec.decode(name.subarray(0, name.indexOf(0) < 0 ? len : name.indexOf(0))) : null;
+        try { yield vcall(this, "onEvent", "(IILjava/lang/String;)V", view.getInt32(at, true), view.getInt32(at + 4, true), path); }
+        catch (error) { logUncaught(error); }
+        at += 16 + len;
+      }
+    }
+  }),
+  "startWatching(I[Ljava/lang/String;I[I)V": (fd: number, paths: string[], mask: number, wfds: Int32Array) => {
+    paths.forEach((path, i) => { wfds[i] = fd < 0 ? -1 : Math.max(-1, javaInotifyAddWatch(fd, path, mask)); });
+  },
+  "stopWatching(I[I)V": (fd: number, wfds: Int32Array) => { for (const wd of wfds) if (wd >= 0) javaInotifyRmWatch(fd, wd); },
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>

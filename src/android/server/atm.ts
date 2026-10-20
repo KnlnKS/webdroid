@@ -16,6 +16,8 @@ import { componentParts$, intentQuery$, mkComponentName, systemActivity, withCom
 import { grantResultUris } from "../urigrants.ts";
 import { attached, thisApp, userLaunched, pms, runsHere } from "./am.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
+import { deviceConfiguration } from "../resnative.ts";
+import { GL_ES_VERSION } from "../pm.ts";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
@@ -547,8 +549,13 @@ rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "andro
 } });
 const appTask = once(() => newObj("webdroid/AppTask"));
 
-/** the methods IActivityTaskManager adds for ActivityThread's activities */
+/** IActivityTaskManager's methods but PendingIntentController's */
 export const activityTaskMethods = {
+  "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => after(newObj("android/content/pm/ConfigurationInfo"), (info) => {
+    const config = deviceConfiguration();
+    return setDeclared(info, "android/content/pm/ConfigurationInfo", { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
+      reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION });
+  }),
   "getAppTasks(Ljava/lang/String;)Ljava/util/List;": () => stack.length ? after(appTask(), (task) => newArrayList([task])) : newArrayList([]),
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
   // nothing captures the screen, so a screen-capture observer is never called

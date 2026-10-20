@@ -6,7 +6,8 @@ import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from ".
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { hostedService } from "../binder.ts";
-import { PROCESS_UID, processName } from "../os.ts";
+import { PROCESS_PID, PROCESS_UID, processName, totalMemory, freeMemory } from "../os.ts";
+import { jarray } from "../../jvm/abi.ts";
 import { appHost } from "../apphost.ts";
 import { configurations } from "./wm.ts";
 import { startMainActivity } from "./atm.ts";
@@ -15,7 +16,7 @@ import { systemProviderHolder } from "../systemproviders.ts";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants.ts";
 import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
-import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
+import { appCrashed, processImportance, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
 import { callingIdentity, newStub, parceledList } from "../binder.ts";
 import { packages, ownedBy, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
@@ -136,7 +137,14 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
   return setDeclared(holder, HOLDER, { provider: yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder) });
 });
 
-/** the methods IActivityManager adds for ActivityThread */
+const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
+function fillProc(info: JObj): JObj {
+  const pkg = appHost?.pkg ?? "";
+  return setDeclared(info, PROCESS_INFO, { processName: processName(), pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
+    importance: processImportance() });
+}
+const checkPidPermission = (name: string, _pid: number, uid: number) => checkUidPermission(name, uid);
+/** IActivityManager's methods but those of ActiveServices, BroadcastQueue and PendingIntentController */
 export const activityManagerMethods = {
   "attachApplication(Landroid/app/IApplicationThread;J)V": (app: JObj) => bind(app),
   "finishAttachApplication(JJ)V": () => {},
@@ -191,6 +199,34 @@ export const activityManagerMethods = {
     for (const r of records) infos.push(yield* awaited(exitInfo(r)));
     return yield parceledList(infos);
   }),
+  "getRunningAppProcesses()Ljava/util/List;": () => after(newObj(PROCESS_INFO), (info) => newArrayList([fillProc(info)])),
+  "getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JObj) => { fillProc(info); },
+  // the device profile's memory: the page cannot read the host's
+  "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: JObj) => {
+    setDeclared(mi, "android/app/ActivityManager$MemoryInfo", { totalMem: totalMemory(), availMem: freeMemory(), lowMemory: 0, threshold: 128n << 20n });
+  },
+  "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": driven(function* (pids: Int32Array): Gen {
+    const infos: JObj[] = [];
+    for (const pid of pids) {
+      const info: JObj = yield newObj("android/os/Debug$MemoryInfo");
+      yield scall("android/os/Debug", "getMemoryInfo", "(ILandroid/os/Debug$MemoryInfo;)Z", pid, info);
+      infos.push(info);
+    }
+    return jarray(infos, "Landroid/os/Debug$MemoryInfo;");
+  }),
+  // ActiveServices does not report its records as RunningServiceInfo
+  "getServices(II)Ljava/util/List;": () => newArrayList(),
+  // no starts are recorded, and nothing restricts this app or drives it as a monkey
+  "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
+  "reportStartInfoViewTimestamps(JJ)V": () => {},
+  "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
+  "checkPermission(Ljava/lang/String;II)I": checkPidPermission,
+  "checkPermissionForDevice(Ljava/lang/String;III)I": checkPidPermission,
+  "isUserAMonkey()Z": () => 0,
+  // the render thread's tid, for scheduling: everything here shares the page's one thread
+  "setRenderThread(I)V": () => {},
+  // AMS records it to kill this process when that package changes; no package changes under a running app
+  "addPackageDependency(Ljava/lang/String;)V": () => {},
 };
 const CRASH_INFO = "android/app/ApplicationErrorReport$CrashInfo", EXIT_INFO = "android/app/ApplicationExitInfo";
 const DUMP = "android.permission.DUMP", CLEAR_APP_USER_DATA = "android.permission.CLEAR_APP_USER_DATA";

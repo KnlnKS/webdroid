@@ -8,7 +8,7 @@ import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm
 import { after, scall, staticField, newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
-import { hostStub } from "../binder.ts";
+import { hostService } from "../binder.ts";
 import { postMain } from "../mainloop.ts";
 import { type ImeSession, serveInput, showInput, extractedInput, mirrorInput } from "../ime.ts";
 import { setImeShown } from "./wm.ts";
@@ -110,7 +110,7 @@ const methodSession = once(() => after(newObj("webdroid/InputMethodSession"), (s
 
 const emptyInfoList = () => after(newArrayList(), list => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
   "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", list));
-rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JObj {}, sup: "com/android/internal/view/IInputMethodManager$Stub", methods: {
+hostService("input_method", "webdroid/InputMethodManagerService", "com/android/internal/view/IInputMethodManager$Stub", {
   [`startInputOrWindowGainedFocus${START})L${BIND};`]:
     (_reason: number, _client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null) =>
       rt.drive(startInputOrWindowGainedFocus(window, info, connection, mode)),
@@ -138,5 +138,4 @@ rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JO
   ...noops(`addClient(${CLIENT}Lcom/android/internal/inputmethod/IRemoteInputConnection;I)V`, "removeImeSurface()V",
     "removeImeSurfaceFromWindowAsync(Landroid/os/IBinder;)V", "reportPerceptibleAsync(Landroid/os/IBinder;Z)V",
     `showInputMethodPickerFromClient(${CLIENT}I)V`, `prepareStylusHandwritingDelegation(${CLIENT}ILjava/lang/String;Ljava/lang/String;)V`),
-} });
-hostStub("input_method", "webdroid/InputMethodManagerService");
+});

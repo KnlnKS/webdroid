@@ -4,7 +4,7 @@
 import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { lambda } from "../jvm/natives/jlambda.ts";
-import { callingIdentity, hostStub, newStub, onCallerDeath, oneway } from "./binder.ts";
+import { callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio.ts";
 
 const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
@@ -136,7 +136,7 @@ rt.register({ name: "webdroid/MediaSessionController", ctor: recordBinder(), sup
 
 /** MediaSessionService.enforceMediaPermissions: no app holds MEDIA_CONTENT_CONTROL or an enabled notification listener */
 const noMediaControl = () => { throw rt.mkThrowable("java/lang/SecurityException", "Missing permission to control media."); };
-rt.register({ name: "webdroid/MediaSessionService", ctor: class extends JObj {}, sup: MS + "ISessionManager$Stub", methods: {
+hostService("media_session", "webdroid/MediaSessionService", MS + "ISessionManager$Stub", {
   [`createSession(${S}L${MS}ISessionCallback;${S}${B}I)L${MS}ISession;`]: driven(function* createSession$(pkg: string, cb: JObj, tag: string, info: JObj | null): Gen {
     const { pid } = callingIdentity();
     const binder = (yield* awaited(newStub("webdroid/MediaSessionRecord"))) as JRecordBinder, controller = (yield* awaited(newStub("webdroid/MediaSessionController"))) as JRecordBinder;
@@ -152,5 +152,4 @@ rt.register({ name: "webdroid/MediaSessionService", ctor: class extends JObj {},
   "getSessions(Landroid/content/ComponentName;I)Ljava/util/List;": noMediaControl,
   [`addSessionsListener(L${MS}IActiveSessionsListener;Landroid/content/ComponentName;I)V`]: noMediaControl,
   ...noops(`removeSessionsListener(L${MS}IActiveSessionsListener;)V`),
-} });
-hostStub("media_session", "webdroid/MediaSessionService");
+});

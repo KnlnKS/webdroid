@@ -1,9 +1,9 @@
 // IClipboard: ClipboardService, hosted once in system_server (SYSTEM_SERVICES) for every process's
 // ClipboardManager. It keeps the primary clip as the ClipData the caller's parcel made, which only the
 // focused app's uid reads, and tells the listeners whose uid has focus of each change.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { JObj, driven, type Gen } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, hostStub, onCallerDeath, oneway } from "./binder.ts";
+import { callingIdentity, hostService, onCallerDeath, oneway } from "./binder.ts";
 import { foreground } from "./server/atm.ts";
 import { PROCESS_UID } from "./os.ts";
 import { wallMillis } from "../guest-clock.ts";
@@ -25,7 +25,7 @@ function setPrimary(clip: JObj | null): void {
 const description = (clip: JObj) => vcall(clip, "getDescription", "()Landroid/content/ClipDescription;");
 function* binderOf(listener: JObj): Gen<unknown> { return yield vcall(listener, "asBinder", "()Landroid/os/IBinder;"); }
 const P = "Ljava/lang/String;Ljava/lang/String;II", L = "Landroid/content/IOnPrimaryClipChangedListener;";
-rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, sup: "android/content/IClipboard$Stub", methods: {
+hostService("clipboard", "webdroid/ClipboardService", "android/content/IClipboard$Stub", {
   // stamped as copied now, as setPrimaryClipInternalLocked does
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield description(clip), "setTimestamp", "(J)V", BigInt(Math.floor(wallMillis())));
@@ -54,5 +54,4 @@ rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, su
   [`getPrimaryClipSource(${P})Ljava/lang/String;`]: () => null,
   // the platform default: an app reading the clipboard is announced
   "areClipboardAccessNotificationsEnabledForUser(I)Z": () => 1,
-} });
-hostStub("clipboard", "webdroid/ClipboardService");
+});

@@ -9,7 +9,7 @@ import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { wallMillis } from "../guest-clock.ts";
 import { vfs } from "../shell/vfs.ts";
 import { hostUi } from "../shell/host-ui.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { newIntent, registerSystemActivity, type JIntent } from "./intent.ts";
 import { mkUri } from "./net.ts";
 import { pendingTransport, intentSender } from "./pendingintent.ts";
@@ -25,7 +25,7 @@ const jobs = new Map<string, Job>();
 const jobKey = (id: JObj): string | Promise<string> => vcall(id, "flattenToString", `()${S}`);
 const setState = (job: Job, state: number) => vcall(job.info, "setState", "(I)V", state);
 
-rt.register({ name: "webdroid/PrintManagerService", ctor: class extends JObj {}, sup: "android/print/IPrintManager$Stub", methods: {
+hostService("print", "webdroid/PrintManagerService", "android/print/IPrintManager$Stub", {
   // UserState.print: a created job, and the dialog that configures and runs it
   [`print(${S}Landroid/print/IPrintDocumentAdapter;${PA}${S}II)Landroid/os/Bundle;`]:
     driven(function* (name: string, adapter: JObj, attributes: JObj | null, pkg: string, appId: number): Gen {
@@ -53,8 +53,7 @@ rt.register({ name: "webdroid/PrintManagerService", ctor: class extends JObj {},
   [`getPrintJobInfo(${ID}II)Landroid/print/PrintJobInfo;`]: (id: JObj) => after(jobKey(id), (key) => jobs.get(key)?.info ?? null),
   "getPrintJobInfos(II)Ljava/util/List;": () => newArrayList([...jobs.values()].map((job) => job.info)),
   [`cancelPrintJob(${ID}II)V`]: (id: JObj) => after(jobKey(id), (key) => { const job = jobs.get(key); return job && setState(job, STATE_CANCELED); }),
-} });
-hostStub("print", "webdroid/PrintManagerService");
+});
 
 /** an adapter callback's outcome: its result, null when canceled, or the failure's message. Each
  *  callback class has its own ctor, which takes on its Stub as supertype. */

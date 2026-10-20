@@ -14,7 +14,7 @@ import { AccountStore, canonicalAccountCommands, type AccountAccess, type Accoun
 import { attr, attrStr, parseAXML } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
 import { resString } from "./res.ts";
-import { asSystem, callingIdentity, hostStub, type Caller } from "./binder.ts";
+import { asSystem, callingIdentity, hostService, type Caller } from "./binder.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
 import { mkComponentName, newIntent } from "./intent.ts";
 import { broadcastIntent } from "./server/broadcastqueue.ts";
@@ -183,7 +183,7 @@ rt.register({ name: "webdroid/AccountFeatures", ctor: JAccountFeatures, sup: "an
 
 const RESPONSE = "Landroid/accounts/IAccountManagerResponse;", AUTH = "Landroid/accounts/IAccountAuthenticatorResponse;";
 const A = "Landroid/accounts/Account;", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
-rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {}, sup: "android/accounts/IAccountManager$Stub", methods: {
+hostService("account", "webdroid/AccountManagerService", "android/accounts/IAccountManager$Stub", {
   [`getAccountsAsUser(${S}I${S})[${A}`]: (type: string | null) => byType(type),
   [`getAccountsForPackage(${S}I${S})[${A}`]: (pkg: string) => byType(null, pkg),
   [`getAccountsByTypeForPackage(${S}${S}${S})[${A}`]: (type: string | null, pkg: string) => {
@@ -264,8 +264,7 @@ rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {
     const renamed = s && (yield* awaited(accountAccess.accountChange({ kind: "rename", key: s, name })));
     yield reply(response, yield* bundle(renamed ? { authAccount: name, accountType: s!.type } : {}));
   }),
-} });
-hostStub("account", "webdroid/AccountManagerService");
+});
 
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
   if (yield* awaited(owned(account))) return 0;

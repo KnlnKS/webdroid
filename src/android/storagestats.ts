@@ -7,7 +7,7 @@ import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { packages } from "./packages.ts";
 import { mimeOf } from "../mime.ts";
-import { callingIdentity, hostStub, serviceContext } from "./binder.ts";
+import { callingIdentity, hostService, serviceContext } from "./binder.ts";
 
 /** bytes of every file under one of `dirs` that `keep` accepts */
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {
@@ -54,7 +54,7 @@ function* enforceStats(pkg: string): Gen<void> {
 }
 const uidPackages = (uid: number) => [...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg);
 const S = "Ljava/lang/String;";
-rt.register({ name: "webdroid/StorageStatsService", ctor: class extends JObj {}, sup: "android/app/usage/IStorageStatsManager$Stub", methods: {
+hostService("storagestats", "webdroid/StorageStatsService", "android/app/usage/IStorageStatsManager$Stub", {
   [`getTotalBytes(${S}${S})J`]: () => after(storageEstimate(), (e) => BigInt(Math.floor(e.total))),
   [`getFreeBytes(${S}${S})J`]: () => after(storageEstimate(), (e) => BigInt(Math.floor(e.free))),
   // the VFS keeps no per-uid quota, and vold reserves nothing
@@ -81,5 +81,4 @@ rt.register({ name: "webdroid/StorageStatsService", ctor: class extends JObj {},
     yield* enforceStats(caller);
     return externalStats();
   }),
-} });
-hostStub("storagestats", "webdroid/StorageStatsService");
+});

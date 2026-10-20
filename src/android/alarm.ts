@@ -4,7 +4,7 @@
 // Exact alarms need the permission AlarmManagerService asks for.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, hostStub, newStub, onCallerDeath, oneway } from "./binder.ts";
+import { callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { operationId } from "./pendingintent.ts";
 import type { Alarms } from "../shell/alarms.ts";
@@ -39,7 +39,7 @@ function removeListener(binder: unknown): void {
 let completion: JObj | Promise<JObj> | undefined;
 const asBinder = (listener: JObj) => vcall(listener, "asBinder", "()Landroid/os/IBinder;");
 const WINDOW_EXACT = 0n;
-rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {}, sup: "android/app/IAlarmManager$Stub", methods: {
+hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$Stub", {
   "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":
     driven(function* (pkg: string, type: number, at: bigint, window: bigint, interval: bigint, _flags: number, operation: JObj | null, listener: JObj | null): Gen<void> {
       const { pid, uid } = callingIdentity();
@@ -67,9 +67,8 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
   "hasScheduleExactAlarm(Ljava/lang/String;I)Z": (pkg: string) => +canScheduleExact(pkg),
   // no alarm clock is set on this device
   "getNextAlarmClock(I)Landroid/app/AlarmManager$AlarmClockInfo;": () => null,
-} });
+});
 // a listener alarm's completion: nothing waits on it here, as no wake lock is held for delivery
 rt.register({ name: "webdroid/AlarmCompleteListener", ctor: class extends JObj {}, sup: "android/app/IAlarmCompleteListener$Stub", methods: {
   "alarmComplete(Landroid/os/IBinder;)V": () => {},
 } });
-hostStub("alarm", "webdroid/AlarmManagerService");

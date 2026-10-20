@@ -3,7 +3,7 @@
 import { awaited, rt, JObj, stubs, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime.ts";
 import { vcall, scall, newObj, linkClass } from "../jvm/natives/jentry.ts";
 import { boxBool } from "../jvm/natives/jbox.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { onMain } from "./mainloop.ts";
 import { cookieManager } from "./cookies.ts";
 import { createFunctor } from "./webfunctor.ts";
@@ -32,11 +32,10 @@ rt.register({
   },
 });
 // WebViewUpdateService: the provider package is the only one, current and never updated
-rt.register({ name: "webdroid/WebViewUpdateService", ctor: class extends JObj {}, sup: "android/webkit/IWebViewUpdateService$Stub", methods: {
+hostService("webviewupdate", "webdroid/WebViewUpdateService", "android/webkit/IWebViewUpdateService$Stub", {
   "getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": webViewPackage,
   "getCurrentWebViewPackageName()Ljava/lang/String;": () => WEBVIEW_PACKAGE,
-} });
-hostStub("webviewupdate", "webdroid/WebViewUpdateService");
+});
 
 
 class Factory extends JObj {

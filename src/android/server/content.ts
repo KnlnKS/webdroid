@@ -7,7 +7,7 @@ import { awaited, rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/run
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { vcall } from "../../jvm/natives/jentry.ts";
 import { jarray } from "../../jvm/abi.ts";
-import { callingIdentity, hostStub, onCallerDeath, oneway } from "../binder.ts";
+import { callingIdentity, hostService, onCallerDeath, oneway } from "../binder.ts";
 import { mkUri, uriParts, uriText, type JUri } from "../net.ts";
 
 const NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS = 2;
@@ -39,7 +39,7 @@ export const notifyContent = driven(function* notifyContent$(uri: string, origin
 const IObserver = "Landroid/database/IContentObserver;";
 const ACCOUNT = "Landroid/accounts/Account;", S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;";
 const binderOf = (observer: JObj) => vcall(observer, "asBinder", "()Landroid/os/IBinder;");
-rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup: "android/content/IContentService$Stub", methods: {
+hostService("content", "webdroid/ContentService", "android/content/IContentService$Stub", {
   [`registerContentObserver(Landroid/net/Uri;Z${IObserver}II)V`]: driven(function* (uri: JUri | null, descendants: number, observer: JObj | null, userId: number): Gen<void> {
     if (!uri || !observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "You must pass a valid uri and observer");
     const { pid } = callingIdentity(), key = yield binderOf(observer), segments = segmentsOf(yield* awaited(uriText(uri)));
@@ -66,5 +66,4 @@ rt.register({ name: "webdroid/ContentService", ctor: class extends JObj {}, sup:
     `getSyncAdapterPackageAsUser(${S}${S}I)${S}`, `getCache(${S}Landroid/net/Uri;I)Landroid/os/Bundle;`),
   ...noops("addStatusChangeListener(ILandroid/content/ISyncStatusObserver;)V", "removeStatusChangeListener(Landroid/content/ISyncStatusObserver;)V",
     `putCache(${S}Landroid/net/Uri;Landroid/os/Bundle;I)V`, `onDbCorruption(${S}${S}${S})V`),
-} });
-hostStub("content", "webdroid/ContentService");
+});

@@ -9,7 +9,7 @@ import { awaited, rt, JObj, getDeclared, setDeclared, driven, waits, type Gen } 
 import { concat, jarray, sameBytes } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { unbox } from "../jvm/natives/jbox.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { PROCESS_UID } from "./os.ts";
 import { device } from "../shell/config.ts";
 import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
@@ -404,7 +404,7 @@ const listed = driven(function* (start: string | null): Gen<unknown[]> {
     descriptors.push(setDeclared(yield newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }));
   return jarray(descriptors, `L${KD};`);
 });
-rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup: "android/system/keystore2/IKeystoreService$Stub", methods: {
+hostService("android.system.keystore2.IKeystoreService/default", "webdroid/KeystoreService", "android/system/keystore2/IKeystoreService$Stub", {
   "getSecurityLevel(I)Landroid/system/keystore2/IKeystoreSecurityLevel;": (level: number) =>
     level === TRUSTED_ENVIRONMENT ? teeLevel() : failure(-68, "No KeyMint instance for security level " + level),
   "getKeyEntry(Landroid/system/keystore2/KeyDescriptor;)Landroid/system/keystore2/KeyEntryResponse;": driven(function* (d: unknown) {
@@ -430,5 +430,4 @@ rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup
   "listEntriesBatched(IJLjava/lang/String;)[Landroid/system/keystore2/KeyDescriptor;": (_domain: number, _ns: bigint, start: string | null) => listed(start),
   "getNumberOfEntries(IJ)I": () => entries().length,
   "deleteKey(Landroid/system/keystore2/KeyDescriptor;)V": (d: unknown) => deleteKey(d),
-} });
-hostStub("android.system.keystore2.IKeystoreService/default", "webdroid/KeystoreService");
+});

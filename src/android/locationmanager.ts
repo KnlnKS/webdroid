@@ -11,7 +11,7 @@ import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { once } from "../jvm/suspend.ts";
 import { bootTime, clearGuestTimeout, setSystemTimeout, uptimeMillis, type GuestTimer } from "../guest-clock.ts";
-import { asSystem, callingIdentity, hostStub, hostedService, onCallerDeath, oneway, type Caller } from "./binder.ts";
+import { asSystem, callingIdentity, hostService, hostedService, onCallerDeath, oneway, type Caller } from "./binder.ts";
 import { geocodeMethods } from "./geocoder.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { ownedBy } from "./packages.ts";
@@ -151,7 +151,7 @@ function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]
 
 const LISTENER = "Landroid/location/ILocationListener;";
 const asBinder = (listener: JObj) => vcall(listener, "asBinder", "()Landroid/os/IBinder;");
-rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj {}, sup: "android/location/ILocationManager$Stub", methods: {
+hostService("location", "webdroid/LocationManagerService", "android/location/ILocationManager$Stub", {
   // the browser's geolocation takes no provider commands (aiding data, time injection)
   "sendExtraCommand(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)V": () => {},
   "getAllProviders()Ljava/util/List;": () => newArrayList(providers()),
@@ -214,5 +214,4 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   // no GNSS time either: SystemClock.currentGnssTimeClock reports it unavailable
   ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;", "getGnssTimeMillis()Landroid/location/LocationTime;"),
   ...geocodeMethods,
-} });
-hostStub("location", "webdroid/LocationManagerService");
+});

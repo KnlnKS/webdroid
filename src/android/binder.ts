@@ -1,6 +1,6 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
-import { awaited, JObj, rt, driven, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, rt, driven, waits, type Gen, type NativeSpec } from "../jvm/runtime.ts";
 import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
 import { exitProcess, processExited } from "../process-exit.ts";
@@ -515,12 +515,17 @@ rt.registerJnis("android/os/BinderProxy", {
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
 export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => after(newArrayList(items), list => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", list));
-/** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
- *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
+/** Host a registered subclass of a system service's AIDL Stub as `name`, made when first asked for. A
+ *  Stub whose methods declare @EnforcePermission takes its enforcer at construction (its no-argument
  *  constructor asks the system context for one); none of the hosted methods calls it. */
 const scopedServices = new WeakSet<object>();
 export function hostStub(name: string, cls: string, scopedDescriptors = false): void {
   binderServices.set(name, () => after(newStub(cls), binder => { if (scopedDescriptors) scopedServices.add(binder); return binder; }));
+}
+/** register `cls`, the subclass of `sup` (an AIDL Stub) whose `methods` answer, and host it as `name` */
+export function hostService(name: string, cls: string, sup: string, methods?: NativeSpec["methods"], scopedDescriptors = false): void {
+  rt.register({ name: cls, ctor: class extends JObj {}, sup, methods });
+  hostStub(name, cls, scopedDescriptors);
 }
 /** a Stub subclass's instance, as hostStub makes one (also for binders a service hands out), on
  *  the asking thread: a class it initializes may be one that thread is already initializing */

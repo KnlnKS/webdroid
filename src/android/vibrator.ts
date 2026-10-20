@@ -7,6 +7,7 @@ import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { systemResource } from "./resnative.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { settingsAccess } from "./settings.ts";
+import { hostService } from "./binder.ts";
 
 const VIBRATOR_ID = 1;
 /** VibrationSettings' fallbacks for prebaked effects a motor without effects cannot play (CLICK,
@@ -82,7 +83,7 @@ function* performHapticFeedback(constant: number, always: number): Gen<void> {
   const vibration = yield scall("android/os/VibrationEffect", "get", "(IZ)Landroid/os/VibrationEffect;", effect[0], +effect[1]);
   play(...(yield* timingsOf(vibration)));
 }
-rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj {}, sup: "android/os/IVibratorManagerService$Stub", methods: {
+hostService("vibrator_manager", "webdroid/VibratorManagerService", "android/os/IVibratorManagerService$Stub", {
   "getVibratorIds()[I": () => Int32Array.of(VIBRATOR_ID),
   "getVibratorInfo(I)Landroid/os/VibratorInfo;": driven(function* (id: number) {
     if (id !== VIBRATOR_ID) return null;
@@ -100,4 +101,4 @@ rt.register({ name: "webdroid/VibratorManagerService", ctor: class extends JObj 
   // no state changes are reported, as none can be observed
   "registerVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
   "unregisterVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
-} });
+});

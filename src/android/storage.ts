@@ -7,7 +7,7 @@ import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, linkInit } from "../jvm/natives/jentry.ts";
 import { systemResource } from "./resnative.ts";
 import { newFile } from "../jvm/natives/jio.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { uuidDefault } from "./os.ts";
 import { packages } from "./packages.ts";
@@ -56,7 +56,7 @@ const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
   return info;
 });
 
-rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {}, sup: "android/os/storage/IStorageManager$Stub", methods: {
+hostService("mount", "webdroid/StorageManagerService", "android/os/storage/IStorageManager$Stub", {
   "getVolumeList(ILjava/lang/String;I)[Landroid/os/storage/StorageVolume;": driven(function* (): Gen {
     return jarray([yield* awaited(storageVolume())], "Landroid/os/storage/StorageVolume;");
   }),
@@ -82,7 +82,6 @@ rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {
     for (let i = SHARED.length; i >= 0; i = dir.indexOf("/", i + 1)) vfs.mkdir(dir.slice(0, i));
     vfs.mkdir(dir);
   },
-} });
-hostStub("mount", "webdroid/StorageManagerService");
+});
 // android_os_storage_StorageManager: the vfs keeps no project quotas, so FS_IOC_FSGETXATTR fails
 rt.registerJni("android/os/storage/StorageManager", "setQuotaProjectId(Ljava/lang/String;J)Z", () => 0);

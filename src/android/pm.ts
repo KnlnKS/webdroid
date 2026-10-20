@@ -28,7 +28,7 @@ import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, sig
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
 import { digestBytes } from "../jvm/natives/digest.ts";
-import { hostStub, oneway, parceledList } from "./binder.ts";
+import { hostService, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
 import { installerService } from "./packageinstaller.ts";
 import { checkPermission } from "./permissions.ts";
@@ -651,7 +651,7 @@ function* properties$(name: string, type: number): Gen<JObj[]> {
   return out;
 }
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", CN = "Landroid/content/ComponentName;", SLICE = "Landroid/content/pm/ParceledListSlice;";
-rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageManager$Stub", methods: {
+hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPackageManager$Stub", {
   [`getPackageInfo(${S}JI)Landroid/content/pm/PackageInfo;`]: driven(function* getPackageInfo$(pkg: string, flags: bigint): Gen {
     const record = yield* awaited(packageRecord(pkg));
     return record ? yield* packageInfo$(record, flag(flags)) : null;
@@ -782,14 +782,12 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", yield newArrayList(checksums));
   }),
   ...noops(`notifyPackageUse(${S}I)V`, `notifyDexLoad(${S}Ljava/util/Map;${S})V`),
-} });
-hostStub("package", "webdroid/PackageManagerService");
+});
 
 // a single-user device with no managed profile: nothing to reach across
-rt.register({ name: "webdroid/CrossProfileAppsService", ctor: class extends JObj {}, sup: "android/content/pm/ICrossProfileApps$Stub", methods: {
+hostService("crossprofileapps", "webdroid/CrossProfileAppsService", "android/content/pm/ICrossProfileApps$Stub", {
   [`getTargetUserProfiles(${S})Ljava/util/List;`]: () => newArrayList(),
   [`canInteractAcrossProfiles(${S})Z`]: () => 0,
   [`canRequestInteractAcrossProfiles(${S})Z`]: () => 0,
-} });
-hostStub("crossprofileapps", "webdroid/CrossProfileAppsService");
+});
 

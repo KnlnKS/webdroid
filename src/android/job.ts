@@ -8,9 +8,10 @@ import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
-import { asSystem, callingIdentity, hostStub, parceledList } from "./binder.ts";
+import { asSystem, callingIdentity, hostService, parceledList } from "./binder.ts";
 import { ownedBy } from "./packages.ts";
-import { batteryLow, netUp } from "./services.ts";
+import { netUp } from "./connectivity.ts";
+import { batteryLow } from "./power.ts";
 import { device } from "../shell/config.ts";
 import { clearGuestTimeout, setSystemTimeout, type GuestTimer } from "../guest-clock.ts";
 import type { JComponentName } from "./intent.ts";
@@ -133,7 +134,7 @@ export const jobData: PackageState = {
     }
   },
 };
-rt.register({ name: "webdroid/JobSchedulerService", ctor: class extends JObj {}, sup: "android/app/job/IJobScheduler$Stub", methods: {
+hostService("jobscheduler", "webdroid/JobSchedulerService", "android/app/job/IJobScheduler$Stub", {
   "schedule(Ljava/lang/String;Landroid/app/job/JobInfo;)I": driven(scheduleJob),
   "enqueue(Ljava/lang/String;Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I": driven(scheduleJob),
   "cancel(Ljava/lang/String;I)V": (namespace: string | null, id: number) => rt.drive(cancelJob(callingIdentity().uid, namespace, id)),
@@ -155,8 +156,7 @@ rt.register({ name: "webdroid/JobSchedulerService", ctor: class extends JObj {},
     }
     return map;
   }),
-} });
-hostStub("jobscheduler", "webdroid/JobSchedulerService");
+});
 
 // IJobCallback: the scheduler's end of one run
 class JJobCallback extends JObj { job!: ScheduledJob; run!: JobRun; }

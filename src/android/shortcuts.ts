@@ -7,7 +7,7 @@ import { after, vcall } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { wallMillis } from "../guest-clock.ts";
-import { callingIdentity, hostStub, parceledList } from "./binder.ts";
+import { callingIdentity, hostService, parceledList } from "./binder.ts";
 import { mkComponentName } from "./intent.ts";
 import { ownedBy } from "./packages.ts";
 import { launcherActivity } from "./pm.ts";
@@ -81,7 +81,7 @@ const remove = (pkg: string, ids: JObj | null) => {
 const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
 
 const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";
-rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup: "android/content/pm/IShortcutService$Stub", methods: {
+hostService("shortcut", "webdroid/ShortcutService", "android/content/pm/IShortcutService$Stub", {
   [`setDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) { verifyCaller(pkg); yield* commit(pkg, yield* incomingList(pkg, slice)); return 1; }),
   [`addDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
     verifyCaller(pkg);
@@ -139,5 +139,4 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
     complete(future, "false"),
   [`createShortcutResultIntent(${S}${SI}I${FUTURE})V`]: (_pkg: string, _si: JObj, _user: number, future: JObj) => complete(future, null),
   ...noops(`enableShortcuts(${S}${LIST}I)V`, `onApplicationActive(${S}I)V`),
-} });
-hostStub("shortcut", "webdroid/ShortcutService");
+});
