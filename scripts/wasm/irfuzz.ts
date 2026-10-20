@@ -1,7 +1,7 @@
 // Generator of methods whose control flow javac never produces: random graphs of basic blocks (so cycles with several entries), written as a class file
 // of version 50 (the type-inferring verifier takes any flow) that d8 converts like any other class. A fuel local ends every cycle. Handler blocks cover
 // random runs of the layout, so exception edges meet the same graph. The signature is the one of fuzz.ts' methods.
-import { Pool, u2, u4 } from "./classfile.ts";
+import { Pool, classFile, method, u2 } from "./classfile.ts";
 
 type T = "I" | "J" | "F" | "D";
 type Rnd = (n: number) => number;
@@ -112,9 +112,7 @@ export function irreducibleClass(name: string, count: number, rnd: Rnd): Uint8Ar
       const type = pick([null, "java/lang/ArithmeticException", "java/lang/RuntimeException"]);
       return [...u2(start.get(layout[lo])!), ...u2(end.get(layout[hi])!), ...u2(start.get(nb + i)!), ...u2(type ? pool.cls(type) : 0)];
     });
-    const body = [...u2(24), ...u2(MAX_LOCALS), ...u4(code.length), ...code, ...u2(table.length), ...table.flat(), ...u2(0)];
-    methods.push([0, 8, ...u2(pool.utf8(`m${n}`)), ...u2(pool.utf8("(IJFD)" + ret)), 0, 1, ...u2(pool.utf8("Code")), ...u4(body.length), ...body]);
+    methods.push(method(pool, 8, `m${n}`, "(IJFD)" + ret, code, { stack: 24, locals: MAX_LOCALS, handlers: table }));
   }
-  const thisC = pool.cls(name), superC = pool.cls("java/lang/Object");
-  return Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 50, ...u2(pool.count), ...pool.bytes, 0, 0x21, ...u2(thisC), ...u2(superC), 0, 0, 0, 0, ...u2(methods.length), ...methods.flat(), 0, 0]);
+  return classFile(pool, { name, methods, major: 50 });
 }

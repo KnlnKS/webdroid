@@ -20,7 +20,7 @@ import { ldp, PTR } from "../../src/native/host.ts";
 import { mainThread } from "../../src/jvm/natives/jentry.ts";
 import { definingLoader } from "../../src/wasm/link/loaders.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
-import { Pool, u2, u4 } from "./classfile.ts";
+import { Pool, classFile, method, u2 } from "./classfile.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
 import { typeFailure, canAccess } from "../../src/wasm/compiler/linkage.ts";
 import type { Code } from "../../src/wasm/compiler/code.ts";
@@ -42,13 +42,8 @@ const build = (dir: string, sources: string[], classpath: string[] = []) => {
   const to = join(out, dir);
   javac(to, sources.map((s) => join(JAVA, s)), { release: 11, classpath, android: true });
   if (dir === "b") {
-    const p = new Pool(), self = p.cls("TypeSite"), sup = p.cls("java/lang/Object");
-    const method = (name: string, descriptor: string) => {
-      const code = [0x13, ...u2(p.methodType(descriptor)), 0xb0], body = [...u2(1), ...u2(0), ...u4(code.length), ...code, ...u2(0), ...u2(0)];
-      return [...u2(9), ...u2(p.utf8(name)), ...u2(p.utf8("()Ljava/lang/invoke/MethodType;")), ...u2(1), ...u2(p.utf8("Code")), ...u4(body.length), ...body];
-    };
-    const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
-    writeFileSync(join(to, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
+    const p = new Pool(), type = (name: string, descriptor: string) => method(p, 9, name, "()Ljava/lang/invoke/MethodType;", [0x13, ...u2(p.methodType(descriptor)), 0xb0], { stack: 1, locals: 0 });
+    writeFileSync(join(to, "TypeSite.class"), classFile(p, { name: "TypeSite", methods: [type("value", "(LShared;)LShared;"), type("missing", "()LAbsentOptional;")] }));
   }
   const classes = readdirSync(to, { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
   return join(androidFixture({ out: to, classpath, minApi: dir === "b" ? 34 : 26, classes }), "classes.dex");
