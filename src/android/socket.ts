@@ -13,9 +13,8 @@ import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, soc
 import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet.ts";
 import { socketCreate, socketPair } from "../native/socket/syscalls.ts";
 import {
-  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv6, type Endpoint,
+  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv4, parseIpv6, type Endpoint,
 } from "../native/net-address.ts";
-import { parseIpv4 } from "../shell/relay.ts";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";

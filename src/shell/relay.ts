@@ -1,16 +1,8 @@
 import { unshared } from "../jvm/abi.ts";
+import { ipv4Key, parseIpv4, type Ipv4 } from "../native/net-address.ts";
 
 const EMPTY_CHUNK = new Uint8Array(0);
 
-type Ipv4 = [number, number, number, number];
-export function parseIpv4(text: string): Ipv4 | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
-  if (!match) return null;
-  const bytes: Ipv4 = [+match[1], +match[2], +match[3], +match[4]];
-  return bytes.every((byte) => byte <= 255) ? bytes : null;
-}
-export const ipv4Key = (bytes: ArrayLike<number>): number => ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
-export const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
 // A name resolves to a stable address in 198.18.0.0/15 (RFC 2544's benchmarking block, unrouted)
 // shared by Java's InetAddress and the native resolver: whichever side later dials the address,
 // the relay is given the name it stands for. A numeric literal is itself.

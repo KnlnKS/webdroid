@@ -1,12 +1,12 @@
 // AF_INET and AF_INET6: a TCP connection to another host is a relay connection; TCP to a listener
 // in this process and UDP between this process's sockets stay in the process.
 
-import { DatagramRelay, Relay, syntheticHost, ipv4Key, ipv4Text, parseIpv4 } from "../../shell/relay.ts";
+import { DatagramRelay, Relay, syntheticHost } from "../../shell/relay.ts";
 import { E, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../abi.ts";
 import { sameBytes } from "../../jvm/abi.ts";
 import {
   AF_UNIX, AF_INET, AF_INET6, V4_ANY, V4_LOOPBACK, V6_LOOPBACK, isAny, isLoopback, isMulticast, addressKey,
-  endpointOf, parseIpv6, addressText, INTERFACES, type Endpoint,
+  endpointOf, parseIpv4, parseIpv6, ipv4Key, addressText, INTERFACES, type Endpoint,
 } from "../net-address.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi.ts";
 import {
@@ -167,7 +167,7 @@ class TcpSocket extends InetSocket {
     const target: Endpoint = isAny(ep.address) ? { address: loopbackOf(ep), port: ep.port } : ep;
     this.peer = target;
     if (isLoopback(target.address)) return this.connectLoopback(target);
-    const host = target.address.length === 4 ? syntheticHost(target.address) ?? ipv4Text(target.address) : addressText(target.address);
+    const host = target.address.length === 4 ? syntheticHost(target.address) ?? addressText(target.address) : addressText(target.address);
     record(`connect ${host}:${target.port} nonblock=${this.nonblock}`);
     const relay = new Relay(host, target.port, false);
     this.stream = relay;
@@ -377,7 +377,7 @@ class UdpSocket extends InetSocket {
     if (!isLoopback(destination.address) && !recipients.length) {
       if (destination.address.length === 16) return -E.NETUNREACH;
       const relay = this.relay ??= new DatagramRelay((packet, address, port) => this.enqueue(packet, { address, port }));
-      void relay.send(syntheticHost(destination.address) ?? ipv4Text(destination.address), destination.port, copy).catch(() => {
+      void relay.send(syntheticHost(destination.address) ?? addressText(destination.address), destination.port, copy).catch(() => {
         this.error = E.NETUNREACH;
         relay.close();
         if (this.relay === relay) this.relay = null;
