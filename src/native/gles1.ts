@@ -10,11 +10,42 @@ import type { Cpu } from "./cpu.ts";
 import { glCommon, glProbe } from "./gles3.ts";
 import { readGuestPixels, pixelStore } from "./gles3-pixels.ts";
 import { vertexTypeBytes, guestIndices, indexBounds } from "./gles3-client-arrays.ts";
-import { gl, invert, takeError, untracked, raise } from "../android/gl.ts";
+import { gl, takeError, untracked, raise } from "../android/gl.ts";
 import { perf } from "../perf.ts";
 import { activateEglCurrent } from "./egl-current.ts";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
+/** a 4x4 column-major inverse into inv; 0 when singular */
+function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {
+  const a = src[so], b = src[so + 1], c = src[so + 2], d = src[so + 3],
+    e = src[so + 4], f = src[so + 5], g = src[so + 6], h = src[so + 7],
+    i = src[so + 8], j = src[so + 9], k = src[so + 10], l = src[so + 11],
+    m = src[so + 12], n = src[so + 13], o = src[so + 14], p = src[so + 15];
+  const ab = a * f - b * e, ac = a * g - c * e, ad = a * h - d * e,
+    bc = b * g - c * f, bd = b * h - d * f, cd = c * h - d * g,
+    ij = i * n - j * m, ik = i * o - k * m, il = i * p - l * m,
+    jk = j * o - k * n, jl = j * p - l * n, kl = k * p - l * o;
+  const det = ab * kl - ac * jl + ad * jk + bc * il - bd * ik + cd * ij;
+  if (det === 0) return 0;
+  const r = 1 / det;
+  inv[io] = (f * kl - g * jl + h * jk) * r;
+  inv[io + 1] = (-b * kl + c * jl - d * jk) * r;
+  inv[io + 2] = (n * cd - o * bd + p * bc) * r;
+  inv[io + 3] = (-j * cd + k * bd - l * bc) * r;
+  inv[io + 4] = (-e * kl + g * il - h * ik) * r;
+  inv[io + 5] = (a * kl - c * il + d * ik) * r;
+  inv[io + 6] = (-m * cd + o * ad - p * ac) * r;
+  inv[io + 7] = (i * cd - k * ad + l * ac) * r;
+  inv[io + 8] = (e * jl - f * il + h * ij) * r;
+  inv[io + 9] = (-a * jl + b * il - d * ij) * r;
+  inv[io + 10] = (m * bd - n * ad + p * ab) * r;
+  inv[io + 11] = (-i * bd + j * ad - l * ab) * r;
+  inv[io + 12] = (-e * jk + f * ik - g * ij) * r;
+  inv[io + 13] = (a * jk - b * ik + c * ij) * r;
+  inv[io + 14] = (-m * bc + n * ac - o * ab) * r;
+  inv[io + 15] = (i * bc - j * ac + k * ab) * r;
+  return 1;
+}
 export function gles1String(context: GL, name: number): string | null {
   switch (name) {
     case 0x1f00: return "webdroid";
