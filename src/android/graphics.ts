@@ -40,9 +40,9 @@ export const emptyBox: Readonly<Box> = { left: 0, top: 0, right: 0, bottom: 0 };
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
  * modes Canvas2D cannot express are absent and fall back to plain source-over.
- * CLEAR maps to destination-out, which clears only where the source is opaque: prep() fills a
- * CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes with a
- * transparent one).
+ * CLEAR maps to destination-out, which clears only where the source is opaque: NativePaint.fillStyle
+ * fills a CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes
+ * with a transparent one). DST is absent too: a draw by it changes nothing.
  */
 export const COMPOSITE: Record<string, GlobalCompositeOperation> = {
   CLEAR: "destination-out", SRC: "copy", SRC_OVER: "source-over", DST_OVER: "destination-over",

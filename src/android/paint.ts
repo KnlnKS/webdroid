@@ -30,6 +30,12 @@ const DEFAULT_FLAGS = 0x503;
 const ELEGANT = 0;
 export const CAPS: readonly CanvasLineCap[] = ["butt", "round", "square"];
 export const JOINS: readonly CanvasLineJoin[] = ["miter", "round", "bevel"];
+/** Canvas2D's composite ops that blend over the whole clip, clearing what a draw does not cover,
+ *  where SkBlendMode leaves it */
+export const UNBOUNDED: ReadonlySet<string> = new Set(["copy", "source-in", "destination-in", "source-out", "destination-atop"]);
+/** for an opaque colour, the bounded mode that blends it as the unbounded one does where it covers
+ *  (DST_IN then changes nothing); a transparent colour clears what any of them covers */
+const OPAQUE_MODES: Record<string, string | null> = { SRC: null, SRC_IN: "SRC_ATOP", DST_IN: "DST", SRC_OUT: "XOR", DST_ATOP: "DST_OVER" };
 
 /** hwui's Paint. The Java side keeps its own copies of the objects it was given (mShader,
  *  mTypeface, mColor as a ColorLong, the shadow layer); this is what a draw and a measure read. */
@@ -86,13 +92,16 @@ export class NativePaint {
   }
   /** SkPaint::setAlpha: an out-of-range value is pinned, and a negative one reads as unsigned */
   setAlpha(a: number) { this.color = ((a < 0 || a > 255 ? 255 : a) << 24 | (this.color & 0xffffff)) | 0; }
-  compositeOp(): GlobalCompositeOperation | null {
-    if (this.blend === "source-in" && !this.shader && !this.colorFilter && this.color >>> 24 === 255) return "source-atop";
-    return this.blend;
+  /** the mode a draw of this paint blends by (null for SRC_OVER): an unbounded mode (UNBOUNDED) of
+   *  a solid colour gives way to the bounded mode that draws it alike */
+  drawMode(): string | null {
+    const name = this.blendName;
+    if (name === null || this.shader || !UNBOUNDED.has(this.blend!)) return name;
+    const alpha = this.filteredColor() >>> 24;
+    return alpha === 255 ? OPAQUE_MODES[name] : alpha === 0 ? "CLEAR" : name;
   }
-  transparentSourceIn(): boolean {
-    return this.blend === "source-in" && this.color >>> 24 === 0 && !this.shader && !this.colorFilter;
-  }
+  /** whether a draw clears what it covers, whatever its colour */
+  clears(): boolean { return this.blendName !== null && this.drawMode() === "CLEAR"; }
 
   // the primary font is a pure function of the typeface; text ops and metrics ask for it often
   private pTf: NativeTypeface | null | undefined = undefined;
@@ -107,7 +116,7 @@ export class NativePaint {
     return this.pFont!;
   }
   fillStyle(ctx: Ctx2D): string | CanvasGradient | CanvasPattern {
-    return this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
+    return this.clears() ? "#000" : this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
   /** the paint's colour through its colour filter */
   filteredColor(): number {
