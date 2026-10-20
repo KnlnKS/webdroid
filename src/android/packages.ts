@@ -5,6 +5,11 @@ import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
+/** PackageManager's flags, which IPackageManager takes as a long */
+export const GET_ACTIVITIES = 1, GET_RECEIVERS = 2, GET_SERVICES = 4, GET_PROVIDERS = 8, GET_INSTRUMENTATION = 16, GET_SIGNATURES = 64,
+  GET_META_DATA = 0x80, MATCH_DISABLED_COMPONENTS = 0x200, GET_SHARED_LIBRARY_FILES = 0x400, GET_URI_PERMISSION_PATTERNS = 0x800,
+  GET_PERMISSIONS = 0x1000, GET_CONFIGURATIONS = 0x4000, MATCH_DEFAULT_ONLY = 0x10000, MATCH_DIRECT_BOOT_UNAWARE = 0x40000,
+  MATCH_DIRECT_BOOT_AWARE = 0x80000, MATCH_SYSTEM_ONLY = 0x100000, GET_SIGNING_CERTIFICATES = 0x8000000, MATCH_DIRECT_BOOT_AUTO = 0x10000000;
 export const qualifyComponent = (name: string, pkg: string): string => {
   name = name.replace(/\//g, ".");
   return name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;

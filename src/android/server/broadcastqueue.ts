@@ -10,7 +10,7 @@ import { PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";
 import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
-import { scheduleOnApp, compatInfo, thisApp, pms, GET_SHARED_LIBRARY_FILES } from "./am.ts";
+import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./am.ts";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
@@ -62,7 +62,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
   const from = sender ?? SYSTEM;
   if (component) {
     const name = yield* awaited(mkComponentName(appHost!.pkg, component));
-    const info = yield vcall(yield* awaited(pms()), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
+    const info = yield vcall(yield* awaited(pms()), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, STOCK_PM_FLAGS, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
     const copy = yield* withComponent$(intent, name);
     const done = finished(thisApp());

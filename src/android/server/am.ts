@@ -17,16 +17,17 @@ import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
 import { callingIdentity, newStub, parceledList } from "../binder.ts";
-import { packages } from "../packages.ts";
+import { packages, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
 import { clearUserData } from "../appdata.ts";
 import { COMPAT_CHANGES } from "../compat-changes.ts";
 
-export const GET_SHARED_LIBRARY_FILES = 0x400n;
+/** ActivityManagerService.STOCK_PM_FLAGS, what its package queries ask for */
+export const STOCK_PM_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES);
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
  *  MATCH_DIRECT_BOOT_AUTO, without meta-data (a provider asks for its own) */
-const APP_PROVIDER_FLAGS = GET_SHARED_LIBRARY_FILES | 0x800n | 0x10000000n;
+const APP_PROVIDER_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES | GET_URI_PERMISSION_PATTERNS | MATCH_DIRECT_BOOT_AUTO);
 /** the package manager, as system_server's services reach it */
 export const pms = () => hostedService("package") as Promise<JObj>;
 /** a component of `pkg` in `process` runs in this process */
@@ -60,7 +61,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
   const pkg = appHost!.pkg, process = processName();
   appThread = app;
   const pm = yield* awaited(pms());
-  const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
+  const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, STOCK_PM_FLAGS, 0);
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
   const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, APP_PROVIDER_FLAGS, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
@@ -124,7 +125,7 @@ export const providerProcesses: { get: (pkg: string, process: string, authority:
 const contentProvider = driven(function* (name: string, userId: number): Gen<JObj | null> {
   const own = published.get(name) ?? (yield* awaited(systemProviderHolder(name)));
   if (own) return own;
-  const info: JObj | null = yield vcall(yield* awaited(pms()), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
+  const info: JObj | null = yield vcall(yield* awaited(pms()), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, STOCK_PM_FLAGS, userId);
   if (!info) return null;
   const app = getDeclared<JObj>(info, COMPONENT_INFO, "applicationInfo"), process = getDeclared<string>(info, COMPONENT_INFO, "processName");
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
