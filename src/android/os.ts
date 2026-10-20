@@ -88,7 +88,9 @@ function sendSignal(pid: number, signal: number): void | Promise<void> {
   return never();
 }
 const threadPriorities = new Map<number, number>();
-const totalMemory = () => BigInt(device.cpu.memKb) * 1024n;
+/** the device profile's memory in bytes, half of it free as /proc/meminfo's MemFree has it */
+export const totalMemory = (): bigint => BigInt(device.cpu.memKb) * 1024n;
+export const freeMemory = (): bigint => totalMemory() / 2n;
 const idForName = (name: string | null) => androidGroupId(name ?? rt.npe());
 rt.registerJnis("android/os/Process", {
   "getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
@@ -104,7 +106,7 @@ rt.registerJnis("android/os/Process", {
   "setThreadGroup(II)V": () => {}, "setThreadGroupAndCpuset(II)V": () => {},
   "setArgV0Native(Ljava/lang/String;)V": (name: string) => { procIdentity.name = name; },
   "getTotalMemory()J": totalMemory,
-  "getFreeMemory()J": () => totalMemory() / 2n,
+  "getFreeMemory()J": freeMemory,
   "sendSignal(II)V": sendSignal,
   "sendSignalQuiet(II)V": sendSignal,
 });

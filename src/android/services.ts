@@ -14,7 +14,7 @@ import { device } from "../shell/config.ts";
 import { appHost } from "./apphost.ts";
 import { newIntent, putExtra, registerSystemActivity } from "./intent.ts";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os.ts";
+import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, totalMemory, freeMemory } from "./os.ts";
 import { GL_ES_VERSION } from "./pm.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
 import { deviceConfiguration, systemResource } from "./resnative.ts";
@@ -41,7 +41,7 @@ const activityManager: NativeSpec["methods"] = {
   "getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JObj) => { fillProc(info); },
   // the device profile's memory: the page cannot read the host's
   "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: JObj) => {
-    setDeclared(mi, "android/app/ActivityManager$MemoryInfo", { totalMem: 4n << 30n, availMem: 2n << 30n, lowMemory: 0, threshold: 128n << 20n });
+    setDeclared(mi, "android/app/ActivityManager$MemoryInfo", { totalMem: totalMemory(), availMem: freeMemory(), lowMemory: 0, threshold: 128n << 20n });
   },
   "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": driven(function* (pids: Int32Array): Gen {
     const infos: JObj[] = [];
