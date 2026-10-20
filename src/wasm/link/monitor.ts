@@ -71,12 +71,12 @@ export class Monitors {
       if (!o) { this.header.setLock(obj, (s.id << 8) | 1); return St.Ok; }
       if (owns(o, s)) { if ((l & 255) < THIN_MAX) this.header.setLock(obj, l + 1); else this.inflate(obj, o, THIN_MAX + 1); return St.Ok; }
       this.inflate(obj, o, l & 255);
-      return s.canSuspend ? St.Block : St.Nbs;
+      return s.sched.canWait(s) ? St.Block : St.Nbs;
     }
     const m = this.inflated(l);
     if (!m.owner) { m.owner = s; m.depth = 1; return St.Ok; }
     if (owns(m.owner, s)) { m.depth++; return St.Ok; }
-    return s.canSuspend ? St.Block : St.Nbs;
+    return s.sched.canWait(s) ? St.Block : St.Nbs;
   }
   /** waits for the owner of an inflated monitor to hand it over */
   enter(obj: object, s: Strand): Promise<void> {

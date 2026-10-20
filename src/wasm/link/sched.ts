@@ -188,7 +188,7 @@ const NO_HOOKS: ThreadHooks = { switched() {}, ended() {}, named() {} };
 const NESTED_LIMIT = 200;
 
 export class Strand {
-  readonly id: number; readonly thread: ThreadRec; readonly root: boolean; private sched: Sched;
+  readonly id: number; readonly thread: ThreadRec; readonly root: boolean; readonly sched: Sched;
   /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   waitsOn: Strand | null = null;
   /** the strand whose native entered Java on this one: the same thread, so it holds what that strand holds */
@@ -198,8 +198,6 @@ export class Strand {
   /** the host's own strand for this one (host/entry.ts) */
   host: unknown = null;
   constructor(id: number, thread: ThreadRec, root: boolean, sched: Sched) { this.id = id; this.thread = thread; this.root = root; this.sched = sched; }
-  /** whether code on this strand runs on a stack of its own, which may suspend (host code at the top level runs on the caller's) */
-  get canSuspend(): boolean { return !this.root; }
   /** runs the Wasm function `f` on a stack of this strand; a Java exception rejects the promise */
   call<R = unknown>(f: Function, ...args: unknown[]): Promise<R> { return this.sched.enter(this, f, args) as Promise<R>; }
   /** the strand is over */
@@ -227,15 +225,28 @@ export class Sched {
   owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
   /** whether this turn has used its cooperative time slice */
   turnDue(): boolean { return this.loop.due(); }
-  /** whether the code running now is on a stack of its own, which can wait for a Promise (the host's top level is not) */
-  canWait(): boolean { return !this.current().root; }
+  /** how many plain calls from the host into Java (`synchronous`) are on the running stack, which none of its Java frames can suspend through */
+  private synchronousEntries = 0;
+  /** whether code of strand `s` (the running one by default) can wait for a Promise: it runs on a stack of its own (the host's top level does not) and no plain call from the host is under it */
+  canWait(s: Strand = this.current()): boolean { return this.synchronousEntries === 0 && !s.root; }
+  /** whether Java frames are on the running stack: a strand's, or under a plain call from the host */
+  inJava(): boolean { return this.synchronousEntries > 0 || !this.current().root; }
+  /** runs `run`, a plain call from the host into Java */
+  synchronous<T>(run: () => T): T {
+    this.synchronousEntries++;
+    try { return run(); } finally { this.synchronousEntries--; }
+  }
+  /** `fn` as the two imports a call site chooses between by whether it can wait: plain, and Suspending */
+  importPair<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): [plain: (...a: A) => Promise<R> | R, wait: (...a: A) => R] {
+    return [(...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } }, this.suspending(fn)];
+  }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
    * Delivery preparation may wait before the turn expires. Restore the caller before compilation and again in the resumed stub. */
   admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
     const s = this.current();
-    if (s.root || this.w.inSynchronousJava()) return run();
+    if (!this.canWait(s)) return run();
     const thr = this.g.thr.value, depth = this.g.depth.value;
     const delivery = prepare?.(), due = this.loop.due();
     if (!delivery && !due) return run();
@@ -331,7 +342,7 @@ export class Sched {
   }
   /** Host calls are plain; a strand entry unwraps the same export before WebAssembly.promising. */
   synchronousExport(raw: Function): Function {
-    const host = (...args: unknown[]) => this.w.synchronous(() => raw(...args));
+    const host = (...args: unknown[]) => { this.synchronousEntries++; try { return raw(...args); } finally { this.synchronousEntries--; } };
     this.synchronousExports.set(host, raw);
     return host;
   }
@@ -341,17 +352,18 @@ export class Sched {
     if (!p) this.promised.set(f, p = promising(f));
     return p;
   }
+  /** runs `f` on a new stack of `s`, which may suspend whatever called it */
   enter(s: Strand, f: Function, args: unknown[]): Promise<unknown> {
     const caller = this.current();
     if (!caller.root) caller.nested++;
-    const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running] as const;
-    this.become(s);
+    const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running, this.synchronousEntries] as const;
+    this.become(s); this.synchronousEntries = 0;
     try {
       const p = this.promising(f)(...args) as Promise<unknown>, idle = () => this.idle();
       // a stack that ends after a resume leaves the globals as its own
       p.then(idle, idle);
       return p;
-    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; const c = this.current(); this.hooks.switched(c.thread, c.root); }
+    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; this.synchronousEntries = was[4]; const c = this.current(); this.hooks.switched(c.thread, c.root); }
   }
 
   // ---------- host.sync
@@ -383,7 +395,7 @@ export class Sched {
       case Sync.Unpark: { const r = this.rec(obj!, true)!; if (r.parked) r.parked(); else r.permit = true; return 0; }
       case Sync.Status: return this.status(obj!, a !== 0);
       case Sync.Plain: this.blockedPlain++; return 0;
-      case Sync.CanSuspend: return +(!s.root && !this.w.inSynchronousJava());
+      case Sync.CanSuspend: return +this.canWait(s);
       case Sync.Resume: this.hooks.switched(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
       case Sync.Rename: { const r = this.rec(obj!); if (r) this.hooks.named(r); return 0; }

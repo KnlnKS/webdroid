@@ -42,7 +42,7 @@ const background = Object.assign(new JThread(), { jname: "interposed-background"
 const current = await entry.callOn(origin, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
 await entry.callOn(origin, () => entry.initClass("E$Owner"));
 await entry.callOn(origin, () => entry.newObj("E$Owner"));
-const immediate = w.synchronous(() => entry.callOn(origin, () => entry.newObj("E$Owner")));
+const immediate = w.sched.synchronous(() => entry.callOn(origin, () => entry.newObj("E$Owner")));
 if (immediate instanceof Promise) fail("warm synchronous constructor became asynchronous");
 const immediateObject = await immediate;
 if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== current) fail("synchronous constructor caller");

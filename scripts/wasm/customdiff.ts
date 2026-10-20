@@ -313,7 +313,7 @@ console.log("4 ART collector/retry/racing cases match");
     c.i64(1n); cx.callMethod(c, cx.prog.resolve("java/lang/Thread", "sleep", "(J)V")!); c.i32(7);
   }, owner);
   try {
-    w.synchronous(() => call());
+    w.sched.synchronous(() => call());
     throw new Error("plain handle callback must reject blocking");
   } catch (e) {
     const t = w.throwable(e);

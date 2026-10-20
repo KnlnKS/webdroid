@@ -61,7 +61,7 @@ export function startRuntime(w: World): Runtime {
   }
   const linker = {
     link: (slot: number) => w.tiers.linkSlot(slot),
-    due: (slot: number) => +(w.sched.canWait() && !w.inSynchronousJava() && (w.sched.turnDue() || !!w.aot?.needsPreparation(slot))),
+    due: (slot: number) => +(w.sched.canWait() && (w.sched.turnDue() || !!w.aot?.needsPreparation(slot))),
     wait: suspending((slot: number) => w.sched.admitLink(() => w.tiers.linkSlot(slot), () => w.aot?.prepare(slot))),
     sync: (op: number, obj: object | null, a: number) => w.sched.sync(op, obj, a),
   };

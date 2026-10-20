@@ -304,7 +304,7 @@ if (substrate) {
         expect("delivery admission restores depth", globals.depth.value, 19);
       }, () => { prepared++; return Promise.resolve(); });
       expect("delivery admission waits without exhausted turn budget", prepared, 1);
-      w.synchronous(() => w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); }));
+      w.sched.synchronous(() => w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); }));
       expect("synchronous Java does not prepare delivery", prepared, 1);
       try { await w.sched.admitLink(() => { throw new Error("rejected preparation ran link"); }, () => Promise.reject(new Error("preparation rejected"))); }
       catch (error) { expect("preparation rejection is retained", (error as Error).message, "preparation rejected"); }

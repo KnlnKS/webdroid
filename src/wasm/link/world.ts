@@ -374,7 +374,7 @@ export class World {
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
     const { slot, ensure, params, ret } = this.entryCall(cls, name, desc), call = this.helpers.invoker(params, ret);
-    return (...args) => this.synchronous(() => {
+    return (...args) => this.sched.synchronous(() => {
       this.tiers.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
@@ -418,17 +418,6 @@ export class World {
     const depth = this.rt.depth.value;
     try { this.rt.callee.value = SLOT.soe; (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; } finally { this.rt.depth.value = depth; }
     return e;
-  }
-  private synchronousEntries = 0;
-  inSynchronousJava(): boolean { return this.synchronousEntries > 0; }
-  synchronous<T>(run: () => T): T {
-    this.synchronousEntries++;
-    try { return run(); } finally { this.synchronousEntries--; }
-  }
-  freshStack<T>(run: () => T): T {
-    this.tiers.refreshHotUnits();
-    const prior = this.synchronousEntries; this.synchronousEntries = 0;
-    try { return run(); } finally { this.synchronousEntries = prior; }
   }
   // ---------- functions over Java values that the host calls (hostfns.ts)
   hostFn(...a: Parameters<HostFunctions["hostFn"]>): ReturnType<HostFunctions["hostFn"]> { return this.helpers.hostFn(...a); }

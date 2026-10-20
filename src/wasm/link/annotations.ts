@@ -52,12 +52,8 @@ const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x
 const states = new WeakMap<World, ReturnType<typeof make>>();
 function make(w: World) {
   const fn = w.hostFn.bind(w);
-  const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) => {
-    let plain: Function | undefined, waiting: ReturnType<World["callFn"]> | undefined;
-    return (strand: Strand, ...args: unknown[]) => strand.canSuspend && !w.inSynchronousJava()
-      ? (waiting ??= w.callFn(name, params, ret, body))(strand, ...args)
-      : w.synchronous(() => (plain ??= fn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); })))(...args));
-  };
+  const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) =>
+    (strand: Strand, ...args: unknown[]) => w.helpers.mayWait(strand, name, params, ret, body, args);
   const classOf = fn("an:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); });
   const mkExec = fn("an:mkExec", ["I", "I", "I"], "L", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "mkExec"); });
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));

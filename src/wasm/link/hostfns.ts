@@ -118,7 +118,8 @@ export class HostFunctions {
       const caller = this.w.stacks.bridge(s), leave = caller.leave;
       const mine = token;
       let p: Promise<unknown>;
-      try { p = this.w.freshStack(() => enter(s, mine, ...args)); } catch (error) { leave(); throw error; }
+      this.w.tiers.refreshHotUnits();
+      try { p = enter(s, mine, ...args); } catch (error) { leave(); throw error; }
       const state = d.value as number;
       if (state !== mine && state !== -mine) {
         caller.suspended();
@@ -138,6 +139,16 @@ export class HostFunctions {
       return result;
     });
     return f;
+  }
+  /** calls a Java function made of `body` (as callFn's) with `args`, waiting only where strand `parent` can: on a new strand of its own then, which answers a Promise if
+   *  it waited, else plainly */
+  mayWait(parent: Strand, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, args: unknown[], prepare?: (cx: Compiler) => void): unknown {
+    if (!this.w.sched.canWait(parent)) return this.w.unwound(() => this.hostFn(name, params, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }), prepare)(...args));
+    const s = this.w.sched.strand(parent.thread, parent);
+    let result: unknown;
+    try { result = this.callFn(name, params, ret, body, prepare)(s, ...args); } catch (e) { s.end(); throw e; }
+    if (result instanceof Promise) return result.finally(() => s.end());
+    s.end(); return result;
   }
   /** field readers are made again: field layouts follow a changed namespace */
   forgetFieldReaders(): void { this.fieldReaders.clear(); }
@@ -170,6 +181,6 @@ export class HostFunctions {
       });
       this.throwMakers.set(cls, make = (m) => f(m === null ? null : this.w.javaString(m)));
     }
-    return this.w.synchronous(() => make!(msg));
+    return make(msg);
   }
 }

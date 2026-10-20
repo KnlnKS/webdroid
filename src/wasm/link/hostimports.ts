@@ -45,6 +45,7 @@ export function hostImports(w: World): HostImports {
     return resolveCatch(w, method, pc, throwable, sched.current());
   };
   const signatures = (id: number) => validateSignatures(w, w.nameOf(id), sched.current());
+  const [catchBlockPlain, catchBlockWait] = sched.importPair(catchBlock), [initSignatures, initSignaturesWait] = sched.importPair(signatures);
   const javaValue = (v: unknown) => w.javaValue(v);
   const math = {} as Record<keyof typeof MATH_IMPORTS, Function>;
   for (const f of Object.keys(MATH_IMPORTS) as (keyof typeof MATH_IMPORTS)[]) math[f] = Math[f];
@@ -113,9 +114,6 @@ export function hostImports(w: World): HostImports {
     // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead
     len: (answer: unknown[] | number) => typeof answer === "number" ? answer : answer.length,
     catchSync: () => w.symbolic.symbolicSync(),
-    catchBlock: (...args: Parameters<typeof catchBlock>) => w.synchronous(() => catchBlock(...args)),
-    catchBlockWait: sched.suspending(catchBlock),
-    initSignatures: (id: number) => w.synchronous(() => signatures(id)),
-    initSignaturesWait: sched.suspending(signatures),
+    catchBlock: catchBlockPlain, catchBlockWait, initSignatures, initSignaturesWait,
   } satisfies HostImports;
 }

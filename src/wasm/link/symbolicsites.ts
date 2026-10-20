@@ -55,7 +55,7 @@ export class SymbolicSites {
     for (const [name] of sites) out[name] = this.symbolicSites.get(name)!.slot;
     return out;
   }
-  symbolicSync(): number { return +(this.w.inSynchronousJava() || this.w.sched.current().root); }
+  symbolicSync(): number { return +!this.w.sched.canWait(); }
   private symbolicResolver(method: MethodInfo, pc: number, slot: number, inputs: SymbolicSite[4], output: SymbolicSite[5]) {
     const run = () => {
       this.symbolicResolutions++;
@@ -95,6 +95,7 @@ export class SymbolicSites {
       const ready = resolveInstruction(this.w, method, ins, owner);
       return chain(ready, install);
     };
-    return { plain: () => this.w.synchronous(run), wait: this.w.sched.suspending(run) };
+    const [plain, wait] = this.w.sched.importPair(run);
+    return { plain, wait };
   }
 }
