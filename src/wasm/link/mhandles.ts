@@ -13,6 +13,7 @@ import { CLASS, InvokeMode, MH, MT, OBJECTS, emitInvokeImport, emitMethodType, h
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { prettyType } from "../compiler/linkage.ts";
 import { type Strand } from "./sched.ts";
 import { emitVarHandleAccess } from "../compiler/poly.ts";
@@ -64,20 +65,12 @@ interface State {
   ptypes(t: object): object; rtype(t: object): object; classId(c: object): number;
   newArray(n: number): object;
 }
-const states = new WeakMap<World, State>();
-function state(w: World): State {
-  let s = states.get(w);
-  if (s) return s;
-  const kinds = handleKinds(w.prog);
-  s = {
-    kinds,
-    handleKind: w.helpers.fieldReader<number>(MH, "handleKind", "I"), art: w.helpers.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.helpers.fieldReader<object>(MH, "type", `L${MT};`),
-    ptypes: w.helpers.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.helpers.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.helpers.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
-    newArray: w.helpers.hostFn("mh:new", ["I"], "L", (cx, c) => cx.emitNewArray(c, OBJECTS, () => c.lget(0))),
-  };
-  states.set(w, s);
-  return s;
-}
+const states = new PerWorld((w): State => ({
+  kinds: handleKinds(w.prog),
+  handleKind: w.helpers.fieldReader<number>(MH, "handleKind", "I"), art: w.helpers.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.helpers.fieldReader<object>(MH, "type", `L${MT};`),
+  ptypes: w.helpers.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.helpers.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.helpers.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
+  newArray: w.helpers.hostFn("mh:new", ["I"], "L", (cx, c) => cx.emitNewArray(c, OBJECTS, () => c.lget(0))),
+}));
 
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
@@ -94,7 +87,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   if (mode === InvokeMode.Custom) return invokeCustom(w, siteId, args, parent);
   if (mode === InvokeMode.VarHandle) {
     const separator = siteId.indexOf("@"), mode = siteId.slice(0, separator), site = parseMethodDesc(siteId.slice(separator + 1));
-    const s = state(w), list = s.newArray(site.params.length + 1), owner = "java/lang/invoke/VarHandle";
+    const s = states.get(w), list = s.newArray(site.params.length + 1), owner = "java/lang/invoke/VarHandle";
     w.bridge.setElement(list, 0, mh);
     site.params.forEach((_, i) => w.bridge.setElement(list, i + 1, w.bridge.element(args, i)));
     const method = w.prog.require(owner).methods.find(m => m.name === mode)!;
@@ -102,7 +95,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     return invokeVarHandle(w, list, art, false, [`L${owner};`, ...site.params], site.ret, parent);
   }
   if (mode === InvokeMode.Frame) return invokeFrame(w, mh!, args, parent);
-  const s = state(w);
+  const s = states.get(w);
   const { params: sp, ret: sr } = parseMethodDesc(siteId), { params: np, ret: nr } = signatureOf(w, s.typeOf(mh!));
   if (np.length !== sp.length || !np.every((d, i) => d === sp[i]) || nr !== sr) {
     if (mode === InvokeMode.Exact) w.raise("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
@@ -161,7 +154,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
 
 /** ART DoVarHandleInvokeTranslation obtains the access-mode type, checks exact invokers, then dispatches the accessor. */
 function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, params: string[], ret: string, parent: Strand): Answer {
-  const s = state(w), VH = "java/lang/invoke/VarHandle", AM = `${VH}$AccessMode`;
+  const s = states.get(w), VH = "java/lang/invoke/VarHandle", AM = `${VH}$AccessMode`;
   if (params[0] !== `L${VH};`) w.raise("java/lang/invoke/WrongMethodTypeException", "Expected leading VarHandle parameter");
   const handle = w.bridge.element(args, 0) as object;
   if (!handle) w.raise("java/lang/NullPointerException", "Expected argument 1 to be a non-null VarHandle");
@@ -249,7 +242,7 @@ function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: 
   else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
 }
 function signatureOf(w: World, type: object): { params: string[]; ret: string } {
-  const s = state(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));
+  const s = states.get(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));
   return { params: Array.from({ length: w.bridge.arrayLength(p) }, (_, i) => desc(w.bridge.element(p, i) as object)), ret: desc(s.rtype(type)) };
 }
 function frameArgs(w: World, frame: object, params: string[], parent: Strand): object | Promise<object> {

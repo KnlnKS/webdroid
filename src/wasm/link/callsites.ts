@@ -12,13 +12,14 @@ import type { Compiler } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
 import { typeName } from "../compiler/program.ts";
 import { InvokeMode, emitHandleValue, emitTypeValue, emitInvokeImport, resolveHandleMember } from "../compiler/handles.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
-const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
+const linked = new PerWorld(() => new WeakMap<DexFile, Map<number, object>>());
 const scalarType: Record<number, string> = { 0: "I", 2: "I", 3: "I", 4: "I", 6: "J", 0x10: "F", 0x11: "D", 0x15: `L${MT};`, 0x16: `L${MH};`, 0x17: "Ljava/lang/String;", 0x18: "Ljava/lang/Class;", 0x1f: "I" };
 type BootstrapReference = { argument: number } & (
   { kind: "handle"; index: number } | { kind: "methodType"; index: number } | { kind: "class"; owner: string; descriptor: string }
@@ -125,7 +126,7 @@ function wrap(w: World, e: unknown, index: number, parent: Strand): never | Prom
 }
 export function invokeCustom(w: World, site: string, args: object, parent: Strand): object | null | Promise<object | null> {
   const split = site.lastIndexOf("#"), index = Number(site.slice(split + 1)), referrer = methodOf(w.prog, site.slice(0, split))!;
-  let dexes = linked.get(w); if (!dexes) linked.set(w, dexes = new WeakMap());
+  const dexes = linked.get(w);
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
   const signature = () => referrer.dex.protoDesc(referrer.dex.callSiteProto(index));
   const targetOf = w.helpers.fieldReader<object | null>(CS, "target", `L${MH};`);

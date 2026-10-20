@@ -8,6 +8,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { Loader } from "../compiler/program.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { prepareDefinition, resolvedMirror } from "./resolution.ts";
 import { chain } from "./maybe.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
@@ -34,16 +35,11 @@ interface State {
   /** the ClassLoader object that opened the app's own dex files, which the classes of the default namespace that the app defines answer to getClassLoader */
   appLoader: object | null;
 }
-const states = new WeakMap<World, State>();
-function stateOf(w: World): State {
-  let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.helpers.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
-  return s;
-}
+const states = new PerWorld((w): State => ({ byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.helpers.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null }));
 
 /** the namespace a ClassLoader object sees: its own if it opened dex files, else its nearest ancestor's, else the default one */
 function loaderFor(w: World, obj: object | null): Loader {
-  const s = stateOf(w);
+  const s = states.get(w);
   for (let o = obj; o; o = s.parentOf(o)) { const l = s.byObject.get(o); if (l) return l; }
   return w.prog.boot;
 }
@@ -53,7 +49,7 @@ function loaderFor(w: World, obj: object | null): Loader {
  *  nearest defining one is a ClassLoader of the app's, which decides in Java what it hands down (an isolating loader usually hands down little): Java's
  *  resolutions correct either guess as they happen, and each correction re-resolves the loader's dex files. */
 function newLoader(w: World, parent: object | null, loader: object): Loader {
-  const s = stateOf(w), platform = (o: object) => { const cls = w.classNameOf(o); return w.prog.loaderOf(cls) === w.prog.boot ? cls : undefined; };
+  const s = states.get(w), platform = (o: object) => { const cls = w.classNameOf(o); return w.prog.loaderOf(cls) === w.prog.boot ? cls : undefined; };
   let ownFirst = platform(loader) === "dalvik/system/DelegateLastClassLoader";
   for (let o = parent; o; o = s.parentOf(o)) {
     const ancestor = s.byObject.get(o);
@@ -66,14 +62,14 @@ function newLoader(w: World, parent: object | null, loader: object): Loader {
 /** Native class generation defines in the supplied loader even when it has never opened dex files. */
 export function definingLoader(w: World, object: object | null): Loader {
   if (!object) return w.prog.boot;
-  const s = stateOf(w);
+  const s = states.get(w);
   let loader = s.byObject.get(object);
   if (!loader) { loader = newLoader(w, s.parentOf(object), object); s.byObject.set(object, loader); }
   return loader;
 }
 
 export function objectOfLoader(w: World, loader: Loader): object | null {
-  return loader.object ?? (loader === w.prog.root ? states.get(w)?.appLoader ?? null : null);
+  return loader.object ?? (loader === w.prog.root ? states.peek(w)?.appLoader ?? null : null);
 }
 
 const PATH_LOADERS = new Set(["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "dalvik/system/InMemoryDexClassLoader"]);
@@ -82,7 +78,7 @@ const PATH_LOADERS = new Set(["dalvik/system/PathClassLoader", "dalvik/system/De
 function standardPath(w: World, object: object, seen = new Set<object>()): boolean {
   if (seen.has(object)) return false;
   seen.add(object);
-  const cls = w.classNameOf(object), parent = stateOf(w).parentOf(object);
+  const cls = w.classNameOf(object), parent = states.get(w).parentOf(object);
   if (!PATH_LOADERS.has(cls) || w.prog.loaderOf(cls) !== w.prog.boot || parent && w.classNameOf(parent) !== "java/lang/BootClassLoader") return false;
   const [before, after] = librariesOf(w, object);
   return [...before, ...after].every(l => l !== w.prog.boot && !!l.object && standardPath(w, l.object, seen));
@@ -90,7 +86,7 @@ function standardPath(w: World, object: object, seen = new Set<object>()): boole
 
 /** ART searches exact platform loader chains natively before invoking Java loadClass. */
 export function nativeClassLookup(w: World, loader: Loader, name: string): string | undefined {
-  const s = states.get(w);
+  const s = states.peek(w);
   if (!s) return;
   const boot = w.prog.lookup(w.prog.boot, name), descriptor = `L${name};`, active = new Set<object>();
   // False delegates an unprovable path to Java; undefined is a proven miss.
@@ -140,7 +136,7 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
 }
 
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
-  const s = stateOf(w), prior = s.libraries.get(object);
+  const s = states.get(w), prior = s.libraries.get(object);
   if (prior) return prior;
   const mark = w.bridge.begin();
   try {
@@ -159,7 +155,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
 export function classByName(w: World, name: string, scope: unknown, mode: number): number | Promise<object> {
   const n = name.replace(/\./g, "/");
   if (n === "" || n.includes("@")) return 0;
-  const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(scope as object) : undefined;
+  const prog = w.prog, s = states.get(w), cookie = mode === Lookup.Cookie ? s.cookies.get(scope as object) : undefined;
   const object = scope as object | null;
   const loader = mode === Lookup.Cookie ? cookie?.loader : mode === Lookup.Defined ? definingLoader(w, object) : loaderFor(w, object);
   if (!loader) return 0;
@@ -201,7 +197,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
 }
 
 function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): object {
-  const s = stateOf(w);
+  const s = states.get(w);
   // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
   let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
   if (!loader) {

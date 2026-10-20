@@ -4,6 +4,7 @@ import { idOfClass } from "./classes.ts";
 import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders.ts";
 import type { Strand } from "./sched.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { descToName } from "../../jvm/abi.ts";
@@ -132,20 +133,19 @@ export function resolveForName(w: World, name: string, object: object | null, ow
 }
 
 type Definition = { owner: Strand["thread"]; state: "resolving" | "ready" | "failed"; wait: Promise<string>; error?: unknown };
-const definitions = new WeakMap<World, Map<string, Definition>>();
+const definitions = new PerWorld(() => new Map<string, Definition>());
 
 export function definitionReady(w: World, key: string): boolean {
   const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
   return !cls?.dex || !cls.def || w.prog.linksStatically(loader) || !objectOfLoader(w, loader)
-    || definitions.get(w)?.get(key)?.state === "ready";
+    || definitions.peek(w)?.get(key)?.state === "ready";
 }
 
 /** Resolve only declaration hierarchy before a definition publishes layout or its mirror. */
 export function prepareDefinition(w: World, key: string, owner: Strand): string | Promise<string> {
   const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
   if (!cls?.dex || !cls.def || w.prog.linksStatically(loader) || !objectOfLoader(w, loader)) return key;
-  let states = definitions.get(w);
-  if (!states) definitions.set(w, states = new Map());
+  const states = definitions.get(w);
   const prior = states.get(key);
   if (prior) {
     if (prior.state === "ready") return key;

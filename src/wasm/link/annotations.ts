@@ -11,6 +11,7 @@ import type { EncAnnotation, EncVal } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
@@ -49,7 +50,7 @@ function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; p
 }
 const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x.visibility === visibility);
 
-const states = new WeakMap<World, ReturnType<typeof make>>();
+const states = new PerWorld(make);
 function make(w: World) {
   const fn = w.helpers.hostFn.bind(w.helpers);
   const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) =>
@@ -143,8 +144,7 @@ export function hostObject(w: World, kind: number, a: number, b: number, arg: ob
   return advance();
 }
 function* objects(w: World, strand: Strand, kind: number, a: number, b: number, arg: object | null): Generator<unknown, object | null, any> {
-  let s = states.get(w);
-  if (!s) states.set(w, s = make(w));
+  const s = states.get(w);
   const system = SYSTEM_VALUES.get(kind);
   if (system) {
     const hit = ofKind(elementOf(w, kind, a).set, SYSTEM).find((x) => x.type === system[0]), v = hit?.elements.value;

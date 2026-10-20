@@ -15,6 +15,7 @@ import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";
@@ -28,9 +29,9 @@ function members(jc: JClass | undefined): string[] {
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
-const sigs = new WeakMap<World, WeakMap<MethodInfo, { params: number[]; ret: number }>>();
+const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), true);
 function sigOf(w: World, m: MethodInfo) {
-  let byMethod = sigs.get(w); if (!byMethod) sigs.set(w, byMethod = new WeakMap());
+  const byMethod = sigs.get(w);
   let s = byMethod.get(m); if (!s) byMethod.set(m, s = { params: m.params.map((p) => w.idOf(typeName(p))), ret: w.idOf(typeName(m.ret)) });
   return s;
 }

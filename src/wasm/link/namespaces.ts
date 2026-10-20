@@ -4,6 +4,7 @@ import { changedTypes, declaresNaming, declaresStaticOf, javaName, type Loader }
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 
 export class Namespaces {
   private readonly w: World;
@@ -111,7 +112,7 @@ export class Namespaces {
     w.epoch++;
     w.opts.compiler?.namespaces();
     w.cha.reindex(); w.planner.forgetImplementations();
-    w.helpers.forgetFieldReaders();
+    w.helpers.forgetFieldReaders(); PerWorld.rebound(w);
     w.dispatch.forget();
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);

@@ -6,6 +6,7 @@ import { T } from "../compiler/wasmbin.ts";
 import { causedThrowable, resolveType } from "./resolution.ts";
 import { type Strand } from "./sched.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { emitSave } from "../compiler/hostcalls.ts";
 import { caught, chain, each } from "./maybe.ts";
 
@@ -79,7 +80,7 @@ function constraints(w: World, cls: string): Pair[] {
 export const hasSignatureConstraints = (w: World, cls: string): boolean => constraints(w, cls).length > 0;
 
 type Validation = { thread: Strand["thread"]; wait: Promise<void> } | { ready: true } | { failed: true };
-const validations = new WeakMap<World, Map<string, Validation>>();
+const validations = new PerWorld(() => new Map<string, Validation>());
 
 function signature(m: MethodInfo): string[] {
   if (!m.dex || m.methodIdx < 0) return [m.ret, ...m.params];
@@ -88,8 +89,7 @@ function signature(m: MethodInfo): string[] {
 }
 
 export function validateSignatures(w: World, cls: string, owner: Strand): void | Promise<void> {
-  let states = validations.get(w);
-  if (!states) validations.set(w, states = new Map());
+  const states = validations.get(w);
   const prior = states.get(cls);
   if (prior) {
     if ("ready" in prior) return;

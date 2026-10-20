@@ -17,6 +17,7 @@ import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 import { hostUnsafe, fieldCookie, byFieldId } from "./unsafe.ts";
 import { hostReflect } from "./reflect.ts";
 import { hostMembers } from "./members.ts";
@@ -39,9 +40,9 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-const ifaceCache = new WeakMap<World, Map<string, string[]>>();
+const ifaceCache = new PerWorld(() => new Map<string, string[]>(), true);
 function interfaces(w: World, name: string): string[] {
-  let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
+  const m = ifaceCache.get(w);
   let l = m.get(name);
   if (!l) {
     const out = new Set<string>(), add = (i: string) => { if (!out.has(i)) { out.add(i); w.prog.get(i)?.ifaces.forEach(add); } };
