@@ -7,12 +7,11 @@
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
 import { openApk } from "./lib.ts";
 import { dexesOfZip } from "../src/jvm/dex.ts";
-import { mountLocalPlatformData } from "./aosp.ts";
+import { mountLocalPlatformData, platformJarBytes } from "./aosp.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import { loadDex, loadTier } from "../src/jvm/tier.ts";
-import "../src/jvm/natives/jstring.ts";
-import "../src/jvm/natives/jlang.ts";
-import "../src/jvm/natives/jio.ts";
+import { loadPlatformJar } from "../src/android/framework.ts";
+import "../src/natives.ts";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader.ts";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host.ts";
 import { jniMissing, registered } from "../src/native/jni.ts";
@@ -24,6 +23,7 @@ const args = process.argv.slice(2);
 const [apk, lib] = args.filter((a) => !a.startsWith("--"));
 const zip = openApk(apk);
 await loadTier();
+platformJarBytes().forEach((bytes, i) => bytes && loadPlatformJar(bytes, i));
 for (const dex of dexesOfZip(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
