@@ -2,8 +2,7 @@
 // (cached by runner source content), for scripts/wasm/conform.ts.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import { androidPlatform, androidTool } from "../android-sdk.ts";
-import { shellIn } from "../wasm/tools.ts";
+import { fixture, javac, shellIn } from "../java.ts";
 import { SUITES } from "./suites.ts";
 
 export const CACHE = "conform-cache";
@@ -14,8 +13,7 @@ export async function prepare(suiteName: string): Promise<{ suite: (typeof SUITE
   const suite = SUITES[suiteName];
   if (!suite) throw new Error(`unknown suite ${suiteName}: ${Object.keys(SUITES).join("|")}`);
   const jarDir = `${CACHE}/jars`, dexDir = `${CACHE}/${suiteName}`;
-  const JAVA_HOME = process.env.JAVA_HOME ?? "/opt/homebrew/opt/openjdk@21";
-  const run = shellIn(process.cwd(), { ...process.env, JAVA_HOME, PATH: `${JAVA_HOME}/bin:${process.env.PATH}` });
+  const run = shellIn(process.cwd());
 
   mkdirSync(jarDir, { recursive: true });
   const jars = await Promise.all(suite.maven.map(async (coords) => {
@@ -63,18 +61,16 @@ export async function prepare(suiteName: string): Promise<{ suite: (typeof SUITE
     const stubs = filesUnder(`${here}/stubs`, "**/*.java");
     // hidden platform APIs the tests call: compiled against, never dexed, so the platform's own classes answer
     const hidden = `${dexDir}/hidden`;
-    if (fullBuild && suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
-      ...filesUnder(`${here}/hidden`, "**/*.java")]);
+    if (fullBuild && suite.source) javac(hidden, filesUnder(`${here}/hidden`, "**/*.java"), { release: 17, android: true, flags: ["-nowarn"] });
     // hidden java.* classes cannot come from the class path; they patch java.base as sources javac only reads
     const patch = suite.source ? ["--patch-module", `java.base=${here}/patch/java.base`] : [];
-    run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", ...patch, "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
-      "-d", out, ...runners, ...(fullBuild ? [...(suite.source ? stubs : []), ...sources] : [])]);
+    javac(out, [...runners, ...(fullBuild ? [...(suite.source ? stubs : []), ...sources] : [])],
+      { release: 17, classpath: [...jars, hidden], android: true, flags: ["-XDstringConcat=inline", "-nowarn", ...patch] });
     // Build separately: a smaller result must not leave classes2.dex from an older build.
     // Publish only after d8 succeeds; failed builds keep their old stamp and are retried.
     const nextDex = mkdtempSync(`${dexDir}/dex-`);
     try {
-      run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", nextDex, ...jars,
-        ...filesUnder(out, "**/*.class")]);
+      fixture({ out: nextDex, classes: [...jars, ...filesUnder(out, "**/*.class")], android: true, minApi: 35, debug: true });
       for (const file of readdirSync(dexDir)) if (/^classes(\d+)?\.dex$/.test(file)) rmSync(`${dexDir}/${file}`);
       for (const file of readdirSync(nextDex)) renameSync(`${nextDex}/${file}`, `${dexDir}/${file}`);
       writeFileSync(stamp, runnerSources);

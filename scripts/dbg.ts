@@ -3,9 +3,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid.ts";
 import { FLOWS } from "../tests/e2e/flows/index.ts";
 import { executionFlow } from "../tests/e2e/types.ts";
-import { need } from "./args.ts";
+import { cli } from "./args.ts";
 
-const [app, stopAtArg = "99", outDir = "webdroid-shots/dbg"] = need("pnpm dbg <flow> [stopAtStep] [outDir]");
+const [app, stopAtArg = "99", outDir = "webdroid-shots/dbg"] = cli("pnpm dbg <flow> [stopAtStep] [outDir]", {}, { min: 1 }).positionals;
 const stopAt = Number(stopAtArg);
 const source = FLOWS.find((f) => f.app === app);
 if (!source) { console.error(`unknown flow "${app}" — known: ${FLOWS.map((f) => f.app).join(", ")}`); process.exit(2); }

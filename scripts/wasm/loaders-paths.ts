@@ -7,9 +7,10 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
 import { definingLoader, nativeClassLookup } from "../../src/wasm/link/loaders.ts";
-import { loadDexes, program, world } from "./lib.ts";
+import { program, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { natives } from "./harness.ts";
-import { PLATFORM_PATHS } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
 /** `app` and `common` are the suite's dexes, `files` the dex each of `paths` (the class path of a DexClassLoader) names */

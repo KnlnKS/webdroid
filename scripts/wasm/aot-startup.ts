@@ -4,7 +4,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
 const dir = process.env.WEBDROID_AOT;
 if (!dir) throw new Error("set WEBDROID_AOT to a build");

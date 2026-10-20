@@ -13,10 +13,10 @@ import type { ClassDef } from "../src/jvm/dex.ts";
 import { prepareMethod } from "../src/jvm/prepared.ts";
 
 import "../src/natives.ts";
-import { openDexes } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 import { corpusApks } from "./apk-corpus.ts";
-import { hasPlatformJars, platformDefs } from "./desccheck.ts";
-export { hasPlatformJars };
+import { hasPlatformJars } from "./aosp.ts";
+import { platformDefs } from "./desccheck.ts";
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dirname, "..");
@@ -124,7 +124,7 @@ async function corpusOverrides(defs: Map<string, ClassDef>, wanted: Map<string, 
   const counts = new Map<string, Map<string, Set<string>>>();
   for (const apk of corpusApks(resolve(root, "apks"))) {
     let dexes;
-    try { dexes = await openDexes(resolve(root, "apks", apk)); } catch { continue; }
+    try { dexes = loadDexes(resolve(root, "apks", apk)); } catch { continue; }
     const app = new Map<string, ClassDef>();
     for (const dex of dexes) for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));

@@ -9,7 +9,7 @@ import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
 import { world } from "./lib.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { ROOT, platformJars } from "./paths.ts";
-import { filesIn } from "./tools.ts";
+import { filesIn } from "../java.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 
 const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);

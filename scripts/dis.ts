@@ -1,10 +1,10 @@
 // Disassemble a method: pnpm dis <apk> <class> [methodName]
-import { openDexes } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes.ts";
 import { descToName } from "../src/jvm/abi.ts";
 
 const [apk, clsName, methodName] = process.argv.slice(2);
-for (const dex of await openDexes(apk)) {
+for (const dex of loadDexes(apk)) {
   const dname = dex.name;
   for (let i = 0; i < dex.classDefCount; i++) {
     if (descToName(dex.type(dex.classDef2Type(i))) !== clsName) continue;

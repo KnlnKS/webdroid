@@ -3,7 +3,7 @@
 Engine support for what the Wasm tier uses. Dated rows and sections were measured on this host (availability and
 limits, not speed). Recheck the secondary sources before relying on them.
 
-Reproduce from `research/wasm` after `pnpm install`:
+Reproduce from `research/wasm` after `pnpm install` (binaryen and playwright are root dependencies):
 - `node probe.mjs <chrome|chromium|webkit> [--flags=a,b] [--nolimits]`: the matrix, as JSON
 - `DEBUG=pw:browser node probe-tiering.mjs hints [chrome|chromium|node]` reads V8's `--trace-wasm-compilation-times`;
   `node probe-tiering.mjs cache [chrome|chromium] [http,sw,cache]` takes `MB`, `HOT`, `OPTIONS=0`, `HEADED=1` and `JS_FLAGS`.

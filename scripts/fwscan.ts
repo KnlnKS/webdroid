@@ -2,11 +2,11 @@
 // pnpm fwscan [vendor/aosp/framework.jar] [class-name-prefix]
 import { ACC } from "../src/jvm/dex.ts";
 import { descToName } from "../src/jvm/abi.ts";
-import { openDexes } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
 import { frameworkSurface } from "./fuzz/catalog.ts";
 
 const [jar = "vendor/aosp/framework.jar", prefix] = process.argv.slice(2);
-const dexes = await openDexes(jar);
+const dexes = loadDexes(jar);
 
 const surface = frameworkSurface(dexes);
 const selected = (owner: string) => !prefix || owner.startsWith(prefix);

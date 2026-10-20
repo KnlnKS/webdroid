@@ -9,8 +9,7 @@ import type { Entry } from "../../jvm/natives/jentry.ts";
 import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import { appArchives } from "../../jvm/natives/jdex.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
-import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex.ts";
-import { centralDir, entryBytes } from "../../jvm/natives/jzip.ts";
+import { dexesIn, dexesOfZip, type DexFile } from "../../jvm/dex.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
@@ -247,17 +246,13 @@ export function openDexes(path: string, app: DexFile[], opened: Map<string, DexF
     const own = appArchives.has(path) && app.length > 0;
     const packed = own ? undefined : packedArchives.get(path);
     const bytes = own || packed ? null : vfs.readFile(path);
-    const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path);
-    const dexes = packed ? packed.prepare(true).then(() => dexEntryNames(Object.keys(packed.zip)).flatMap(name => dexesIn(packed.zip[name], `${path}:${name}`)))
+    const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? jarDexes(bytes, path) : dexesIn(bytes, path);
+    const dexes = packed ? packed.prepare(true).then(() => dexesOfZip(packed.zip, path))
       : bytes instanceof Promise ? bytes.then(decode) : decode(bytes);
     opened.set(path, dexes instanceof Promise ? dexes.catch(error => { opened.delete(path); throw error; }) : dexes);
   }
   return opened.get(path);
 }
-const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
-  const dir = centralDir(zip);
-  return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
-};
 
 let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined, warmPort: MessagePort | undefined;
 /** a process Worker's store takes its modules from the page's (`serveAot`), the page's compile host starts its compile workers, and the page's warm Worker

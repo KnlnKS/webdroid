@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { brotliCompressSync, constants } from "node:zlib";
 import { fileResponse } from "./serve.ts";
 import { AOT_ROOT, sourceKey, sourcePaths, type AotManifest } from "./aot-key.ts";
-import { PLATFORM_PATHS, ROOT } from "./wasm/paths.ts";
+import { PLATFORM_PATHS } from "./aosp.ts";
+import { ROOT } from "./wasm/paths.ts";
 
 let current: { stamp: string; source: string } | undefined;
 /** the key of the sources now, recomputed when a file has changed */

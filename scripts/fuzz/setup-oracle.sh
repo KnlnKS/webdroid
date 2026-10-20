@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
+export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
 export PATH="$JAVA_HOME/bin:/opt/homebrew/bin:$PATH"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
 ADB="$SDK/platform-tools/adb"

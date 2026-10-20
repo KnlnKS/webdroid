@@ -1,8 +1,8 @@
 import { expect, test } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { BASELINE, descriptorMismatches, hasPlatformJars, withoutHint } from "../scripts/desccheck.ts";
-import { dexesFrom } from "../scripts/dexes.ts";
-import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
+import { BASELINE, descriptorMismatches, withoutHint } from "../scripts/desccheck.ts";
+import { hasPlatformJars, PLATFORM_PATHS } from "../scripts/aosp.ts";
+import { loadDexes } from "../scripts/dexes.ts";
 import { Program } from "../src/wasm/compiler/program.ts";
 import { externs, intrinsics } from "../src/wasm/link/intrinsics.ts";
 
@@ -19,8 +19,7 @@ test.skipIf(!hasPlatformJars())("registered descriptors match AOSP declarations,
 // An intrinsic (a method run as generated code instead of its body or a native) is keyed by class,
 // name and descriptor, so a key its platform class does not declare never applies, silently.
 test.skipIf(!hasPlatformJars())("every intrinsic names a method its platform class declares", () => {
-  const jar = (name: string) => new URL(`../vendor/aosp/${name}`, import.meta.url).pathname;
-  const prog = new Program(PLATFORM_JARS.flatMap((name) => dexesFrom(new Uint8Array(readFileSync(jar(name))), jar(name))));
+  const prog = new Program(PLATFORM_PATHS.flatMap(loadDexes));
   const extern = new Set(externs);
   const unmatched = [...intrinsics.keys()].filter((key) => {
     const dot = key.indexOf(".");

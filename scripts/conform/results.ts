@@ -1,4 +1,4 @@
-// What a conformance class run answers: ConformRunner's lines, and the hash baselines keep of a passing test's name.
+// What a conformance class run answers: ConformRunner's lines, the hash baselines keep of a passing test's name, and the coverage a failed setup loses.
 import { crc32 } from "node:zlib";
 
 export type Outcome = { ok: boolean; message: string };
@@ -26,4 +26,20 @@ export function parseLines(text: string): { tests: Map<string, Outcome>; skipped
     if (status === "S") skipped.set(name, message); else tests.set(clockFree(name), { ok: status === "P", message });
   }
   return { tests, skipped };
+}
+
+/** Array-provider setup failures lose rows even when the run emits none of the baseline names. */
+export function arrayProviderFailures(cls: string, skipped: Map<string, string>): string[] {
+  const failures: string[] = [];
+  for (const [name, reason] of skipped) if (/^array provider adapter:|GenericArrayTypeImpl.*cannot be cast to java.lang.Class/.test(reason)) {
+    failures.push(`${cls}: ${name}  array-provider coverage lost (${reason.slice(0, 200)})`);
+  }
+  return failures;
+}
+
+/** A shared setup failure must not turn lost baseline executions into benign name drift. */
+export function classSetupFailures(cls: string, tests: Map<string, Outcome>, baselineCount: number): string[] {
+  if (!baselineCount) return [];
+  const failure = [tests.get(cls), tests.get(`initializationError(${cls})`)].find((result) => result && !result.ok);
+  return failure ? [`${cls}: class setup failed with ${baselineCount} baseline passing tests (${failure.message.slice(0, 200)})`] : [];
 }

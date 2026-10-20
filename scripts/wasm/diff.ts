@@ -10,7 +10,8 @@ import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { checker, fixture, onJdk } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { fixture, onJdk } from "../java.ts";
 
 const out = fixture({ sources: ["W", "S", "N", "Ref"].map((c) => join(JAVA, c + ".java")), classes: /^[WSN](\$\w+)?\.class$/ });
 

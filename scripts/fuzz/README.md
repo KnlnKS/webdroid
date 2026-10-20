@@ -49,7 +49,7 @@ machine paths out of scripts.
 ```bash
 sdkmanager 'platform-tools' 'emulator' 'platforms;android-35' \
   'system-images;android-35;google_apis;arm64-v8a'
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
+export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
 export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 pnpm install

@@ -7,7 +7,7 @@ import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticFiel
 import { javaInterface } from "../../src/android/webjavabridge.ts";
 import { processFailure } from "../../src/shell/process-port.ts";
 import { JAVA } from "./paths.ts";
-import { androidFixture } from "./tools.ts";
+import { androidFixture } from "../java.ts";
 
 let built: string | undefined;
 /** the fixture E (and its nested classes) as a dex, built once per process */

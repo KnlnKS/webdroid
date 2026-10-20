@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
-import { dexesFrom } from "../dexes.ts";
+import { loadDexes } from "../dexes.ts";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import type { AppCodeRequest } from "../../src/wasm/host/appcode.ts";
-import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { dexesIn, dexEntryNames, type DexFile } from "../../src/jvm/dex.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
+import { dexesIn, dexesOfZip, type DexFile } from "../../src/jvm/dex.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { zipTree } from "../../src/jvm/natives/jzip.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
@@ -14,20 +14,15 @@ import { useWorld, worldOptions } from "../../src/wasm/host/boot.ts";
 
 /** the platform build under `key` at `base`, as prepareApp sees it, without its files */
 export const fakeAot = (base: string, key: string): AppCodeRequest["aot"] => ({ base, key, bytes: () => undefined });
-export function loadDexes(path: string) {
-  return dexesFrom(new Uint8Array(readFileSync(path)), path);
-}
 /** WEBDROID_AOT=<dir> runs the harnesses over the precompiled platform assets (aot-build.ts) in <dir> */
 const AOT = typeof process === "undefined" ? (globalThis as { G1_AOT?: string }).G1_AOT : process.env.WEBDROID_AOT;
 /** a page fetches the build as the app does (g1run.ts makes G1_STORE); node reads the files */
 const aotStore = (dir: string): AotStore => (globalThis as { G1_STORE?: AotStore }).G1_STORE ?? { get: (file) => new Uint8Array(readFileSync(`${dir}/${file}`)) };
+const PLATFORM = new Set(PLATFORM_PATHS);
+/** a Program over the dex and jar files at `paths`. A platform build numbers its code by every platform class, so under WEBDROID_AOT the platform
+ *  jars among `paths` stand for all of them, in class path order ahead of the other paths. */
 export function program(paths: string[]) {
-  // precompiled code is numbered by the platform's classes, so all of them come first, in class path order, before the app's
-  const platform = (p: string) => p.includes("/vendor/aosp/");
-  if (AOT) {
-    const root = paths.find(platform)?.split("/vendor/aosp/")[0];
-    if (root) paths = [...PLATFORM_JARS.map((j) => `${root}/vendor/aosp/${j}`), ...paths.filter((p) => !platform(p))];
-  }
+  if (AOT && paths.some((p) => PLATFORM.has(p))) paths = [...PLATFORM_PATHS, ...paths.filter((p) => !PLATFORM.has(p))];
   const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
   return prog;
 }
@@ -35,9 +30,8 @@ export function program(paths: string[]) {
 function vfsDexes(path: string): DexFile[] | undefined {
   const bytes = vfs.readFile(path);
   if (!(bytes instanceof Uint8Array)) return undefined;
-  if (path.endsWith(".dex")) return dexesIn(bytes, path);
-  const zip = zipTree(bytes), names = dexEntryNames(Object.keys(zip));
-  return names.length ? names.flatMap((n) => dexesIn(zip[n], n)) : undefined;
+  const dexes = path.endsWith(".dex") ? dexesIn(bytes, path) : dexesOfZip(zipTree(bytes));
+  return dexes.length ? dexes : undefined;
 }
 /** `w` made the realm's Java now and whenever its entries are called: the objects natives make are the current World's */
 export function current(w: World): World {

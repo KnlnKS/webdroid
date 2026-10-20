@@ -8,9 +8,10 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive.ts";
 import { appArchives } from "../../src/jvm/natives/jdex.ts";
 import { openDexes } from "../../src/wasm/host/boot.ts";
-import { loadDexes, world } from "./lib.ts";
+import { world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { natives } from "./harness.ts";
-import { PLATFORM_PATHS } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
 /** `app`, `a` and `b` are the suite's dexes; `out` takes the APK built of them */

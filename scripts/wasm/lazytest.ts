@@ -1,11 +1,13 @@
 // The linker's own tests: CHA devirtualisation undone by a dex loaded later, the implicit exceptions with their messages, heap limits,
 // stack traces, StackOverflowError at the Java edge. Needs javac and d8. Run: pnpm wasm lazytest
 import { join } from "node:path";
-import { loadDexes, world } from "./lib.ts";
+import { world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { JAVA, platformJars } from "./paths.ts";
-import { checker, filesIn, fixture } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { filesIn, fixture } from "../java.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 
 const jars = platformJars("core-oj", "core-libart");

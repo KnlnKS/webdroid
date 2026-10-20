@@ -5,8 +5,10 @@
 //   pnpm ts scripts/lat/census.ts <run.json> ... [--windows]
 import { readFileSync } from "node:fs";
 import { brokerMethods } from "../../src/shell/processes.ts";
+import { Ev } from "../../src/timeline.ts";
 
-const THREAD = 17, CALL = 20, ANSWER = 21, SERVE = 25, MAIN = 1;
+/** Ev.Thread's argument for the main thread */
+const MAIN = 1;
 type Mark = [number, number, number];
 const q = (a: number[], p: number) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; };
 const byMethod = new Map<string, { calls: number; windows: Set<string>; trips: number[]; main: number }>(), perWindow: number[] = [], mainPerWindow: number[] = [], waits: number[] = [];
@@ -21,9 +23,9 @@ for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for
     const open = new Map<number, [number, boolean][]>(), window = `${file}:${run.scenario}:${step.name}:${windows}`;
     let spent = 0, mainSpent = 0, thread = 0;
     for (const [ms, ev, arg] of worker) {
-      if (ev === THREAD) thread = arg;
-      if (ev === CALL) (open.get(arg) ?? open.set(arg, []).get(arg)!).push([ms, thread === MAIN]);
-      if (ev !== ANSWER) continue;
+      if (ev === Ev.Thread) thread = arg;
+      if (ev === Ev.Call) (open.get(arg) ?? open.set(arg, []).get(arg)!).push([ms, thread === MAIN]);
+      if (ev !== Ev.Answer) continue;
       const call = open.get(arg)?.shift();
       if (!call) continue;
       const [at, main] = call, name = brokerMethods[arg] ?? `#${arg}`, row = byMethod.get(name) ?? byMethod.set(name, { calls: 0, windows: new Set(), trips: [], main: 0 }).get(name)!;
@@ -32,10 +34,10 @@ for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for
     }
     perWindow.push(spent); mainPerWindow.push(mainSpent);
     if (process.argv.includes("--windows") && spent) console.log(`  ${run.scenario} ${step.name}: ${spent.toFixed(1)} ms waiting on broker calls, ${mainSpent.toFixed(1)} on the main thread`);
-    const serves = (step.page as Mark[] | undefined ?? []).filter(([, ev]) => ev === SERVE).map(([ms]) => ms);
+    const serves = (step.page as Mark[] | undefined ?? []).filter(([, ev]) => ev === Ev.Serve).map(([ms]) => ms);
     let next = 0;
     for (const [ms, ev] of worker) {
-      if (ev !== CALL) continue;
+      if (ev !== Ev.Call) continue;
       while (next < serves.length && serves[next] < ms) next++;
       if (next < serves.length) waits.push(serves[next++] - ms);
     }

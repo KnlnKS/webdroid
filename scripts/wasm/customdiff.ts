@@ -3,13 +3,15 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { loadDexes, program, world } from "./lib.ts";
+import { program, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { ACC, Program } from "../../src/wasm/compiler/program.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
-import { Pool, u2, u4 } from "./classfile.ts";
+import { Pool, classFile, method, u2, u4 } from "./classfile.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { checker, fixture, javac, onJdk, tempDir } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { fixture, javac, onJdk, tempDir } from "../java.ts";
 import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles.ts";
 import { bootstrapReferences } from "../../src/wasm/link/callsites.ts";
 import { mapExternal, memorySync, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
@@ -28,13 +30,8 @@ import { UInfo } from "../../src/wasm/compiler/info.ts";
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
   const out: Record<string, Uint8Array> = {};
-  const build = (name: string, access: number, sup: string, ifaces: string[], pool: Pool, fields: number[][], methods: number[][], attrs: number[][]) => {
-    const self = pool.cls(name), parent = pool.cls(sup), interfaces = ifaces.map((i) => pool.cls(i));
-    out[name] = Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(pool.count), ...pool.bytes, ...u2(access), ...u2(self), ...u2(parent), ...u2(interfaces.length), ...interfaces.flatMap(u2), ...u2(fields.length), ...fields.flat(), ...u2(methods.length), ...methods.flat(), ...u2(attrs.length), ...attrs.flat()]);
-  };
-  const method = (pool: Pool, access: number, name: string, desc: string, code: number[] | null, locals = 3, stack = 4) => {
-    const body = code && [...u2(stack), ...u2(locals), ...u4(code.length), ...code, ...u2(0), ...u2(0)];
-    return [...u2(access), ...u2(pool.utf8(name)), ...u2(pool.utf8(desc)), ...u2(body ? 1 : 0), ...(body ? [...u2(pool.utf8("Code")), ...u4(body.length), ...body] : [])];
+  const build = (name: string, access: number, sup: string, interfaces: string[], pool: Pool, fields: number[][], methods: number[][], attributes: number[][]) => {
+    out[name] = classFile(pool, { name, access, sup, interfaces, fields, methods, attributes });
   };
   // interface Ig { String name(); }
   { const p = new Pool(); build("Ig", 0x601, "java/lang/Object", [], p, [], [method(p, 0x401, "name", "()Ljava/lang/String;", null)], []); }
@@ -106,12 +103,12 @@ function handClasses(): Record<string, Uint8Array> {
     build("Mt", 0x21, "java/lang/Object", [], p, [], [
       constant("type", p.methodType(signature), "MethodType"),
       constant("handle", handle, "MethodHandle"),
-      method(p, 9, "identity", "(LMh$Signature;)LMh$Signature;", [0x2a, 0xb0], 1),
-      method(p, 9, "poly", "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;", [0x2a, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LMh$Signature;)LMh$Signature;")), 0xb0], 1),
-      method(p, 9, "arrayHandle", "()Ljava/lang/invoke/VarHandle;", [0x13, ...u2(p.cls("[LMh$Signature;")), 0xb8, ...u2(p.member(10, "java/lang/invoke/MethodHandles", "arrayElementVarHandle", "(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;")), 0xb0], 0),
-      method(p, 9, "vh", "(Ljava/lang/invoke/VarHandle;)Ljava/lang/Object;", [0x2a, 0x01, 0x03, 0xb6, ...u2(p.member(10, "java/lang/invoke/VarHandle", "get", "([LMh$Signature;I)LMh$Signature;")), 0xb0], 1),
-      method(p, 9, "nullPoly", "()I", [0x01, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LAbsent;)LAbsent;")), 0x57, 0x03, 0xac], 0),
-      method(p, 9, "custom", "()Ljava/lang/Object;", [0x01, 0xba, ...u2(p.invokeDynamic(0, "signature", signature)), 0, 0, 0xb0], 0)
+      method(p, 9, "identity", "(LMh$Signature;)LMh$Signature;", [0x2a, 0xb0], { locals: 1 }),
+      method(p, 9, "poly", "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;", [0x2a, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LMh$Signature;)LMh$Signature;")), 0xb0], { locals: 1 }),
+      method(p, 9, "arrayHandle", "()Ljava/lang/invoke/VarHandle;", [0x13, ...u2(p.cls("[LMh$Signature;")), 0xb8, ...u2(p.member(10, "java/lang/invoke/MethodHandles", "arrayElementVarHandle", "(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;")), 0xb0], { locals: 0 }),
+      method(p, 9, "vh", "(Ljava/lang/invoke/VarHandle;)Ljava/lang/Object;", [0x2a, 0x01, 0x03, 0xb6, ...u2(p.member(10, "java/lang/invoke/VarHandle", "get", "([LMh$Signature;I)LMh$Signature;")), 0xb0], { locals: 1 }),
+      method(p, 9, "nullPoly", "()I", [0x01, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LAbsent;)LAbsent;")), 0x57, 0x03, 0xac], { locals: 0 }),
+      method(p, 9, "custom", "()Ljava/lang/Object;", [0x01, 0xba, ...u2(p.invokeDynamic(0, "signature", signature)), 0, 0, 0xb0], { locals: 0 })
     ], [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
   }
   {
@@ -120,9 +117,9 @@ function handClasses(): Record<string, Uint8Array> {
     const site = (name: string, bsm: string, tail: string, args: number[] = [], ret = "Ljava/lang/invoke/CallSite;") => {
       const index = bootstraps.length;
       bootstraps.push([...u2(p.methodHandle(6, p.member(10, "Bootstrap", bsm, prefix + tail + ")" + ret))), ...u2(args.length), ...args.flatMap(u2)]);
-      methods.push(method(p, 9, name, "(I)I", [0x1a, 0xba, ...u2(p.invokeDynamic(index, name, "(I)I")), 0, 0, 0xac], 1));
+      methods.push(method(p, 9, name, "(I)I", [0x1a, 0xba, ...u2(p.invokeDynamic(index, name, "(I)I")), 0, 0, 0xac], { locals: 1 }));
     };
-    methods.push(method(p, 10, "secret", "(I)I", [0x1a, 0x10, 19, 0x60, 0xac], 1));
+    methods.push(method(p, 10, "secret", "(I)I", [0x1a, 0x10, 19, 0x60, 0xac], { locals: 1 }));
     site("fixed", "fixed", "I", [p.int(19)]);
     site("collected", "collected", "[I", [p.int(2), p.int(7), p.int(11)]);
     site("constants", "constants", "Ljava/lang/String;Ljava/lang/Class;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;", [p.string("payload"), p.cls("Bootstrap"), p.methodType("(I)I"), p.methodHandle(6, p.member(10, "Bootstrap", "add", "(II)I"))]);
@@ -139,7 +136,7 @@ function handClasses(): Record<string, Uint8Array> {
     const nullable = bootstraps.length, nullableDesc = "([IIIIII)V";
     bootstraps.push([...u2(p.methodHandle(6, p.member(10, "Bootstrap", "nullableRange", prefix + ")Ljava/lang/invoke/CallSite;"))), ...u2(0)]);
     methods.push(method(p, 9, "nullableRange", "([IIIIII)I", [0x2a, 0x1b, 0x1c, 0x1d, 0x15, 4, 0x15, 5,
-      0xba, ...u2(p.invokeDynamic(nullable, "nullableRange", nullableDesc)), 0, 0, 0x2a, 0xbe, 0xac], 6, 6));
+      0xba, ...u2(p.invokeDynamic(nullable, "nullableRange", nullableDesc)), 0, 0, 0x2a, 0xbe, 0xac], { locals: 6, stack: 6 }));
     const body = [...u2(bootstraps.length), ...bootstraps.flat()];
     build("Dyn", 0x21, "java/lang/Object", [], p, [], methods, [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
   }

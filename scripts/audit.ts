@@ -6,31 +6,33 @@
 // and interface sites. With --framework the AOSP dex joins the program and the report becomes
 // the native methods this apk would need if those classes ran as AOSP bytecode.
 import { globSync, readFileSync, writeFileSync } from "node:fs";
-import { openApk, openDexes, dexesOf } from "./lib.ts";
-import { argv } from "./args.ts";
+import { openApk } from "./lib.ts";
+import { loadDexes } from "./dexes.ts";
+import { AOSP } from "./aosp.ts";
+import { dexesOfZip, type DexFile } from "../src/jvm/dex.ts";
+import { cli } from "./args.ts";
 import { Program, reach } from "../src/jvm/reach.ts";
 import { rootsOf, reflectiveRoots } from "../src/jvm/roots.ts";
-import type { DexFile } from "../src/jvm/dex.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import "../src/natives.ts";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";
 
-const args = process.argv.slice(2);
-const { flag, opt, positional } = argv(args, ["--limit", "--json", "--from"]);
-const apk = positional[0];
-if (!apk) throw new Error("usage: pnpm run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
-const limit = parseInt(opt("--limit", "40")!);
+const { values: { framework, all, limit: limitArg, json: out, from, cut }, positionals: [apk] } = cli("pnpm audit <apk> [--framework] [--all] [--limit N] [--json out.json] [--from class[#method]]... [--cut prefix]...", {
+  framework: { type: "boolean" }, all: { type: "boolean" }, limit: { type: "string", default: "40" }, json: { type: "string" },
+  from: { type: "string", multiple: true, default: [] }, cut: { type: "string", multiple: true, default: [] },
+}, { min: 1 });
+const limit = parseInt(limitArg);
 
 const t0 = performance.now();
-const zip = await openApk(apk);
-const appDexes = dexesOf(zip);
+const zip = openApk(apk);
+const appDexes = dexesOfZip(zip);
 const p = new Program();
 for (const d of appDexes) p.add(d);
 const appClasses = p.size;
 
 let fwDexes: DexFile[] = [];
-if (flag("--framework")) {
-  fwDexes = await openDexes("vendor/aosp/framework.jar");
+if (framework) {
+  fwDexes = loadDexes(`${AOSP}/framework.jar`);
   for (const d of fwDexes) p.add(d);
 }
 
@@ -41,7 +43,6 @@ for (const name of Object.keys(zip)) {
 
 // --from <class> asks the same question of a framework subtree instead of an apk: what
 // would running THIS as bytecode need? Same closure, different roots.
-const from = args.filter((a, i) => args[i - 1] === "--from");
 const roots = from.length
   ? { classes: from.map((f) => f.split("#")[0]), why: new Map(from.map((c) => [c.split("#")[0], "--from"])), methods: from.flatMap((f) => {
       const [c, only] = f.split("#");
@@ -73,8 +74,8 @@ const rank = rankCalls;
 
 const show = (title: string, rows: [string, number][]) => {
   console.log(`\n=== ${title}: ${rows.length}`);
-  for (const [k, n] of rows.slice(0, flag("--all") ? rows.length : limit)) console.log(`  ${String(n).padStart(5)}  ${k}`);
-  if (!flag("--all") && rows.length > limit) console.log(`  … ${rows.length - limit} more (--all)`);
+  for (const [k, n] of rows.slice(0, all ? rows.length : limit)) console.log(`  ${String(n).padStart(5)}  ${k}`);
+  if (!all && rows.length > limit) console.log(`  … ${rows.length - limit} more (--all)`);
 };
 
 // A class the program never defines is the hard stop: today it auto-stubs and every call
@@ -96,7 +97,7 @@ if (fwDexes.length) {
   }
   const rows = [...byClass].sort((a, b) => b[1][0] - a[1][0]);
   console.log(`\n=== the same, by class: ${rows.length} classes to shim`);
-  for (const [c, [m, sites]] of rows.slice(0, flag("--all") ? rows.length : limit || 25)) {
+  for (const [c, [m, sites]] of rows.slice(0, all ? rows.length : limit || 25)) {
     console.log(`  ${String(m).padStart(4)} methods ${String(sites).padStart(5)} sites  ${c}`);
   }
   show("unresolved after AOSP (no dex anywhere, no native)", rank(r.unresolvedMethods, (k) => isFramework(k) && !registered(k)));
@@ -110,7 +111,6 @@ show("framework fields reached and not implemented", rank(r.unresolvedFields, (k
 // only half of it — a cut is also bounded by what the hand-written framework ABOVE it still
 // names, because those sites hold the TS class and read its JS properties, and bytecode
 // spells the same fields f$name$hash. Cutting a leaf under a TS framework moves the problem.
-const cut = args.filter((a, i) => args[i - 1] === "--cut");
 if (cut.length) {
   const src = new Map(globSync("src/**/*.ts").map((f) => [f, readFileSync(f, "utf8")]));   // file → text, read once
   const rows: [string, string, number][] = [];
@@ -128,12 +128,11 @@ if (cut.length) {
   rows.sort((a, b) => b[2] - a[2]);
   const total = rows.reduce((n, r) => n + r[2], 0);
   console.log(`\n=== cut [${cut.join(" ")}]: ${rows.length} native specs to withhold, ${total} references from src/ to rehome`);
-  for (const [name, ctor, n] of rows.slice(0, flag("--all") ? rows.length : limit || 25)) {
+  for (const [name, ctor, n] of rows.slice(0, all ? rows.length : limit || 25)) {
     console.log(`  ${String(n).padStart(5)}  ${name}  (${ctor || "anonymous"})`);
   }
 }
 
-const out = opt("--json");
 if (out) {
   writeFileSync(out, JSON.stringify({
     apk, appClasses, frameworkClasses: p.size - appClasses,

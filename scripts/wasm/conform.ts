@@ -6,11 +6,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prepare } from "../conform/prepare.ts";
-import { hash, parseLines, type Outcome } from "../conform/results.ts";
+import { arrayProviderFailures, classSetupFailures, hash, parseLines, type Outcome } from "../conform/results.ts";
 import { SUITES } from "../conform/suites.ts";
-import { consume } from "../args.ts";
+import { cli } from "../args.ts";
 import { nodeCommand, run } from "../node.ts";
-import { arrayProviderFailures, classSetupFailures } from "./conform-coverage.ts";
 import { checker } from "./tools.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
@@ -21,12 +20,11 @@ const PINS_PATH = "tests/conformance/wasm-pins.json";
 const CLASS_TIMEOUT_MS = Number(process.env.CONFORM_TIMEOUT ?? 600_000);
 type Pins = Record<string, { class: string; test: string; flaky?: boolean; why: string }[]>;
 
-const args = process.argv.slice(2);
-const { flag, option } = consume(args);
-const update = flag("--update"), jobs = Number(option("--jobs") ?? 4), testFilter = option("--test") ?? "", outputDir = option("--out");
-const [target, match = ""] = args;
-const plan: [string, string][] = target === "quick" ? QUICK : target in SUITES ? [[target, match]] : [];
-if (!plan.length) { console.error(`usage: pnpm conform <${Object.keys(SUITES).join("|")}|quick> [class-substring] [--test name] [--update] [--jobs n] [--out directory]`); process.exit(2); }
+const usage = `pnpm conform <${Object.keys(SUITES).join("|")}|quick> [class-substring] [--test name] [--update] [--jobs n] [--out directory]`;
+const { values: { update, jobs: jobsArg, test: testFilter, out: outputDir }, positionals: [target, match = ""] } = cli(usage,
+  { update: { type: "boolean" }, jobs: { type: "string", default: "4" }, test: { type: "string", default: "" }, out: { type: "string" } });
+const jobs = Number(jobsArg), plan: [string, string][] = target === "quick" ? QUICK : target in SUITES ? [[target, match]] : [];
+if (!plan.length) { console.error(`usage: ${usage}`); process.exit(2); }
 
 const [node, conformOne] = nodeCommand(join(import.meta.dirname, "conformone.ts"));
 

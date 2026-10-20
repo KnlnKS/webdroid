@@ -7,14 +7,17 @@ import { packModule, VERSION, type AotStore, type CHeader, type DHeader } from "
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { WarmWorld, type WarmCall } from "../../src/wasm/link/warmshim.ts";
-import { loadDexes, program, world } from "./lib.ts";
+import { program, world } from "./lib.ts";
+import { loadDexes } from "../dexes.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { buildApp } from "../../src/wasm/link/apps.ts";
 import { natives } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
-import { JAVA, PLATFORM_PATHS } from "./paths.ts";
-import { checker, filesIn, fixture, tempDir } from "./tools.ts";
+import { JAVA } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
+import { checker } from "./tools.ts";
+import { filesIn, fixture, tempDir } from "../java.ts";
 
 const build = process.env.WEBDROID_AOT;
 if (!build) { console.log("aottest: set WEBDROID_AOT to a build (aot-build.ts)"); process.exit(1); }

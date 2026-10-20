@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { BASELINE, OVERRIDES, hasPlatformJars, overrideBypasses, selfCallsSkipped } from "../scripts/bypass.ts";
+import { BASELINE, OVERRIDES, overrideBypasses, selfCallsSkipped } from "../scripts/bypass.ts";
+import { hasPlatformJars } from "../scripts/aosp.ts";
 
 // A TS method that answers where AOSP's body calls an overridable method on `this` ignores an app's
 // override of it. Known ones are the baseline, a backlog; `pnpm bypass --write-baseline` rewrites it.

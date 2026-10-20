@@ -1,34 +1,31 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { openApk, openDexes, dexesOf } from "../lib.ts";
+import { openApk } from "../lib.ts";
+import { loadDexes } from "../dexes.ts";
+import { AOSP } from "../aosp.ts";
+import { dexesOfZip } from "../../src/jvm/dex.ts";
 import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import { Program, reach } from "../../src/jvm/reach.ts";
 import { reflectiveRoots, rootsOf } from "../../src/jvm/roots.ts";
 import "../../src/natives.ts";
 
-function option(args: string[], name: string, fallback?: string): string | undefined {
-  const inline = args.find((arg) => arg.startsWith(`${name}=`));
-  if (inline) return inline.slice(name.length + 1);
-  const index = args.indexOf(name);
-  return index < 0 ? fallback : args[index + 1];
-}
-
-export async function inventory(args: string[]): Promise<void> {
-  const sdk = Number(option(args, "--sdk", "35"));
+/** `pnpm fuzz inventory`: the API level's declared members by support, and with `reached` the members the corpus apps reach */
+export async function inventory(options: { sdk: string; framework?: string; json?: string; reached: boolean }): Promise<void> {
+  const sdk = Number(options.sdk);
   if (!Number.isInteger(sdk) || sdk < 1) throw new Error("--sdk must be a positive integer");
   const cached = `fuzz-cache/android-${sdk}/framework.jar`;
-  const frameworkPath = option(args, "--framework", existsSync(cached) ? cached : "vendor/aosp/framework.jar")!;
-  const xml = sdkApiXml(sdk), frameworkDexes = await openDexes(frameworkPath);
+  const frameworkPath = options.framework ?? (existsSync(cached) ? cached : `${AOSP}/framework.jar`);
+  const xml = sdkApiXml(sdk), frameworkDexes = loadDexes(frameworkPath);
   let catalog = buildCatalog({ sdk, xml, runtime: rt, frameworkDexes });
-  if (!args.includes("--no-reached")) {
+  if (options.reached) {
     const reached: ReachedSurface = { classes: new Map(), methods: new Map(), fields: new Map() };
     const bump = (target: Map<string, number>, source: Iterable<readonly [string, number]>) => {
       for (const [key, count] of source) target.set(key, (target.get(key) ?? 0) + count);
     };
     const apks = readdirSync("apks").filter((file) => /\.x?apk$/i.test(file)).sort();
     for (const file of apks) {
-      const zip = await openApk(`apks/${file}`), dexes = dexesOf(zip), program = new Program();
+      const zip = openApk(`apks/${file}`), dexes = dexesOfZip(zip), program = new Program();
       for (const dex of dexes) program.add(dex);
       for (const dex of frameworkDexes) program.add(dex);
       const services: Record<string, string> = {};
@@ -44,7 +41,7 @@ export async function inventory(args: string[]): Promise<void> {
   }
   console.log(`Android API ${sdk}: ${catalog.members.length} declared members`);
   for (const [support, count] of Object.entries(catalog.totals)) console.log(`  ${String(count).padStart(6)}  ${support}`);
-  const json = option(args, "--json");
+  const { json } = options;
   if (json) {
     mkdirSync(dirname(json), { recursive: true });
     writeFileSync(json, JSON.stringify(catalog, null, 1));

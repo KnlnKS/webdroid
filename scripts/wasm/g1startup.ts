@@ -6,7 +6,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
-import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
+import { G1_DIR, ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
 const dir = process.env.WEBDROID_AOT, dex = join(G1_DIR, "classes.dex"), files = new Set<string>();
 if (!dir) throw new Error("set WEBDROID_AOT to a build made with --app");
