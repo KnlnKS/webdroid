@@ -14,6 +14,9 @@ export type PackedArchiveIndex = {
   spans: [number, number, string, number][];
 };
 export const packedArchives = new Map<string, PackedArchive>();
+/** the app's own archives, whose dex the process loaded at boot: a loader over them (LoadedApk's) is
+ *  the app's class loader, over the classes the process already holds */
+export const appArchives = new Set<string>();
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const input = bytes.buffer instanceof ArrayBuffer ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
   return new Uint8Array(await crypto.subtle.digest("SHA-256", input)).toHex();
