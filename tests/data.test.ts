@@ -643,6 +643,29 @@ describe("mediastore", () => {
     expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
     expect([await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0), await vcall(cursor, "getInt", "(I)I", 1)]).toEqual(["/sdcard/Pictures/resolved.png", 3]);
   });
+
+  test("a row's dates are its file's: DATE_MODIFIED follows its modification time, DATE_ADDED stays as it changes", async () => {
+    freshSQLiteStore();
+    const context = await bootApp(await packageRecord("org.webdroid.test.sqlite"));
+    const cr = await vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
+    const path = "/sdcard/Pictures/dated.png";
+    const dates = async () => {
+      const cursor = await vcall(cr, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+        await mkUri("content://media/external/images/media"), strArray(["date_added", "date_modified", "datetaken"]), "_data = ?", strArray([path]), null);
+      expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+      const row: unknown[] = [];
+      for (let i = 0; i < 3; i++) row.push(await vcall(cursor, "getLong", "(I)J", i));
+      return row;
+    };
+    try {
+      vfs.write(path, new Uint8Array([1]));
+      vfs.mtimes.set(path, 1_600_000_000_500);
+      expect(await dates()).toEqual([1_600_000_000n, 1_600_000_000n, 1_600_000_000_500n]);
+      vfs.write(path, new Uint8Array([1, 2]));
+      vfs.mtimes.set(path, 1_700_000_000_000);
+      expect(await dates()).toEqual([1_600_000_000n, 1_700_000_000n, 1_700_000_000_000n]);
+    } finally { vfs.delete(path); }
+  });
 });
 
 test("libcore directory operations await their canonical owner and observe peer metadata", async () => {

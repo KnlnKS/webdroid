@@ -8,9 +8,11 @@ const settingsMethods: NonNullable<NativeSpec["methods"]> = {
   "setUserAgentString(Ljava/lang/String;)V": function (this: WebSettingsAdapter, s: string | null) { this.v.userAgentString = s || defaultUserAgent(); },
   ...stubs(undefined, "setDatabasePath(Ljava/lang/String;)V", "setGeolocationDatabasePath(Ljava/lang/String;)V", "setEnableSmoothTransition(Z)V"),
 };
+/** each setting under its property's name: those the renderer reads, and the rest the app reads back */
+interface WebSettingsValues { userAgentString: string; standardFontFamily: string | null; defaultFontSize: number; [setting: string]: unknown }
 export class WebSettingsAdapter extends JObj {
-  get userAgent(): string { return String(this.v.userAgentString); }
-  v: Record<string, unknown> = {
+  get userAgent(): string { return this.v.userAgentString; }
+  v: WebSettingsValues = {
     userAgentString: defaultUserAgent(), cacheMode: -1, textZoom: 100, minimumFontSize: 8, minimumLogicalFontSize: 8, defaultFontSize: 16,
     defaultFixedFontSize: 13, mixedContentMode: 1, forceDark: 1, supportZoom: 1, displayZoomControls: 1, allowContentAccess: 1,
     mediaPlaybackRequiresUserGesture: 1, safeBrowsingEnabled: 1, loadsImagesAutomatically: 1, standardFontFamily: "sans-serif",

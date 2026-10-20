@@ -5,7 +5,6 @@ import type { JObj } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { device } from "../shell/config.ts";
 import { onMain } from "./mainloop.ts";
-import { runningApp } from "./apphost.ts";
 import { onProcessExit } from "../process-exit.ts";
 import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge.ts";
 import { rendererUrl } from "../shell/webrenderer.ts";
@@ -133,7 +132,7 @@ export class Subframes {
   private async open(entry: Entry, prefetched?: string): Promise<string> {
     const { hold } = this.owner, remote = hold.remote;
     if (!remote) throw new Error("no page");
-    const origin = await webRenderer(runningApp().pkg, webOrigin(entry)), token = crypto.randomUUID();
+    const origin = await webRenderer(webOrigin(entry)), token = crypto.randomUUID();
     if (hold.remote !== remote) throw new Error("page closed");
     this.loads.set(token, { entry, origin, prefetched });
     if (this.loads.size > 256) this.loads.delete(this.loads.keys().next().value!);

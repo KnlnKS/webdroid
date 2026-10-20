@@ -12,10 +12,12 @@ import { device } from "../shell/config.ts";
 import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars.ts";
 import { parseKeyMap, javaKeyCharacterMap } from "./keyevent.ts";
 
-const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
+export const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
 /** TOUCHSCREEN | STYLUS: the source of the touchscreen's events */
-const TOUCH_SOURCE = 0x5002;
+export const TOUCH_SOURCE = 0x5002;
 const RAW_RANGE = 32768;
+/** a touch event's precision along a display axis of `size` pixels: raw units per pixel */
+export const touchPrecision = (size: number): number => RAW_RANGE / size;
 
 const B = "android/view/InputDevice$Builder";
 function* build(calls: [string, string, ...unknown[]][], ranges: [number, number, number][] = []): Gen<JObj> {

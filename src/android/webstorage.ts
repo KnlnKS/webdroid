@@ -40,9 +40,6 @@ export type WebStorageCalls = {
   webStorage(op: StorageOp, origin?: string): Promise<[string, {usage:number;quota:number}|null][]>;
 };
 export const webStorageTransport: {calls:(()=>WebStorageCalls)|null} = {calls:null};
-export function webRenderer(pkg: string, webOrigin: string): Promise<string> {
-  return webStorageTransport.calls ? webStorageTransport.calls().webRenderer(webOrigin) : localWebRenderer(pkg,webOrigin);
-}
 /** Bound to the registered process package, never an identity supplied by a renderer. */
 export function canonicalWebStorage(pkg:string): WebStorageCalls {
   return {
@@ -56,7 +53,10 @@ export function canonicalWebStorage(pkg:string): WebStorageCalls {
     }),
   };
 }
+/** this process's WebView data: its broker's, or its own package's when it holds it */
 const storageCalls = () => webStorageTransport.calls?.() ?? canonicalWebStorage(runningApp().pkg);
+/** the renderer origin this process's pages of `webOrigin` render on */
+export const webRenderer = (webOrigin: string): Promise<string> => storageCalls().webRenderer(webOrigin);
 
 // the quota manager runs its tasks in order: a query after a delete sees it done
 let lane: Promise<unknown> = Promise.resolve();

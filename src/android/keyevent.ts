@@ -12,7 +12,7 @@ import { nextId } from "./motionevent.ts";
 import { uptimeMillis } from "../guest-clock.ts";
 
 const KE = "android/view/KeyEvent", KCM = "android/view/KeyCharacterMap";
-const SOURCE_KEYBOARD = 0x101;
+export const SOURCE_KEYBOARD = 0x101;
 const labels = [...keyCodes.keys()];
 
 // ── KeyCharacterMap

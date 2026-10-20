@@ -17,6 +17,26 @@ export class NativeFormat {
   string(key: string): string { const v = this.values.get(key)?.value; return typeof v === "string" ? v : ""; }
   buffer(key: string): JBuffer | undefined { const v = this.values.get(key)?.value; return isBuffer(v) ? v as JBuffer : undefined; }
 }
+/** An access unit in the MP4 framing (ISO/IEC 14496-15: each NAL unit after its `nalLength`-byte length) as
+ *  Annex B, or null when such lengths do not frame NAL units exactly. An empty unit is dropped, as
+ *  MPEG4Extractor drops one. */
+export function annexB(data: Uint8Array, nalLength = 4): Uint8Array | null {
+  const length = (at: number) => { let n = 0; for (let i = 0; i < nalLength; i++) n = n * 256 + data[at + i]; return n; };
+  let size = 0;
+  for (let at = 0, n = 0; at < data.length; at += nalLength + n) {
+    if (at + nalLength > data.length) return null;
+    if ((n = length(at)) && (at + nalLength + n > data.length || data[at + nalLength] & 0x80)) return null;
+    if (n) size += 4 + n;
+  }
+  const out = new Uint8Array(size);
+  for (let at = 0, to = 0, n = 0; at < data.length; at += nalLength + n) {
+    if (!(n = length(at))) continue;
+    out[to + 3] = 1;
+    out.set(data.subarray(at + nalLength, at + nalLength + n), to + 4);
+    to += 4 + n;
+  }
+  return out;
+}
 /** codec-specific data's bytes, as a decoder takes them */
 export const csdBytes = (format: NativeFormat, key: string): Uint8Array | undefined => { const b = format.buffer(key); return b && remainingBytes(b); };
 const TYPE_OF_BOX: Record<string, number> = { I: TYPE_INTEGER, J: TYPE_LONG, F: TYPE_FLOAT };

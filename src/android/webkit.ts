@@ -7,7 +7,7 @@
 // executing; a browser that runs that renderer on this thread gets only the calls that return
 // nothing, posted.
 
-import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, stubs, noEffect, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime.ts";
 import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
@@ -16,7 +16,7 @@ import { runningApp } from "./apphost.ts";
 import { webCookies, thirdPartyCookies } from "./cookies.ts";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge.ts";
 import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
-import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
+import { parsePageMessage, request, type Answers, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
 import type { WebCookies } from "../shell/webcookies.ts";
 import { webRenderer } from "./webstorage.ts";
 import { webPrintAdapter } from "./printing.ts";
@@ -59,7 +59,8 @@ export class WebViewChromium extends JObj {
   /** the app's client, or once init ran the process's default one (Chromium's null client, a plain WebViewClient) */
   client!: JObj;
   chrome: JObj | null = null;
-  dl: unknown = null;
+  /** the app's DownloadListener, which takes each response a frame downloads */
+  dl: JObj | null = null;
   findListener: unknown = null;
   findQuery = "";
   findCount = 0;
@@ -194,6 +195,13 @@ export class WebViewChromium extends JObj {
         if (sub) { this.subframes.navigate(frame, entry, m.html); break; }
         this.history.replace(entry);
         this.go(entry, false, m.html);
+        break;
+      }
+      case "download": {
+        // Chromium's download delegate hands the app any frame's download, with the user agent its request sent
+        const listener = this.dl, agent = this.settings.userAgent;
+        if (listener) void onMain(() => vcall(listener, "onDownloadStart", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
+          m.url, agent, m.disposition, m.mime, BigInt(m.length)));
       }
     }
   }
@@ -211,25 +219,17 @@ export class WebViewChromium extends JObj {
     frame.cookies.sent = sent;
     frame.port.postMessage({ kind: "cookies", list, ack: frame.cookies.ack } satisfies AppMessage);
   }
-  /** `message` to the page once its script listens, and the answer on a port of its own; a rejection
-   *  ("interrupted", "timed out") when the page closes or `ms` pass first */
-  private ask(message: AppMessage, ms: number): Promise<unknown> {
-    const { script, closed } = this.page, channel = new MessageChannel();
-    return new Promise((resolve, reject) => {
-      const settle = (done: () => void) => { clearTimeout(timer); closed.signal.removeEventListener("abort", interrupted); channel.port1.close(); done(); };
-      const interrupted = () => settle(() => reject("interrupted"));
-      const timer = setTimeout(() => settle(() => reject("timed out")), ms);
-      closed.signal.addEventListener("abort", interrupted);
-      channel.port1.onmessage = ({ data }) => settle(() => resolve(data));
-      void script.promise.then((port) => port.postMessage(message, [channel.port2]));
-    });
+  /** `message` to the page once its script listens, which rejects once the page closes */
+  private ask<M extends AppMessage & { kind: keyof Answers }>(message: M, ms: number) {
+    const { script, closed } = this.page;
+    return request(message, (m, answer) => void script.promise.then((port) => port.postMessage(m, [answer])), ms, closed.signal);
   }
   async bitmapSnapshot(): Promise<ImageBitmap> {
     const failed = (message: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", message);
     if (!this.hold.remote) throw failed("WebView content is unavailable for bitmap capture");
-    const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); }) as { data?: string; error?: string };
-    if (answer.error) throw failed(answer.error);
-    return createImageBitmap(await (await fetch(answer.data!)).blob());
+    const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); });
+    if ("error" in answer) throw failed(answer.error);
+    return createImageBitmap(await (await fetch(answer.data)).blob());
   }
   stop() {
     this.gen++;
@@ -272,7 +272,7 @@ export class WebViewChromium extends JObj {
       const intercept = classNameOf(this.client) !== "android/webkit/WebViewClient";
       this.intercepting = intercept;
       const remote = this.hold.remote = new WebBridge(weakIfaces(callbacks.ifaces),
-        intercept ? callbacks.intercept : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
+        intercept ? callbacks.intercept : undefined, webRenderer(webOrigin(e)));
       this.hold.ends.push(el.ready(remote.id, callbacks.ready));
       void this.jar.then((jar) => {
         if (this.hold.remote === remote) this.hold.ends.push(jar.watch(callbacks.cookies(jar)));
@@ -346,7 +346,7 @@ export class WebViewChromium extends JObj {
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
     if (!this.hold.remote) return "null";
-    return this.ask({ kind: "eval", script: js }, 30_000).then((value) => typeof value === "string" ? value : "null", () => "null");
+    return this.ask({ kind: "eval", script: js }, 30_000).catch(() => "null");
   }
   findAll(query: string) {
     this.findQuery = query;
@@ -497,9 +497,9 @@ rt.register({
     "getRendererRequestedPriority()I": () => 2,
     "getRendererPriorityWaivedWhenNotVisible()Z": () => 0,
     // what Chromium accepts and keeps no visible state for here
-    ...Object.fromEntries(["setHorizontalScrollbarOverlay(Z)V", "setVerticalScrollbarOverlay(Z)V", "setMapTrackballToArrowKeys(Z)V",
+    ...noEffect("setHorizontalScrollbarOverlay(Z)V", "setVerticalScrollbarOverlay(Z)V", "setMapTrackballToArrowKeys(Z)V",
       "notifyFindDialogDismissed()V", "freeMemory()V", "clearView()V", "setInitialScale(I)V", "setRendererPriorityPolicy(IZ)V",
-      "setPictureListener(Landroid/webkit/WebView$PictureListener;)V"].map((sig) => [sig, () => {}])),
+      "setPictureListener(Landroid/webkit/WebView$PictureListener;)V"),
     ...stubs(undefined, "setNetworkAvailable(Z)V", "pauseTimers()V", "resumeTimers()V", "clearCache(Z)V", "clearFormData()V",
       "clearSslPreferences()V", "flingScroll(II)V", "invokeZoomPicker()V",
       "setWebViewRenderProcessClient(Ljava/util/concurrent/Executor;Landroid/webkit/WebViewRenderProcessClient;)V"),
@@ -550,13 +550,13 @@ rt.register({
     "getAccessibilityNodeProvider()Landroid/view/accessibility/AccessibilityNodeProvider;": () => null,
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;": () => null,
     // placement follows the draw functor, so attachment, visibility and scroll need nothing more
-    ...Object.fromEntries(["onAttachedToWindow()V", "onDetachedFromWindow()V", "onVisibilityChanged(Landroid/view/View;I)V",
+    ...noEffect("onAttachedToWindow()V", "onDetachedFromWindow()V", "onVisibilityChanged(Landroid/view/View;I)V",
       "onWindowVisibilityChanged(I)V", "onWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V",
       "onScrollChanged(IIII)V", "onOverScrolled(IIZZ)V", "setOverScrollMode(I)V", "setScrollBarStyle(I)V", "setLayerType(ILandroid/graphics/Paint;)V",
       "preDispatchDraw(Landroid/graphics/Canvas;)V", "onStartTemporaryDetach()V", "onFinishTemporaryDetach()V",
       "onConfigurationChanged(Landroid/content/res/Configuration;)V", "onProvideVirtualStructure(Landroid/view/ViewStructure;)V",
       "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
-      "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"].map((sig) => [sig, () => {}])),
+      "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V"),
     ...stubs(undefined, "onActivityResult(IILandroid/content/Intent;)V"),
 
     // ── ScrollDelegate: the page scrolls inside its frame, so the view itself never scrolls

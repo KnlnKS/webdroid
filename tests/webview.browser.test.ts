@@ -522,6 +522,58 @@ describe("WebView isolation", () => {
     } finally { await page.close(); await server.stop(true); }
   });
 
+  test("a frame's response that Chromium downloads goes to the app and commits no document", async () => {
+    const upstream: Record<string, [number, Record<string, string>]> = {
+      "/report.pdf": [200, { "content-type": "application/pdf", "content-length": "4" }],
+      "/notes.txt": [200, { "content-type": "text/plain", "content-disposition": 'Attachment; filename="notes.txt"' }],
+      "/table": [200, { "content-type": "text/csv; charset=utf-8" }],
+      "/shown": [200, { "content-type": "text/html", "content-disposition": "inline; filename=shown.html" }],
+      "/gone.zip": [404, { "content-type": "application/zip" }],
+    };
+    const server = await serve({ fetch: (req) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
+      if (path === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async (target) => {
+        const [status, headers] = upstream[new URL(target).pathname];
+        return new Response(/html/.test(headers["content-type"]) ? "<!doctype html><body>shown" : "%PDF", { status, headers });
+      } });
+      return new Response(path === "/webview" ? WEB_FRAME : "<!doctype html><body>app", { headers: { "content-type": "text/html" } });
+    } });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://localhost:${server.port}/`);
+      const urls = Object.keys(upstream).map((path) => "https://upstream.example" + path);
+      const answers = await page.evaluate(async ({ origin, sandbox, urls }) => Promise.all(urls.map((url) => new Promise<unknown[]>((resolve) => {
+        // what the frame tells the app until its load ends, or nothing once a moment passes
+        const id = crypto.randomUUID(), frame = document.createElement("iframe"), channel = new MessageChannel(), told: unknown[] = [];
+        const done = () => { frame.remove(); channel.port1.close(); resolve(told.slice()); };
+        frame.setAttribute("sandbox", sandbox);
+        frame.src = `${origin}/webview?__wd_bridge=${id}`;
+        channel.port1.onmessage = ({ data, ports }) => {
+          if (data.kind === "webcookies") { ports[0].postMessage(""); return; }
+          told.push(data.kind === "loaded" || data.kind === "download" ? data : data.kind);
+          if (data.kind === "loaded" || data.kind === "script-ready") done();
+        };
+        addEventListener("message", (event) => {
+          if (event.source !== frame.contentWindow || event.data?.bridge !== id || event.data.kind !== "ready") return;
+          frame.contentWindow!.postMessage({ bridge: id, kind: "load", page: url, userAgent: "agent", intercept: false, interfaces: {}, cookies: [], clientHints: null,
+            frames: "", fonts: { faces: [], css: "" }, document: { src: "/proxy?frame=1&url=" + encodeURIComponent(url) } }, origin, [channel.port2]);
+          setTimeout(done, 2000);
+        });
+        document.body.append(frame);
+      }))), { origin: `http://files.localhost:${server.port}`, sandbox: WEB_FRAME_SANDBOX, urls });
+      const download = (url: string, disposition: string, mime: string, length: number) =>
+        [{ kind: "download", url, disposition, mime, length }, { kind: "loaded", url, title: "", error: null, width: 0, height: 0 }];
+      expect(answers).toEqual([
+        download(urls[0], "", "application/pdf", 4),
+        download(urls[1], 'Attachment; filename="notes.txt"', "text/plain", -1),
+        download(urls[2], "", "text/csv", -1),
+        ["script-ready"],
+        [],
+      ]);
+    } finally { await page.close(); await server.stop(true); }
+  });
+
   test("a page's subframes load where the app routes them, never straight from their site", async () => {
     const hits: string[] = [];
     const server = await serve({ fetch: (req) => {
@@ -738,7 +790,7 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
       const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
         import {callProxy} from '${location.origin}/process-port.js';
         onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);webStorageTransport.calls=()=>proxy.endpoint;
-          const [a,b]=await Promise.all([webRenderer('ignored-wire-package','https://one.example'),webRenderer('ignored-wire-package','https://two.example')]);
+          const [a,b]=await Promise.all([webRenderer('https://one.example'),webRenderer('https://two.example')]);
           postMessage({a,b,local:typeof localStorage});};`;
       const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
       try {

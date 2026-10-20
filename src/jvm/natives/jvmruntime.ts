@@ -1,5 +1,5 @@
 // ART's process configuration boundaries.
-import { rt } from "../runtime.ts";
+import { rt, noEffect } from "../runtime.ts";
 import { jarray } from "../abi.ts";
 import { libraryAbi } from "./jlang.ts";
 import { ABIS_32 } from "../../shell/properties.ts";
@@ -70,10 +70,9 @@ rt.registerJnis("dalvik/system/VMRuntime", {
   "nativeSetTargetHeapUtilization(F)V": (value: number) => { heapUtilization = value; },
   "getFinalizerTimeoutMs()J": () => 10000n,
   "getNotifyNativeInterval()I": () => 384,
-  ...Object.fromEntries(["setProcessPackageName(Ljava/lang/String;)V", "setProcessDataDirectory(Ljava/lang/String;)V", "clampGrowthLimit()V", "clearGrowthLimit()V", "trimHeap()V", "requestHeapTrim()V", "requestConcurrentGC()V",
+  ...noEffect("setProcessPackageName(Ljava/lang/String;)V", "setProcessDataDirectory(Ljava/lang/String;)V", "clampGrowthLimit()V", "clearGrowthLimit()V", "trimHeap()V", "requestHeapTrim()V", "requestConcurrentGC()V",
     "updateProcessState(I)V", "notifyStartupCompleted()V", "bootCompleted()V", "resetJitCounters()V", "setSystemDaemonThreadPriority()V",
-    "notifyNativeAllocationsInternal()V", "preloadDexCaches()V", "runHeapTasks()V", "startHeapTaskProcessor()V", "stopHeapTaskProcessor()V"]
-    .map((sig) => [sig, () => {}])),
+    "notifyNativeAllocationsInternal()V", "preloadDexCaches()V", "runHeapTasks()V", "startHeapTaskProcessor()V", "stopHeapTaskProcessor()V"),
 });
 
 // DDMS chunks go to an attached debugger, and ART drops them when none is (there never is here)

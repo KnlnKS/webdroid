@@ -4,7 +4,7 @@
 // frame an EGL swap or a decoder produced; queueing it latches the buffer on its layer, and the
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, type JObj, declaredField, noEffect } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { asSystem } from "./binder.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
@@ -279,7 +279,7 @@ rt.registerJnis("android/view/SurfaceControl", {
   },
   // properties the display composes without: the browser canvas has one color space, no HDR,
   // no frame-rate voting, no blur or shadows on layers, and input routing is the window manager's
-  ...Object.fromEntries([
+  ...noEffect(
     "nativeSetBufferTransform(JJI)V", "nativeSetDataSpace(JJI)V", "nativeSetColorSpaceAgnostic(JJZ)V", "nativeSetFrameRate(JJFII)V",
     "nativeSetFrameRateCategory(JJIZ)V", "nativeSetFrameRateSelectionPriority(JJI)V", "nativeSetFrameRateSelectionStrategy(JJI)V",
     "nativeSetDefaultFrameRateCompatibility(JJI)V", "nativeSetFixedTransformHint(JJI)V", "nativeSetInputWindowInfo(JJLandroid/view/InputWindowHandle;)V",
@@ -288,7 +288,7 @@ rt.registerJnis("android/view/SurfaceControl", {
     "nativeSetDimmingEnabled(JJZ)V", "nativeSetCanOccludePresentation(JJZ)V", "nativeSetDesiredPresentTimeNanos(JJ)V", "nativeSetFrameTimeline(JJ)V",
     "nativeSanitize(JII)V", "nativeSetShadowRadius(JJF)V", "nativeSetBackgroundBlurRadius(JJI)V", "nativeSetExtendedRangeBrightness(JJFF)V",
     "nativeSetDesiredHdrHeadroom(JJF)V",
-  ].map((sig) => [sig, () => {}])),
+  ),
   "nativeAddTransactionCommittedListener(JLandroid/view/SurfaceControl$TransactionCommittedListener;)V": (t: bigint, listener: JObj) => {
     tx(t).ops.push(() => queueMicrotask(() => detached(() => asSystem(() => vcall(listener, "onTransactionCommitted", "()V")))));
   },

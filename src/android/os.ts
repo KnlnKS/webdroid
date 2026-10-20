@@ -4,7 +4,7 @@ import { processEnv } from "../shell/environment.ts";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
 import { guestAt, mem } from "../native/mem.ts";
 import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
-import { awaited, rt, type JObj, noops, driven, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, noops, noEffect, driven, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
 import { i8, jarray, utf8 } from "../jvm/abi.ts";
 import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
@@ -117,11 +117,11 @@ rt.registerJnis("android/os/Process", {
 // enabled and every event is dropped, as atrace drops them with no tracing session
 rt.registerJnis("android/os/Trace", {
   "nativeIsTagEnabled(J)Z": () => 0,
-  ...Object.fromEntries(["nativeAsyncTraceBegin(JLjava/lang/String;I)V", "nativeAsyncTraceEnd(JLjava/lang/String;I)V",
+  ...noEffect("nativeAsyncTraceBegin(JLjava/lang/String;I)V", "nativeAsyncTraceEnd(JLjava/lang/String;I)V",
     "nativeAsyncTraceForTrackBegin(JLjava/lang/String;Ljava/lang/String;I)V", "nativeAsyncTraceForTrackEnd(JLjava/lang/String;I)V",
     "nativeInstant(JLjava/lang/String;)V", "nativeInstantForTrack(JLjava/lang/String;Ljava/lang/String;)V", "nativeRegisterWithPerfetto()V",
     "nativeSetAppTracingAllowed(Z)V", "nativeSetTracingEnabled(Z)V", "nativeTraceBegin(JLjava/lang/String;)V",
-    "nativeTraceCounter(JLjava/lang/String;J)V", "nativeTraceEnd(J)V"].map((sig) => [sig, () => {}])),
+    "nativeTraceCounter(JLjava/lang/String;J)V", "nativeTraceEnd(J)V"),
 });
 /** the JS heap in KiB, the nearest thing to this process's dalvik footprint */
 const jsHeapKb = () => (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;

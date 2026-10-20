@@ -10,6 +10,7 @@ import { newAudioSessionId, setSounding } from "./audio-output.ts";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
 import { guestEndpoint } from "../native/net-address.ts";
 import { deviceFetch } from "../shell/devicefetch.ts";
+import { nextHop, proxyStatus, type ProxyRequest } from "../shell/webpage/redirect.ts";
 import { nativeParcel, writeInt } from "./parcel.ts";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
@@ -131,16 +132,21 @@ const loadFrom = (p: Player, source: FileSource | null) => {
   if (!source?.size) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   return after(readFully(source), (bytes) => p.load(URL.createObjectURL(new Blob([bytes as BlobPart]))));
 };
-/** where the media element reads `url` with `headers`: through the proxy, or for a URL the device serves
- *  itself, read whole from the app's loopback server as the media server reads it, after its redirects */
-function mediaSource(url: string, headers: [string, string][], hops = 0): string | Promise<string> {
-  if (!guestEndpoint(url)) return `/proxy?url=${encodeURIComponent(url)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-  return deviceFetch(url, { headers: new Headers(headers.map(([k, v]): [string, string] => ["x-wd-" + k, v])) }).then(async (response) => {
-    const status = Number(response.headers.get("x-wd-status")) || response.status, location = response.headers.get("location");
-    if (status >= 300 && status < 400 && location && hops < 20) {
+/** where the media element reads `request`: through the proxy (the element sends no headers of its own,
+ *  so the request's travel in the URL), or for a URL the device serves itself, read whole from the app's
+ *  loopback server as the media server reads it, after its redirects */
+function mediaSource(request: ProxyRequest, hops = 0): string | Promise<string> {
+  if (!guestEndpoint(request.url)) {
+    const headers = [...request.headers].map(([k, v]) => [k.slice(5), v]);
+    return `/proxy?url=${encodeURIComponent(request.url)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+  }
+  return deviceFetch(request.url, request).then(async (response) => {
+    const next = hops < 20 ? nextHop(response, request) : null;
+    if (next) {
       await response.body?.cancel();
-      return mediaSource(new URL(location, url).href, headers, hops + 1);
+      return mediaSource(next, hops + 1);
     }
+    const status = proxyStatus(response);
     if (status < 200 || status > 299) throw new Error(`HTTP ${status}`);
     return URL.createObjectURL(await response.blob());
   });
@@ -167,10 +173,10 @@ rt.registerJnis(MP, {
   // MediaHTTPConnection, an HttpURLConnection, sends the app's headers and http.agent when they name no User-Agent
   "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": M((p, _http: unknown, path: string, keys: string[] | null, values: string[] | null) => {
     if (!/^https?:/i.test(path)) throw rt.mkThrowable("java/io/IOException", "setDataSource failed.: status=0x80000000");
-    const headers: [string, string][] = (keys ?? []).map((k, i) => [k, values?.[i] ?? ""]);
-    const named = headers.some(([k]) => k.toLowerCase() === "user-agent");
-    return after(named ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent: string | null) => {
-      p.load(mediaSource(path, agent ? [...headers, ["User-Agent", agent]] : headers));
+    const headers = new Headers((keys ?? []).map((k, i): [string, string] => ["x-wd-" + k, values?.[i] ?? ""]));
+    return after(headers.has("x-wd-user-agent") ? null : scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent"), (agent: string | null) => {
+      if (agent) headers.set("x-wd-user-agent", agent);
+      p.load(mediaSource({ url: path, method: "GET", headers }));
     });
   }),
   "_setVideoSurface(Landroid/view/Surface;)V": M((p, surface: JObj | null) => {
