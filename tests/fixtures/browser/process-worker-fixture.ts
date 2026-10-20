@@ -78,13 +78,12 @@ const roles: Record<string, () => (data: never) => void> = {
       packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     }));
   },
-  /** a process relaying the page's broker calls; one given an endpoint posts its notifications */
+  /** a process relaying the page's broker calls */
   client: () => {
     let broker: Record<string, (...args: unknown[]) => Promise<unknown>>;
-    return (data: (BrokerInit & { endpoint?: MessagePort }) | { id: number; method: string; args: unknown[] }) => {
+    return (data: BrokerInit | { id: number; method: string; args: unknown[] }) => {
       if ("broker" in data) {
         broker = brokerCalls(data) as unknown as typeof broker;
-        if (data.endpoint) serveProcess(data.endpoint, stubEndpoint({ settingsChanged: async (table, name) => post({ setting: [table, name] }) }));
         return post({ ready: true });
       }
       const { id, method, args } = data;

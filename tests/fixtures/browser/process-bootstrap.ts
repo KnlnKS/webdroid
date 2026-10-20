@@ -17,22 +17,18 @@ import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerS
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
-type ClientEvent = { setting?: [string, string] };
 /** a client fixture Worker calling the broker as `pid`: `ask` answers a call's value, or `{error}` with its
  *  message; given `events`, the Worker serves `pid`'s endpoint and reports its notifications there */
-function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: ClientEvent) => void) {
+function brokerWorker(broker: ProcessBroker, pid: number) {
   const worker = fixtureWorker("client"), waiting = new Map<number, (value: unknown) => void>();
   let next = 1, ready!: () => void;
   const started = new Promise<void>(resolve => ready = resolve);
   worker.onmessage = ({ data }) => {
     if (data.ready) ready();
-    else if ("id" in data) { waiting.get(data.id)!("error" in data ? { error: data.error } : data.value); waiting.delete(data.id); }
-    else events?.(data);
+    else { waiting.get(data.id)!("error" in data ? { error: data.error } : data.value); waiting.delete(data.id); }
   };
-  const port = broker.brokerPort(pid), endpoint = events && new MessageChannel();
-  worker.postMessage({ broker: port, methods: brokerMethods, endpoint: endpoint?.port1 } satisfies BrokerInit & { endpoint?: MessagePort },
-    endpoint ? [port, endpoint.port1] : [port]);
-  if (endpoint) broker.readyPort(pid, endpoint.port2);
+  const port = broker.brokerPort(pid);
+  worker.postMessage({ broker: port, methods: brokerMethods } satisfies BrokerInit, [port]);
   const ask = (method: keyof BrokerCalls | "write", ...args: unknown[]) => started.then(() => new Promise<unknown>(resolve => {
     const id = next++;
     waiting.set(id, resolve);
@@ -262,7 +258,7 @@ export async function clockBootstrapOwnership() {
     let brokerTimer = 0;
     setSystemTimeout(()=>brokerTimer++,20);
     const incoming = await entry.ready;
-    await incoming.settingsChanged("global","worker_endpoint_probe");
+    await incoming.cookiesChanged();
     await incoming.packageRemoved("worker.endpoint.absent.package");
     const advanced = await guestClockControl.advanceBy(10), pendingBeforeDeath = guestClockControl.pending();
     const previous = {pid:8199,uid:15000,process:pkg,pkg,reason:4,status:0,importance:400,timestamp:wall,
@@ -319,16 +315,10 @@ export async function storeOwnership() {
   const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.ready(8302,stubEndpoint()); broker.ready(8303,stubEndpoint());
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
-  let settingChanged!:()=>void;
-  const settingChanges: string[][] = [];
-  const {ask,worker}=brokerWorker(broker,8301,event=>{
-    if(event.setting){settingChanges.push(event.setting);settingChanged?.();}
-  });
+  const {ask,worker}=brokerWorker(broker,8301);
   try {
     await ask("settingsGet","global","webdroid_worker_setting");
-    const settingNotice=new Promise<void>(resolve=>settingChanged=resolve);
     const settingsWritten=await ask("settingsPut","global","webdroid_worker_setting","shared");
-    await settingNotice;
     const settingsRead=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
     const rows=await peers[0].endpoint.settingsEntries("global");
     rows.find(([name])=>name==="webdroid_worker_setting")![1]="copied";
@@ -383,7 +373,7 @@ export async function storeOwnership() {
     worker.terminate();broker.fail(8301,"store Worker ended",NOT_CRASHED);
     const settingsSurvivor=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
     return {prefs,paths:{made,repeated,directory:((ownerStat.value?.mode ?? 0) & 0o170000) === 0o040000,copied:freshList.value?.includes("databases"),foreignPath,metadata,retainedMetadata,changedMode,restoredMetadata},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},
-      settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
+      settings:{written:settingsWritten,read:settingsRead,sameKey,survivor:settingsSurvivor}};
   }finally{
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);

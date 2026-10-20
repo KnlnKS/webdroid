@@ -45,7 +45,7 @@ import type { WebStorageCalls } from "../android/webstorage.ts";
 import { hostUiMethods, type HostUi } from "./host-ui.ts";
 import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import type { SettingsCalls, SettingsTable } from "./settings.ts";
+import type { SettingsCalls } from "./settings.ts";
 import { serveProcess, processProxy, processError, methodsOf, closePort } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
 
@@ -82,7 +82,6 @@ export type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   cookiesChanged: () => Promise<void>;
-  settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
   storageChanged: (key: string, value: string | null) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
   packageRemoved: (pkg: string) => Promise<void>;
@@ -136,12 +135,10 @@ export class ProcessSession {
   /** the command ports it holds */
   readonly callers = new Set<() => void>();
   sqlite: ReturnType<typeof createSQLiteSession> | null = null;
-  /** what tells it of settings changes */
-  settings: (() => void) | null = null;
   dispose(): void {
-    this.sqlite?.close(); this.settings?.(); this.endpoint?.();
+    this.sqlite?.close(); this.endpoint?.();
     for (const close of [...this.callers, ...this.bootstrap]) close();
-    this.sqlite = this.settings = this.endpoint = null;
+    this.sqlite = this.endpoint = null;
     this.bootstrap.length = 0; this.callers.clear();
   }
 }
@@ -271,7 +268,6 @@ export class ProcessBroker {
   /** what the Worker of `pid` starts from: every package's archive, its broker port and its surfaces */
   private async bootstrap(pid: number): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
-    this.watchSettings(pid);
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
@@ -316,12 +312,6 @@ export class ProcessBroker {
       entry.session.endpoint = () => { stop(); proxy.close(); };
       entry.resolve(proxy.endpoint);
     } catch (error) { closePort(port); stop(); throw error; }
-  }
-  watchSettings(pid: number): void {
-    const entry = this.entry(pid);
-    entry.session.settings ??= this.settings.watch((table, name) => {
-      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
-    });
   }
   /** a process ended, or its Worker failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {

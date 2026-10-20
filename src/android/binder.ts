@@ -538,7 +538,7 @@ class JServiceManager extends JObj { binder: JObj | null = null; }
 let remoteServices = new Set<string>();
 let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
 /** the services an app process reaches in system_server: their state is the device's */
-export const SYSTEM_SERVICES: readonly string[] = ["notification", "mount", "audio", "media_session", "media_router", "clipboard", "alarm", "location", "account"];
+export const SYSTEM_SERVICES: readonly string[] = ["notification", "mount", "audio", "media_session", "media_router", "clipboard", "alarm", "location", "account", "content"];
 export function useSystemServiceAccess(names: readonly string[], lookup?: (name: string) => Promise<BinderHandle | null>): void {
   if (names.length && !lookup) throw new Error("System service lookup is required");
   remoteServices = new Set(names);

@@ -25,7 +25,7 @@ import { usePermissionStore, usePermissionAccess } from "../android/permissions.
 import { sqliteTransport } from "../android/sqlite.ts";
 import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
 import { useNotificationStore, notificationTransport } from "../android/notification.ts";
-import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings.ts";
+import { useSettingsStore, useSettingsAccess } from "../android/settings.ts";
 import { remoteSettings } from "./settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
@@ -190,7 +190,6 @@ export function createProcessEndpoint(): ProcessEndpoint {
   return {
     processDied: async token => life.died(token),
     cookiesChanged: async () => cookiesChanged(),
-    settingsChanged: async (table, name) => settingsChanged(table, name),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => forgetRemoved(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },

@@ -1,7 +1,7 @@
 // The settings tables SettingsProvider keeps (SettingsState per table): the reference device's values
 // (device-settings.ts) under what has been written since, which persists with the device rather than
-// with an app's install. One store serves every process through the broker; a write notifies each
-// process's watcher, which dispatches the change to its content observers.
+// with an app's install. One store serves every process through the broker; system_server watches
+// it and notifies every process's content observers of a write.
 import { DEVICE_SETTINGS } from "../android/device-settings.ts";
 
 export type SettingsTable = "system" | "secure" | "global" | "config";

@@ -1,5 +1,5 @@
 // SettingsProvider, the `settings` authority, as an IContentProvider every process hosts over the
-// broker's SettingsStore. AOSP's Settings, NameValueCache, Settings.Config and DeviceConfig run from
+// broker's SettingsStore, whose writes system_server's ContentService announces. AOSP's Settings, NameValueCache, Settings.Config and DeviceConfig run from
 // bytecode above it; the answers follow the reference AVD's SettingsProvider.apk (call, query,
 // insert, update, delete), its readable-key rules and its permission checks, which a probe app
 // (targetSdk 30 and 35) reproduced on the device. NameValueCache's generation tracking is not
@@ -38,7 +38,7 @@ export function useSettingsAccess(shared: SettingsAccess): void {
   stopWatching(); access = shared;
 }
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
-export function settingsChanged(table: SettingsTable, name: string): void {
+function settingsChanged(table: SettingsTable, name: string): void {
   detached(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)), logUncaught);
 }
 
