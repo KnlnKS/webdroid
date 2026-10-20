@@ -11,6 +11,7 @@ import type { MC } from "./method.ts";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "./linkage.ts";
 import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
 import { mid } from "./ids.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
 
@@ -56,7 +57,7 @@ export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number
 export function emitHandleConstant(mc: MC, index: number): void {
   if (emitHandleValue(mc.cx, mc.code, mc.m, index)) mc.set("L");
 }
-type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: string };
+type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: Invoke };
 type HandleFailure = LinkFailure | { errorClass: string; message: string };
 
 /** Shared by executed resolution and emission so member failures precede signature loading. */
@@ -73,11 +74,11 @@ export function resolveHandleMember(prog: Program, referrer: MethodInfo, index: 
     return { field: f };
   }
   const mr = dex.method(h.idx), cls = dex.typeName(mr.cls), desc = dex.methodDesc(h.idx);
-  let invoke = h.type === MethodHandleType.InvokeStatic ? "invoke-static" : h.type === MethodHandleType.InvokeInterface ? "invoke-interface" : h.type === MethodHandleType.InvokeConstructor ? "invoke-direct" : "invoke-virtual";
+  let invoke: Invoke = h.type === MethodHandleType.InvokeStatic ? Invoke.Static : h.type === MethodHandleType.InvokeInterface ? Invoke.Interface : h.type === MethodHandleType.InvokeConstructor ? Invoke.Direct : Invoke.Virtual;
   if (h.type === MethodHandleType.InvokeDirect) {
-    const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
+    const target = resolveInvoke(prog, Invoke.Direct, cls, mr.name, desc, referrer.cls);
     if (failed(target)) return target;
-    invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
+    invoke = target.flags & ACC.PRIVATE ? Invoke.Direct : Invoke.Super;
   }
   const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
   if (failed(m)) return m;
@@ -110,8 +111,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
       c.lget(lookup); cx.constClass(c, cls); c.lget(type);
       cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); return true;
     }
-    kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
-      : invoke === "invoke-direct" ? K.INVOKE_DIRECT : invoke === "invoke-super" ? K.INVOKE_SUPER : K.INVOKE_VIRTUAL;
+    kind = [K.INVOKE_VIRTUAL, K.INVOKE_SUPER, K.INVOKE_DIRECT, K.INVOKE_STATIC, K.INVOKE_INTERFACE][invoke];
     art = BigInt(cx.idOf(m.cls)) << 16n | BigInt(prog.require(m.cls).methods.indexOf(m));
     ret = sig.ret; params = [...m.isStatic ? [] : [descOf(cls)], ...sig.params];
   }

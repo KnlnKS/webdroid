@@ -5,7 +5,7 @@
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
 import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { R as KR } from "./infer.ts";
-import { isFieldAccess, isInstanceInvoke } from "./opinfo.ts";
+import { isFieldAccess, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { failed } from "./linkage.ts";
 import { STRING } from "./strings.ts";
 import type { MC } from "./method.ts";

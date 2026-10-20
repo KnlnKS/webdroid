@@ -6,6 +6,7 @@ import type { Strand } from "./sched.ts";
 import type { World } from "./world.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import { Pool, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
 import { descToName } from "../../jvm/abi.ts";
 import { handleMemberOwner, handleSignatureTypes, handleThunk, methodTypeSignatureTypes, type SignatureType } from "./mhandles.ts";
 import { THROWERS } from "../compiler/exc.ts";
@@ -61,12 +62,8 @@ export function resolveType(w: World, loader: Loader, name: string, owner: Stran
 }
 
 export function instructionClass(method: MethodInfo, ins: PreparedInstruction): string | undefined {
-  const dex = method.dex, n = ins.name;
-  const index = /^(const-class|check-cast|new-instance|filled-new-array)/.test(n) ? ins.b
-    : n === "instance-of" || n === "new-array" ? ins.c
-    : /^(iget|iput)/.test(n) ? dex.field(ins.c).cls
-    : /^(sget|sput)/.test(n) ? dex.field(ins.b).cls
-    : /^invoke-(virtual|interface|static|direct|super|polymorphic)/.test(n) ? dex.method(ins.b).cls : undefined;
+  const dex = method.dex, pool = referenceOf(ins.op), at = referenceIndex(ins);
+  const index = pool === Pool.Type ? at : pool === Pool.Field ? dex.field(at).cls : pool === Pool.Method ? dex.method(at).cls : undefined;
   if (index === undefined) return;
   const descriptor = dex.rawType(index);
   if (descriptor[0] !== "L" && descriptor[0] !== "[") return;

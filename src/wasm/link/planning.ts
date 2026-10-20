@@ -6,7 +6,7 @@ import { mid } from "../compiler/ids.ts";
 import { symbolicOverride } from "../compiler/linkage.ts";
 import { HOT_BUDGET } from "../compiler/exc.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
-import { insnLen } from "../../jvm/opcodes.ts";
+import { Invoke, insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { World } from "./world.ts";
 
@@ -92,10 +92,10 @@ export class Planner {
     if (!sites) {
       const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
-        const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
+        const name = ins.op !== 0xfa && ins.op !== 0xfb && instructionClass(m, ins);
         if (name) references.add(name);
         if (ins.op === 0x22) allocations.add(m.dex.typeName(ins.b));
-        if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
+        if (!isInvoke(ins.op) || ins.op >= 0xfa) continue;
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
@@ -122,9 +122,9 @@ export class Planner {
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (this.w.needsSymbolicSite(m, ins)) continue;
-      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = ins.name.replace("/range", "");
-      if (decl[0] === "[" || kind === "invoke-super") continue;
-      const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.w.cha.targets(decl, mr.name, desc);
+      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = invokeKind(ins.op);
+      if (decl[0] === "[" || kind === Invoke.Super) continue;
+      const targets = kind === Invoke.Static || kind === Invoke.Direct ? undefined : this.w.cha.targets(decl, mr.name, desc);
       yield { t: targets ? targets.length === 1 ? targets[0] : undefined : this.w.prog.resolve(decl, mr.name, desc), targets, decl, name: mr.name, desc };
     }
   }

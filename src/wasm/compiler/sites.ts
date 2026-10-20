@@ -1,4 +1,5 @@
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { Invoke, Pool, invokeKind, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { inferTyping, KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
@@ -20,23 +21,24 @@ export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, in
 }
 
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
-  const n = ins.name, dex = m.dex;
-  if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
-  if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
-  return /^(const-class|const-method-|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super|polymorphic))/.test(n);
+  const op = ins.op, pool = referenceOf(op), dex = m.dex;
+  if (pool < Pool.Type || pool === Pool.CallSite) return false;
+  if (op === 0x22) return dex.rawType(ins.b) !== "Ljava/lang/String;";
+  return !(pool === Pool.Method && invokeKind(op) === Invoke.Direct && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;");
 }
 
 function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): { inputs: SymbolicSite[4]; output: SymbolicSite[5] } {
-  const n = ins.name, dex = m.dex, inputs: SymbolicSite[4] = [], seen = new Set<number>();
+  const op = ins.op, pool = referenceOf(op), dex = m.dex, inputs: SymbolicSite[4] = [], seen = new Set<number>();
   for (const reg of registersOf(ins)) {
     const web = typing.use(ins.pc, reg);
     if (web < 0 || seen.has(web)) continue;
     seen.add(web);
     inputs.push([reg, KINDS[typing.kind[web]].abi]);
   }
-  const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
-    : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)
-    : /^(iput|sput)/.test(n) ? "V" : n === "instance-of" ? "I" : "L";
+  // iput and sput answer nothing
+  const output = pool === Pool.Method ? dex.rawType(dex.proto(op >= 0xfa ? ins.c : dex.method(ins.b).proto).ret)
+    : pool === Pool.Field ? op >= 0x67 || op >= 0x59 && op <= 0x5f ? "V" : dex.rawType(dex.field(referenceIndex(ins)).type)
+    : op === 0x20 ? "I" : "L";
   return { inputs, output: output === "V" ? "V" : kindOf(output) };
 }
 
@@ -47,10 +49,10 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   if (!entry) return false;
   // the operands declareSymbolicSites gave the site, which its linked operation takes
   const [, , , , inputs, output] = entry.site;
-  if (ins.name.startsWith("invoke-polymorphic") && mc.dex.rawType(mc.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") { mc.nonNull(ins.regs[0]); mc.code.drop(); }
+  if ((ins.op === 0xfa || ins.op === 0xfb) && mc.dex.rawType(mc.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") { mc.nonNull(ins.regs[0]); mc.code.drop(); }
   for (const [reg, kind] of inputs) mc.get(kind, reg);
   mc.code.gget(entry.slot).callIndirect(cx.sig(inputs.map(input => input[1]), output), cx.symbolicTable!);
-  if (/^invoke-|^filled-new-array/.test(ins.name)) mc.finishResult(ins, output);
+  if (isInvoke(ins.op) || ins.op === 0x24 || ins.op === 0x25) mc.finishResult(ins, output);
   else if (output !== "V") mc.set(output);
   return true;
 }

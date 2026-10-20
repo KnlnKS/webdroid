@@ -5,6 +5,7 @@ import type { DexFile } from "../../jvm/dex.ts";
 import { PRIMS, descToName } from "../../jvm/abi.ts";
 import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;
@@ -33,6 +34,8 @@ export function typeFailure(prog: Program, desc: string): LinkFailure | undefine
 /** the class a NoClassDefFoundError's message from here names */
 export const unresolvedClass = (message: string): string | undefined => message.startsWith(UNRESOLVED) ? classOfType(message.slice(UNRESOLVED.length)) : undefined;
 
+/** by Invoke, the kind ART names in its messages */
+const INVOKE_TYPE = ["virtual", "super", "direct", "static", "interface"];
 const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.isCtor || m.flags & ACC.PRIVATE ? "direct" : prog.get(m.cls)?.isInterface ? "interface" : "virtual");
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
@@ -136,18 +139,18 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
   return target && failed(target) ? { ...target, message: `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}` } : target;
 }
 
-/** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method, `kind` the opcode without /range. */
-export function resolveInvoke(prog: Program, kind: string, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
+/** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method. */
+export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
   const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = () => declared(prog, referrer);
   if (!c) return fail("ncdfr", UNRESOLVED + descriptor(declaredCls), declaredCls);
-  if (kind === "invoke-interface" && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
-  if (kind === "invoke-virtual" && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
-  const expected = kind.slice(7);
-  const owner = kind === "invoke-super" && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
-  const m = kind === "invoke-super" && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
+  if (kind === Invoke.Interface && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
+  if (kind === Invoke.Virtual && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
+  const expected = INVOKE_TYPE[kind];
+  const owner = kind === Invoke.Super && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
+  const m = kind === Invoke.Super && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
   if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descriptor(cls)} or its super classes${declared(prog, cls)}`);
   if (failed(m)) return m;
-  if (m.isStatic !== (kind === "invoke-static")) {
+  if (m.isStatic !== (kind === Invoke.Static)) {
     const found = invokeType(m, prog);
     return fail("icce", `The method '${prettyMethod(m)}' was expected to be of type ${expected} but instead was found to be of type ${found}${at()}`);
   }

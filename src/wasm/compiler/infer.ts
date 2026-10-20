@@ -9,7 +9,7 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
 import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
-import { isInvoke, isInstanceInvoke } from "./opinfo.ts";
+import { isInvoke, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { OP } from "./code.ts";
 import { T, type VT } from "./wasmbin.ts";
 import type { Kind } from "./program.ts";

@@ -115,6 +115,34 @@ export function insnLen(insns: Uint16Array, pc: number): number {
   if (!entry) throw new Error(`bad opcode 0x${op.toString(16)} at pc ${pc}`);
   return FMT_LEN[entry[1]];
 }
+export const isInvoke = (op: number) => (op >= 0x6e && op <= 0x78 && op !== 0x73) || (op >= 0xfa && op <= 0xfd);
+/** iget and iput: quickened forms never compile */
+export const isFieldAccess = (op: number) => op >= 0x52 && op <= 0x5f;
+export const isInstanceInvoke = (op: number) => isInvoke(op) && op !== 0x71 && op !== 0x77 && op < 0xfc;
+/** the bits of a narrow constant, const/4 to const/high16 (0x12-0x15) */
+export const narrowBits = (op: number, b: number): number => op === 0x15 ? b << 16 : b;
+/** the bits of a wide constant, const-wide/16 to const-wide/high16 (0x16-0x19) */
+export const wideBits = (op: number, b: number, wide: bigint): bigint => op === 0x18 ? wide : op === 0x19 ? BigInt(b) << 48n : BigInt(b);
+
+/** an invoke's kind in opcode order; a range form has its plain form's */
+export const Invoke = { Virtual: 0, Super: 1, Direct: 2, Static: 3, Interface: 4, Polymorphic: 5, Custom: 6 } as const;
+export type Invoke = (typeof Invoke)[keyof typeof Invoke];
+/** the kind of an invoke opcode (isInvoke) */
+export const invokeKind = (op: number): Invoke => (op >= 0xfa ? op >= 0xfc ? Invoke.Custom : Invoke.Polymorphic : (op - 0x6e) % 6) as Invoke;
+
+/** the constant pool an instruction's reference indexes; the quickened forms hold offsets instead */
+export const Pool = { None: 0, String: 1, Type: 2, Field: 3, Method: 4, Proto: 5, Handle: 6, CallSite: 7 } as const;
+export type Pool = (typeof Pool)[keyof typeof Pool];
+const POOL = new Uint8Array(256), IN_C = new Uint8Array(256);
+POOL.fill(Pool.String, 0x1a, 0x1c).fill(Pool.Type, 0x22, 0x26).fill(Pool.Field, 0x52, 0x6e).fill(Pool.Method, 0x6e, 0x79).fill(Pool.Method, 0xfa, 0xfc).fill(Pool.CallSite, 0xfc, 0xfe);
+POOL[0x1c] = POOL[0x1f] = POOL[0x20] = Pool.Type;
+POOL[0x73] = Pool.None; POOL[0xfe] = Pool.Handle; POOL[0xff] = Pool.Proto;
+IN_C.fill(1, 0x52, 0x60); IN_C[0x20] = IN_C[0x23] = 1;
+/** the pool an instruction's reference indexes: invoke-polymorphic's is its method, whose prototype is its c */
+export const referenceOf = (op: number): Pool => POOL[op] as Pool;
+/** the index of an instruction's reference: c for instance-of, new-array, iget and iput, b for the others */
+export const referenceIndex = (ins: { op: number; b: number; c: number }): number => IN_C[ins.op] ? ins.c : ins.b;
+
 /** the references of a method's code, each with the opcode that makes it (-1 for a catch handler's type) */
 interface RefVisitor {
   /** an invoke-kind/range instruction's method_id */
@@ -127,9 +155,10 @@ interface RefVisitor {
 export function walkRefs(code: CodeItem, v: RefVisitor): void {
   const insns = code.insns;
   walkInsns(insns, (op, pc) => {
-    if (op >= 0x6e && op <= 0x78 && op !== 0x73) v.invoke?.(op, insns[pc + 1]);
-    else if (op === 0x1c || op === 0x1f || op === 0x20 || (op >= 0x22 && op <= 0x25)) v.type?.(op, insns[pc + 1]);
-    else if (op >= 0x52 && op <= 0x6d) v.field?.(op, insns[pc + 1]);
+    const pool = POOL[op];
+    if (pool === Pool.Method && op < 0xfa) v.invoke?.(op, insns[pc + 1]);
+    else if (pool === Pool.Type) v.type?.(op, insns[pc + 1]);
+    else if (pool === Pool.Field) v.field?.(op, insns[pc + 1]);
   });
   if (v.type) for (const t of code.tries) for (const [type] of t.handlers) v.type(-1, type);
 }
