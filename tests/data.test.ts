@@ -18,7 +18,7 @@ import { alarmTransport } from "../src/android/alarm.ts";
 import { activityTransport } from "../src/android/server/atm.ts";
 import { newIntent } from "../src/android/intent.ts";
 import { decodeIntent } from "../src/android/intentipc.ts";
-import { clipboardTransport } from "../src/android/clipboard.ts";
+import { useFocusedUid } from "../src/android/clipboard.ts";
 import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
 import { notificationTransport } from "../src/android/notification.ts";
 import type { BrokerCalls } from "../src/shell/processes.ts";
@@ -173,7 +173,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
   const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
-    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
+    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousPaths = filePathTransport.calls,
     previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
@@ -221,7 +221,7 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(activityTransport)) Reflect.deleteProperty(activityTransport,key);
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
-    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;Object.assign(clipboardTransport,previousClip);
+    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;
     Object.assign(locationTransport,previousLocation);
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);
@@ -231,34 +231,23 @@ test("Worker activity commands retain local results across reentrant replies and
   }
 });
 
-test("ClipboardService awaits canonical writes and reads null from an asynchronous owner", async () => {
+test("ClipboardService keeps one clip, which only the focused uid reads", async () => {
   await bootApp(await packageRecord("org.webdroid.test.clipboard"));
-  const previous = { ...clipboardTransport }, { port1, port2 } = new MessageChannel();
-  type Calls = Pick<BrokerCalls, "clipboardSet" | "clipboardGet" | "clipboardListen">;
-  let clip: Awaited<ReturnType<Calls["clipboardGet"]>> = null, entered!: () => void, release!: () => void;
-  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
-  const stop = serveCalls<Calls>(port1, {
-    clipboardSet: async data => { entered(); await blocked; clip = data; },
-    clipboardGet: async () => clip, clipboardListen: async () => {},
-  });
-  const client = callProxy<Calls>(port2, ["clipboardSet", "clipboardGet", "clipboardListen"]);
-  Object.assign(clipboardTransport, {set:client.endpoint.clipboardSet,get:client.endpoint.clipboardGet,has:undefined,listen:client.endpoint.clipboardListen});
+  const service = rt.make("webdroid/ClipboardService"), P = "Ljava/lang/String;Ljava/lang/String;II", caller = ["org.webdroid.test.clipboard",null,0,0];
+  let focused: number | undefined;
+  useFocusedUid(() => focused);
   try {
-    const service = rt.make("webdroid/ClipboardService"), P = "Ljava/lang/String;Ljava/lang/String;II", caller = ["org.webdroid.test.clipboard",null,0,0];
-    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
     const source = await scall("android/content/ClipData", "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;", "label", "copied");
-    const write = vcallAsync(service,"setPrimaryClip",`(Landroid/content/ClipData;${P})V`,source,...caller);
-    await waiting; expect(clip).toBeNull();
-    release(); await write;
-    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(1);
-    expect(await vcall(service, "hasClipboardText", `(${P})Z`, ...caller)).toBe(1);
-    const restored = await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller);
-    expect(restored === source).toBe(false);
-    expect(await vcall(await vcall(restored,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");
-    await vcall(service, "clearPrimaryClip", `(${P})V`, ...caller);
+    await vcall(service, "setPrimaryClip", `(Landroid/content/ClipData;${P})V`, source, ...caller);
     expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
     expect(await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller)).toBeNull();
-  } finally { release(); Object.assign(clipboardTransport,previous); client.close(); stop(); }
+    focused = (await import("../src/android/os.ts")).PROCESS_UID;
+    expect(await vcall(service, "hasClipboardText", `(${P})Z`, ...caller)).toBe(1);
+    const read = await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller);
+    expect(await vcall(await vcall(read,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");
+    await vcall(service, "clearPrimaryClip", `(${P})V`, ...caller);
+    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
+  } finally { useFocusedUid(() => undefined); }
 });
 
 test("CookieManager waits for canonical mutation before its main-looper callback", async () => {

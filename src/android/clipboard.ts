@@ -1,65 +1,58 @@
-// IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
-// every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
-import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
+// IClipboard: ClipboardService, hosted once in system_server (SYSTEM_SERVICES) for every process's
+// ClipboardManager. It keeps the primary clip as the ClipData the caller's parcel made, which only the
+// focused app's uid reads, and tells the listeners whose uid has focus of each change.
+import { JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
-import { parcelled, releaseRights, unparcelled, type ParcelData } from "./binder.ts";
-import { processRights } from "../native/process-fd.ts";
-import { postMain } from "./mainloop.ts";
+import { callingIdentity, hostStub, onCallerDeath, oneway } from "./binder.ts";
+import { foreground } from "./server/atm.ts";
+import { PROCESS_UID } from "./os.ts";
+import { wallMillis } from "../guest-clock.ts";
 
-export const clipboardTransport: {
-  set: (data: ParcelData | null) => void | Promise<void>;
-  get: () => ParcelData | null | Promise<ParcelData | null>;
-  has?: () => boolean | Promise<boolean>;
-  listen: (active: boolean) => void | Promise<void>;
-} = {
-  has:undefined,
-  set: () => { throw new Error("Clipboard service unavailable"); },
-  get: () => { throw new Error("Clipboard service unavailable"); },
-  listen: () => { throw new Error("Clipboard service unavailable"); },
-};
+/** the uid whose app has input focus (WindowManagerService.isUidFocused): system_server's realm asks
+ *  the broker; a realm of its own has its app while one of its activities is resumed */
+let focusedUid = (): number | undefined => foreground() ? PROCESS_UID : undefined;
+export function useFocusedUid(focused: () => number | undefined): void { focusedUid = focused; }
 
-const listeners = new Set<unknown>();
-export function clipboardChanged(): void {
-  for (const listener of listeners) postMain(() => vcall(listener, "dispatchPrimaryClipChanged", "()V"));
+let primary: JObj | null = null;
+/** each listener by its binder, with the uid that registered it, as a RemoteCallbackList keeps them */
+const listeners = new Map<unknown, { listener: JObj; uid: number; unwatch: () => void }>();
+/** clipboardAccessAllowed for a read: the app must have focus */
+const readable = (uid = callingIdentity().uid) => uid === focusedUid();
+function setPrimary(clip: JObj | null): void {
+  primary = clip;
+  for (const { listener, uid } of listeners.values()) if (readable(uid)) oneway(listener, "dispatchPrimaryClipChanged", "()V");
 }
-/** the clip, read back from its parcel */
-function* current(): Gen<JObj | null> {
-  const data = yield* awaited(clipboardTransport.get());
-  return data && (yield* awaited(unparcelled("android/content/ClipData", data)));
-}
-const P = "Ljava/lang/String;Ljava/lang/String;II";
+const description = (clip: JObj) => vcall(clip, "getDescription", "()Landroid/content/ClipDescription;");
+function* binderOf(listener: JObj): Gen<unknown> { return yield vcall(listener, "asBinder", "()Landroid/os/IBinder;"); }
+const P = "Ljava/lang/String;Ljava/lang/String;II", L = "Landroid/content/IOnPrimaryClipChangedListener;";
 rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, sup: "android/content/IClipboard$Stub", methods: {
-  // ClipboardService stamps the clip as copied now
+  // stamped as copied now, as setPrimaryClipInternalLocked does
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
-    yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    const data=yield* awaited(parcelled(clip,processRights));
-    try {yield* awaited(clipboardTransport.set(data));}
-    finally {yield* awaited(releaseRights(data,processRights,true));}
+    yield vcall(yield description(clip), "setTimestamp", "(J)V", BigInt(Math.floor(wallMillis())));
+    setPrimary(clip);
   }),
-  [`getPrimaryClip(${P})Landroid/content/ClipData;`]: driven(current),
-  [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: driven(function* () {
-    const clip = yield* current();
-    return clip && (yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"));
-  }),
-  [`hasPrimaryClip(${P})Z`]: driven(function* () { return +(clipboardTransport.has ? yield* awaited(clipboardTransport.has()) : (yield* awaited(clipboardTransport.get())) !== null); }),
+  [`getPrimaryClip(${P})Landroid/content/ClipData;`]: () => readable() ? primary : null,
+  [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: () => readable() && primary ? description(primary) : null,
+  [`hasPrimaryClip(${P})Z`]: () => +(readable() && primary !== null),
   [`hasClipboardText(${P})Z`]: driven(function* () {
-    const clip = yield* current();
+    const clip = readable() ? primary : null;
     if (!clip || !(yield vcall(clip, "getItemCount", "()I"))) return 0;
     const text = yield vcall(yield vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", 0), "getText", "()Ljava/lang/CharSequence;");
     return +(text != null && (yield vcall(text, "length", "()I")) > 0);
   }),
-  [`clearPrimaryClip(${P})V`]: () => clipboardTransport.set(null),
-  [`addPrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: driven(function* (listener: unknown) {
-    const present = listeners.has(listener);
-    listeners.add(listener);
-    try { yield* awaited(clipboardTransport.listen(true)); }
-    catch (error) { if (!present) listeners.delete(listener); throw error; }
+  [`clearPrimaryClip(${P})V`]: () => setPrimary(null),
+  [`addPrimaryClipChangedListener(${L}${P})V`]: driven(function* (listener: JObj) {
+    const { pid, uid } = callingIdentity(), binder = yield* binderOf(listener);
+    if (!listeners.has(binder)) listeners.set(binder, { listener, uid, unwatch: onCallerDeath(pid, () => listeners.delete(binder)) });
   }),
-  [`removePrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: driven(function* (listener: unknown) {
-    listeners.delete(listener); if (!listeners.size) yield* awaited(clipboardTransport.listen(false));
+  [`removePrimaryClipChangedListener(${L}${P})V`]: driven(function* (listener: JObj) {
+    const binder = yield* binderOf(listener);
+    listeners.get(binder)?.unwatch();
+    listeners.delete(binder);
   }),
   // a clip's source app is not disclosed to other apps
   [`getPrimaryClipSource(${P})Ljava/lang/String;`]: () => null,
   // the platform default: an app reading the clipboard is announced
   "areClipboardAccessNotificationsEnabledForUser(I)Z": () => 1,
 } });
+hostStub("clipboard", "webdroid/ClipboardService");

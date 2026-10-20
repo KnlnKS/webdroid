@@ -25,7 +25,7 @@ const roles: Record<string, () => (data: never) => void> = {
   /** a process whose services step through the broker calls endpointOwnership checks */
   endpoint: () => ({ port, ...init }: BrokerInit & { port: MessagePort }) => {
     const broker = brokerCalls(init), life = remoteProcessLife(() => broker, error => { throw error; });
-    let removed = false, clips = 0, fd = -1, received = -1, deaths = 0;
+    let removed = false, notices = 0, fd = -1, received = -1, deaths = 0;
     // The port binds the caller's identity; the one this request names must not count.
     const forged = { caller: { pid: 9999, uid: 9999 } };
     const descriptor = ({ data }: TransactionReply) => {
@@ -34,7 +34,7 @@ const roles: Record<string, () => (data: never) => void> = {
       return right.descriptor;
     };
     const steps: Record<number, (intent: ParcelData) => Promise<BinderHandle>> = {
-      42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: clips }),
+      42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: notices }),
       43: async () => {
         fd = (await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
         const foreign = await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
@@ -75,7 +75,7 @@ const roles: Record<string, () => (data: never) => void> = {
         const intent = "intent" in request ? request.intent : null, step = intent && steps[intent.bytes[0]];
         return step ? step(intent!) : { pid: 8002, id: removed ? 2 : 1 };
       },
-      processDied: async token => life.died(token), clipboardChanged: async () => { clips++; },
+      processDied: async token => life.died(token), cookiesChanged: async () => { notices++; },
       packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     }));
   },
@@ -86,18 +86,11 @@ const roles: Record<string, () => (data: never) => void> = {
       if ("broker" in data) {
         broker = brokerCalls(data) as unknown as typeof broker;
         if (data.endpoint) serveProcess(data.endpoint, stubEndpoint({ accountsChanged: async () => post({ accountsChanged: true }),
-          settingsChanged: async (table, name) => post({ setting: [table, name] }), clipboardChanged: async () => post({ changed: true }) }));
+          settingsChanged: async (table, name) => post({ setting: [table, name] }) }));
         return post({ ready: true });
       }
       const { id, method, args } = data;
-      void (async () => {
-        if (method !== "write") return broker[method](...args);
-        // The broker keeps the clip it was sent, not this realm's bytes.
-        const bytes = Uint8Array.of(1, 2);
-        await broker.clipboardSet({ bytes, objects: [] });
-        bytes[0] = 9;
-        return Array.from(bytes);
-      })().then(value => post({ id, value }), (error: Error) => post({ id, error: error.message }));
+      void (async () => broker[method](...args))().then(value => post({ id, value }), (error: Error) => post({ id, error: error.message }));
     };
   },
   /** a process booted from the page's bootstrap, on a guest clock the page drives when it sends one */
@@ -176,14 +169,14 @@ const roles: Record<string, () => (data: never) => void> = {
   /** a process whose transactions exercise Parcel copies, a reentrant callback and each failure kind */
   parcel: () => ({ endpoint, callback }: { endpoint: MessagePort; callback: MessagePort }) => {
     const peer = processProxy(callback);
-    let clips = 0;
+    let notices = 0;
     serveProcess(endpoint, stubEndpoint({
-      clipboardChanged: async () => { clips++; },
+      cookiesChanged: async () => { notices++; },
       transact: async (request, caller) => {
         if (request.code === 1) { request.data.bytes[0] = 99; return { handled: caller.uid, data: request.data }; }
         if (request.code === 2) {
           const reply = await peer.endpoint.transact(request, caller);
-          reply.data.bytes = Uint8Array.of(reply.data.bytes[0], clips);
+          reply.data.bytes = Uint8Array.of(reply.data.bytes[0], notices);
           return reply;
         }
         if (request.code === 3) throw { $javaClass: "java/lang/SecurityException", msg: "denied" };
@@ -227,7 +220,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
     queueMicrotask(() => setGuestTimeout(() => post({ tick: "nested", now: uptimeMillis() }), 0));
     setGuestTimeout(() => post({ tick: "dead" }), 5);
   }, 10);
-  const commands = { cookies: await broker.cookieHas(), clipboard: await broker.clipboardGet() };
+  const commands = { cookies: await broker.cookieHas() };
   post({ kind: "ready" } satisfies ProcessWorkerStatus);
   post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [PROCESS_PID, PROCESS_UID, PROCESS_NAME], commands } });
 }

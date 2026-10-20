@@ -17,7 +17,7 @@ import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerS
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
-type ClientEvent = { changed?: true; accountsChanged?: true; setting?: [string, string] };
+type ClientEvent = { accountsChanged?: true; setting?: [string, string] };
 /** a client fixture Worker calling the broker as `pid`: `ask` answers a call's value, or `{error}` with its
  *  message; given `events`, the Worker serves `pid`'s endpoint and reports its notifications there */
 function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: ClientEvent) => void) {
@@ -111,7 +111,7 @@ export async function bootstrapOwnership() {
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all(displays);
-  const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
+  const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.processAlive(0).then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
   return { imeOwners:{deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
 }
@@ -128,7 +128,7 @@ export async function endpointOwnership() {
   const waiting = new Promise<void>(resolve => entered = resolve);
   const endpoint = (pid: number) => stubEndpoint({
     transact: async (request, caller) => {
-      if (request.code === 2) { await other.clipboardChanged(); return {handled:caller.pid,data:{bytes:Uint8Array.of(caller.uid & 255),objects:[]}}; }
+      if (request.code === 2) { await other.cookiesChanged(); return {handled:caller.pid,data:{bytes:Uint8Array.of(caller.uid & 255),objects:[]}}; }
       if (request.code === 3) {
         const right=request.data.objects[0]?.[1];
         if(!right || !("descriptor" in right))throw new Error("missing driver FD right");
@@ -258,7 +258,7 @@ export async function clockBootstrapOwnership() {
   const ticks: {tick:string;now:number;wall?:number}[] = [];
   worker.addEventListener("message", ({data}) => { if (data.tick) ticks.push(data); });
   try {
-    const ready = await posted<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>(worker, "report");
+    const ready = await posted<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean}}>(worker, "report");
     let brokerTimer = 0;
     setSystemTimeout(()=>brokerTimer++,20);
     const incoming = await entry.ready;
@@ -307,8 +307,9 @@ export async function clockBootstrapOwnership() {
   } finally { workers.forEach(peer=>peer.terminate());for(const nextPid of [8203,8204,8205])broker.fail(nextPid,"exit fixture cleanup",NOT_CRASHED);broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); packages.delete(pkg); }
 }
 
-export async function clipboardOwnership() {
-  const broker = processBroker(), pkg = "test.clipboard.shared", foreign = "test.clipboard.other";
+/** a Worker's and its peers' calls on the stores the broker keeps for every process */
+export async function storeOwnership() {
+  const broker = processBroker(), pkg = "test.stores.shared", foreign = "test.stores.other";
   const fileHooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
   broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
@@ -316,30 +317,15 @@ export async function clipboardOwnership() {
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
   }
   const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
-  broker.activities.setForeground(8301);
-  let peerChanges = 0, peerChanged!: () => void;
-  broker.ready(8302,stubEndpoint({clipboardChanged:async()=>{peerChanges++;peerChanged?.();}})); broker.ready(8303,stubEndpoint());
+  broker.ready(8302,stubEndpoint()); broker.ready(8303,stubEndpoint());
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
-  let changes=0,changed!:()=>void,settingChanged!:()=>void,accountChanged!:()=>void,accountChanges=0;
+  let settingChanged!:()=>void,accountChanged!:()=>void,accountChanges=0;
   const settingChanges: string[][] = [];
   const {ask,worker}=brokerWorker(broker,8301,event=>{
-    if(event.changed){changes++;changed?.();}
     if(event.accountsChanged){accountChanges++;accountChanged?.();}
     if(event.setting){settingChanges.push(event.setting);settingChanged?.();}
   });
   try {
-    await ask("clipboardListen",true);await peers[0].endpoint.clipboardListen(true);
-    const notification=new Promise<void>(resolve=>changed=resolve),peerNotification=new Promise<void>(resolve=>peerChanged=resolve);
-    const source=await ask("write");await Promise.all([notification,peerNotification]);
-    const read=await peers[0].endpoint.clipboardGet();read!.bytes[0]=7;
-    const fresh=await peers[0].endpoint.clipboardGet();
-    const denied=await peers[1].endpoint.clipboardGet();
-    broker.activities.setForeground(8303);const foreground=await peers[1].endpoint.clipboardGet();broker.activities.setForeground(8302);
-    await ask("clipboardListen",false);
-    const cleared=new Promise<void>(resolve=>peerChanged=resolve);
-    await peers[0].endpoint.clipboardSet(null);await cleared;
-    const absent=await ask("clipboardGet");
-    const written=new Promise<void>(resolve=>peerChanged=resolve);await ask("write");await written;
     await ask("settingsGet","global","webdroid_worker_setting");
     const settingNotice=new Promise<void>(resolve=>settingChanged=resolve);
     const settingsWritten=await ask("settingsPut","global","webdroid_worker_setting","shared");
@@ -409,20 +395,18 @@ export async function clipboardOwnership() {
     const foreignPath=await ask("fileMkdir",`/data/data/${foreign}/denied`);
     // Drain the notification endpoint before death, so cleanup is not racing its reply.
     await (await entries[1].ready).activity({kind:"back"});
-    worker.terminate();broker.fail(8301,"clipboard Worker ended",NOT_CRASHED);
-    const survivor=await peers[0].endpoint.clipboardGet();
+    worker.terminate();broker.fail(8301,"store Worker ended",NOT_CRASHED);
     const settingsSurvivor=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
     const accountSurvivor=await peers[0].endpoint.accountCached(key,"session");
     const changesBefore=accountChanges;broker.accounts.persist();
     await peers[0].endpoint.accountExists(key);
     const cleaned=accountChanges===changesBefore;
     return {prefs,paths:{made,repeated,directory:((ownerStat.value?.mode ?? 0) & 0o170000) === 0o040000,copied:freshList.value?.includes("databases"),foreignPath,metadata,retainedMetadata,changedMode,restoredMetadata},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
-      renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
-      changes,peerChanges,survivor:Array.from(survivor!.bytes),
+      renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
   }finally{
     for(const client of peers)client.close();worker.terminate();
-    for(const pid of [8301,8302,8303])broker.fail(pid,"clipboard fixture cleanup",NOT_CRASHED);
+    for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
     for (let i=broker.accounts.records.length-1;i>=0;i--)
       if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
     broker.accounts.persist();
@@ -434,57 +418,27 @@ export async function clipboardOwnership() {
   }
 }
 
-export async function storedClipboardRights() {
-  const broker=processBroker(),pkg="test.clipboard.rights",pids=[8401,8402],path=`/data/data/${pkg}/retained.bin`;
+/** A PendingIntent's Intent may carry no descriptor; the staged one the refused request held is given back. */
+export async function pendingDescriptorRights() {
+  const broker=processBroker(),pkg="test.pending.rights",pid=8401,path=`/data/data/${pkg}/retained.bin`;
   const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
   vfs.mkdir("/data/data");
-  for(const pid of pids)broker.register(pkg,pkg+":"+pid,pid);
-  broker.activities.setForeground(8402);
-  const reader=callProxy<BrokerCalls>(broker.brokerPort(8402),brokerMethods),{ask,worker}=brokerWorker(broker,8401);
-  const imported:number[]=[];
+  broker.register(pkg,pkg,pid);
+  const {ask,worker}=brokerWorker(broker,pid);
   try {
     await ask("fileMkdir",`/data/data/${pkg}`);
     const opened=await ask("fileDescriptor",{kind:"open",path,flags:0x42}) as number|{token:number};
-    if(typeof opened==="number")throw new Error("Stored clipboard open failed: "+opened);
-    const fd=opened.token;
-    await ask("fileDescriptor",{kind:"write",fd,bytes:Uint8Array.of(1,2,3,4)});
-    await ask("fileDescriptor",{kind:"seek",fd,offset:0,whence:0});
-    const deniedStage=await ask("fileDescriptor",{kind:"stage",fd}) as number;
-    const denied=await ask("pendingCreate",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:deniedStage}]]}) as {error?:string};
-    const retired=typeof await ask("fileDescriptor",{kind:"stat",fd:deniedStage})==="number";
-    const staged=await ask("fileDescriptor",{kind:"stage",fd}) as number;
-    const published=await ask("clipboardSet",{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string}|undefined;
-    if(published?.error)throw new Error(published.error);
-    const candidate=await ask("fileDescriptor",{kind:"stage",fd}) as number;
-    const failure=await ask("clipboardSet",{bytes:new Uint8Array(48),objects:[[0,{descriptor:candidate}],[24,{descriptor:-1}]]}) as {error?:string};
-    const replacementRejected=failure.error==="Invalid retained Parcel descriptor" &&
-      typeof await ask("fileDescriptor",{kind:"stat",fd:candidate})==="number";
-    const has=await reader.endpoint.clipboardHas(),reads:number[]=[];
-    for(let i=0;i<2;i++) {
-      const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
-      if(!right || !("descriptor" in right))throw new Error("Missing retained clipboard right");
-      imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
-      reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1}) as Uint8Array)[0]);
-    }
-    worker.terminate();broker.fail(8401,"stored rights sender ended",NOT_CRASHED);
-    const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
-    if(!right || !("descriptor" in right))throw new Error("Retained clipboard lost on sender death");
-    imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
-    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1}) as Uint8Array)[0]);
-    await reader.endpoint.clipboardSet(null);
-    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:imported[0],length:1}) as Uint8Array)[0]);
-    await reader.endpoint.fileDescriptor({kind:"write",fd:imported[0],offset:0,bytes:Uint8Array.of(9)});
-    return {has,cleared:!(await reader.endpoint.clipboardHas()),reads,backing:[...vfs.read(path)!],replacementRejected,pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
+    if(typeof opened==="number")throw new Error("Descriptor open failed: "+opened);
+    const staged=await ask("fileDescriptor",{kind:"stage",fd:opened.token}) as number;
+    const denied=await ask("pendingCreate",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string};
+    const retired=typeof await ask("fileDescriptor",{kind:"stat",fd:staged})==="number";
+    return {pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
   } finally {
-    for(const fd of imported)await reader.endpoint.fileDescriptor({kind:"close",fd});
-    reader.close();worker.terminate();
-    for(const pid of pids)broker.fail(pid,"stored clipboard fixture cleanup",NOT_CRASHED);
+    worker.terminate();broker.fail(pid,"pending rights fixture cleanup",NOT_CRASHED);
     vfs.delete(path);packages.delete(pkg);
   }
 }
-
-
 
 export async function pointerInputOwnership() {
   const worker=fixtureWorker("pointer"),channel=new MessageChannel(),client=callProxy<PointerCalls>(channel.port1,["pointer","release","samples"]);

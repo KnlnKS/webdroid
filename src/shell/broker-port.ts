@@ -211,7 +211,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     activityFinish: async (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
     activityPresentation: async translucent => broker.activities.presentation(pid, translucent),
     displayOrientation: async landscape => broker.activities.orientation(pid, landscape),
-    ...broker.clipboard.calls(pid),
     settingsGet: async (table, name) => { broker.watchSettings(pid); return broker.settings.get(table, name); },
     settingsEntries: async table => { broker.watchSettings(pid); return broker.settings.entries(table); },
     settingsPut: async (table, name, value) => { broker.watchSettings(pid); return broker.settings.put(table, name, value); },
@@ -229,7 +228,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const stop = serveCalls(port1, live, () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, {
     // a reply its caller never receives gives back the descriptor rights it carried
     transact: reply => broker.discardDescriptors(pid, reply.data, false),
-    clipboardGet: data => data && broker.discardDescriptors(pid, data, false),
   });
   callers.add(stop);
   return { port: port2, close: stop };

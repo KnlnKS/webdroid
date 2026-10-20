@@ -30,8 +30,8 @@ import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android
 import { remoteSettings } from "./settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
-import { clipboardTransport, clipboardChanged } from "../android/clipboard.ts";
 import { locationTransport } from "../android/locationmanager.ts";
+import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
@@ -47,7 +47,7 @@ const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().b
 const location = remoteLocation(brokerCalls);
 const life = remoteProcessLife(brokerCalls, logUncaught);
 /** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
- *  and lives, SQLite, cookies, the clipboard, locations, PendingIntents, alarms and service starts */
+ *  and lives, SQLite, cookies, locations, PendingIntents, alarms and service starts */
 function connectCommandTransports(): void {
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
@@ -67,10 +67,6 @@ function connectCommandTransports(): void {
   binderTransport.transact = request => remote(brokerCalls().transact(request));
   descriptorTransport.importCalls = brokerCalls;
   sqliteTransport.call = request => brokerCalls().sqlite(request);
-  clipboardTransport.set = data => brokerCalls().clipboardSet(data);
-  clipboardTransport.get = () => brokerCalls().clipboardGet();
-  clipboardTransport.has = () => brokerCalls().clipboardHas();
-  clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   cookieTransport.calls = brokerCalls;
   Object.assign(locationTransport, location.access);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
@@ -193,6 +189,7 @@ export function connectProcess(): ProcessEndpoint {
   useNotificationStore(broker.notifications);
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
+  useFocusedUid(() => broker.foregroundUid());
   const stopAccounts = useAccountStore(broker.accounts);
   if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
   const stopSettings = useSettingsStore(broker.settings);
@@ -206,7 +203,6 @@ export function createProcessEndpoint(): ProcessEndpoint {
     processDied: async token => life.died(token),
     locationChanged: async (id,token,event) => location.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
-    clipboardChanged: async () => clipboardChanged(),
     cookiesChanged: async () => cookiesChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
     storageChanged: async (key, value) => storageChanged(key, value),

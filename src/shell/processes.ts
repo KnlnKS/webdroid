@@ -38,7 +38,6 @@ import type { LocationCalls } from "./location-access.ts";
 import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
 import type { FilePathCalls } from "./file-path.ts";
 import { FileDescriptors, type DescriptorCalls, type DescriptorRights } from "./file-descriptors.ts";
-import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
@@ -83,7 +82,6 @@ export type ProcessEndpoint = {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
-  clipboardChanged: () => Promise<void>;
   cookiesChanged: () => Promise<void>;
   locationChanged: (id: number, token: number, event: LocationEvent) => Promise<void>;
   accountsChanged: () => Promise<void>;
@@ -97,7 +95,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & ClipboardCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
+export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -120,7 +118,7 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 /** in a fixed order: census decodes a timeline's call indexes by it */
-export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
+export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
 export type Entry = { pkg: string; process: string; uid: number; pid: number;
   /** the page's side of the Worker it runs in; the page's own process has none */
   host: ProcessHost | null;
@@ -210,10 +208,6 @@ export class ProcessBroker {
   readonly hosts = new ProcessHosts({ bootstrap: pid => this.bootstrap(pid), ready: (pid, port) => this.readyPort(pid, port),
     failed: (pid, message) => this.fail(pid, message, NOT_CRASHED) });
   readonly fileDescriptors = new FileDescriptors();
-  readonly clipboard = new Clipboard(this.fileDescriptors, {
-    uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
-    changed: pid => { if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.clipboardChanged())); },
-  });
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
@@ -362,13 +356,15 @@ export class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); host?.close(); this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
+    entry.watchers.clear(); host?.close(); this.files.detach(pid); this.location.remove(pid);
     this.activities.processDied(pid);
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
   starting(): boolean { return [...this.entries.values()].some(e => e.host && !e.dead && !e.session.endpoint); }
   /** settles once the process has presented a frame, or has died */
   presented(pid: number): Promise<void> { return this.entries.get(pid)?.host?.presented.promise ?? Promise.resolve(); }
+  /** the uid of the process on top, whose app has input focus */
+  foregroundUid(): number | undefined { return this.entries.get(this.activities.foreground)?.uid; }
   foregroundHost(): ProcessHost | null {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.host : null;
