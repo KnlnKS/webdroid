@@ -17,17 +17,17 @@ import { permissionInfo$ } from "./pm.ts";
  * A runtime permission is DENIED until the app asks for it, which is the state a freshly
  * installed app is in — reporting a blanket grant sends an app straight past the fallback it
  * was written to take. Install-time permissions stay granted, as the platform grants them.
- * AOSP's dangerous groups, by their permission names.
+ * The permissions the reference build's framework-res declares dangerous.
  */
 const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CALL_LOG", "WRITE_CALL_LOG",
   "PROCESS_OUTGOING_CALLS", "CAMERA", "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS",
   "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO",
-  "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS", "ADD_VOICEMAIL",
-  "USE_SIP", "ACCEPT_HANDOVER", "BODY_SENSORS", "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS",
-  "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
-  "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
-  "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
-  .map((n) => "android.permission." + n));
+  "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS",
+  "USE_SIP", "ACCEPT_HANDOVER", "BODY_SENSORS", "BODY_SENSORS_BACKGROUND", "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS",
+  "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS", "READ_CELL_BROADCASTS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+  "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "READ_MEDIA_VISUAL_USER_SELECTED", "ACCESS_MEDIA_LOCATION",
+  "POST_NOTIFICATIONS", "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES", "UWB_RANGING"]
+  .map((n) => "android.permission." + n).concat("com.android.voicemail.permission.ADD_VOICEMAIL"));
 /** the runtime grants of each package; corrupt state remains denied */
 const savedGrants = persisted("wd:permissions:", (saved) => Array.isArray(saved) ? saved.filter((name): name is string => typeof name === "string") : null);
 export class PermissionStore {
