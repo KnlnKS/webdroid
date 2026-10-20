@@ -12,13 +12,13 @@ const u32At = (b: Uint8Array, i: number): number => (b[i] | b[i + 1] << 8 | b[i 
 
 const EVENTFD: FileOps = {
   ...ANON,
-  read(f, target) {
+  read(f, target, at, n) {
     const counter = f.event!, count = counter.count;
-    if (target.length < 8) return -E.INVAL;
+    if (n < 8) return -E.INVAL;
     if (!count) return -E.AGAIN;
     const low = count % 0x1_0000_0000, high = (count - low) / 0x1_0000_0000;
-    target[0] = low; target[1] = low >>> 8; target[2] = low >>> 16; target[3] = low >>> 24;
-    target[4] = high; target[5] = high >>> 8; target[6] = high >>> 16; target[7] = high >>> 24;
+    target[at] = low; target[at + 1] = low >>> 8; target[at + 2] = low >>> 16; target[at + 3] = low >>> 24;
+    target[at + 4] = high; target[at + 5] = high >>> 8; target[at + 6] = high >>> 16; target[at + 7] = high >>> 24;
     counter.count = 0;
     return 8;
   },

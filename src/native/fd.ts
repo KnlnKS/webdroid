@@ -48,10 +48,10 @@ export interface FileOps {
   readonly mode: number;
   /** whether pread and pwrite reach it: a stream has no offsets */
   readonly positional: boolean;
-  /** Up to target.length bytes at `off`, or at the position (off < 0), which moves past them. A stream
-   *  that would wait answers -EAGAIN, and is waited on (watch) unless O_NONBLOCK. A Promise leaves
-   *  `target` alone and settles to the bytes read, or -errno. */
-  read(f: OpenFile, target: Uint8Array, off: number, fd: number): number | Promise<Uint8Array | number>;
+  /** Up to `n` bytes at `off`, or at the position (off < 0), which moves past them, into `target` from
+   *  `at` (guest memory itself for a guest read). A stream that would wait answers -EAGAIN, and is waited
+   *  on (watch) unless O_NONBLOCK. A Promise leaves `target` alone and settles to the bytes read, or -errno. */
+  read(f: OpenFile, target: Uint8Array, at: number, n: number, off: number, fd: number): number | Promise<Uint8Array | number>;
   /** `bytes` at `off`, or at the position (off < 0); the kind copies what it keeps */
   write(f: OpenFile, bytes: Uint8Array, off: number): number | Promise<number>;
   poll(f: OpenFile, events: number): number;
@@ -198,7 +198,7 @@ export const woken = (f: OpenFile): Promise<void> => new Promise((resolve) => { 
 export function javaReadFd(fd: number, target: Uint8Array, off = -1): number | Promise<number> {
   const f = fds.get(fd), error = refused(f, off, false);
   if (error) return error;
-  const r = f!.ops.read(f!, target, off, fd);
+  const r = f!.ops.read(f!, target, 0, target.length, off, fd);
   if (typeof r !== "number") return r.then((v) => typeof v === "number" ? v : (target.set(v), v.length));
   return r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK) ? woken(f!).then(() => javaReadFd(fd, target, off)) : r;
 }

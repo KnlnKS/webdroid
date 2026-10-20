@@ -28,12 +28,12 @@ export function contentAt(content: VfsFile, off: number, n: number): Uint8Array 
   if (!k) return EMPTY;
   return content.source ? readAt(content.source, off, k) : content.data.subarray(off, off + k);
 }
-function contentInto(content: VfsFile, target: Uint8Array, off: number): number | Promise<Uint8Array | number> {
+function contentInto(content: VfsFile, target: Uint8Array, at: number, n: number, off: number): number | Promise<Uint8Array | number> {
   let value: Uint8Array | Promise<Uint8Array>;
-  try { value = contentAt(content, off, target.length); }
+  try { value = contentAt(content, off, n); }
   catch { return -E.IO; }
   if (value instanceof Promise) return value.catch(() => -E.IO);
-  target.set(value);
+  target.set(value, at);
   return value.length;
 }
 /** a read at the position moves it once the bytes come, and the next read at the position waits for that */
@@ -42,11 +42,10 @@ function queueRead(f: OpenFile, read: Promise<Uint8Array | number>): Promise<Uin
   const queue: Promise<void> = f.readQueue = moved.then(() => { if (f.readQueue === queue) f.readQueue = undefined; });
   return moved;
 }
-function readContent(f: OpenFile, target: Uint8Array, off: number): number | Promise<Uint8Array | number> {
-  if (off >= 0) return contentInto(f.content, target, off);
-  const n = target.length;
+function readContent(f: OpenFile, target: Uint8Array, at: number, n: number, off: number): number | Promise<Uint8Array | number> {
+  if (off >= 0) return contentInto(f.content, target, at, n, off);
   if (f.readQueue) return queueRead(f, f.readQueue.then(() => contentAt(f.content, f.pos, n)).catch(() => -E.IO));
-  const r = contentInto(f.content, target, f.pos);
+  const r = contentInto(f.content, target, at, n, f.pos);
   if (typeof r !== "number") return queueRead(f, r);
   if (r > 0) f.pos += r;
   return r;
@@ -135,7 +134,7 @@ const RANDOM: FileOps = {
   ...ANON,
   mode: S_IFCHR | 0o666,
   positional: true,
-  read(_f, target) { randomBytes(target); return target.length; },
+  read(_f, target, at, n) { randomBytes(target.subarray(at, at + n)); return n; },
   seek: (f) => f.pos,                                                             // noop_llseek
   available: () => -E.INVAL,
 };
@@ -178,13 +177,13 @@ export function fdFile(fd: number): VfsFile | null {
 export function fdRead(fd: number, p: number, n: number, off = -1): number | Promise<number> {
   const f = openFd(fd), error = refused(f, off, false);
   if (error) return error;
-  const r = f!.ops.read(f!, mem.bytes(p, n), off, fd);
+  const at = mem.reach(p, n), r = f!.ops.read(f!, mem.u8, at, n, off, fd);
   if (typeof r !== "number") {
-    const at = anchor(p);
-    return r.then((v) => typeof v === "number" ? v : (mem.write(at(), v), v.length));
+    const dst = anchor(p);
+    return r.then((v) => typeof v === "number" ? v : (mem.write(dst(), v), v.length));
   }
   if (r > 0) wrote(p, r);
-  else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) { const at = anchor(p); return woken(f!).then(() => fdRead(fd, at(), n, off)); }
+  else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) { const dst = anchor(p); return woken(f!).then(() => fdRead(fd, dst(), n, off)); }
   return r;
 }
 export const pread = (fd: number, p: number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : fdRead(fd, p, n, off);

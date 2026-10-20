@@ -64,7 +64,7 @@ function remoteRead(remote: RemoteDescriptor, length: number, off: number): Prom
 const REMOTE: FileOps = {
   ...ANON,
   positional: true,
-  read: (f, target, off) => remoteRead(f.remote!, target.length, off),
+  read: (f, _target, _at, n, off) => remoteRead(f.remote!, n, off),
   write: (f, bytes, off) => f.remote!.request("write", {bytes:bytes.slice(),offset:offsetOf(off)}),
   seek: (f, offset, whence) => f.remote!.request("seek", {offset,whence}),
   stat: (f) => f.remote!.stat(),

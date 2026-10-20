@@ -49,14 +49,14 @@ export function hookInotify(): void {
 /** an inotify descriptor reads whole events, as many as fit */
 const INOTIFY: FileOps = {
   ...ANON,
-  read(f, target) {
+  read(f, target, at, n) {
     const pipe = f.rpipe!, q = pipe.q;
     if (!q.length) return pipe.closed ? 0 : -E.AGAIN;
-    if (target.length < q[0].length) return -E.INVAL;
+    if (n < q[0].length) return -E.INVAL;
     let done = 0;
-    while (q.length && done + q[0].length <= target.length) {
+    while (q.length && done + q[0].length <= n) {
       const event = q.shift()!;
-      target.set(event, done);
+      target.set(event, at + done);
       done += event.length;
     }
     return done;

@@ -242,10 +242,10 @@ const lengthOf = (r: Received | number): number => {
 const SOCKET: FileOps = {
   ...ANON,
   mode: S_IFSOCK | 0o777,
-  read(f, target, _off, fd) {
-    const socket = f.socket!, now = socket.receive(fd, target, MSG_DONTWAIT) as Received | number;
+  read(f, target, at, n, _off, fd) {
+    const socket = f.socket!, now = socket.receive(fd, target.subarray(at, at + n), MSG_DONTWAIT) as Received | number;
     if (now !== -E.AGAIN || socket.nonblock) return lengthOf(now);
-    const into = new Uint8Array(target.length);
+    const into = new Uint8Array(n);
     return Promise.resolve(socket.receive(fd, into, 0)).then((r) => typeof r === "number" ? r : into.subarray(0, lengthOf(r)));
   },
   write: (f, bytes) => f.socket!.send(bytes, null, null),

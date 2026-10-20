@@ -23,13 +23,13 @@ const queued = (pipe: Pipe): number => pipe.q.reduce((n, b) => n + b.length, 0);
 export const PIPE: FileOps = {
   ...ANON,
   mode: S_IFIFO | 0o600,
-  read(f, target) {
+  read(f, target, at, n) {
     const pipe = f.rpipe!, q = pipe.q;
     if (!q.length) return pipe.closed ? 0 : -E.AGAIN;
     let k = 0;
-    while (k < target.length && q.length) {
-      const c = q[0], take = Math.min(target.length - k, c.length);
-      target.set(take === c.length ? c : c.subarray(0, take), k);
+    while (k < n && q.length) {
+      const c = q[0], take = Math.min(n - k, c.length);
+      target.set(take === c.length ? c : c.subarray(0, take), at + k);
       k += take;
       if (take === c.length) q.shift(); else q[0] = c.subarray(take);
     }

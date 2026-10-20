@@ -198,6 +198,8 @@ export const mem = {
     return (e < 0 ? u8.length : e) - (a >>> 0);
   },
   bytes: localBytes,
+  /** a host access of n bytes at a, checked: where it lands in u8 */
+  reach(a: number, n: number): number { checkAddr(a, n); return a >>> 0; },
   write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
   memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
   memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },
