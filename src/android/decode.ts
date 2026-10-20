@@ -477,18 +477,19 @@ const ALLOCATOR_DEFAULT = 0, ALLOCATOR_HARDWARE = 3;
 /** PixelFormat's answers a PostProcessor gives */
 const UNKNOWN = 0, TRANSLUCENT = -3, OPAQUE_FORMAT = -1;
 rt.registerJnis(DECODER, {
-  "nCreate(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (asset: bigint, _animation: number, source: unknown) =>
-    createDecoder(() => assetBytes(asset), source),
+  // each nCreate waits for its source's bytes, or for the ImageDecoder its constructor makes
+  "nCreate(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": waits((asset: bigint, _animation: number, source: unknown) =>
+    createDecoder(() => assetBytes(asset), source)),
   "nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;":
     waits((buffer: JBuffer, position: number, limit: number, _animation: number, source: unknown) =>
       createDecoder(() => after(readBufferBytes(buffer,position << elementShift(buffer),(limit - position) << elementShift(buffer)), bytes => bytes.slice()), source)),
-  "nCreate([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (bytes: Int8Array, off: number, len: number, _animation: number, source: unknown) =>
-    createDecoder(() => u8(bytes, off, len).slice(), source),
-  "nCreate(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (stream: unknown, _storage: Int8Array, _animation: number, source: unknown) =>
-    createDecoder(() => readStreamFully(stream), source),
+  "nCreate([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": waits((bytes: Int8Array, off: number, len: number, _animation: number, source: unknown) =>
+    createDecoder(() => u8(bytes, off, len).slice(), source)),
+  "nCreate(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": waits((stream: unknown, _storage: Int8Array, _animation: number, source: unknown) =>
+    createDecoder(() => readStreamFully(stream), source)),
   // from the descriptor's position, `length` bytes of it (-1: to the end)
-  "nCreate(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (fd: object | null, length: bigint, _animation: number, source: unknown) =>
-    createDecoder(async () => { const b = await fdBytes(fd); return length < 0n ? b : b.subarray(0, Number(length)); }, source),
+  "nCreate(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": waits((fd: object | null, length: bigint, _animation: number, source: unknown) =>
+    createDecoder(async () => { const b = await fdBytes(fd); return length < 0n ? b : b.subarray(0, Number(length)); }, source)),
   "nGetSampledSize(JI)Landroid/util/Size;": (h: bigint, sample: number) => {
     const { header } = encodedAt(h);
     return newObj("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
