@@ -1,126 +1,53 @@
-import type { ProcessLifeCalls } from "./process-life.ts";
 // The broker: system_server's part across process realms, kept in the page's realm, which
 // outlives them all. It registers each process and its Worker, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
-import type { PendingAccess } from "../android/pendingintent.ts";
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
 import { Alarms } from "./alarms.ts";
-import { AccountStore, type AccountCalls } from "./accounts.ts";
+import { AccountStore } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
-import { asSystem, releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
+import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
-import { newIntent, type ComponentRef } from "../android/intent.ts";
+import { newIntent } from "../android/intent.ts";
 import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { uptimeMillis } from "../guest-clock.ts";
-import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords.ts";
+import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords.ts";
 import { ActivityStack } from "./activitystack.ts";
 import type { FileSource } from "./lazyfile.ts";
 import { vfs } from "./vfs.ts";
 import { device, naturalLandscape } from "./config.ts";
-import type { Sender } from "../android/server/broadcastqueue.ts";
-import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm.ts";
-import { checkPermission, PermissionStore, type PermissionCalls } from "../android/permissions.ts";
+import { exported, componentPermission, componentProcess, resolveProvider } from "../android/pm.ts";
+import { PermissionStore } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
-import { sqliteStore, type createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite.ts";
-import { preferenceStore, type PreferenceCalls } from "../android/sharedprefs.ts";
-import { notificationStore, type ForegroundNotificationRequest } from "../android/notification.ts";
+import { sqliteStore, type createSQLiteSession } from "../android/sqlite.ts";
+import { preferenceStore } from "../android/sharedprefs.ts";
+import { notificationStore } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
 import { settingsStore } from "../android/settings.ts";
-import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
+import { awaited, rt } from "../jvm/runtime.ts";
 import type { WebCookies } from "./webcookies.ts";
-import type { CookieCalls } from "./cookie-access.ts";
-import type { LocationCalls } from "./location-access.ts";
-import { BrowserLocation, type LocationEvent } from "./geolocation.ts";
-import type { FilePathCalls } from "./file-path.ts";
-import { FileDescriptors, type DescriptorCalls, type DescriptorRights } from "./file-descriptors.ts";
-import { Clipboard, type ClipboardCalls } from "./clipboard.ts";
+import { BrowserLocation } from "./geolocation.ts";
+import { FileDescriptors, type DescriptorRights } from "./file-descriptors.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
 import { serveFile } from "./remote-file.ts";
-import type { WebStorageCalls } from "../android/webstorage.ts";
-import { hostUiMethods, type HostUi } from "./host-ui.ts";
 import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import type { SettingsCalls, SettingsTable } from "./settings.ts";
-import { serveProcess, processProxy, processError, methodsOf, closePort } from "./process-port.ts";
+import { serveProcess, processProxy, processError, closePort } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
+import { asBroker, forgetRemoved, permissionDenied, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
-export const permissionDenied = async (permission: string, pkg: string) =>
-  await checkPermission(permission, pkg) !== 0;
 async function someDenied(permissions: string[], pkg: string): Promise<boolean> {
   for (const permission of permissions) if (await permissionDenied(permission, pkg)) return true;
   return false;
 }
-/** a process's Java work on the broker's requests, or for the broker on its own behalf, as
- *  system_server does it. The broker runs none itself (a caller's realm rebuilds its errors), so
- *  it answers whichever process's JVM has ended, the page's included. */
-export const asBroker = <T>(work: Gen<T>): Promise<T> => asSystem(() => rt.drive(work));
-export const unawaited = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
-export type Receiver = { pkg: string; cls: string; priority: number };
-/** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
-export function* receivers(intent: JObj): Gen<Receiver[]> {
-  return (yield* awaited(queryReceivers(intent))).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
-}
-export type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
-export type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
-  | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
-  | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" }
-  | { kind: "rotate"; landscape: boolean };
-export type ProcessEndpoint = {
-  processDied: (token: number) => Promise<void>;
-  activity: (request: ActivityRequest) => Promise<void>;
-  transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
-  service: (request: ServiceRequest) => Promise<BinderHandle | null>;
-  /** IServiceConnection.connected for a binding this process holds by its key */
-  serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
-  contentProvider: (authority: string) => Promise<BinderHandle | null>;
-  broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
-  clipboardChanged: () => Promise<void>;
-  cookiesChanged: () => Promise<void>;
-  locationChanged: (id: number, token: number, event: LocationEvent) => Promise<void>;
-  accountsChanged: () => Promise<void>;
-  settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
-  storageChanged: (key: string, value: string | null) => Promise<void>;
-  /** a package was removed: this process's package manager forgets it */
-  packageRemoved: (pkg: string) => Promise<void>;
-  /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
-  kill: (signal: number, note?: KillNote) => void;
-};
-/** Caller identity is bound to the port, never supplied in a request's arguments. */
-type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
-  (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & ClipboardCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
-  serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
-  alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
-  alarmCancel: (id: number) => Promise<void>;
-  systemService: (name: string) => Promise<BinderHandle | null>;
-  systemProvider: (authority: string) => Promise<BinderHandle | null>;
-  notificationForeground: (request: ForegroundNotificationRequest) => Promise<void>;
-  exitRecords: (pkg: string) => Promise<ExitRecord[]>;
-  processExited: (record: ExitRecord) => void;
-  storageWrite: (key: string, value: string | null) => void;
-  /** a package's own clear, one the caller holds the permission for, or one the user agrees to */
-  packageDataChange: (pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string) => Promise<boolean>;
-  activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
-  activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
-  activityPresentation: (translucent: boolean) => Promise<void>;
-  displayOrientation: (landscape: boolean) => Promise<void>;
-  sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
-  transact: (request: Transaction) => Promise<TransactionReply>;
-  service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
-  contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
-  broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
-};
-/** in a fixed order: census decodes a timeline's call indexes by it */
-export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
 export type Entry = { pkg: string; process: string; uid: number; pid: number;
   /** the page's side of the Worker it runs in; the page's own process has none */
   host: ProcessHost | null;
@@ -143,16 +70,11 @@ export class ProcessSession {
   /** the command ports it holds */
   readonly callers = new Set<() => void>();
   sqlite: ReturnType<typeof createSQLiteSession> | null = null;
-  /** what tells it of account and settings changes */
-  accounts: (() => void) | null = null;
-  settings: (() => void) | null = null;
-  /** its location subscriptions' tokens, by id */
-  readonly locations = new Map<number, number>();
   dispose(): void {
-    this.sqlite?.close(); this.settings?.(); this.accounts?.(); this.endpoint?.();
+    this.sqlite?.close(); this.endpoint?.();
     for (const close of [...this.callers, ...this.bootstrap]) close();
-    this.sqlite = this.settings = this.accounts = this.endpoint = null;
-    this.bootstrap.length = 0; this.callers.clear(); this.locations.clear();
+    this.sqlite = this.endpoint = null;
+    this.bootstrap.length = 0; this.callers.clear();
   }
 }
 export class ProcessBroker {
@@ -210,10 +132,6 @@ export class ProcessBroker {
   readonly hosts = new ProcessHosts({ bootstrap: pid => this.bootstrap(pid), ready: (pid, port) => this.readyPort(pid, port),
     failed: (pid, message) => this.fail(pid, message, NOT_CRASHED) });
   readonly fileDescriptors = new FileDescriptors();
-  readonly clipboard = new Clipboard(this.fileDescriptors, {
-    uid: pid => this.entry(pid).uid, foregroundUid: () => this.entries.get(this.activities.foreground)?.uid,
-    changed: pid => { if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.clipboardChanged())); },
-  });
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
@@ -285,8 +203,6 @@ export class ProcessBroker {
   /** what the Worker of `pid` starts from: every package's archive, its broker port and its surfaces */
   private async bootstrap(pid: number): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
-    this.watchSettings(pid);
-    this.watchAccounts(pid);
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
@@ -332,20 +248,6 @@ export class ProcessBroker {
       entry.resolve(proxy.endpoint);
     } catch (error) { closePort(port); stop(); throw error; }
   }
-  /** Root uses its local Java watcher; remote processes keep only this owner-side notifier. */
-  watchAccounts(pid: number, local?: () => void): void {
-    const entry = this.entry(pid), session = entry.session;
-    if (local) { session.accounts?.(); session.accounts = local; return; }
-    session.accounts ??= this.accounts.watch(() => {
-      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.accountsChanged()));
-    });
-  }
-  watchSettings(pid: number): void {
-    const entry = this.entry(pid);
-    entry.session.settings ??= this.settings.watch((table, name) => {
-      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
-    });
-  }
   /** a process ended, or its Worker failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
@@ -362,13 +264,15 @@ export class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); host?.close(); this.files.detach(pid); this.location.remove(pid); this.clipboard.forget(pid);
+    entry.watchers.clear(); host?.close(); this.files.detach(pid);
     this.activities.processDied(pid);
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
   starting(): boolean { return [...this.entries.values()].some(e => e.host && !e.dead && !e.session.endpoint); }
   /** settles once the process has presented a frame, or has died */
   presented(pid: number): Promise<void> { return this.entries.get(pid)?.host?.presented.promise ?? Promise.resolve(); }
+  /** the uid of the process on top, whose app has input focus */
+  foregroundUid(): number | undefined { return this.entries.get(this.activities.foreground)?.uid; }
   foregroundHost(): ProcessHost | null {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.host : null;
@@ -545,12 +449,6 @@ function installed(pkg: string) {
   const owner = packages.get(pkg);
   if (!owner) throw new Error("Package not installed: " + pkg);
   return owner;
-}
-/** a removed package leaves this process's package manager, with the archive it would register again from */
-export function forgetRemoved(pkg: string): void {
-  packages.delete(pkg);
-  packedArchives.delete(installedPath(pkg));
-  vfs.delete(installedPath(pkg));
 }
 declare global { interface Window { __wdProcesses?: ProcessBroker; } }
 export function processBroker(): ProcessBroker {

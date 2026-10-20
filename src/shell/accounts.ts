@@ -1,3 +1,5 @@
+import { storedText, storeText } from "./device-storage.ts";
+
 export type StoredAccount = {
   name: string; type: string; owner: string; password: string | null;
   data: Record<string, string>; tokens: Record<string, string>; visibility: Record<string, number>;
@@ -17,13 +19,12 @@ export type AccountChange =
 export type AccountQuery = { type: string | null; pkg: string; managed?: boolean };
 export type CachedAccount = { account: AccountSummary; token?: string };
 export interface AccountAccess {
-  accountList(query: AccountQuery): AccountSummary[] | Promise<AccountSummary[]>;
-  accountRead(key: AccountKey): StoredAccount | null | Promise<StoredAccount | null>;
-  accountExists(key: AccountKey): boolean | Promise<boolean>;
-  accountCached(key: AccountKey, tokenType: string): CachedAccount | null | Promise<CachedAccount | null>;
-  accountChange(change: AccountChange): number | Promise<number>;
+  accountList(query: AccountQuery): AccountSummary[];
+  accountRead(key: AccountKey): StoredAccount | null;
+  accountExists(key: AccountKey): boolean;
+  accountCached(key: AccountKey, tokenType: string): CachedAccount | null;
+  accountChange(change: AccountChange): number;
 }
-export type AccountCalls = { [K in keyof AccountAccess]: (...args: Parameters<AccountAccess[K]>) => Promise<Awaited<ReturnType<AccountAccess[K]>>> };
 export type AccountAuthority = { caller: string; authenticator(type: string): string | undefined; sameUid(a: string, b: string): boolean; known(pkg: string): boolean; denied(type: string): never };
 const summary = (s: StoredAccount): AccountSummary => ({ name: s.name, type: s.type, owner: s.owner, id: s.id, visibility: { ...s.visibility } });
 const copy = (s: StoredAccount): StoredAccount => ({ ...s, data: Object.assign(Object.create(null), s.data), tokens: Object.assign(Object.create(null), s.tokens), visibility: Object.assign(Object.create(null), s.visibility) });
@@ -84,6 +85,7 @@ export function canonicalAccountCommands(store: AccountStore, authority: () => A
   };
 }
 const strings = (value: unknown): value is Record<string, string> => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(v => typeof v === "string");
+const KEY = "wd:accounts";
 export class AccountStore {
   private loaded: StoredAccount[] | null = null;
   private nextId = 1;
@@ -93,7 +95,7 @@ export class AccountStore {
     if (this.loaded) return this.loaded;
     this.loaded = [];
     try {
-      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:accounts") ?? "[]");
+      const saved: unknown = JSON.parse(storedText(KEY) ?? "[]");
       if (Array.isArray(saved)) for (const value of saved) {
         if (!value || typeof value !== "object" || typeof value.name !== "string" || typeof value.type !== "string" || typeof value.owner !== "string" || !value.name || !value.type || !value.owner ||
           !(value.password === null || typeof value.password === "string") || !strings(value.data) || !strings(value.tokens) ||
@@ -105,7 +107,7 @@ export class AccountStore {
     return this.loaded;
   }
   persist(): void {
-    globalThis.localStorage?.setItem("wd:accounts", JSON.stringify(this.records.map(({ id, ...record }) => record)));
+    storeText(KEY, JSON.stringify(this.records.map(({ id, ...record }) => record)));
     for (const listener of this.listeners) listener();
   }
   /** AccountManagerService on a package's removal: the accounts its authenticator kept, and their

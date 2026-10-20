@@ -4,8 +4,7 @@
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { awaited, type JObj, driven, type Gen } from "../../jvm/runtime.ts";
 import { newObj, vcall } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
-import { notConnected } from "../binder.ts";
+import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
 import { PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";

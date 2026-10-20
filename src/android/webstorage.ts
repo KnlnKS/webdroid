@@ -13,25 +13,20 @@ import { runningApp } from "./apphost.ts";
 import { rendererOrigin, rendererStorage } from "../shell/webrenderer.ts";
 import type { StorageOp } from "../shell/webpage/protocol.ts";
 import type { PackageState } from "../shell/packagedata.ts";
+import { persisted } from "../shell/device-storage.ts";
 
 /** kept with the install */
-const originsKey = (pkg: string) => "wd:install:" + pkg + ":webview";
+const savedOrigins = persisted("wd:install:", (saved) => Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : null);
+const originsKey = (pkg: string) => pkg + ":webview";
 /** the web origins `pkg`'s WebViews have rendered */
-export function webOrigins(pkg: string): string[] {
-  try {
-    const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(originsKey(pkg)) ?? "[]");
-    return Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : [];
-  } catch { return []; }
-}
+export const webOrigins = (pkg: string): string[] => savedOrigins.get(originsKey(pkg)) ?? [];
 /** the renderer origin `pkg`'s pages of `webOrigin` render on. The install time is part of it, so a
  *  reinstall starts on origins of its own. */
 const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
 /** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds */
 function localWebRenderer(pkg: string, webOrigin: string): Promise<string> {
   const known = webOrigins(pkg);
-  if (!known.includes(webOrigin)) {
-    try { globalThis.localStorage?.setItem(originsKey(pkg), JSON.stringify([...known, webOrigin])); } catch { /* storage can be unavailable */ }
-  }
+  if (!known.includes(webOrigin)) savedOrigins.set(originsKey(pkg), [...known, webOrigin]);
   return rendererOf(pkg, webOrigin);
 }
 
@@ -72,7 +67,7 @@ const storageOf = (pkg: string, webOrigin: string, op: StorageOp) => rendererOf(
 export const webData: PackageState = {
   clear: (pkg) => inOrder(async () => {
     await Promise.all(webOrigins(pkg).map((o) => storageOf(pkg, o, "all")));
-    try { globalThis.localStorage?.removeItem(originsKey(pkg)); } catch { /* storage can be unavailable */ }
+    savedOrigins.remove(originsKey(pkg));
   }),
 };
 

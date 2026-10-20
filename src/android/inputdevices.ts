@@ -7,7 +7,7 @@
 import { awaited, rt, JObj, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { once } from "../jvm/suspend.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { device } from "../shell/config.ts";
 import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars.ts";
 import { parseKeyMap, javaKeyCharacterMap } from "./keyevent.ts";
@@ -55,7 +55,7 @@ function hasKeys(id: number, sourceMask: number, codes: Int32Array, out: Uint8Ar
   return 1;
 }
 
-rt.register({ name: "webdroid/InputManagerService", ctor: class extends JObj {}, sup: "android/hardware/input/IInputManager$Stub", methods: {
+hostService("input", "webdroid/InputManagerService", "android/hardware/input/IInputManager$Stub", {
   "getInputDevice(I)Landroid/view/InputDevice;": waits((id: number) => after(inputDevices(), (devices) => devices.get(id) ?? null)),
   "getInputDeviceIds()[I": () => Int32Array.of(VIRTUAL_KEYBOARD, TOUCHSCREEN),
   // the devices never change, so a listener is never called
@@ -63,6 +63,5 @@ rt.register({ name: "webdroid/InputManagerService", ctor: class extends JObj {},
   "hasKeys(II[I[Z)Z": hasKeys,
   // the device leaves the velocitytracker_strategy flag at its default
   "getVelocityTrackerStrategy()Ljava/lang/String;": () => null,
-} });
-hostStub("input", "webdroid/InputManagerService");
+});
 

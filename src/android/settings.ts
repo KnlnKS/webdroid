@@ -1,5 +1,5 @@
 // SettingsProvider, the `settings` authority, as an IContentProvider every process hosts over the
-// broker's SettingsStore. AOSP's Settings, NameValueCache, Settings.Config and DeviceConfig run from
+// broker's SettingsStore, whose writes system_server's ContentService announces. AOSP's Settings, NameValueCache, Settings.Config and DeviceConfig run from
 // bytecode above it; the answers follow the reference AVD's SettingsProvider.apk (call, query,
 // insert, update, delete), its readable-key rules and its permission checks, which a probe app
 // (targetSdk 30 and 35) reproduced on the device. NameValueCache's generation tracking is not
@@ -18,7 +18,7 @@ import { callingIdentity, asSystem } from "./binder.ts";
 import { uriParts } from "./net.ts";
 import { packages, type PackageRecord } from "./packages.ts";
 import { notifyContent } from "./server/content.ts";
-import { locationTransport } from "./locationmanager.ts";
+import { locationEnabled } from "./locationmanager.ts";
 import { holdsPlatformPermission } from "./permissions.ts";
 import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings.ts";
 import { registerSystemProvider, matrixCursor } from "./systemproviders.ts";
@@ -38,7 +38,7 @@ export function useSettingsAccess(shared: SettingsAccess): void {
   stopWatching(); access = shared;
 }
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
-export function settingsChanged(table: SettingsTable, name: string): void {
+function settingsChanged(table: SettingsTable, name: string): void {
   detached(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)), logUncaught);
 }
 
@@ -127,7 +127,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
 /** settings whose value another owner keeps: LocationManagerService writes location_mode with the
  *  location switch, and DatabaseHelper names the device after its model until someone renames it */
 const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => unknown>>> = {
-  secure: { location_mode: () => after(locationTransport.enabled(), enabled => enabled ? "3" : "0") },
+  secure: { location_mode: () => after(locationEnabled(), enabled => enabled ? "3" : "0") },
   global: { device_name: (stored) => stored ?? staticField("android/os/Build", "MODEL") },
 };
 const valueOf = (table: Table, name: string): unknown => {

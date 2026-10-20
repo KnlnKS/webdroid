@@ -1,7 +1,7 @@
 // The permission controller: which permissions a package or uid holds, as PermissionManagerService
 // checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
 // IPermissionManager over them.
-import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray, sameBytes } from "../jvm/abi.ts";
 import { after, vcall, newObj } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
@@ -10,7 +10,7 @@ import { appHost } from "./apphost.ts";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
 import { type PackageRecord, packages, signaturePermissions, usesSdk } from "./packages.ts";
 import { persisted } from "../shell/device-storage.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { permissionInfo$ } from "./pm.ts";
 
 /**
@@ -176,7 +176,7 @@ const SPLIT_PERMISSIONS: [string, number, string][] = [
   ["READ_MEDIA_IMAGES", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["READ_MEDIA_VIDEO", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"],
   ["ACCESS_MEDIA_LOCATION", 10001, "READ_MEDIA_VISUAL_USER_SELECTED"], ["com.google.android.gms.permission.ACTIVITY_RECOGNITION", 29, "ACTIVITY_RECOGNITION"],
 ];
-rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionManager$Stub", methods: {
+hostService("permissionmgr", "webdroid/PermissionManagerService", "android/permission/IPermissionManager$Stub", {
   [`checkPermission(${S}${S}${S}I)I`]: (pkg: string, permission: string) => checkPermission(permission, pkg),
   [`checkUidPermission(I${S}I)I`]: (uid: number, permission: string) => checkUidPermission(permission, uid),
   [`getPermissionInfo(${S}${S}I)Landroid/content/pm/PermissionInfo;`]: driven(function* getPermissionInfo$(name: string, _caller: string, flags: number): Gen {
@@ -196,9 +196,7 @@ rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JOb
   }),
   ...noops("addOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V",
     "removeOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V"),
-} });
-hostStub("permissionmgr", "webdroid/PermissionManagerService");
+});
 // PermissionManager holds a LegacyPermissionManager from construction; none of its identifier
 // checks is answered yet, so each reports itself missing when reached
-rt.register({ name: "webdroid/LegacyPermissionManagerService", ctor: class extends JObj {}, sup: "android/permission/ILegacyPermissionManager$Stub" });
-hostStub("legacy_permission", "webdroid/LegacyPermissionManagerService");
+hostService("legacy_permission", "webdroid/LegacyPermissionManagerService", "android/permission/ILegacyPermissionManager$Stub");

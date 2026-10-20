@@ -5,15 +5,12 @@ import { ANON, installFile, newFile, openFd, javaCloseFd, javaFdBytes, type FdSt
 import { javaOpenFd, listProcess } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { isMutablePath } from "../shell/file-path.ts";
+import { pathOwner } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
 import type { DescriptorCalls, DescriptorKind, DescriptorReply, DescriptorRequest, DescriptorRights } from "../shell/file-descriptors.ts";
 import { settleRemoteMaps } from "./mappings.ts";
 
-/** Bound lazily after the process is registered; the page's kernel never installs this. */
 export const descriptorTransport: {
-  calls?: () => DescriptorCalls;
-  importCalls?: () => DescriptorCalls;
   /** the page's own rights, which its kernel answers directly */
   local?: DescriptorRights;
 } = {};
@@ -21,10 +18,10 @@ export const descriptorTransport: {
 /** An open file another realm owns, which answers each request on it by its token. */
 export class RemoteDescriptor {
   token: number;
-  calls: () => DescriptorCalls;
-  constructor(token: number, calls: () => DescriptorCalls) { this.token = token; this.calls = calls; }
+  calls: DescriptorCalls;
+  constructor(token: number, calls: DescriptorCalls) { this.token = token; this.calls = calls; }
   request<K extends DescriptorKind>(kind: K, args: Omit<DescriptorRequest<K>, "kind" | "fd">): Promise<DescriptorReply<K>> {
-    return this.calls().fileDescriptor({ kind, fd: this.token, ...args } as DescriptorRequest<K>);
+    return this.calls.fileDescriptor({ kind, fd: this.token, ...args } as DescriptorRequest<K>);
   }
   stat(): Promise<FdStat | null> { return this.request("stat", {}).then(reply => typeof reply === "number" ? null : reply); }
   /** a lease on [offset, offset + length) of the open file */
@@ -37,17 +34,17 @@ export class RemoteDescriptor {
       region,
       immutable,
       async read(offset,length) {
-        const bytes = await calls().fileDescriptor({kind:"mappingRead",lease,offset,length});
+        const bytes = await calls.fileDescriptor({kind:"mappingRead",lease,offset,length});
         if (typeof bytes === "number") throw new Error(`shared mapping read: ${-bytes}`);
         if (bytes.length !== length) throw new Error("short shared mapping read");
         return bytes;
       },
       async write(offset,bytes) {
-        const n = await calls().fileDescriptor({kind:"mappingWrite",lease,offset,bytes:bytes.slice()});
+        const n = await calls.fileDescriptor({kind:"mappingWrite",lease,offset,bytes:bytes.slice()});
         if (n !== bytes.length) throw new Error(`shared mapping write: ${n}`);
       },
       async close() {
-        const n = await calls().fileDescriptor({kind:"mappingRelease",lease});
+        const n = await calls.fileDescriptor({kind:"mappingRelease",lease});
         if (n < 0 && n !== -E.BADF) throw new Error(`shared mapping release: ${-n}`);
       },
     };
@@ -94,12 +91,11 @@ const REMOTE: FileOps = {
 };
 export const isRemoteFd = (fd: number): boolean => openFd(fd)?.ops === REMOTE;
 
-function installRemote(token: number, calls: () => DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
+function installRemote(token: number, calls: DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
   const f = newFile(REMOTE, path, flags, undefined, dir);
   f.remote = new RemoteDescriptor(token, calls);
   return installFile(f, cloexec);
 }
-const kernelCalls = () => descriptorTransport.calls ?? descriptorTransport.importCalls;
 /** this realm's descriptor rights, which the page's kernel holds: the page's own locally, a process's through requests */
 export const processRights: DescriptorRights = {
   stage(fd) {
@@ -111,32 +107,32 @@ export const processRights: DescriptorRights = {
   },
   async take(token) {
     if (descriptorTransport.local) return descriptorTransport.local.take(token);
-    const calls = kernelCalls();
+    const calls = pathOwner()?.descriptors;
     if (!calls) return -E.BADF;
-    const stat = await calls().fileDescriptor({kind:"stat",fd:token});
+    const stat = await calls.fileDescriptor({kind:"stat",fd:token});
     if (typeof stat === "number") return stat;
-    const flags = await calls().fileDescriptor({kind:"fcntl",fd:token,command:3,arg:0});
-    if (flags < 0) { await calls().fileDescriptor({kind:"close",fd:token}); return flags; }
-    const taken = await calls().fileDescriptor({kind:"take",fd:token});
+    const flags = await calls.fileDescriptor({kind:"fcntl",fd:token,command:3,arg:0});
+    if (flags < 0) { await calls.fileDescriptor({kind:"close",fd:token}); return flags; }
+    const taken = await calls.fileDescriptor({kind:"take",fd:token});
     return taken < 0 ? taken : installRemote(token,calls,stat.path ?? "",flags,(stat.mode & S_IFMT) === S_IFDIR,true);
   },
   discard(token, staged) {
-    const local = descriptorTransport.local, calls = kernelCalls();
+    const local = descriptorTransport.local, calls = pathOwner()?.descriptors;
     if (local) return local.discard(token, staged);
-    return calls ? calls().fileDescriptor({kind:staged ? "unstage" : "close",fd:token}) : Promise.resolve(-E.BADF);
+    return calls ? calls.fileDescriptor({kind:staged ? "unstage" : "close",fd:token}) : Promise.resolve(-E.BADF);
   },
 };
 
 export function processOpenFd(path: string, flags: number): number | Promise<number> {
-  const normalized = vfs.norm(path), calls = isMutablePath(normalized) ? descriptorTransport.calls : undefined;
+  const normalized = vfs.norm(path), calls = pathOwner(normalized)?.descriptors;
   if (!calls) return javaOpenFd(normalized,flags);
-  return calls().fileDescriptor({kind:"open",path:normalized,flags}).then(reply =>
+  return calls.fileDescriptor({kind:"open",path:normalized,flags}).then(reply =>
     typeof reply === "number" ? reply : reply === "fifo" ? openRemoteFifo(normalized,flags) : installRemote(reply.token,calls,normalized,flags,reply.dir));
 }
 
 /** a file's bytes, from the realm that owns its path */
 export async function processFileBytes(path: string): Promise<Uint8Array | null> {
-  if (!isMutablePath(path) || !descriptorTransport.calls) return vfs.readFile(path);
+  if (!pathOwner(path)) return vfs.readFile(path);
   const fd = await processOpenFd(path, 0);
   if (fd < 0) return null;
   try { return await javaFdBytes(fd); } finally { await javaCloseFd(fd); }
@@ -145,8 +141,8 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
 /** An owner's lease on a range of a file, which outlives the descriptor that took it; `region` names the file. */
 export type ProcessMapping = { size: number; region: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
 export function processAshmemCreate(size: number): Promise<number> | null {
-  const calls = descriptorTransport.calls;
-  return calls ? calls().fileDescriptor({kind:"ashmemCreate",size}).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;
+  const calls = pathOwner()?.descriptors;
+  return calls ? calls.fileDescriptor({kind:"ashmemCreate",size}).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;
 }
 export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
   const remote = openFd(fd)?.remote;

@@ -140,6 +140,8 @@ export function installTime(pkg: string): bigint {
 }
 /** `pkg` is installed under `uid`: a caller's claim to a package, as checkPackage verifies it */
 export const ownedBy = (pkg: string | null, uid: number): boolean => pkg !== null && packages.get(pkg)?.uid === uid;
+/** the installed packages under `uid`, as getPackagesForUid lists them */
+export const uidPackages = (uid: number): PackageRecord[] => [...packages.values()].filter((p) => p.uid === uid);
 /** the uid a package was given, without assigning one */
 export const knownUid = (pkg: string): number | undefined => packages.get(pkg)?.uid ?? uids.get(pkg);
 /** the packages installed or with an install kept, whose removal drops the install state (its

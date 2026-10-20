@@ -2,13 +2,16 @@
 // per-package state ActivityManager and PackageManager reset beside it (clearApplicationUserData);
 // removing the package (uninstall, the shell's reset) clears it, then also takes its install state
 // and what the system keeps for it while it is installed.
-import type { processBroker, Receiver } from "./processes.ts";
+import type { Receiver } from "./broker-contract.ts";
+import type { processBroker } from "./processes.ts";
 import type { ParcelData } from "../android/binder.ts";
 import { webData } from "../android/webstorage.ts";
 import { keystoreData } from "../android/keystore.ts";
 import { uriGrantData } from "../android/urigrants.ts";
 import { legacySnapshotData } from "../android/sqlite.ts";
 import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
+import { jobData } from "../android/job.ts";
+import { shortcutData } from "../android/shortcuts.ts";
 import { installData, knownUid, packages } from "../android/packages.ts";
 import { installedPath } from "../android/pm.ts";
 import { forgetPackage } from "./packages.ts";
@@ -26,7 +29,7 @@ export type PackageState = {
 };
 /** in the order they clear: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [
-  broker.alarms, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
+  broker.alarms, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
   broker.files, webData, broker.intents, broker.accounts, exitRecordData, installData,

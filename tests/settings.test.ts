@@ -4,11 +4,13 @@ import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
 import { packages, type PackageRecord } from "../src/android/packages.ts";
 import { setProcessIdentity } from "../src/android/os.ts";
-import { locationTransport } from "../src/android/locationmanager.ts";
+import { useGeolocation } from "../src/android/locationmanager.ts";
+import { BrowserLocation } from "../src/shell/geolocation.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { mkUri, uriText, type JUri } from "../src/android/net.ts";
 import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
-import { remoteSettings, type SettingsCalls } from "../src/shell/settings.ts";
+import type { SettingsAccess } from "../src/shell/settings.ts";
+import type { Calls } from "../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { systemProvider } from "../src/android/systemproviders.ts";
 import { bootApp, packageRecord, thrown } from "./java.ts";
@@ -45,14 +47,14 @@ describe("settings-provider", () => {
     const store = settingsStore(), channel = new MessageChannel(), key = "webdroid_async_setting";
     let release!: () => void, began!: () => void;
     const gate = new Promise<void>(resolve => release = resolve), entered = new Promise<void>(resolve => began = resolve);
-    const stop = serveCalls<SettingsCalls>(channel.port1, {
-      settingsGet: async (table, name) => store.get(table, name),
-      settingsEntries: async table => store.entries(table),
-      settingsSsaid: async () => store.ssaidKey(),
-      settingsPut: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
+    const stop = serveCalls<Calls<SettingsAccess>>(channel.port1, {
+      get: async (table, name) => store.get(table, name),
+      entries: async table => store.entries(table),
+      ssaidKey: async () => store.ssaidKey(),
+      put: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
     });
-    const client = callProxy<SettingsCalls>(channel.port2, ["settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"]);
-    useSettingsAccess(remoteSettings(() => client.endpoint));
+    const client = callProxy<Calls<SettingsAccess>>(channel.port2, ["get", "entries", "put", "ssaidKey"]);
+    useSettingsAccess(client.endpoint);
     setProcessIdentity(4321, 1000);
     try {
       const pending = scall(GLOBAL, "putString", `(${CR}${S}${S})Z`, cr, key, "shared");
@@ -78,18 +80,17 @@ describe("settings-provider", () => {
     expect(await thrown(() => scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "font_scale"))).toBe("android/provider/Settings$SettingNotFoundException: font_scale");
     expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe(DEVICE_PROPERTIES["ro.product.model"]);
     expect(await scall(GLOBAL, "getFloat", `(${CR}${S}F)F`, cr, "animator_duration_scale", 0.5)).toBe(0.5);
-    const enabled = locationTransport.enabled, available = locationTransport.available;
+    const geolocation = { available: false, enabled: false, last: null, subscribe() {}, remove() {} };
+    useGeolocation(geolocation);
     try {
       const service = rt.make("webdroid/LocationManagerService");
-      locationTransport.available = async () => false;
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(0);
-      locationTransport.available = async () => true;
+      geolocation.available = true;
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(1);
-      locationTransport.enabled = async () => false;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(0);
-      locationTransport.enabled = async () => true;
+      geolocation.enabled = true;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(3);
-    } finally { locationTransport.enabled = enabled; locationTransport.available = available; }
+    } finally { useGeolocation(new BrowserLocation()); }
   });
 
   test("an app reads its SSAID, the same for every package with its signer", async () => {

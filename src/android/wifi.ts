@@ -1,18 +1,18 @@
 // IWifiManager, under AOSP's WifiManager, WifiInfo, ScanResult and DhcpInfo: the page's network is
-// the one Wi-Fi network ConnectivityService reports (services.ts), connected while the page is
+// the one Wi-Fi network ConnectivityService reports (connectivity.ts), connected while the page is
 // online, as the reference AVD's AndroidWifi access point (dumpsys wifi's mWifiInfo) apart from its
 // address, which the network's LinkProperties do not carry either. WifiServiceImpl's checks are
 // kept (decoded from the AVD's service-wifi.jar): ACCESS_WIFI_STATE to read, CHANGE_WIFI_STATE to
 // change, location access to see the network's identity or scan results. There is no radio to scan
 // or toggle: a scan fails and setWifiEnabled is refused.
-import { awaited, JObj, setDeclared, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder.ts";
+import { callingIdentity, enforceCallingOrSelfPermission, hostService } from "./binder.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { packages } from "./packages.ts";
-import { locationTransport } from "./locationmanager.ts";
-import { DNS_SERVER, netUp, theNetwork } from "./services.ts";
+import { locationEnabled } from "./locationmanager.ts";
+import { DNS_SERVER, netUp, theNetwork } from "./connectivity.ts";
 
 const WIFI_STATE_ENABLED = 3, WIFI_STANDARD_LEGACY = 1, SECURITY_TYPE_OPEN = 0, REDACT_FOR_ACCESS_FINE_LOCATION = 1n;
 const S = "Ljava/lang/String;", SLICE = "com/android/wifi/x/com/android/modules/utils/ParceledListSlice";
@@ -26,7 +26,7 @@ const refuseChange = () => after(enforce("android.permission.CHANGE_WIFI_STATE")
  *  below Q) */
 function* canAccessScanResults(pkg: string): Gen<boolean> {
   const { uid } = callingIdentity(), check = (name: string) => checkUidPermission("android.permission." + name, uid);
-  return (yield* awaited(locationTransport.enabled())) && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
+  return (yield* awaited(locationEnabled())) && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
 }
 function* connectionInfo(): Gen<JObj> {
   const info = yield newObj("android/net/wifi/WifiInfo");
@@ -47,7 +47,7 @@ function* connectionInfo(): Gen<JObj> {
 const inet4 = (address: string) => address.split(".").reduceRight((n, octet) => (n << 8) | +octet, 0);
 
 const locks = new Set<unknown>(), multicast = new Map<unknown, string>();
-rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "android/net/wifi/IWifiManager$Stub", methods: {
+hostService("wifi", "webdroid/WifiService", "android/net/wifi/IWifiManager$Stub", {
   "getWifiEnabledState()I": () => after(enforceAccess(), () => WIFI_STATE_ENABLED),
   [`getConnectionInfo(${S}${S})Landroid/net/wifi/WifiInfo;`]: driven(function* (pkg: string) {
     yield enforceAccess();
@@ -83,5 +83,4 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
     for (const [binder, held] of multicast) if (held === tag) { multicast.delete(binder); break; }
   }),
   "isMulticastEnabled()Z": () => +(multicast.size > 0),
-} });
-hostStub("wifi", "webdroid/WifiService");
+});

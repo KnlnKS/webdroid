@@ -4,7 +4,8 @@
 import type { ParcelData } from "../android/binder.ts";
 import { guestSleep } from "../guest-clock.ts";
 import type { Rotation } from "./config.ts";
-import type { ActivityRequest, Entry } from "./processes.ts";
+import type { ActivityRequest } from "./broker-contract.ts";
+import type { Entry } from "./processes.ts";
 
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;

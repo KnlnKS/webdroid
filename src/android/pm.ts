@@ -23,12 +23,12 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind,
+import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
 import { digestBytes } from "../jvm/natives/digest.ts";
-import { hostStub, oneway, parceledList } from "./binder.ts";
+import { hostService, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
 import { installerService } from "./packageinstaller.ts";
 import { checkPermission } from "./permissions.ts";
@@ -607,7 +607,6 @@ function compareSignatures(left: Uint8Array[], right: Uint8Array[]): number {
   if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
   return left.length === right.length && left.every((cert) => right.some((other) => sameBytes(cert, other))) ? 0 : -3;
 }
-const recordsForUid = (uid: number) => [...packages.values()].filter((p) => p.uid === uid);
 
 function* componentArgs$(component: JObj | null): Gen<[string, string]> {
   if (!component) rt.npe();
@@ -652,7 +651,7 @@ function* properties$(name: string, type: number): Gen<JObj[]> {
   return out;
 }
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", CN = "Landroid/content/ComponentName;", SLICE = "Landroid/content/pm/ParceledListSlice;";
-rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageManager$Stub", methods: {
+hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPackageManager$Stub", {
   [`getPackageInfo(${S}JI)Landroid/content/pm/PackageInfo;`]: driven(function* getPackageInfo$(pkg: string, flags: bigint): Gen {
     const record = yield* awaited(packageRecord(pkg));
     return record ? yield* packageInfo$(record, flag(flags)) : null;
@@ -745,10 +744,10 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   // no PermissionController module is installed
   "getPermissionControllerPackageName()Ljava/lang/String;": () => null,
   "isDeviceUpgrading()Z": () => 0,
-  [`getNameForUid(I)${S}`]: (uid: number) => recordsForUid(uid)[0]?.pkg ?? null,
-  [`getNamesForUids([I)[${S}`]: (uids: Int32Array) => jarray([...uids].map((uid) => recordsForUid(uid)[0]?.pkg ?? null), S),
+  [`getNameForUid(I)${S}`]: (uid: number) => uidPackages(uid)[0]?.pkg ?? null,
+  [`getNamesForUids([I)[${S}`]: (uids: Int32Array) => jarray([...uids].map((uid) => uidPackages(uid)[0]?.pkg ?? null), S),
   [`getPackagesForUid(I)[${S}`]: (uid: number) => {
-    const names = recordsForUid(uid).map((p) => p.pkg);
+    const names = uidPackages(uid).map((p) => p.pkg);
     return names.length ? jarray(names, S) : null;
   },
   [`checkSignatures(${S}${S}I)I`]: async (a: string, b: string) => {
@@ -756,7 +755,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     return x && y ? compareSignatures(await x.visibleCertificates(), await y.visibleCertificates()) : -4;
   },
   "checkUidSignatures(II)I": async (a: number, b: number) => {
-    const x = recordsForUid(a)[0], y = recordsForUid(b)[0];
+    const x = uidPackages(a)[0], y = uidPackages(b)[0];
     return x && y ? compareSignatures(await x.visibleCertificates(), await y.visibleCertificates()) : -4;
   },
   [`hasSigningCertificate(${S}[BI)Z`]: async (pkg: string, certificate: Int8Array, type: number) => {
@@ -764,7 +763,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     return record ? certificateMatches(await record.visibleCertificates(), certificate, type) : 0;
   },
   "hasUidSigningCertificate(I[BI)Z": async (uid: number, certificate: Int8Array, type: number) => {
-    for (const record of recordsForUid(uid)) if (await certificateMatches(await record.visibleCertificates(), certificate, type)) return 1;
+    for (const record of uidPackages(uid)) if (await certificateMatches(await record.visibleCertificates(), certificate, type)) return 1;
     return 0;
   },
   [`getInstalledPackages(JI)${SLICE}`]: driven(function* getInstalledPackages$(flags: bigint): Gen {
@@ -783,14 +782,12 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", yield newArrayList(checksums));
   }),
   ...noops(`notifyPackageUse(${S}I)V`, `notifyDexLoad(${S}Ljava/util/Map;${S})V`),
-} });
-hostStub("package", "webdroid/PackageManagerService");
+});
 
 // a single-user device with no managed profile: nothing to reach across
-rt.register({ name: "webdroid/CrossProfileAppsService", ctor: class extends JObj {}, sup: "android/content/pm/ICrossProfileApps$Stub", methods: {
+hostService("crossprofileapps", "webdroid/CrossProfileAppsService", "android/content/pm/ICrossProfileApps$Stub", {
   [`getTargetUserProfiles(${S})Ljava/util/List;`]: () => newArrayList(),
   [`canInteractAcrossProfiles(${S})Z`]: () => 0,
   [`canRequestInteractAcrossProfiles(${S})Z`]: () => 0,
-} });
-hostStub("crossprofileapps", "webdroid/CrossProfileAppsService");
+});
 

@@ -1,6 +1,6 @@
 import { guestClockControl } from "../guest-clock.ts";
 import { closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import type { BrokerCalls } from "./processes.ts";
+import type { BrokerCalls } from "./broker-contract.ts";
 
 /** The Worker attached its clock and loaded natives before this bootstrap arrived. */
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {

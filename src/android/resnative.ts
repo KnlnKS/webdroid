@@ -10,7 +10,7 @@ import { jarray } from "../jvm/abi.ts";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues.ts";
 import { mkPfd } from "./os.ts";
 import { appHost } from "./apphost.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 
 /** framework-res's `type`/`name` as Resources.getSystem() reads it with `read`, or its id without one */
@@ -73,7 +73,7 @@ let appLocales = emptyLocales;
 const ownLocales = (pkg: string | null, permission: string) => {
   if (pkg !== appHost?.pkg) throw rt.mkThrowable("java/lang/SecurityException", `Caller must be ${pkg} or hold ${permission}`);
 };
-rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}, sup: "android/app/ILocaleManager$Stub", methods: {
+hostService("locale", "webdroid/LocaleManagerService", "android/app/ILocaleManager$Stub", {
   "getApplicationLocales(Ljava/lang/String;I)Landroid/os/LocaleList;": (pkg: string | null) => {
     ownLocales(pkg, "android.permission.READ_APP_SPECIFIC_LOCALES");
     return javaLocales(appLocales);
@@ -85,8 +85,7 @@ rt.register({ name: "webdroid/LocaleManagerService", ctor: class extends JObj {}
   "getSystemLocales()Landroid/os/LocaleList;": () => javaLocales(localeList),
   // no app has an override of its LocaleConfig
   "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
-} });
-hostStub("locale", "webdroid/LocaleManagerService");
+});
 /**
  * The device's configuration. AOSP's Resources take it as a Configuration of their own
  * (resources.ts javaConfiguration) at boot and on every change the shell delivers; night mode,

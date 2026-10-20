@@ -1,4 +1,4 @@
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
 import { appHost } from "./apphost.ts";
 import { type JUri, mkUri, uriText, clipUris } from "./net.ts";
@@ -103,11 +103,10 @@ function* persistedPermissions(): Gen<JObj> {
 
 // IUriGrantsManager, under AOSP's ContentResolver: this app's persisted grants. Grants it made to
 // others are not recorded, so it has no outgoing ones.
-rt.register({ name: "webdroid/UriGrantsManagerService", ctor: class extends JObj {}, sup: "android/app/IUriGrantsManager$Stub", methods: {
+hostService("uri_grants", "webdroid/UriGrantsManagerService", "android/app/IUriGrantsManager$Stub", {
   "takePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri | null, modes: number) => after(uriText(u), (uri) => takePersistable(uri, modes)),
   "releasePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri | null, modes: number) => after(uriText(u), (uri) => releasePersistable(uri, modes)),
   "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": driven(function* (_pkg: string, incoming: number) {
     return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield* persistedPermissions() : yield newArrayList());
   }),
-} });
-hostStub("uri_grants", "webdroid/UriGrantsManagerService");
+});

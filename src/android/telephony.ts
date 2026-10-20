@@ -5,7 +5,7 @@
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
-import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder.ts";
+import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostService, serviceContext } from "./binder.ts";
 import { packages } from "./packages.ts";
 
 absentService("phone", "isub", "iphonesubinfo", "carrier_config", "isms", "simphonebook", "telephony_ims");
@@ -57,7 +57,7 @@ function* checkListenerPermission(events: number[], subId: number, pkg: string, 
   if (any(PRIVILEGED)) yield enforce("android.permission.READ_PRIVILEGED_PHONE_STATE");
 }
 
-rt.register({ name: "webdroid/TelephonyRegistry", ctor: class extends JObj {}, sup: "com/android/internal/telephony/ITelephonyRegistry$Stub", methods: {
+hostService("telephony.registry", "webdroid/TelephonyRegistry", "com/android/internal/telephony/ITelephonyRegistry$Stub", {
   "listenWithEventList(ZZILjava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IPhoneStateListener;[IZ)V":
     driven(function* (_fine: number, _coarse: number, subId: number, pkg: string, featureId: string | null, _callback: JObj, events: Int32Array) {
       if (events.length) yield* checkListenerPermission([...events], subId, pkg, featureId);
@@ -66,5 +66,4 @@ rt.register({ name: "webdroid/TelephonyRegistry", ctor: class extends JObj {}, s
   "addOnSubscriptionsChangedListener(Ljava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
   "addOnOpportunisticSubscriptionsChangedListener(Ljava/lang/String;Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
   "removeOnSubscriptionsChangedListener(Ljava/lang/String;Lcom/android/internal/telephony/IOnSubscriptionsChangedListener;)V": () => {},
-} });
-hostStub("telephony.registry", "webdroid/TelephonyRegistry");
+});

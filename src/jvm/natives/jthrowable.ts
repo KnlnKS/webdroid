@@ -15,6 +15,8 @@ export class JThrowable extends JObj {
  *  PrivilegedActionException answer from their own fields */
 const causeOf = (t: JThrowable): JThrowable | null | Promise<JThrowable | null> => vcall(t, "getCause", "()Ljava/lang/Throwable;");
 
+/** a cross-process transport's call before the broker connects it */
+export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
 /** log a throwable no Java handler takes and tell the development shell */
 export function logUncaught(e: unknown): void {
   const je = rt.jx(e), java = javaRuns();

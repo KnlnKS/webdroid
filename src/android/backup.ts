@@ -1,5 +1,5 @@
 import { JObj, rt, noops, stubs } from "../jvm/runtime.ts";
-import { hostStub } from "./binder.ts";
+import { hostService } from "./binder.ts";
 import { ownedHandle, release } from "./handles.ts";
 
 // the native RestoreHelperBase a file helper allocates at construction; only a backup transport
@@ -11,9 +11,8 @@ rt.registerJnis("android/app/backup/FileBackupHelperBase", {
 
 // IBackupManager, under AOSP's BackupManager: the service runs, as on the reference AVD, with
 // backup disabled and no transport, so a data change is noted and nothing is scheduled
-rt.register({ name: "webdroid/BackupManagerService", ctor: class extends JObj {}, sup: "android/app/backup/IBackupManager$Stub", methods: {
+hostService("backup", "webdroid/BackupManagerService", "android/app/backup/IBackupManager$Stub", {
   ...noops("dataChanged(Ljava/lang/String;)V", "dataChangedForUser(ILjava/lang/String;)V"),
   ...stubs(0, "isBackupEnabled()Z", "isBackupEnabledForUser(I)Z"),
   "isBackupServiceActive(I)Z": () => 1,
-} });
-hostStub("backup", "webdroid/BackupManagerService");
+});

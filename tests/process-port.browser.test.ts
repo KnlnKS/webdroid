@@ -33,11 +33,11 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     });
     expect(profileOwnership).toEqual({absent:null,untouched:true,copiedKey:"build-key",
       fresh:{key:"build-key",wanted:["c1.wasm"],worlds:[{linked:["LExample;"],called:["LCalled;"]}]}});
-    const retainedRights = await page.evaluate(async()=>{
-      const {storedClipboardRights}=await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
-      return storedClipboardRights();
+    const pendingRights = await page.evaluate(async()=>{
+      const {pendingDescriptorRights}=await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
+      return pendingDescriptorRights();
     });
-    expect(retainedRights).toEqual({has:true,cleared:true,reads:[1,2,3,4],backing:[9,2,3,4],replacementRejected:true,pendingRejected:true});
+    expect(pendingRights).toEqual({pendingRejected:true});
     const result = await page.evaluate(async () => {
       const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port.ts");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
@@ -46,7 +46,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const proxy = processProxy(endpointPorts.port1, fault => fault.javaClass ? Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }) : processError(fault));
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, stubEndpoint({ transact: async () => {
-        await proxy.endpoint.clipboardChanged();
+        await proxy.endpoint.cookiesChanged();
         return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
       } }));
       try {
@@ -86,25 +86,17 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     expect(cookies).toEqual({ session: true, persisted: true, read: "session=one; saved=two", isolatedRead: "",
       document: ["saved=two"], network: "session=one; saved=two", accept: false, denied: false, removed: true, afterSession: "saved=two",
       saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
-    const clipboard = await page.evaluate(async () => {
-      const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
-      return clipboardOwnership();
+    const stores = await page.evaluate(async () => {
+      const { storeOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
+      return storeOwnership();
     });
-    expect(clipboard).toEqual({prefs:{ack:true,fresh:["one"],keys:["array","other"],foreignDenied:true,emptyForeignDenied:true,publicPolicy:"test.clipboard.shared",policyDenied:true,files:["worker"]},paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13,metadata:true,retainedMetadata:true,changedMode:true,restoredMetadata:true},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},accounts:{publicOnly:true,exists:true,token:"visible-token",deniedRead:true,deniedWrite:true,
-      renamed:"renamed-account",survivor:"renamed-account",changes:1,cleaned:true},source:[9,2],fresh:[1,2],denied:null,foreground:[1,2],absent:null,
-      changes:1,peerChanges:3,survivor:[1,2],
-      settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});
+    expect(stores).toEqual({prefs:{ack:true,fresh:["one"],keys:["array","other"],foreignDenied:true,emptyForeignDenied:true,publicPolicy:"test.stores.shared",policyDenied:true,files:["worker"]},paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13,metadata:true,retainedMetadata:true,changedMode:true,restoredMetadata:true},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},
+      settings:{written:true,read:"shared",sameKey:true,survivor:"shared"}});
     const pointers = await page.evaluate(async () => {
       const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return pointerInputOwnership();
     });
     expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,10,12],[1,2,60,80],[1,1,80,100]],closed:true});
-    const locationResult = await page.evaluate(async () => {
-      const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
-      return locationOwnership();
-    });
-    expect(locationResult).toEqual({available:true,denied:true,events:[12,24],copied:true,
-      stale:true,removed:true,peerSurvives:true,deathCloses:true});
     const diagnostic = await page.evaluate(async () => {
       const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return workerDiagnosticOwnership();

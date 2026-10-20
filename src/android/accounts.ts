@@ -1,26 +1,23 @@
-// IAccountManager, the TS half of AOSP's AccountManager: AccountManager, Account,
+// system_server's AccountManagerService over the broker's account store: AccountManager, Account,
 // AbstractAccountAuthenticator, AccountAuthenticatorResponse and AuthenticatorDescription run from
-// bytecode, and accounts live in the broker's store, shared by every process. An operation an
-// authenticator answers runs as an AccountManagerService session: bind the authenticator's
-// service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
+// bytecode in the apps, which reach this one service by Binder. An operation an authenticator
+// answers runs as a session: bind the authenticator's service, call its IAccountAuthenticator
+// with a response Stub, and relay what it reports.
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { boxInt } from "../jvm/natives/jbox.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
-import { appHost } from "./apphost.ts";
-import { PROCESS_PID, PROCESS_UID } from "./os.ts";
-import { packages, qualifyComponent, ownedBy } from "./packages.ts";
-import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountCalls, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts.ts";
+import { packages, qualifyComponent, ownedBy, uidPackages } from "./packages.ts";
+import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountAuthority, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts.ts";
 import { attr, attrStr, parseAXML } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
 import { resString } from "./res.ts";
-import { asSystem, hostStub } from "./binder.ts";
+import { asSystem, callingIdentity, hostService, type Caller } from "./binder.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
 import { mkComponentName, newIntent } from "./intent.ts";
-import { deliverBroadcast } from "./server/broadcastqueue.ts";
-import { postMain } from "./mainloop.ts";
+import { broadcastIntent } from "./server/broadcastqueue.ts";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
@@ -48,19 +45,21 @@ const authenticatorFor = (type: string) => authenticators().find((a) => a.type =
 let stopAccountUpdates = () => {};
 /** AccountManagerService's broadcasts on a change, which AccountManager's listeners hear */
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
-export function accountsChanged(): void {
-  if (!appHost) return;
-  for (const action of CHANGED) postMain(() => after(newIntent(action),
-    (intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null)), logUncaught);
+function accountsChanged(): void {
+  for (const action of CHANGED) asSystem(() => after(newIntent(action), (intent) => broadcastIntent(intent, [], false))).catch(logUncaught);
 }
 export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountAccess = canonicalAccountCommands(store, accountAuthority);
   return stopAccountUpdates = store.watch(accountsChanged);
 }
-export const accountAuthority = (pkg = caller(), uid = PROCESS_UID) => ({ caller: pkg, authenticator: (type: string) => authenticatorFor(type)?.pkg, sameUid, known: (pkg: string) => packages.has(pkg), denied: (type: string): never => { throw rt.mkThrowable("java/lang/SecurityException", `uid ${uid} cannot manage accounts of type: ${type}`); } });
+function accountAuthority(): AccountAuthority {
+  const { uid } = callingIdentity();
+  return { caller: caller(uid), authenticator: (type: string) => authenticatorFor(type)?.pkg, sameUid, known: (pkg: string) => packages.has(pkg),
+    denied: (type: string): never => { throw rt.mkThrowable("java/lang/SecurityException", `uid ${uid} cannot manage accounts of type: ${type}`); } };
+}
 let accountAccess: AccountAccess;
-export function useAccountAccess(calls: AccountCalls): void { stopAccountUpdates(); accountAccess = calls; }
-const caller = () => appHost?.pkg ?? "";
+/** the calling uid's package, as getPackageNameForUid picks one */
+const caller = (uid = callingIdentity().uid) => uidPackages(uid)[0]?.pkg ?? "";
 const sameUid = (a: string, b: string) => ownedBy(b, packages.get(a)?.uid ?? -1);
 useAccountStore(new AccountStore());
 /** an account's visibility to `pkg`: its owner's uid always sees it */
@@ -148,7 +147,7 @@ const session = driven(function* (type: string, response: JObj, call: (authentic
   const s: JAccountSession = yield newObj("webdroid/AccountSession");
   s.response = response; s.options = options;
   try {
-    const { binder, unbind } = yield* awaited(bindAsSystem(yield* awaited(mkComponentName(owner.pkg, owner.cls)), `account:${PROCESS_PID}:${nextSession++}`, "android.accounts.AccountAuthenticator"));
+    const { binder, unbind } = yield* awaited(bindAsSystem(yield* awaited(mkComponentName(owner.pkg, owner.cls)), "account:" + nextSession++, "android.accounts.AccountAuthenticator"));
     s.unbind = unbind;
     yield vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", s, 0);
     const authenticator = yield scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);
@@ -160,10 +159,10 @@ const session = driven(function* (type: string, response: JObj, call: (authentic
   }
 });
 /** the caller's identity, which AccountManagerService adds to what an authenticator is asked */
-function* withCaller(options: JObj | null): Gen<JObj> {
+function* withCaller(options: JObj | null, { pid, uid }: Caller): Gen<JObj> {
   const b = options ?? (yield newObj("android/os/Bundle"));
-  yield vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerUid", PROCESS_UID);
-  yield vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerPid", PROCESS_PID);
+  yield vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerUid", uid);
+  yield vcall(b, "putInt", "(Ljava/lang/String;I)V", "callerPid", pid);
   return b;
 }
 /** an account's features, asked of its authenticator in a session of its own */
@@ -184,12 +183,13 @@ rt.register({ name: "webdroid/AccountFeatures", ctor: JAccountFeatures, sup: "an
 
 const RESPONSE = "Landroid/accounts/IAccountManagerResponse;", AUTH = "Landroid/accounts/IAccountAuthenticatorResponse;";
 const A = "Landroid/accounts/Account;", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
-rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {}, sup: "android/accounts/IAccountManager$Stub", methods: {
+hostService("account", "webdroid/AccountManagerService", "android/accounts/IAccountManager$Stub", {
   [`getAccountsAsUser(${S}I${S})[${A}`]: (type: string | null) => byType(type),
   [`getAccountsForPackage(${S}I${S})[${A}`]: (pkg: string) => byType(null, pkg),
   [`getAccountsByTypeForPackage(${S}${S}${S})[${A}`]: (type: string | null, pkg: string) => {
-    if (pkg !== caller() && !(type && sameUid(authenticatorFor(type)?.pkg ?? "", caller())))
-      throw rt.mkThrowable("java/lang/SecurityException", `uid ${PROCESS_UID} cannot get accounts of other packages`);
+    const { uid } = callingIdentity();
+    if (!ownedBy(pkg, uid) && !(type && ownedBy(authenticatorFor(type)?.pkg ?? null, uid)))
+      throw rt.mkThrowable("java/lang/SecurityException", `uid ${uid} cannot get accounts of other packages`);
     return byType(type, pkg);
   },
   "getAuthenticatorTypes(I)[Landroid/accounts/AuthenticatorDescription;": driven(function* () {
@@ -227,7 +227,7 @@ rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {
     }
     return map;
   }),
-  // every process hears its own broadcast when the shared store changes
+  // every process hears the broadcasts a change sends
   ...noops(`registerAccountListener([${S}${S})V`, `unregisterAccountListener([${S}${S})V`, `onAccountAccessed(${S})V`),
 
   [`addAccount(${RESPONSE}${S}${S}[${S}Z${B})V`]: driven(addAccount),
@@ -264,8 +264,7 @@ rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {
     const renamed = s && (yield* awaited(accountAccess.accountChange({ kind: "rename", key: s, name })));
     yield reply(response, yield* bundle(renamed ? { authAccount: name, accountType: s!.type } : {}));
   }),
-} });
-hostStub("account", "webdroid/AccountManagerService");
+});
 
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
   if (yield* awaited(owned(account))) return 0;
@@ -283,17 +282,17 @@ function* addExplicitly(account: JObj, password: string | null, extras: JObj | n
     password, data, tokens: Object.create(null), visibility: visibilities } }));
 }
 function* addAccount(response: JObj, type: string, tokenType: string | null, features: string[] | null, expectActivityLaunch: number, options: JObj | null): Gen<void> {
-  const withIdentity = yield* withCaller(options);
+  const withIdentity = yield* withCaller(options, callingIdentity());
   yield session(type, response, (auth, s) => vcall(auth, "addAccount", `(${AUTH}${S}${S}[${S}${B})V`, s, type, tokenType, features, withIdentity),
     { expectActivityLaunch: !!expectActivityLaunch });
 }
 /** a cached token answers at once unless the authenticator keeps its own; a new one is cached */
 function* getAuthToken(response: JObj, account: JObj, tokenType: string, notifyOnFailure: number, expectActivityLaunch: number, options: JObj | null): Gen<void> {
-  const type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, cachedAccount = yield* awaited(accountAccess.accountCached(keyOf(account), tokenType));
+  const identity = callingIdentity(), type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, cachedAccount = accountAccess.accountCached(keyOf(account), tokenType);
   if (!cachedAccount) { yield fail(response, ERROR_BAD_ARGUMENTS, "account doesn't exist"); return; }
   const s = cachedAccount.account, cached = custom ? undefined : cachedAccount.token;
   if (cached !== undefined) { yield reply(response, yield* bundle({ authtoken: cached, authAccount: s.name, accountType: s.type })); return; }
-  const withIdentity = yield* withCaller(options);
+  const withIdentity = yield* withCaller(options, identity);
   if (notifyOnFailure) yield vcall(withIdentity, "putBoolean", "(Ljava/lang/String;Z)V", "notifyOnAuthFailure", 1);
   yield session(type, response, (auth, r) => vcall(auth, "getAuthToken", `(${AUTH}${A}${S}${B})V`, r, account, tokenType, withIdentity), {
     expectActivityLaunch: !!expectActivityLaunch, keepToken: true,

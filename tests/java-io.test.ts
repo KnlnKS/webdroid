@@ -26,9 +26,9 @@ import { BytesFile } from "../src/shell/lazyfile.ts";
 import { scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
-import { descriptorTransport, isRemoteFd, processRights } from "../src/native/process-fd.ts";
+import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
-import { canonicalFilePaths, filePathTransport, renamePath, makeFifo } from "../src/shell/file-path.ts";
+import { canonicalFilePaths, renamePath, makeFifo, usePathOwner, type FilePaths } from "../src/shell/file-path.ts";
 
 
 describe("android-pfd", () => {
@@ -147,15 +147,15 @@ describe("file-descriptor", () => {
     const channels=[new MessageChannel(),new MessageChannel()];
     const stops=channels.map((channel,i)=>serveCalls(channel.port1,kernel.session(1001+i,()=>0)));
     const proxies=channels.map(channel=>callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
-    const previous={...descriptorTransport};let stored:StoredParcel|null=null;
+    const files=canonicalFilePaths(()=>0);let stored:StoredParcel|null=null;
     const recipients:JObj[]=[];
     try {
-      descriptorTransport.calls=()=>proxies[0].endpoint;
+      usePathOwner({files,descriptors:proxies[0].endpoint});
       const fd=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",path,2,0);
       const pfd=await newObj("android/os/ParcelFileDescriptor","(Ljava/io/FileDescriptor;)V",fd);
       try {stored=await StoredParcel.retain(kernel,1001,await parcelled(pfd,processRights));}
       finally {await vcall(pfd,"close","()V");}
-      kernel.close(1001);descriptorTransport.calls=()=>proxies[1].endpoint;
+      kernel.close(1001);usePathOwner({files,descriptors:proxies[1].endpoint});
       for(let i=0;i<2;i++) {
         const replay=await stored.replay(1002);
         const restored=await unparcelled("android/os/ParcelFileDescriptor",structuredClone(replay));
@@ -175,7 +175,7 @@ describe("file-descriptor", () => {
       await expect(StoredParcel.retain(kernel,1002,{bytes:new Uint8Array(),objects:[[0,{descriptor:rejected}]]})).rejects.toThrow("Invalid retained");
     } finally {
       for(const pfd of recipients)await vcall(pfd,"close","()V");await stored?.close();
-      descriptorTransport.calls=previous.calls;Object.assign(descriptorTransport,previous);proxies.forEach(proxy=>proxy.close());stops.forEach(stop=>stop());
+      usePathOwner(null);proxies.forEach(proxy=>proxy.close());stops.forEach(stop=>stop());
       kernel.close(1001);kernel.close(1002);vfs.delete(path);
     }
   });
@@ -351,10 +351,9 @@ describe("file-descriptor", () => {
     const owner=new FileDescriptors(), paths=canonicalFilePaths(() => 0), channel=new MessageChannel();
     const stop=serveCalls(channel.port1,owner.session(1001,() => 0));
     const proxy=callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]);
-    const previous=descriptorTransport.calls, previousPaths=filePathTransport.calls;
-    descriptorTransport.calls=() => proxy.endpoint;
-    filePathTransport.calls=() => ({...paths,filePrepare:async () => {},fileSetAttributes:async (p,c) => paths.fileSetAttributes(p,c),fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
-      fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileFifo:async p => paths.fileFifo(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)});
+    const files:FilePaths={fileSetAttributes:async (p,c) => paths.fileSetAttributes(p,c),fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
+      fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileFifo:async p => paths.fileFifo(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)};
+    usePathOwner({files,descriptors:proxy.endpoint});
     vfs.mkdir("/data/data/test/fd");
     const raf=await newObj("java/io/RandomAccessFile","(Ljava/lang/String;Ljava/lang/String;)V",path,"rw");
     const fd=await vcall(raf,"getFD",FD);
@@ -418,7 +417,7 @@ describe("file-descriptor", () => {
         expect(received).toBeGreaterThan(0);
         expect(await recipient.endpoint.fileDescriptor({kind:"fcntl",fd:received,command:1,arg:0})).toBe(1);
         expect(await owner.receive(1001,right.descriptor,1002)).toBe(-E.BADF);
-        descriptorTransport.calls=()=>recipient.endpoint;
+        usePathOwner({files,descriptors:recipient.endpoint});
         incoming=await importParcel({...data,objects:[[data.objects[0]![0],{descriptor:received}]]});
         expect(await owner.discard(1002,received,false)).toBe(-E.BADF);
         passed=await vcall(incoming,"readFileDescriptor","()Landroid/os/ParcelFileDescriptor;");
@@ -436,12 +435,12 @@ describe("file-descriptor", () => {
       } finally {
         if(incoming)await vcall(incoming,"recycle","()V");
         if(passed)await vcall(passed,"close","()V");
-        recipient.close();stop2();owner.close(1002);descriptorTransport.calls=()=>proxy.endpoint;
+        recipient.close();stop2();owner.close(1002);usePathOwner({files,descriptors:proxy.endpoint});
       }
     } finally {
       await vcall(raf,"close","()V"); if(nativeFd>=0)await cpu.call(defineHost("canonical-cleanup-close",FS_SYSCALLS.close),[nativeFd]);
       owner.close(1001);proxy.close();stop();
-      descriptorTransport.calls=previous;filePathTransport.calls=previousPaths;
+      usePathOwner(null);
       mem.free(buffer);mem.free(pathPointer);cpu.dispose();setA64(false);vfs.delete(path);vfs.delete(renamed);
     }
   });
@@ -451,9 +450,7 @@ describe("file-descriptor", () => {
     const owner = new FileDescriptors(), paths = canonicalFilePaths(() => 0), channel = new MessageChannel();
     const stop = serveCalls(channel.port1, owner.session(1001, () => 0));
     const proxy = callProxy<DescriptorCalls>(channel.port2, ["fileDescriptor"]);
-    const previous = descriptorTransport.calls, previousPaths = filePathTransport.calls;
-    descriptorTransport.calls = () => proxy.endpoint;
-    filePathTransport.calls = () => new Proxy(paths, { get: (calls, name) => async (...args: never[]) => (calls as unknown as Record<string, (...a: never[]) => unknown>)[name as string]?.(...args) }) as never;
+    usePathOwner({ files: new Proxy(paths, { get: (calls, name) => async (...args: never[]) => (calls as unknown as Record<string, (...a: never[]) => unknown>)[name as string]?.(...args) }), descriptors: proxy.endpoint });
     vfs.mkdir("/data/data/test/fd");
     vfs.write(source, Uint8Array.of(1, 2, 3, 4, 5));
     try {
@@ -472,7 +469,7 @@ describe("file-descriptor", () => {
       expect(vfs.attributes(target).mode).toBe(0o400);
       await scall("android/system/Os", "close", "(Ljava/io/FileDescriptor;)V", fd);
     } finally {
-      descriptorTransport.calls = previous; filePathTransport.calls = previousPaths;
+      usePathOwner(null);
       owner.close(1001); proxy.close(); stop(); vfs.delete(source); vfs.delete(target);
     }
   });
@@ -757,11 +754,10 @@ describe("shared-memory", () => {
       const channel = new MessageChannel(), stop = serveCalls(channel.port1,owner.session(pid,() => 0));
       return {stop,proxy:callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"])};
     });
-    const previous = {...descriptorTransport};
+    const files = canonicalFilePaths(() => 0);
     let first: JObj | null = null, second: JObj | null = null, a: JBuffer | undefined, b: JBuffer | undefined;
     try {
-      descriptorTransport.calls = () => ports[0].proxy.endpoint;
-      descriptorTransport.importCalls = descriptorTransport.calls;
+      usePathOwner({ files, descriptors: ports[0].proxy.endpoint });
       first = await scall("android/os/SharedMemory","create","(Ljava/lang/String;I)Landroid/os/SharedMemory;","aliases",8192);
       a = await vcall(first,"mapReadWrite","()Ljava/nio/ByteBuffer;") as JBuffer;
       expect(await directAddress(a)).toBe(Number(addressOf(a)));
@@ -772,8 +768,7 @@ describe("shared-memory", () => {
       expect(await javaPreadFd(fd,held,4096)).toBe(4);
       expect(new DataView(held.buffer).getInt32(0)).toBe(0x12345678);
       const token = await owner.receive(1001,staged!,1002);
-      descriptorTransport.calls = () => ports[1].proxy.endpoint;
-      descriptorTransport.importCalls = descriptorTransport.calls;
+      usePathOwner({ files, descriptors: ports[1].proxy.endpoint });
       second = await newObj("android/os/SharedMemory","(Ljava/io/FileDescriptor;)V",await mkFd(await processRights.take(token)));
       expect(await vcall(second,"getSize","()I")).toBe(8192);
       expect(await vcall(second,"setProtect","(I)Z",1)).toBe(1);
@@ -795,7 +790,7 @@ describe("shared-memory", () => {
       if (a) await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",a);
       if (b) await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",b);
       if (first) await vcall(first,"close","()V"); if (second) await vcall(second,"close","()V");
-      delete descriptorTransport.calls; delete descriptorTransport.importCalls; Object.assign(descriptorTransport,previous);
+      usePathOwner(null);
       for (const {stop,proxy} of ports) { proxy.close(); stop(); }
       owner.close(1001); owner.close(1002);
     }

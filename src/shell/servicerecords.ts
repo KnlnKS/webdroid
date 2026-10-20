@@ -282,4 +282,3 @@ export type ServiceStarts = ReturnType<ServiceRecords["starts"]>;
 
 /** Remote start state is acknowledged by the owner before Java lifecycle decisions continue. */
 export type ServiceStartAccess = { [K in keyof ServiceStarts]: (...args: Parameters<ServiceStarts[K]>) => ReturnType<ServiceStarts[K]> | Promise<ReturnType<ServiceStarts[K]>> };
-export type ServiceStartCalls = { [K in keyof ServiceStarts as `service${Capitalize<K>}`]: (...args: Parameters<ServiceStarts[K]>) => Promise<ReturnType<ServiceStarts[K]>> };

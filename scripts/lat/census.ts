@@ -4,7 +4,7 @@
 // system_server off the page.
 //   pnpm ts scripts/lat/census.ts <run.json> ... [--windows]
 import { readFileSync } from "node:fs";
-import { brokerMethods } from "../../src/shell/processes.ts";
+import { brokerCallNames } from "../../src/shell/broker-contract.ts";
 import { Ev } from "../../src/timeline.ts";
 
 /** Ev.Thread's argument for the main thread */
@@ -28,7 +28,7 @@ for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for
       if (ev !== Ev.Answer) continue;
       const call = open.get(arg)?.shift();
       if (!call) continue;
-      const [at, main] = call, name = brokerMethods[arg] ?? `#${arg}`, row = byMethod.get(name) ?? byMethod.set(name, { calls: 0, windows: new Set(), trips: [], main: 0 }).get(name)!;
+      const [at, main] = call, name = brokerCallNames[arg] ?? `#${arg}`, row = byMethod.get(name) ?? byMethod.set(name, { calls: 0, windows: new Set(), trips: [], main: 0 }).get(name)!;
       row.calls++; row.windows.add(window); row.trips.push(ms - at); spent += ms - at;
       if (main) { row.main += ms - at; mainSpent += ms - at; }
     }

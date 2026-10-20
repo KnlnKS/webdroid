@@ -13,7 +13,7 @@ import { systemResource } from "./resnative.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { hostService, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
@@ -700,7 +700,7 @@ function enqueueToast(this: JObj, t: ToastRecord): number {
   return 1;
 }
 
-rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends JObj {}, sup: "android/app/INotificationManager$Stub", methods: {
+hostService("notification", "webdroid/NotificationManagerService", "android/app/INotificationManager$Stub", {
   "enqueueTextToast(Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/CharSequence;IZILandroid/app/ITransientNotificationCallback;)Z":
     function (this: JObj, pkg: string, token: JObj, text: unknown, duration: number, _ui: number, _display: number, callback: JObj | null) {
       return enqueueToast.call(this, { pkg, token, text, duration, callback, custom: null });
@@ -865,8 +865,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     checkCallerIsSameApp(pkg);
     return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");
   },
-} });
-hostStub("notification", "webdroid/NotificationManagerService", true);
+}, true);
 
 function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");

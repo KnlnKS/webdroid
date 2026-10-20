@@ -5,7 +5,7 @@
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { mangleField, jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall, staticField } from "../jvm/natives/jentry.ts";
-import { hostStub, binderEscape } from "./binder.ts";
+import { hostService, binderEscape } from "./binder.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { nativeParcel, readInt, writeInt } from "./parcel.ts";
 import { device } from "../shell/config.ts";
@@ -84,7 +84,7 @@ const register = (callback: JObj | null) => {
   callbacks.add(callback);
 };
 
-rt.register({ name: "webdroid/DisplayManagerService", ctor: class extends JObj {}, sup: "android/hardware/display/IDisplayManager$Stub", methods: {
+hostService("display", "webdroid/DisplayManagerService", "android/hardware/display/IDisplayManager$Stub", {
   "getDisplayInfo(I)Landroid/view/DisplayInfo;": (id: number) => id === 0 ? displayInfo() : null,
   "getDisplayIds(Z)[I": () => Int32Array.of(0),
   "getPreferredWideGamutColorSpaceId()I": () => 0,
@@ -98,5 +98,4 @@ rt.register({ name: "webdroid/DisplayManagerService", ctor: class extends JObj {
   "registerCallback(Landroid/hardware/display/IDisplayManagerCallback;)V": register,
   "registerCallbackWithEventMask(Landroid/hardware/display/IDisplayManagerCallback;J)V": register,
   ...noops("disableConnectedDisplay(I)V"),
-} });
-hostStub("display", "webdroid/DisplayManagerService");
+});

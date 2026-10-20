@@ -14,7 +14,7 @@ import { entryCases, entryDex } from "./entrycases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
-import { descriptorTransport } from "../../src/native/process-fd.ts";
+import { canonicalFilePaths, usePathOwner } from "../../src/shell/file-path.ts";
 import { callProxy, serveCalls } from "../../src/shell/process-port.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
@@ -35,12 +35,11 @@ async function inMemoryControl(): Promise<void> {
   const bytes = dexBytes, padded = new Int8Array(bytes.length + 16);
   padded.set(bytes, 8);
   const heap = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
-  const owner = new FileDescriptors(), ports = new MessageChannel(), previous = { ...descriptorTransport };
+  const owner = new FileDescriptors(), ports = new MessageChannel();
   const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, ["fileDescriptor"]);
   let shared, mapped;
   try {
-    descriptorTransport.calls = () => proxy.endpoint;
-    descriptorTransport.importCalls = descriptorTransport.calls;
+    usePathOwner({ files: canonicalFilePaths(() => 0), descriptors: proxy.endpoint });
     shared = await scall("android/os/SharedMemory", "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "dex", Math.ceil(padded.length / 4096) * 4096);
     mapped = await vcall(shared, "mapReadWrite", "()Ljava/nio/ByteBuffer;");
     await writeBufferBytes(mapped, bytes, 8);
@@ -75,7 +74,7 @@ async function inMemoryControl(): Promise<void> {
   } finally {
     if (mapped) await scall("android/os/SharedMemory", "unmap", "(Ljava/nio/ByteBuffer;)V", mapped);
     if (shared) await vcall(shared, "close", "()V");
-    delete descriptorTransport.calls; delete descriptorTransport.importCalls; Object.assign(descriptorTransport, previous);
+    usePathOwner(null);
     proxy.close(); stop(); owner.close(2001);
   }
   console.log("in-memory DEX: actual heap/RPC buffer slices, copied code, defining loaders and bootstrap superclass");

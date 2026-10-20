@@ -4,7 +4,7 @@
 import { JObj, rt, noops } from "../jvm/runtime.ts";
 import { newObj } from "../jvm/natives/jentry.ts";
 import { uptimeMillis } from "../guest-clock.ts";
-import { hostStub, newStub } from "./binder.ts";
+import { hostService, newStub } from "./binder.ts";
 import { strArray } from "../jvm/abi.ts";
 
 const NS = "Landroid/net/NetworkStats;", NSH = "Landroid/net/NetworkStatsHistory;", T = "Landroid/net/NetworkTemplate;";
@@ -26,7 +26,7 @@ rt.register({ name: "webdroid/NetworkStatsSession", ctor: class extends JObj {},
   ...noops("close()V"),
 } });
 const session = () => newStub("webdroid/NetworkStatsSession");
-rt.register({ name: "webdroid/NetworkStatsService", ctor: class extends JObj {}, sup: "android/net/INetworkStatsService$Stub", methods: {
+hostService("netstats", "webdroid/NetworkStatsService", "android/net/INetworkStatsService$Stub", {
   "openSession()Landroid/net/INetworkStatsSession;": session,
   "openSessionForUsageStats(ILjava/lang/String;)Landroid/net/INetworkStatsSession;": session,
   "getTotalStats(I)J": () => UNSUPPORTED,
@@ -34,8 +34,7 @@ rt.register({ name: "webdroid/NetworkStatsService", ctor: class extends JObj {},
   "getIfaceStats(Ljava/lang/String;I)J": () => UNSUPPORTED,
   "getMobileIfaces()[Ljava/lang/String;": () => strArray([]),
   ...noops("forceUpdate()V", "incrementOperationCount(III)V", "clearTrafficStatsRateLimitCaches()V"),
-} });
-hostStub("netstats", "webdroid/NetworkStatsService");
+});
 // TrafficStats' socket tags reach libnetd_client's tagSocket, which with no fwmarkd to send them to
 // reports success as FwmarkClient does when netd is not running; no accounting reads them
 rt.claimNativeLib("framework-connectivity-tiramisu-jni");
