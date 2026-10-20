@@ -31,7 +31,8 @@ function decodeRecord(value: unknown): FileValue | null {
 }
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
-  private views = new Map<number, typeof vfs>();
+  /** the vfs of the process whose writes persist: system_server's, until it dies */
+  private bound: { pid: number; view: typeof vfs } | null = null;
   private loaded = new Map<string, Promise<void>>();
   private pending = new Map<string, FileValue | null>();
   private database: Promise<IDBDatabase> | null = null;
@@ -44,14 +45,13 @@ export class PrivateFiles {
   private orphans = new Set<string>();
 
   attach(pid: number, view: typeof vfs): void {
-    if (this.views.get(pid) === view) return;
-    this.views.set(pid, view);
+    const bound = this.bound = { pid, view };
     for (const [path, value] of this.values) this.install(view, path, value);
     view.prepare = (pkg) => this.prepare(pkg);
     view.flush = () => this.flush();
     view.onWrite = (path, change) => {
       // a process that has died writes nothing more
-      if (this.views.get(pid) !== view) return;
+      if (this.bound !== bound) return;
       const app = appPath(path);
       if (!app && !sharedPath(path)) return;
       const cache = !!app && /^(?:cache|code_cache)(?:\/|$)/.test(app.within);
@@ -62,7 +62,7 @@ export class PrivateFiles {
       this.schedule();
     };
   }
-  detach(pid: number): void { this.views.delete(pid); }
+  detach(pid: number): void { if (this.bound?.pid === pid) this.bound = null; }
   /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
   private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
     const backing = view.lazyFiles.get(path), bytes = view.files.get(path), mtime = view.mtimes.get(path);
@@ -110,7 +110,7 @@ export class PrivateFiles {
     const previous = this.values.get(path);
     if (previous?.kind === "disk" && (value?.kind !== "disk" || value.id !== previous.id)) this.orphans.add(previous.id);
     if (value) this.values.set(path, value); else this.values.delete(path);
-    for (const view of this.views.values()) this.install(view, path, value);
+    if (this.bound) this.install(this.bound.view, path, value);
   }
   private db(): Promise<IDBDatabase> {
     return this.database ??= openDb("webdroid-private-files", "files");

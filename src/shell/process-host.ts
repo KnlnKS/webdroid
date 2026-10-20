@@ -79,13 +79,7 @@ export class ProcessHosts {
     let spare = this.spare;
     this.spare = undefined;
     if (spare && spare.url !== workerUrl(spare.pid, wide)) { spare.worker.terminate(); spare.release(); spare = undefined; }
-    return this.adopt(spare ?? spawn(this.nextPid++, wide), owner.pkg);
-  }
-  /** a host for a process of `pkg` in `spare`, which the broker starts once it registers the process */
-  adopt(spare: SpareWorker, pkg: string): ProcessHost {
-    const host = new ProcessHost(spare, pkg, this);
-    this.live.add(host);
-    return host;
+    return new ProcessHost(spare ?? spawn(this.nextPid++, wide), owner.pkg, this);
   }
   /** whether process Workers send the page a copy of each frame they show, or crops of its regions */
   mirror(on: Mirror): void {
@@ -142,6 +136,7 @@ export class ProcessHost {
         this.fail(data.error.message ?? "Process Worker startup failed");
       }
     };
+    hosts.live.add(this);
   }
   /** sends the Worker its process's bootstrap, once the broker has registered the process */
   start(): void {

@@ -426,25 +426,31 @@ export class ProcessBroker {
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
     const caller = this.entry(callerPid);
-    let delivered: ParcelData | null = null;
-    try {
-      if (request.handle.pid === 0) {
+    if (request.handle.pid === 0) {
+      try {
         if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
         const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
         if (handled) writeString(reply, "android.content.IIntentSender");
         return { handled, data: await exportParcel(reply) };
-      }
-      const target = this.entry(request.handle.pid);
-      delivered = await this.transferDescriptors(caller.pid,target.pid,request.data);
-      return await this.request(target, async endpoint => {
-        const reply = await endpoint.transact({...request,data:delivered!},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
-        try { return {...reply,data:await this.transferDescriptors(target.pid,caller.pid,reply.data)}; }
-        finally { await this.discardDescriptors(target.pid,reply.data,true); }
-      });
+      } finally { await this.discardDescriptors(callerPid,request.data,true); }
+    }
+    const target = request.handle.pid;
+    return this.withTransferred(caller.pid, target, request.data, delivered => this.request(this.entry(target), async endpoint => {
+      const reply = await endpoint.transact({...request,data:delivered},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
+      return {...reply,data:await this.withTransferred(target,caller.pid,reply.data,async data => data)};
+    }));
+  }
+  /** `use` with `data`'s descriptor rights moved from `from` to `to`, which gets them back unless `use`
+   *  succeeds; `from`'s staged rights are discarded either way */
+  async withTransferred<T>(from: number, to: number, data: ParcelData, use: (moved: ParcelData) => Promise<T>, broker = false): Promise<T> {
+    let moved: ParcelData | null = null;
+    try {
+      moved = await this.transferDescriptors(from, to, data, broker);
+      return await use(moved);
     } catch (error) {
-      if (delivered) await this.discardDescriptors(request.handle.pid,delivered,false);
+      if (moved) await this.discardDescriptors(to, moved, false);
       throw error;
-    } finally { await this.discardDescriptors(callerPid,request.data,true); }
+    } finally { await this.discardDescriptors(from, data, true); }
   }
   /** the descriptor rights of `pid`, a process in this realm: staging and taking need it alive, discarding does not */
   descriptorRights(pid: number): DescriptorRights {
