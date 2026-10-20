@@ -88,7 +88,7 @@ export interface HostContext {
   throwable(cls: string, msg: string | null): object;
   raise(throwable: object): unknown;
   bridge: HostBridge;
-  /** the strands: a Suspending import is made by `sched.suspending`, and `sched.running` is the strand a native that calls back into Java runs it as */
+  /** the strands: a Suspending import is made by `sched.suspending` */
   sched: Sched;
   /** records that compiled code ran into something it cannot do (World.onGap) */
   gap(what: string): void;

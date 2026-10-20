@@ -188,7 +188,6 @@ if (substrate) {
         expect(`${mode} import catch retains strand`, w.sched.current().id, importStrand.id);
         expect(`${mode} import catch retains Thread`, globals.thr.value === importStrand.thread.obj, true);
         expect(`${mode} import catch retains depth`, globals.depth.value, 23);
-        if (!deferred) expect("immediate import catch retains native owner", w.sched.running === importStrand, true);
       };
       const f = w.helpers.hostFn("substrate:import-throw:" + mode, [], "V", (_cx, c) => {
         c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]);

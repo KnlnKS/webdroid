@@ -211,8 +211,6 @@ export class Sched {
   readonly strands: (Strand | undefined)[] = [];
   readonly root: Strand;
   readonly monitors: Monitors;
-  /** the strand whose JS code is executing: a native that calls back into Java does it as this strand */
-  running: Strand | null = null;
   /** blocking attempts on a stack that cannot suspend */
   blockedPlain = 0;
   /** calls of Suspending imports that switched stacks */
@@ -302,16 +300,16 @@ export class Sched {
   /** a thread the host made: it runs Java as a thread of its own, whose Thread object is made when it first asks for it */
   hostThread(): ThreadRec { return new ThreadRec(null); }
   /** who runs when no strand does: the host's top level, on the main thread */
-  idle(): void { const g = this.g; g.sid.value = ROOT; g.thr.value = this.main.obj; g.depth.value = 0; this.running = null; this.hooks.switched(this.main, true); }
+  idle(): void { const g = this.g; g.sid.value = ROOT; g.thr.value = this.main.obj; g.depth.value = 0; this.hooks.switched(this.main, true); }
   /** `s` runs, at call depth `depth`; its Thread global is `thr`, which is its thread's object unless it is making that object (curThread) */
   become(s: Strand, depth: unknown = 0, thr: unknown = s.thread.obj): void {
-    const g = this.g; g.sid.value = s.id; g.thr.value = thr; g.depth.value = depth; this.running = s; this.hooks.switched(s.thread, false);
+    const g = this.g; g.sid.value = s.id; g.thr.value = thr; g.depth.value = depth; this.hooks.switched(s.thread, false);
   }
   /** wraps `fn` as a Suspending import. What `fn` does before it first waits is on the calling strand; when it returns the stack switches away,
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
-      const s = this.running = this.current(), depth = this.g.depth.value;
+      const s = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); }
       // No stack switch occurred: Wasm may catch the import's throw on this strand.
@@ -356,14 +354,14 @@ export class Sched {
   enter(s: Strand, f: Function, args: unknown[]): Promise<unknown> {
     const caller = this.current();
     if (!caller.root) caller.nested++;
-    const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running, this.synchronousEntries] as const;
+    const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.synchronousEntries] as const;
     this.become(s); this.synchronousEntries = 0;
     try {
       const p = this.promising(f)(...args) as Promise<unknown>, idle = () => this.idle();
       // a stack that ends after a resume leaves the globals as its own
       p.then(idle, idle);
       return p;
-    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; this.synchronousEntries = was[4]; const c = this.current(); this.hooks.switched(c.thread, c.root); }
+    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.synchronousEntries = was[3]; const c = this.current(); this.hooks.switched(c.thread, c.root); }
   }
 
   // ---------- host.sync
