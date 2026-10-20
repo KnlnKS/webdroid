@@ -47,6 +47,7 @@ export type PageMessage = Invoke
   | { kind: "navigate"; url: string; replace: boolean }
   | { kind: "submit"; url: string; init: FrameInit & { method: string; body: ArrayBuffer } }
   | { kind: "redirect"; url: string; html: string }
+  | { kind: "download"; url: string; disposition: string; mime: string; length: number }
   | { kind: "subframe"; url: string; init?: FrameInit }
   | { kind: "webasset"; path: string }
   | { kind: "webcookies"; url: string; values: string[] };
@@ -113,6 +114,8 @@ export function parsePageMessage(data: unknown): PageMessage | null {
       return text(url) && method !== undefined && body ? { kind: "submit", url, init: { method, body, contentType } } : null;
     }
     case "redirect": return text(url) && text(m.html) ? { kind: "redirect", url, html: m.html } : null;
+    case "download": return text(url) && text(m.disposition) && text(m.mime) && count(m.length) && Number.isSafeInteger(m.length)
+      ? { kind: "download", url, disposition: m.disposition, mime: m.mime, length: m.length } : null;
     case "subframe": return text(url) ? { kind: "subframe", url, init: init(m.init) } : null;
     case "webasset": return text(m.path) ? { kind: "webasset", path: m.path } : null;
     case "webcookies": return text(url) ? { kind: "webcookies", url, values: Array.isArray(m.values) ? m.values.filter(text) : [] } : null;

@@ -5,6 +5,8 @@ import { rt, JObj } from "../src/jvm/runtime.ts";
 import { vcall, newObj } from "../src/jvm/natives/jentry.ts";
 import { onMain } from "../src/android/mainloop.ts";
 import type { WebViewChromium } from "../src/android/webkit.ts";
+import { RendererFrame } from "../src/android/webframes.ts";
+import { parsePageMessage, type PageMessage } from "../src/shell/webpage/protocol.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(startMainLooper);
@@ -60,6 +62,23 @@ describe("webfragment", () => {
     await onMain(() => { view.loadUrl(url); view.fragmentNavigated(url + "#section"); });
     await onMain(() => {});
     expect(client.events).toEqual([["started", url], ["visited", url + "#section", 0, url + "#section"], ["finished", url + "#section"]]);
+  });
+
+  test("a frame's download goes to the app's DownloadListener with the settings' user agent", async () => {
+    class Downloads extends JObj { started: unknown[][] = []; }
+    rt.register({ name: "test/Downloads", ctor: Downloads, methods: {
+      "onDownloadStart(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V": function (this: Downloads, ...args: unknown[]) { this.started.push(args); },
+    } });
+    const view = await webView(), listener = new Downloads(), { port1 } = new MessageChannel(), url = "https://example.org/report.pdf";
+    const frameMessage = (m: PageMessage) => (view as unknown as { frameMessage(frame: RendererFrame, m: PageMessage): void })
+      .frameMessage(new RendererFrame(true, "https://example.org/", "frame", port1), m);
+    const download = parsePageMessage({ kind: "download", url, disposition: "attachment", mime: "application/pdf", length: 4 })!;
+    frameMessage(download);
+    await vcall(view, "setDownloadListener", "(Landroid/webkit/DownloadListener;)V", listener);
+    frameMessage(download);
+    await onMain(() => {});
+    expect(listener.started).toEqual([[url, view.settings.userAgent, "attachment", "application/pdf", 4n]]);
+    port1.close();
   });
 
   test("a WebView history copy is an independent snapshot", async () => {

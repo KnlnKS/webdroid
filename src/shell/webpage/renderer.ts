@@ -8,6 +8,20 @@ import { withPageScript, type AppMessage, type LoadMessage, type PageConfig, typ
 /** the page script, as the renderer bootstrap writes it into an apk asset's document */
 declare const WEB_INJECT: string;
 
+// the types Blink shows (blink/common/mime_util): text but these, its images, media, and the XML,
+// JSON and script types. WebView has no plugins, a PDF viewer among them.
+const UNSHOWN_TEXT = /^text\/(?:(?:x-)?v?calendar|(?:x-)?vcard|directory|ldif|(?:x-)?qif|x-csv|x-vcf|rtf|comma-separated-values|csv|tab-separated-values|tsv|ofx|vnd\.sun\.j2me\.app-descriptor)$/;
+const SHOWN = /^(?:text\/.*|image\/(?:jpeg|pjpeg|jpg|webp|png|apng|gif|bmp|vnd\.microsoft\.icon|x-icon|x-xbitmap|x-png|avif|svg\+xml)|(?:audio|video)\/.*|application\/(?:xhtml\+xml|xml|atom\+xml|rss\+xml|json|(?:x-)?(?:java|ecma)script|[^/]*\+json))$/;
+/** whether a frame's response is a download, as Chromium's navigation decides it: an attachment
+ *  (an unknown disposition type is one), or a successful response of a type Blink cannot show */
+function isDownload(response: Response): boolean {
+  const disposition = /^\s*([^\s;=]+)\s*(?:;|$)/.exec(response.headers.get("content-disposition") ?? "")?.[1].toLowerCase();
+  if (disposition && disposition !== "inline") return true;
+  const mime = mimeOf(response);
+  return !!mime && response.ok && (!SHOWN.test(mime) || UNSHOWN_TEXT.test(mime));
+}
+const mimeOf = (response: Response) => (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+
 /** a renderer origin's storage: its quota-managed usage (less this proxy's own worker), or what a
  *  StorageOp deletes. Runs in a frame on that origin. */
 async function storageOp(op: StorageOp): Promise<{ usage?: number; quota?: number }> {
@@ -70,6 +84,16 @@ function start() {
         headers: { "x-wd-user-agent": task.userAgent, ...(doc.init?.contentType ? { "content-type": doc.init.contentType } : {}) },
       }) : null;
       const final = response?.headers.get("x-wd-final-url") ?? ("html" in doc ? doc.final : undefined);
+      // A download commits no document: the app's DownloadListener takes it. Chromium keeps the frame's
+      // previous page, which this frame has left; it shows an empty one, whose load ends the app's.
+      if (response && isDownload(response)) {
+        void response.body?.cancel();
+        const url = final ?? context.page, length = Number(response.headers.get("x-wd-content-length") ?? response.headers.get("content-length") ?? -1);
+        send({ kind: "download", url, disposition: response.headers.get("content-disposition") ?? "", mime: mimeOf(response),
+          length: Number.isSafeInteger(length) && length >= 0 ? length : -1 });
+        send({ kind: "loaded", url, title: "", error: null, width: 0, height: 0 });
+        return;
+      }
       // a redirect to another origin renders in that origin's partition
       if (response && final && /^https?:/.test(context.page) && new URL(final).origin !== new URL(context.page).origin) {
         send({ kind: "redirect", url: final, html: await response.text() });

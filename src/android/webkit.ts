@@ -59,7 +59,8 @@ export class WebViewChromium extends JObj {
   /** the app's client, or once init ran the process's default one (Chromium's null client, a plain WebViewClient) */
   client!: JObj;
   chrome: JObj | null = null;
-  dl: unknown = null;
+  /** the app's DownloadListener, which takes each response a frame downloads */
+  dl: JObj | null = null;
   findListener: unknown = null;
   findQuery = "";
   findCount = 0;
@@ -194,6 +195,13 @@ export class WebViewChromium extends JObj {
         if (sub) { this.subframes.navigate(frame, entry, m.html); break; }
         this.history.replace(entry);
         this.go(entry, false, m.html);
+        break;
+      }
+      case "download": {
+        // Chromium's download delegate hands the app any frame's download, with the user agent its request sent
+        const listener = this.dl, agent = this.settings.userAgent;
+        if (listener) void onMain(() => vcall(listener, "onDownloadStart", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
+          m.url, agent, m.disposition, m.mime, BigInt(m.length)));
       }
     }
   }
