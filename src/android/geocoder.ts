@@ -76,18 +76,23 @@ function* providerComponent(): Gen<JComponentName | null> {
   const first = yield* awaited(resolveService(intent));
   return first ? yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.owner.pkg, first.name) : null;
 }
-/** the provider's IGeocodeProvider, bound once as the platform keeps it bound */
-const provider = once(driven(function* (): Gen<JObj> {
+/** the provider's IGeocodeProvider, bound as the platform keeps it bound; a failed call drops the binding (its process may have died), as ServiceWatcher rebinds */
+const bindProvider = () => once(driven(function* (): Gen<{ geocoder: JObj; unbind: () => unknown }> {
   const component = yield* providerComponent();
   if (!component) throw rt.mkThrowable("java/io/IOException", "Service not Available");
-  const { binder } = yield* awaited(bindAsSystem(component, "geocoder:" + PROCESS_PID));
-  return yield scall("android/location/provider/IGeocodeProvider$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/location/provider/IGeocodeProvider;", binder);
+  const { binder, unbind } = yield* awaited(bindAsSystem(component, "geocoder:" + PROCESS_PID));
+  return { geocoder: yield scall("android/location/provider/IGeocodeProvider$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/location/provider/IGeocodeProvider;", binder), unbind };
 }));
+let provider = bindProvider();
 const geocode = (method: string, request: string) => driven(function* (req: JObj, callback: JObj): Gen {
-  let geocoder: JObj;
-  try { geocoder = yield* awaited(provider()); } catch { return yield vcall(callback, "onError", "(Ljava/lang/String;)V", null); }
-  try { yield vcall(geocoder, method, `(L${request};Landroid/location/provider/IGeocodeCallback;)V`, req, callback); }
-  catch (e) { yield vcall(callback, "onError", "(Ljava/lang/String;)V", String((e as { msg?: string }).msg ?? e)); }
+  let bound: { geocoder: JObj; unbind: () => unknown };
+  try { bound = yield* awaited(provider()); } catch { return yield vcall(callback, "onError", "(Ljava/lang/String;)V", null); }
+  try { yield vcall(bound.geocoder, method, `(L${request};Landroid/location/provider/IGeocodeCallback;)V`, req, callback); }
+  catch (e) {
+    provider = bindProvider();
+    bound.unbind();
+    yield vcall(callback, "onError", "(Ljava/lang/String;)V", String((e as { msg?: string }).msg ?? e));
+  }
 });
 export const geocodeMethods = {
   "isGeocodeAvailable()Z": driven(function* (): Gen { return +!!(yield* providerComponent()); }),
