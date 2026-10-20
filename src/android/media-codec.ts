@@ -5,7 +5,7 @@ import { awaited, JObj, rt, setDeclared, driven, waits, type Gen } from "../jvm/
 import { concat, jarray } from "../jvm/abi.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, directView, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio.ts";
-import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
+import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, annexB, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface.ts";
 import { nativePeer, nativeThread, postNativeEvent } from "./media-native.ts";
 
@@ -31,19 +31,6 @@ function nalUnits(data: Uint8Array): Uint8Array[] {
   if (start >= 0) units.push(data.subarray(start));
   return units;
 }
-/** An access unit in the MP4 framing (ISO/IEC 14496-15: each NAL unit after its 4-byte length) as Annex B,
- *  or null when such lengths do not frame it exactly. A player that configures its decoder before its
- *  demuxer has read the sample entry can queue samples still framed so. */
-function lengthPrefixedAsAnnexB(data: Uint8Array): Uint8Array | null {
-  const length = (at: number) => (data[at] << 24 | data[at + 1] << 16 | data[at + 2] << 8 | data[at + 3]) >>> 0;
-  let at = 0;
-  for (let n; at + 4 < data.length; at += 4 + n) if (!(n = length(at)) || data[at + 4] & 0x80) return null;
-  if (at !== data.length) return null;
-  const out = data.slice();
-  for (at = 0; at < out.length; at += 4 + length(at)) out.set(START_CODE, at);
-  return out;
-}
-const START_CODE = Uint8Array.of(0, 0, 0, 1);
 /** the RBSP of a NAL unit's first bytes, without emulation prevention */
 function rbsp(unit: Uint8Array, length: number): number[] {
   const out: number[] = [];
@@ -53,7 +40,7 @@ function rbsp(unit: Uint8Array, length: number): number[] {
 const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, "0");
 /** AVC and HEVC in Annex B: a unit's type, the picture (VCL) types and the key ones among them, and the
  *  sequence parameter set's type and codec string (ISO/IEC 14496-15 Annex E) */
-const annexB = (nal: { type(unit: Uint8Array): number; vcl(type: number): boolean; key(type: number): boolean; sps: number; codec(unit: Uint8Array): string | null }): Bitstream => ({
+const nalBitstream = (nal: { type(unit: Uint8Array): number; vcl(type: number): boolean; key(type: number): boolean; sps: number; codec(unit: Uint8Array): string | null }): Bitstream => ({
   keyFrame(data) {
     for (const unit of nalUnits(data)) { const type = nal.type(unit); if (nal.vcl(type)) return nal.key(type); }
     return false;
@@ -63,9 +50,9 @@ const annexB = (nal: { type(unit: Uint8Array): number; vcl(type: number): boolea
     return null;
   },
 });
-const avc = annexB({ type: (unit) => unit[0] & 31, vcl: (type) => type === 1 || type === 5, key: (type) => type === 5, sps: 7,
+const avc = nalBitstream({ type: (unit) => unit[0] & 31, vcl: (type) => type === 1 || type === 5, key: (type) => type === 5, sps: 7,
   codec: (unit) => "avc1." + rbsp(unit, 4).slice(1).map(hex2).join("") });
-const hevc = annexB({ type: (unit) => unit[0] >>> 1 & 63, vcl: (type) => type <= 31, key: (type) => type >= 16 && type <= 21, sps: 33, codec(unit) {
+const hevc = nalBitstream({ type: (unit) => unit[0] >>> 1 & 63, vcl: (type) => type <= 31, key: (type) => type >= 16 && type <= 21, sps: 33, codec(unit) {
   // NAL header (2), vps id/sub-layers/nesting (1), then profile_tier_level's general fields
   const b = rbsp(unit, 15);
   if (b.length < 15) return null;
@@ -324,7 +311,8 @@ class Run {
     const def = this.codec.def;
     if (def.kind === "audio") { this.inFlight++; (this.decoder as AudioDecoder).decode(new EncodedAudioChunk({ type: "key", timestamp, data })); return; }
     const decoder = this.decoder as VideoDecoder;
-    if (def.bitstream.spsCodec) data = lengthPrefixedAsAnnexB(data) ?? data;
+    // a player that configures its decoder before its demuxer has read the sample entry can queue samples still in the MP4 framing
+    if (def.bitstream.spsCodec) data = annexB(data) ?? data;
     if (this.parameterSets.length) data = concat([...this.parameterSets, data]);
     key ||= videoKeyFrame(def, data);
     // a decoder starts at a key frame: what precedes it decodes to nothing, as on a device

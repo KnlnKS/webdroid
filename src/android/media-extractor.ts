@@ -1,19 +1,17 @@
 import type { Sample } from "mp4box";
 import { rt, waits, type JObj } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
-import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format.ts";
+import { concat } from "../jvm/abi.ts";
+import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, annexB, formatToJava } from "./media-format.ts";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio.ts";
 import { fdInt } from "../jvm/natives/jio.ts";
 import { vfs } from "../shell/vfs.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { fdSlice, nativePeer } from "./media-native.ts";
 
-function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
-  const result = new Uint8Array(units.reduce((n, unit) => n + 4 + unit.data.length, 0));
-  let offset = 0;
-  for (const unit of units) { result.set([0, 0, 0, 1], offset); result.set(unit.data, offset + 4); offset += unit.data.length + 4; }
-  return result;
-}
+const START_CODE = Uint8Array.of(0, 0, 0, 1);
+/** parameter sets as Annex B, each after a start code */
+const startCoded = (units: readonly { data: Uint8Array }[]) => concat(units.flatMap((unit) => [START_CODE, unit.data]));
 function csd(format: NativeFormat, key: string, data: Uint8Array): void {
   const buffer = allocateDirectNow(data.length); bufferBytes(buffer).set(data);
   format.set(key, TYPE_BYTE_BUFFER, buffer);
@@ -57,11 +55,11 @@ export class MediaExtractor {
       for (const sample of samples) maxSize = Math.max(maxSize, sample.size);
       if (avc) {
         nalLength = avc.lengthSizeMinusOne + 1;
-        csd(format, "csd-0", annexB(avc.SPS)); csd(format, "csd-1", annexB(avc.PPS));
+        csd(format, "csd-0", startCoded(avc.SPS)); csd(format, "csd-1", startCoded(avc.PPS));
         maxSize *= Math.ceil(4 / nalLength);
       } else if (hevc) {
         nalLength = hevc.lengthSizeMinusOne + 1;
-        csd(format, "csd-0", annexB(hevc.nalu_arrays.flat()));
+        csd(format, "csd-0", startCoded(hevc.nalu_arrays.flat()));
         maxSize *= Math.ceil(4 / nalLength);
       }
       format.set("max-input-size", TYPE_INTEGER, maxSize);
@@ -100,15 +98,9 @@ export class MediaExtractor {
     const data = await readFully(source, sample.offset, sample.size);
     if (data.length !== sample.size) throw new Error("Truncated media sample");
     if (!track.nalLength) return data;
-    const units: { data: Uint8Array }[] = [];
-    for (let offset = 0; offset < data.length;) {
-      if (offset + track.nalLength > data.length) throw new Error("Truncated NAL length");
-      let length = 0;
-      for (let i = 0; i < track.nalLength; i++) length = length * 256 + data[offset++];
-      if (offset + length > data.length) throw new Error("Truncated NAL unit");
-      units.push({ data: data.subarray(offset, offset + length) }); offset += length;
-    }
-    return annexB(units);
+    const units = annexB(data, track.nalLength);
+    if (!units) throw new Error("Malformed NAL units");
+    return units;
   }
   seek(timeUs: number, mode: number): void {
     for (const track of this.tracks) {

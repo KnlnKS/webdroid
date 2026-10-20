@@ -10,6 +10,12 @@ import { definitionFor, parameterSets, videoConfig } from "./media-codec.ts";
 import { inspectMp3 } from "./media-mp3.ts";
 import { dataSourceFile, fdSlice, nativePeer } from "./media-native.ts";
 
+// MediaMetadataRetriever's METADATA_KEY_*
+const DURATION = 9, NUM_TRACKS = 10, MIMETYPE = 12, HAS_AUDIO = 16, HAS_VIDEO = 17, VIDEO_WIDTH = 18, VIDEO_HEIGHT = 19, BITRATE = 20,
+  VIDEO_ROTATION = 24, VIDEO_FRAME_COUNT = 32;
+/** the keys every source answers */
+const summary = (durationMs: number, tracks: number, mime: string, audio: boolean, video: boolean, bitrate: number) => new Map([[DURATION, String(durationMs)],
+  [NUM_TRACKS, String(tracks)], [MIMETYPE, mime], [HAS_AUDIO, audio ? "yes" : "no"], [HAS_VIDEO, video ? "yes" : "no"], [BITRATE, String(bitrate)]]);
 class Retriever {
   extractor: MediaExtractor | null = null;
   source: FileSource | null = null;
@@ -32,8 +38,7 @@ class Retriever {
       }
       this.source = source;
       this.picture = mp3.picture;
-      this.metadata = new Map([[9, String(mp3.durationMs)], [10, "1"], [12, "audio/mpeg"],
-        [16, "yes"], [17, "no"], [20, String(mp3.bitrate)]]);
+      this.metadata = summary(mp3.durationMs, 1, "audio/mpeg", true, false, mp3.bitrate);
     }));
   }
   private describe(source: FileSource, extractor: MediaExtractor): void {
@@ -42,20 +47,10 @@ class Retriever {
     const tracks = extractor.tracks;
     const video = tracks.find(track => track.format.string("mime").startsWith("video/"));
     const audio = tracks.find(track => track.format.string("mime").startsWith("audio/"));
-    this.metadata = new Map([
-      [9, String(Math.round(Math.max(0, ...tracks.map(track => Number(track.format.get("durationUs", TYPE_LONG) ?? 0n) / 1000))))],
-      [10, String(tracks.length)],
-      [12, video ? "video/mp4" : "audio/mp4"],
-      [16, audio ? "yes" : "no"],
-      [17, video ? "yes" : "no"],
-      [20, String(Math.round(tracks.reduce((sum, track) => sum + track.format.number("bitrate", 0), 0)))],
-    ]);
-    if (video) {
-      this.metadata.set(18, String(video.format.number("width", 0)));
-      this.metadata.set(19, String(video.format.number("height", 0)));
-      this.metadata.set(24, "0");
-      this.metadata.set(32, String(video.samples.length));
-    }
+    this.metadata = summary(Math.round(Math.max(0, ...tracks.map(track => Number(track.format.get("durationUs", TYPE_LONG) ?? 0n) / 1000))), tracks.length,
+      video ? "video/mp4" : "audio/mp4", !!audio, !!video, Math.round(tracks.reduce((sum, track) => sum + track.format.number("bitrate", 0), 0)));
+    if (video) this.metadata.set(VIDEO_WIDTH, String(video.format.number("width", 0))).set(VIDEO_HEIGHT, String(video.format.number("height", 0)))
+      .set(VIDEO_ROTATION, "0").set(VIDEO_FRAME_COUNT, String(video.samples.length));
   }
   async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<NativeBitmap | null> {
     // no source, no video track or no decoder for it: the retriever has no frame to give
