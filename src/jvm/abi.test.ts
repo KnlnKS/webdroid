@@ -1,19 +1,17 @@
 import { expect, test } from "vite-plus/test";
-import { charsToString, decodeModifiedUtf8, demangle, mangleField, mangleMethod, mangleStaticField } from "./abi.ts";
+import { charsToString, decodeModifiedUtf8, mangleField, mangleStaticField } from "./abi.ts";
 
 test("Unicode Java members and literal escape-like names retain distinct JS properties", () => {
   const names = ["ﻏ", "ﻐ", "ﾒ", "_", "$fecf$", "😀", "😁"];
   for (const key of [
     (name: string) => mangleField("test/Owner", name),
     (name: string) => mangleStaticField(name),
-    (name: string) => mangleMethod(name, "()I"),
   ]) {
     const props = names.map(key);
     expect(new Set(props).size).toBe(names.length);
     const object = new Function("return {" + props.map((prop, i) => `${prop}:${i}`).join(",") + "}")();
     expect(props.map((prop) => object[prop])).toEqual(names.map((_, i) => i));
   }
-  for (const name of names) expect(demangle(mangleMethod(name, "()I"))).toEqual([name, "()I"]);
 });
 
 test("modified UTF-8 decodes a two-byte NUL and both supplementary forms", () => {

@@ -1,7 +1,7 @@
 // java.lang's natives: System's clocks and properties, Runtime's library loading and memory, and the process a fork would make.
 // Java booleans are 0/1 numbers, longs are BigInt.
 
-import { awaited, rt, type Gen } from "../runtime.ts";
+import { awaited, driven, rt, type Gen } from "../runtime.ts";
 import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
@@ -9,10 +9,7 @@ import { vfs } from "../../shell/vfs.ts";
 import { processFileBytes } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
-import { shareable } from "../suspend.ts";
 import type { JThrowable } from "./jthrowable.ts";
-// String and its builders, java.lang's natives with these
-import "./jstring.ts";
 
 /** Objects.checkFromIndexSize: [off, off + len) must lie within [0, length) */
 export function checkFromIndexSize(off: number, len: number, length: number, cls = "java/lang/IndexOutOfBoundsException"): void {
@@ -63,7 +60,7 @@ function nativeLoad(file: string, loader: unknown, caller: unknown = null): stri
   if (have) return have.thread === curThread ? null : have.pending;
   const thread = curThread;
   // driven: each step continues on the asking thread and chain (a <clinit>'s, when it loads its library)
-  const pending = shareable(rt.drive(function* (): Gen<string | null> {
+  const pending = Promise.resolve(rt.drive(function* (): Gen<string | null> {
     let abi: string | null, bytes: Uint8Array | null;
     if (file.startsWith("/")) {
       bytes = yield* libraryFile(file);
@@ -123,3 +120,18 @@ rt.registerJnis("java/lang/Runtime", {
 rt.registerJni("dalvik/system/VMStack", "getClosestUserClassLoader()Ljava/lang/ClassLoader;", () => rt.userClassLoader());
 // libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock
 rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);
+
+/** Class.getPublicFieldRecursive, as ART searches: the public fields the class declares, then its interfaces', then its superclass's */
+function* publicField(cls: object, name: string): Gen<object | null> {
+  const fields = yield* awaited<object[]>(vcall(cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;"));
+  for (const f of fields) {
+    const modifiers = yield* awaited<number>(vcall(f, "getModifiers", "()I"));
+    if (modifiers & 1 && (yield* awaited<string>(vcall(f, "getName", "()Ljava/lang/String;"))) === name) return f;
+  }
+  const interfaces = yield* awaited<object[]>(vcall(cls, "getInterfaces", "()[Ljava/lang/Class;"));
+  for (const i of interfaces) { const f = yield* publicField(i, name); if (f) return f; }
+  const sup = yield* awaited<object | null>(vcall(cls, "getSuperclass", "()Ljava/lang/Class;"));
+  return sup && (yield* publicField(sup, name));
+}
+rt.registerJni("java/lang/Class", "getPublicFieldRecursive(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+  driven(function* (this: object, name: string): Gen<object | null> { return yield* publicField(this, name); }));

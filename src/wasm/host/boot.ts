@@ -27,9 +27,8 @@ import { guestMemory } from "./guest.ts";
 import { wasmJni } from "./jni.ts";
 import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
-import { hostSpec, natives, nativeSource } from "./nativesource.ts";
+import { attachHostClasses, natives } from "./nativesource.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
-import { declareWaiting } from "./suspend.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
 import { openPersist } from "./persist.ts";
@@ -76,15 +75,7 @@ function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   w.onGap = (gap) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${gap}`); };
   // the class a site cannot link is noted as missing
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
-  // the frames of Java code: a method the host implements is not one
-  rt.javaFrames = () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
-  rt.userClassLoader = () => {
-    for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
-    return null;
-  };
-  for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
-  rt.registered = (spec) => w.addHostClass(hostSpec(spec));
-  return w;
+  return attachHostClasses(w);
 }
 
 /** The realm's World, over the platform build the tab opened and the platform Program its processes share; the app's dex files join it as they arrive. Outside a page (the
@@ -218,7 +209,15 @@ let using: World | undefined;
 export function useWorld(w: World): World {
   if (using === w) return w;
   using = w;
-  useJavaHost({ ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w) });
+  useJavaHost({
+    ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w),
+    // the frames of Java code: a method the host implements is not one
+    javaFrames: () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method),
+    userClassLoader: () => {
+      for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
+      return null;
+    },
+  });
   return w;
 }
 /** the realm's Java until its World is made: whatever first reaches Java makes it (`world`), and useWorld installs it in place of this */
@@ -228,6 +227,8 @@ function usePending(world: () => World): void {
     entry: new Proxy({} as Entry, { get: (_, name) => (...args: unknown[]) => (wasmEntry(world())[name as keyof Entry] as Function)(...args) }),
     jni: lazy(() => { world(); return vm; }),
     fieldName: (cls, name) => fieldNamesOf(world())(cls, name),
+    // no Java has run
+    javaFrames: () => [], userClassLoader: () => null,
   });
 }
 /** the Java objects the runtime makes, in the World `world()` answers */
@@ -286,9 +287,7 @@ export function openAot(): Promise<FetchStore | undefined> {
     const other = switchValue("aot"), current = await fetch(`/aot/current.json${other ? `?key=${other}` : ""}`);
     if (!current.ok) return undefined;
     const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`, aotPort);
-    const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
-    // the natives the modules import as Suspending were chosen when the build was made
-    declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);
+    const [, startup] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json")]);
     mark("aotIndex");
     store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
     return store;

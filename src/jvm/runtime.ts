@@ -1,9 +1,9 @@
 // The registry host code shares with the Wasm tier: the native specs and JNI functions the natives modules register, what Java reaches that
-// nothing implements, the class path's resources, and the conversions natives make (strings, thrown JS errors).
+// nothing implements, the class path's resources, and the throwables natives make of thrown JS errors.
 
-import { Strand, suspendWith } from "./suspend.ts";
-import { decodeString } from "./charset.ts";
-import { charsToString, dotName, oomMessage } from "./abi.ts";
+import { Strand } from "./suspend.ts";
+import { never, processExited } from "../process-exit.ts";
+import { dotName, oomMessage } from "./abi.ts";
 import { isBytecode, isStageD } from "./provenance.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
@@ -20,11 +20,11 @@ export interface NativeSpec {
   sup?: string;
   ifaces?: string[];
   ctor: new (...args: any[]) => object;
-  /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) or alias to prototype prop */
-  methods?: Record<string, ((...a: never[]) => unknown) | string>;
+  /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) */
+  methods?: Record<string, (...a: never[]) => unknown>;
   statics?: Record<string, unknown>;
   /** java-visible public instance fields: java name → JS property name on the TS class */
-  fields?: Record<string, string> | string[];
+  fields?: Record<string, string>;
   /** the platform class's `<clinit>` runs at init, so its statics are the platform's */
   platformClinit?: boolean;
 }
@@ -91,7 +91,7 @@ export class Runtime {
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
    * resumed native runs as the strand that entered it and releases it when it finishes or
-   * suspends again.
+   * suspends again; nothing resumes once the process has exited.
    */
   drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
   private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
@@ -103,16 +103,23 @@ export class Runtime {
       const value = step.value;
       if (value instanceof Promise) {
         if (resumed) this.su();
-        return suspendWith(value, (v, threw) => { this.st(strand); return this.driveStep(g, v, threw, strand, true); }) as Promise<T>;
+        return value.then((v) => this.resumeStep(g, v, false, strand), (e) => this.resumeStep(g, e, true, strand));
       }
       input = value; threw = false;
     }
   }
+  private resumeStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand): T | Promise<T> {
+    if (processExited()) return never();
+    this.st(strand);
+    return this.driveStep(g, input, threw, strand, true);
+  }
+  /** a class the host implements, once */
   register(spec: NativeSpec) {
     if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
       if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
       return;
     }
+    if (this.natives.has(spec.name)) throw new Error(`${spec.name} is registered twice`);
     this.natives.set(spec.name, spec);
     this.registered?.(spec);
   }
@@ -123,8 +130,10 @@ export class Runtime {
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
-  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) {
+  /** `replace`: `fn` replaces the native registered before (JNI's RegisterNatives does), which is otherwise a conflict */
+  registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown, replace = false) {
     const key = cls + "|" + sig;
+    if (!replace && this.jni.has(key)) throw new Error(`${cls}.${sig} is registered twice`);
     this.jni.set(key, this.trackPlaceholder(`${cls}.${sig}`, fn, (f) => { if (this.jni.get(key) === f) this.jni.set(key, fn); }));
   }
   /** register the native halves of one class, by their exact descriptors */
@@ -152,7 +161,7 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
-  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (set by the World) */
+  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (JavaHost's) */
   javaFrames: () => string[] = () => [];
   userClassLoader: () => object | null = () => null;
   /** where each missing entry was first reached */
@@ -234,56 +243,6 @@ export class Runtime {
   }
 
   npe(): never { throw this.mkThrowable("java/lang/NullPointerException", null); }
-  /** new String(char[], int, int), the constructor readers and parsers call per token */
-  strChars(chars: Uint16Array | null, off: number, len: number): string {
-    if (!chars) this.npe();
-    if (off < 0 || len < 0 || off > chars.length - len) throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
-    return charsToString(chars, off, len);
-  }
-  /** String's constructors by descriptor: what the compiler emits for String.<init>, and JNI's NewObject */
-  readonly newStr = {
-    "()V": () => "",
-    "(Ljava/lang/String;)V": (s: string) => s,
-    "(Ljava/lang/StringBuilder;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
-    "(Ljava/lang/StringBuffer;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
-    "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
-    "([CII)V": (chars: Uint16Array, off: number, n: number) => this.strChars(chars, off, n),
-    // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
-    "([BB)V": (bytes: Int8Array, coder: number) => {
-      const n = coder ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
-      if (coder) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
-      else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
-      return charsToString(chars, 0, n);
-    },
-    "([BI)V": (bytes: Int8Array, high: number) => this.hibyteStr(bytes, high, 0, bytes?.length),
-    "([BIII)V": (bytes: Int8Array, high: number, off: number, n: number) => this.hibyteStr(bytes, high, off, n),
-    "([B)V": (bytes: Int8Array) => decodeString(bytes, "UTF-8"),
-    "([BII)V": (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", this.byteRange(bytes, off, n), n),
-    "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
-    "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
-    "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
-    "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
-    // code points, not chars: each element is a whole Unicode scalar
-    "([III)V": (cp: Int32Array, off: number, n: number) => {
-      let out = "";
-      for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
-      return out;
-    },
-  } satisfies Record<string, (...args: never[]) => string>;
-  /** the deprecated String(byte[] ascii, int hibyte, ...): each char is hibyte over a byte */
-  private hibyteStr(bytes: Int8Array | null, high: number, off: number, n: number): string {
-    if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
-    this.byteRange(bytes, off, n);
-    const chars = new Uint16Array(n), hi = high << 8;
-    for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
-    return charsToString(chars, 0, n);
-  }
-  /** String's checkBoundsOffCount over a byte array: the offset */
-  private byteRange(bytes: Int8Array, off: number, count: number): number {
-    if (off < 0 || count < 0 || off > bytes.length - count)
-      throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
-    return off;
-  }
 }
 
 export const rt = new Runtime();

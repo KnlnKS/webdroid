@@ -4,10 +4,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";
 import { vcall } from "../../src/jvm/natives/jentry.ts";
-import { extraBootEntries } from "../../src/wasm/host/hostnatives.ts";
+import { extraBootEntries } from "../../src/jvm/natives/jvmruntime.ts";
 import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
 import { world } from "./lib.ts";
-import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { ROOT, platformJars } from "./paths.ts";
 import { filesIn } from "../java.ts";
 import { vfs } from "../../src/shell/vfs.ts";
@@ -19,7 +19,7 @@ const jars = platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "a
 // the runner's own output (60 MB of test names for the largest class, two bytes a char here) is far over ART's 512 MB limit with the suite's objects: the limit is raised
 const w = world([...dexFiles, ...jars], { heapLimit: 3 * 2 ** 30, natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 w.onGap = (gap) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + gap); };
-addHostClasses(w);
+attachHostClasses(w);
 if (existsSync(join(dexDir, "resources.jar"))) {
   // the suite's resources are read from this jar by the boot class loader, which the classes of a Program without loaders of its own ask
   vfs.write("/data/local/tmp/resources.jar", new Uint8Array(readFileSync(join(dexDir, "resources.jar"))));

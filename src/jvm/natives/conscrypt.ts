@@ -435,7 +435,7 @@ function rsaDecryptPadded(k: Rsa, c: Uint8Array, padding: number, oaep?: RsaPara
 }
 /** the four raw RSA natives: (flen, from, to, key, padding) → bytes written */
 function rsaRaw(op: "pubenc" | "privdec" | "privenc" | "pubdec") {
-  return (flen: number, from: Int8Array, to: Int8Array, ref: JObj, padding: number): number | Promise<number> => {
+  return waits((flen: number, from: Int8Array, to: Int8Array, ref: JObj, padding: number): number | Promise<number> => {
     const k = keyOf(ref), input = region(from, 0, flen).slice();
     const finish = (r: Uint8Array) => { region(to, 0, r.length).set(r); return r.length; };
     if ("wrapper" in k && (op === "privdec" || op === "privenc")) {
@@ -456,7 +456,7 @@ function rsaRaw(op: "pubenc" | "privdec" | "privenc" | "pubdec") {
     const m = pkcs1Unpad(em, 1);
     if (!m) throw rsaErr("java/security/SignatureException", 107, "BLOCK_TYPE_IS_NOT_01");
     return finish(m);
-  };
+  });
 }
 nc("RSA_public_encrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("pubenc"));
 nc("RSA_private_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("privdec"));
@@ -480,7 +480,7 @@ nc("EVP_PKEY_CTX_set_rsa_pss_saltlen(JI)V", (h: bigint, len: number) => { params
 nc("EVP_PKEY_CTX_set_rsa_mgf1_md(JJ)V", (h: bigint, md: bigint) => { params(h).mgf1Md = mdOf(md).name; });
 nc("EVP_PKEY_CTX_set_rsa_oaep_md(JJ)V", (h: bigint, md: bigint) => { params(h).oaepMd = mdOf(md).name; });
 nc("EVP_PKEY_CTX_set_rsa_oaep_label(J[B)V", (h: bigint, label: Int8Array | null) => { params(h).label = label ? u8(label).slice() : new Uint8Array(0); });
-const pkeyCrypt = (encrypt: boolean) => (ref: JObj, out: Int8Array, outOff: number, input: Int8Array, inOff: number, inLen: number) => {
+const pkeyCrypt = (encrypt: boolean) => waits((ref: JObj, out: Int8Array, outOff: number, input: Int8Array, inOff: number, inLen: number) => {
   const p = ptr<RsaParams>(ref), k = p.key, data = region(input, inOff, inLen).slice();
   const finish = (r: Uint8Array) => { region(out, outOff, r.length).set(r); return r.length; };
   if (!encrypt && "wrapper" in k) {
@@ -494,7 +494,7 @@ const pkeyCrypt = (encrypt: boolean) => (ref: JObj, out: Int8Array, outOff: numb
   }
   const r = rsaNumbers(k);
   return finish(encrypt ? rsaEncryptPadded(r, data, p.padding, p) : rsaDecryptPadded(r, data, p.padding, p));
-};
+});
 nc("EVP_PKEY_encrypt(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY_CTX;[BI[BII)I", pkeyCrypt(true));
 nc("EVP_PKEY_decrypt(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY_CTX;[BI[BII)I", pkeyCrypt(false));
 
@@ -516,7 +516,7 @@ const directUpdate = (ref: JObj, address: bigint, len: number) => after(memoryAt
 for (const n of ["EVP_DigestUpdateDirect", "EVP_DigestSignUpdateDirect", "EVP_DigestVerifyUpdateDirect"]) nc(`${n}(Lcom/android/org/conscrypt/NativeRef\$EVP_MD_CTX;JI)V`, directUpdate);
 nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveMac(ref).update(b); }));
 const saltFor = (p: RsaParams, hLen: number, emLen: number) => p.saltLen === -1 ? hLen : p.saltLen === -2 ? emLen - hLen - 2 : p.saltLen;
-nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", (ref: JObj) => {
+nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", waits((ref: JObj) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s?.signing) throw runtimeError("EVP_DigestSignFinal: not initialized for signing");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params;
@@ -535,7 +535,7 @@ nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", (r
   const block = em.length < len ? concat([new Uint8Array(len - em.length), em]) : em;
   if ("wrapper" in key) return scall(UPCALLS, "rsaSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", key.wrapper, RSA_NO_PADDING, i8(block));
   return i8(bigToBytes(rsaPrivate(r, bytesToBig(block)), len));
-});
+}));
 nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z", (ref: JObj, sig: Int8Array, off: number, len: number) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s || s.signing) throw runtimeError("EVP_DigestVerifyFinal: not initialized for verifying");
@@ -623,14 +623,14 @@ nc("ECDSA_size(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) =>
   const int = 1 + lenLen(l + 1) + l + 1;
   return 1 + lenLen(2 * int) + 2 * int;
 });
-nc("ECDSA_sign([B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (digest: Int8Array, sig: Int8Array, ref: JObj) => {
+nc("ECDSA_sign([B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", waits((digest: Int8Array, sig: Int8Array, ref: JObj) => {
   const k = keyOf(ref);
   const finish = (s: Uint8Array) => { region(sig, 0, s.length).set(s); return s.length; };
   if ("wrapper" in k) return after(scall(UPCALLS, "ecSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;[B)[B", k.wrapper, digest), (s: Int8Array) => finish(u8(s)));
   const e = ecOf(ref);
   if (e.priv === undefined) throw sslError("java/security/InvalidKeyException", EC, 123, "MISSING_PRIVATE_KEY");
   return finish(ecdsaSign(e.curve, e.priv, u8(digest)));
-});
+}));
 nc("ECDSA_verify([B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (digest: Int8Array, sig: Int8Array, ref: JObj) => {
   const e = ecOf(ref);
   return +ecdsaVerify(e.curve, e.pub, u8(digest), u8(sig));

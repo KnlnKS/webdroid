@@ -87,7 +87,7 @@ rt.registerJnis("android/os/MessageQueue", {
     if (looper.thread.looper === looper) looper.thread.looper = null;
     release(ptr);
   },
-  "nativePollOnce(JI)V": function (this: JObj, ptr: bigint, timeout: number) { return deref<NativeLooper>(ptr).pollOnce(timeout); },
+  "nativePollOnce(JI)V": waits(function (this: JObj, ptr: bigint, timeout: number) { return deref<NativeLooper>(ptr).pollOnce(timeout); }),
   "nativeWake(J)V": (ptr: bigint) => deref<NativeLooper>(ptr).wake(),
   "nativeIsPolling(J)Z": (ptr: bigint) => +deref<NativeLooper>(ptr).polling,
 });

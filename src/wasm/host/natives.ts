@@ -14,7 +14,7 @@ import { mid } from "../compiler/ids.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
 import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
 import { Bridge } from "./bridge.ts";
-import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend.ts";
+import { adaptImport, mayWait, reportSuspended, reportSuspendError, waitsAlways } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
 import { SIZE, copyFn } from "../compiler/copy.ts";
@@ -129,7 +129,7 @@ export class Natives implements NativeBinder {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = opaque(ctor ? STRING : m.ret), ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn, args.some(isPrimArray) || isPrimArray(rd)), always: !!fn && waitsAlways(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && mayWait(fn), always: !!fn && waitsAlways(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
     this.byMethod.set(m, p);
     return p;
   }
@@ -341,7 +341,7 @@ export class Natives implements NativeBinder {
       // The module's import name fixes its suspension/landing ABI, even when a
       // native bound after the build is now known to answer Promises.
       const abiPlan = { ...p, suspends: waits || landing, always: waits && p.always };
-      const planned = (suspending: boolean) => wrapper(abiPlan, landing ? p.fn : hostForm(p.fn), raise, () => {
+      const planned = (suspending: boolean) => wrapper(abiPlan, p.fn, raise, () => {
         reportSuspended(id);
         ctx.gap(`${id}: native suspended (answers a Promise)`);
         return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });

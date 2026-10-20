@@ -588,8 +588,8 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "mkdir0(JI)V": (path: bigint) => { const p = cpath(path); return after(filePaths(p).fileMkdir(p), (n) => { unixSys(n); }); },
   "rmdir0(J)V": (path: bigint) => removeAt(cpath(path), true),
   // an existing path is never a link
-  "readlink0(J)[B": (path: bigint) => after(statPath(cpath(path), null), () => { throw unixError(E.INVAL); }),
-  "realpath0(J)[B": (path: bigint) => { const p = vfs.norm(cpath(path)); return after(statPath(p, null), () => bytesOf(p)); },
+  "readlink0(J)[B": waits((path: bigint) => after(statPath(cpath(path), null), () => { throw unixError(E.INVAL); })),
+  "realpath0(J)[B": waits((path: bigint) => { const p = vfs.norm(cpath(path)); return after(statPath(p, null), () => bytesOf(p)); }),
   "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
   "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
   "stat1(J)I": (path: bigint) => after(pathReply(cpath(path)), ({ value }) => value?.mode ?? 0),

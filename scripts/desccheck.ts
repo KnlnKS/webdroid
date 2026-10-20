@@ -1,5 +1,6 @@
 // Registered TS descriptors that AOSP does not declare: every native spec method must exist on
-// its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
+// its class or an AOSP supertype with the same name, descriptor and staticness, every String
+// method implemented over JS strings must be an instance method of String, and every JNI
 // delegate must be a native method its class declares. A spec method standing in for an AOSP
 // bytecode body is a reimplementation (docs/architecture.md) unless provenance's TS_SPECS allows its class.
 //   pnpm desccheck [--write-baseline]
@@ -7,13 +8,16 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { rt } from "../src/jvm/runtime.ts";
 import { ACC } from "../src/jvm/dex.ts";
-import { descToName } from "../src/jvm/abi.ts";
+import { descToName, parseMethodDesc } from "../src/jvm/abi.ts";
+import { mayWait } from "../src/wasm/host/suspend.ts";
+import type { HostFn } from "../src/wasm/link/hostapi.ts";
 import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
 import { jarDexes } from "../src/android/framework.ts";
 import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
+import { stringMethods } from "../src/jvm/natives/jstring.ts";
 import "../src/natives.ts";
 
-const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
+const NO_INDEX = 0xffffffff, PRIVATE = 0x2, STRING = "java/lang/String";
 /** a method declaration: its access flags, and whether it has a bytecode body */
 type Declared = { flags: number; hasCode: boolean };
 const aosp = (jar: string) => resolve(import.meta.dirname, "../vendor/aosp", jar);
@@ -88,6 +92,11 @@ export function descriptorMismatches(): Map<string, string[]> {
       else if (found.hasCode && tsSpecViolation(spec.name, true)) report(spec.name, `reimplements ${key}`);
     }
   }
+  for (const sig of stringMethods.keys()) {
+    const found = resolve(STRING, sig);
+    if (!found) report(STRING, "string " + missing(STRING, sig, sig));
+    else if (found.flags & ACC.STATIC) report(STRING, `string ${sig} is static in AOSP`);
+  }
   for (const key of rt.jni.keys()) {
     const [cls, sig] = key.split("|");
     if (!defs.has(cls)) continue;
@@ -96,6 +105,25 @@ export function descriptorMismatches(): Map<string, string[]> {
     else if (!(found.flags & ACC.NATIVE)) report(cls, `jni ${sig} is not native in AOSP`);
   }
   return out;
+}
+
+/** what the body of a native that can answer a Promise has: it waits for something, reads memory that pages in, or hands on the result of a call into Java */
+const WAITS = /\b(after|awaited|pagesIn|external|externalRead|memoryAt|guestAddress|Promise|await|drive)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
+const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && "ZBCSIJFD".includes(d[1]);
+/** the natives with primitive arrays whose bodies look like they wait but that are not declared to (suspend.ts `mayWait`): such a native, imported plain, parks
+ *  on views of linear memory, which may grow while it waits */
+export function undeclaredWaiters(): string[] {
+  const out: string[] = [];
+  const check = (id: string, fn: unknown) => {
+    if (typeof fn !== "function" || (fn as HostFn).javaValues || mayWait(fn as HostFn)) return;
+    const { params, ret } = parseMethodDesc(id.slice(id.indexOf("(")));
+    const body = Function.prototype.toString.call(fn).replace(/\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm, "$1");
+    if ((params.some(isPrimArray) || isPrimArray(ret)) && WAITS.test(body)) out.push(id);
+  };
+  for (const [key, fn] of rt.jni) check(key.replace("|", "."), fn);
+  for (const [cls, spec] of rt.natives) for (const [key, fn] of Object.entries(spec.methods ?? {})) check(`${cls}.${key.replace(/^static /, "")}`, fn);
+  for (const [key, fn] of stringMethods) check(`${STRING}.${key}`, fn);
+  return out.sort();
 }
 
 /** the accepted mismatches `pnpm test` holds new ones against, without their AOSP hints */
@@ -115,4 +143,7 @@ if (import.meta.main) {
     for (const msg of found.get(cls)!.sort()) { console.log("  " + msg); n++; }
   }
   console.log(`${n} mismatches in ${found.size} classes`);
+  const waiters = undeclaredWaiters();
+  for (const id of waiters) console.log("may wait, not declared: " + id);
+  console.log(`${waiters.length} natives with arrays may wait undeclared`);
 }

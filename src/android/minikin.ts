@@ -11,7 +11,7 @@
 //     their hyphens as MeasuredText and the greedy breaker measure them.
 // Glyph bounds are not known, so no run overhangs.
 
-import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { isLead, isTrail } from "../jvm/natives/jstring.ts";
@@ -676,12 +676,12 @@ rt.registerJnis("android/graphics/text/LineBreaker", {
     handle({ strategy, frequency, justified: !!justified, indents: indents ? Float32Array.from(indents) : new Float32Array(0), useBounds: !!useBounds } as Breaker),
   "nGetReleaseFunc()J": () => FINALIZER,
   "nGetReleaseResultFunc()J": () => FINALIZER,
-  "nComputeLineBreaks(J[CJIFIF[FFI)J": (h: bigint, _chars: Uint16Array, mt: bigint, len: number, firstWidth: number, firstCount: number,
+  "nComputeLineBreaks(J[CJIFIF[FFI)J": waits((h: bigint, _chars: Uint16Array, mt: bigint, len: number, firstWidth: number, firstCount: number,
     restWidth: number, tabStops: Float32Array | null, defaultTab: number, indentsOffset: number) => {
     const b = deref<Breaker>(h);
     const breaks = computeBreaks(b, measured(mt), len, new LineWidth(firstWidth, firstCount, restWidth, b.indents, indentsOffset), new TabStops(tabStops, defaultTab));
     return breaks instanceof Promise ? breaks.then(handle) : handle(breaks);
-  },
+  }),
   "nGetLineCount(J)I": (h: bigint) => result(h).breaks.length,
   "nGetLineBreakOffset(JI)I": (h: bigint, i: number) => result(h).breaks[i],
   "nGetLineWidth(JI)F": (h: bigint, i: number) => result(h).widths[i],

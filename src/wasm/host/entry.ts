@@ -10,7 +10,7 @@ import { processExited, never } from "../../process-exit.ts";
 import { mangleField } from "../../jvm/abi.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
 import type { JavaClass } from "../../jvm/tier.ts";
-import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
+import { kindOf, type FieldInfo, type Kind, type MethodInfo, type Program } from "../compiler/program.ts";
 import type { World } from "../link/world.ts";
 import { waitsEnded } from "../link/module.ts";
 import type { Strand, ThreadRec } from "../link/sched.ts";
@@ -27,7 +27,16 @@ import { cpus, nameThread } from "../../native/cpu.ts";
 
 const OBJECT = "Ljava/lang/Object;";
 /** the classes and interfaces every array class is a subtype of */
-export const ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
+const ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
+const element = (d: string) => d[0] === "L" ? d.slice(1, -1) : d;
+/** whether class `a` (a class name or an array descriptor) is assignable to `b`: an array is covariant in a reference element type */
+export function assignable(prog: Program, a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a[0] !== "[") return b[0] !== "[" && prog.isSubclass(a, b);
+  if (b[0] !== "[") return ARRAY_SUPERS.has(b);
+  const x = a.slice(1), y = b.slice(1);
+  return x.length > 1 && y.length > 1 && assignable(prog, element(x), element(y));
+}
 
 /** `f` as a call into Java made by whatever is running (a native, a JNI callback of a native's guest code), on a new strand of its thread: the result, or a Promise of it when it waited */
 const nested = new WeakMap<World, { onStrand<T>(f: (s: Strand) => T): T; thread(): ThreadRec }>();
@@ -88,13 +97,11 @@ function makeEntry(w: World): Entry {
       if (typeof name === "string") nameThread(jthreadOf(rec), name);
     },
   };
-  /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
+  /** the strand whose native is entering Java, while it lives: the one running on this stack, or the one a native resumed as after a wait (Runtime.drive), as rt.cur names it.
+   *  The globals name a strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own */
   const nativeOf = (): Strand | null => {
-    // the globals name the strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own
-    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s.host === rt.cur ? s : null;
-    if (running) return running;
-    const captured = javaStrands.get(rt.cur);
-    return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
+    const s = javaStrands.get(rt.cur);
+    return s && !s.root && sched.strands[s.id] === s ? s : null;
   };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
   let entering: ThreadRec | null = null, enteringParent: Strand | null = null;
@@ -112,7 +119,7 @@ function makeEntry(w: World): Entry {
   };
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
-    if (sched.current().root && !sched.running) hostCurrent = curThread;
+    if (sched.current().root && !nativeOf()) hostCurrent = curThread;
     const thread = threadNow(), s = sched.strand(thread, parentOf(thread));
     // A JNI guest slice can own a host strand while the Wasm globals are idle.
     const caller = rt.cur;
@@ -159,17 +166,7 @@ function makeEntry(w: World): Entry {
   const alloc = (cls: string) => onStrand((s) => w.helpers.invoker([], "L", true)(s, w.host.info(UInfo.AllocInstance, w.idOf(cls), 0), -1)) as object | Promise<object>;
   const init = (cls: string) => w.needsInit(cls) ? enter(() => onStrand((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(cls), -1))) as void | Promise<void> : undefined;
 
-  /** the static field `name` (of type `desc`, when given) that `cls` declares or inherits */
-  const staticOf = (cls: string, name: string, desc?: string): FieldInfo | undefined => {
-    const seen = new Set<string>();
-    const visit = (n: string): FieldInfo | undefined => {
-      const c = prog.get(n);
-      if (!c || seen.has(n)) return undefined;
-      seen.add(n);
-      return c.fields.find((f) => f.isStatic && f.name === name && (desc === undefined || f.desc === desc)) ?? c.ifaces.map(visit).find(Boolean) ?? (c.sup ? visit(c.sup) : undefined);
-    };
-    return visit(cls);
-  };
+  const staticOf = (cls: string, name: string, desc?: string) => prog.resolveField(cls, name, desc, true);
   const classes = new Map<string, JavaClass>();
   function linkClass(name: string): JavaClass {
     let cls = classes.get(name);
@@ -246,8 +243,7 @@ function makeEntry(w: World): Entry {
     initClass(cls) { linkClass(cls); const r = init(cls); return r instanceof Promise ? r.then(() => {}) : null; },
     iof(o, cls) {
       const name = classNameOf(o);
-      if (name === undefined) return false;
-      return name[0] === "[" ? name === cls || ARRAY_SUPERS.has(cls) : prog.isSubclass(name, cls);
+      return name !== undefined && assignable(prog, name, cls);
     },
     classNameOf,
     callOn: (thread, run) => processExited() || waitsEnded() ? never() as never : asThread(recOf(thread), run),

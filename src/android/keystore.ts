@@ -5,7 +5,7 @@
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { once } from "../jvm/suspend.ts";
-import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { concat, jarray } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { unbox } from "../jvm/natives/jbox.ts";
@@ -307,10 +307,10 @@ const live = (self: JKeystoreOperation) => {
   return self.op;
 };
 /** an IKeystoreOperation method, a step of the live operation */
-const operation = <A extends unknown[]>(step: (op: Op, ...a: A) => unknown) => function (this: JKeystoreOperation, ...a: A) {
+const operation = <A extends unknown[]>(step: (op: Op, ...a: A) => unknown) => waits(function (this: JKeystoreOperation, ...a: A) {
   const self = this;
   return rt.drive(keymint$(function* () { return step(live(self), ...a); }()));
-};
+});
 rt.register({ name: "webdroid/KeystoreOperation", ctor: JKeystoreOperation, sup: "android/system/keystore2/IKeystoreOperation$Stub", methods: {
   "updateAad([B)V": operation((op, aad: Int8Array) => { op.aad.push(new Uint8Array(aad)); }),
   "update([B)[B": operation((op, input: Int8Array) => { op.input.push(new Uint8Array(input)); return null; }),
@@ -367,14 +367,14 @@ const createOperation = driven(function* (d: unknown, opParams: unknown[] | null
 class JSecurityLevel extends JObj {}
 rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup: "android/system/keystore2/IKeystoreSecurityLevel$Stub", methods: {
   "generateKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[]) => rt.drive(keymint$(function* (): Gen<JObj> {
+    waits((d: unknown, _attest: unknown, params: unknown[]) => rt.drive(keymint$(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias;
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (ps.some((p) => p.tag === TAG.ATTESTATION_CHALLENGE)) throw ERR.ATTESTATION_KEYS_NOT_PROVISIONED;
       return yield* store(alias, ps, 0, yield* awaited(generateMaterial(ps)));
-    }())),
+    }()))),
   "importKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
-    (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => rt.drive(keymint$(function* (): Gen<JObj> {
+    waits((d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => rt.drive(keymint$(function* (): Gen<JObj> {
       const ps = readParams(params), alias = descriptor(d).alias, alg = algorithmOf(ps), bytes = new Uint8Array(data);
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (alg === ALG.AES || alg === ALG.HMAC) {
@@ -388,7 +388,7 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
       if (num(ps, TAG.KEY_SIZE) === undefined) extra.push({ tag: TAG.KEY_SIZE, kind: KIND.integer, v: key.type === EVP_PKEY_EC ? bitLength(key.ec.curve.p) : bitLength((key as { rsa: { n: bigint } }).rsa.n) });
       if (key.type === EVP_PKEY_EC && num(ps, TAG.EC_CURVE) === undefined) extra.push({ tag: TAG.EC_CURVE, kind: KIND.ecCurve, v: CURVE_BY_EC.indexOf(key.ec.curve.name) });
       return yield* store(alias, ps, 2, { material: marshalPrivateKey(key)!, extra, key });
-    }())),
+    }()))),
   "createOperation(Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;Z)Landroid/system/keystore2/CreateOperationResponse;":
     (d: unknown, params: unknown[]) => createOperation(d, params),
   "deleteKey(Landroid/system/keystore2/KeyDescriptor;)V": (d: unknown) => deleteKey(d),
@@ -412,7 +412,7 @@ rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup
     return setDeclared(yield newObj(KER), KER, { iSecurityLevel: e.material ? yield teeLevel() : null, metadata: yield* metadata(e) });
   }),
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
-  "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": (d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
+  "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": waits((d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
     const k = descriptor(d), list = entries();
     let e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
     if (!e) {
@@ -425,7 +425,7 @@ rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup
     e.modified = Date.now();
     if (!e.material && !e.cert && !e.chain) list.splice(list.indexOf(e), 1);
     save(list);
-  },
+  }),
   "listEntries(IJ)[Landroid/system/keystore2/KeyDescriptor;": () => listed(null),
   "listEntriesBatched(IJLjava/lang/String;)[Landroid/system/keystore2/KeyDescriptor;": (_domain: number, _ns: bigint, start: string | null) => listed(start),
   "getNumberOfEntries(IJ)I": () => entries().length,

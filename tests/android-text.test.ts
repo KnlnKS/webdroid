@@ -23,7 +23,7 @@ describe("locale-span", () => {
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
     expect(await vcall(copy, "getTextLocales", "()Landroid/os/LocaleList;")).toBe(locales);
-    expect(paintOf(copy).language).toBe("ja-JP");
+    expect((await paintOf(copy)).language).toBe("ja-JP");
     const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
     await vcall(span, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
     await vcall(parcel, "setDataPosition", "(I)V", 0);
@@ -103,7 +103,7 @@ describe("style-wrap", () => {
     expect(await vcall(second, "getUnderlying", "()Landroid/text/style/MetricAffectingSpan;")).toBe(style);
     const paint = await newPaint("android/text/TextPaint");
     await vcall(second, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    expect(paintOf(paint).textSize).toBe(23);
+    expect((await paintOf(paint)).textSize).toBe(23);
     const color = await newObj("android/text/style/ForegroundColorSpan", "(I)V", -65536);
     const colorWrapper = await wrap(color);
     expect(iof(colorWrapper, "android/text/style/MetricAffectingSpan")).toBe(false);
@@ -137,7 +137,7 @@ describe("text-appearance-span", () => {
     await vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", await scall("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "serif", 2));
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(await vcall(vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;"), "getStyle", "()I")).toBe(3);
-    expect(paintOf(paint).textSize).toBe(28);
+    expect((await paintOf(paint)).textSize).toBe(28);
     expect(await vcall(paint, "getColor", "()I")).not.toBe(0xff123456 | 0);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(await vcall(paint, "getColor", "()I")).toBe(0xff123456 | 0);
@@ -151,13 +151,13 @@ describe("text-appearance-span", () => {
     const span = await newObj("android/text/style/SuperscriptSpan", "()V");
     const paint = await newPaint("android/text/TextPaint");
     (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
-    paintOf(paint).textSize = 24;
+    (await paintOf(paint)).textSize = 24;
     const half = Math.trunc(await vcall(paint, "ascent", "()F") / 2);
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(textPaintField(paint, "baselineShift")).toBe(3 + half);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(textPaintField(paint, "baselineShift")).toBe(3 + 2 * half);
-    expect(paintOf(paint).textSize).toBe(24);
+    expect((await paintOf(paint)).textSize).toBe(24);
     expect(await vcall(span, "getSpanTypeId", "()I")).toBe(14);
     expect(iof(span, "android/text/style/MetricAffectingSpan")).toBe(true);
   });
@@ -265,7 +265,8 @@ describe("minikin", () => {
       await vcall(paint, "setTextSize", "(F)V", size);
       await vcall(paint, "setLetterSpacing", "(F)V", Math.fround(+spacing * 0.05));
       const out = new Float32Array(text.length);
-      await withFonts(() => advances(styleOf(paintOf(paint)), text, 0, text.length, out));
+      const native = await paintOf(paint);
+      await withFonts(() => advances(styleOf(native), text, 0, text.length, out));
       out.forEach((a, k) => { if (Math.abs(a - +device[k]) > 0.01) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
     }
     expect(mismatches).toEqual([]);

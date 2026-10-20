@@ -1,8 +1,8 @@
 // java.lang.String over JS string primitives: the methods implemented here, called with the string as `this`, replace their bytecode.
 
 import { rt } from "../runtime.ts";
-import { mangleMethod, charsToString, utf8 } from "../abi.ts";
-import { encodeString } from "../charset.ts";
+import { charsToString, utf8 } from "../abi.ts";
+import { decodeString, encodeString } from "../charset.ts";
 import { once } from "../suspend.ts";
 import { csText } from "./jchars.ts";
 import { stringMatches, stringReplace, stringSplit } from "./jregex.ts";
@@ -10,7 +10,10 @@ import { after, linkInit, scall, vcall } from "./jentry.ts";
 
 /** String's methods implemented here, by `name(desc)` */
 export const stringMethods = new Map<string, (this: string, ...a: any[]) => unknown>();
-const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => { stringMethods.set(sig, fn); };
+const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => {
+  if (stringMethods.has(sig)) throw new Error(`String.${sig} is registered twice`);
+  stringMethods.set(sig, fn);
+};
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }
@@ -83,7 +86,7 @@ sm("subSequence(II)Ljava/lang/CharSequence;", substring);
 sm("startsWith(Ljava/lang/String;)Z", function (s: string) { return this.startsWith(s) ? 1 : 0; });
 sm("startsWith(Ljava/lang/String;I)Z", function (s: string, i: number) { return this.startsWith(s, i) ? 1 : 0; });
 sm("endsWith(Ljava/lang/String;)Z", function (s: string) { return this.endsWith(s) ? 1 : 0; });
-sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return this.includes(jToString(s)) ? 1 : 0; });
+sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return after(csText(s ?? rt.npe()), (t: string) => this.includes(t) ? 1 : 0); });
 function javaTrim(value: string): string {
   let start = 0;
   let end = value.length;
@@ -133,12 +136,67 @@ sm("getBytes(II[BI)V", function (begin: number, end: number, dst: Int8Array, off
   if (offset < 0 || offset + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   for (let i = begin; i < end; i++) dst[offset + i - begin] = this.charCodeAt(i);
 });
+
+// ---------- String's constructors, by "<init>" key: what a compiled String factory falls back to (compiler/strings.ts), and JNI's NewObject
+/** String's checkBoundsOffCount over a byte array: the offset */
+function byteRange(bytes: Int8Array, off: number, count: number): number {
+  if (off < 0 || count < 0 || off > bytes.length - count)
+    throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
+  return off;
+}
+/** new String(char[], int, int), the constructor readers and parsers call per token */
+function charRange(chars: Uint16Array | null, off: number, len: number): string {
+  if (!chars) return rt.npe();
+  if (off < 0 || len < 0 || off > chars.length - len) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
+  return charsToString(chars, off, len);
+}
+/** the deprecated String(byte[] ascii, int hibyte, ...): each char is hibyte over a byte */
+function hibyteRange(bytes: Int8Array | null, high: number, off: number, n: number): string {
+  if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", "ascii");
+  byteRange(bytes, off, n);
+  const chars = new Uint16Array(n), hi = high << 8;
+  for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
+  return charsToString(chars, 0, n);
+}
+const utf8Range = (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", byteRange(bytes, off, n), n);
+/** a builder's text: StringBuilder and StringBuffer run from bytecode */
+const builderText = (sb: unknown) => csText(sb ?? rt.npe());
+const constructors: Record<string, (...a: any[]) => unknown> = {
+  "()V": () => "",
+  "(Ljava/lang/String;)V": (s: string) => s,
+  "(Ljava/lang/StringBuilder;)V": builderText,
+  "(Ljava/lang/StringBuffer;)V": builderText,
+  "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
+  "([CII)V": charRange,
+  // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
+  "([BB)V": (bytes: Int8Array, coder: number) => {
+    const n = coder ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
+    if (coder) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
+    else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
+    return charsToString(chars, 0, n);
+  },
+  "([BI)V": (bytes: Int8Array, high: number) => hibyteRange(bytes, high, 0, bytes?.length),
+  "([BIII)V": hibyteRange,
+  "([B)V": (bytes: Int8Array) => decodeString(bytes, "UTF-8"),
+  "([BII)V": utf8Range,
+  "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
+  "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
+  "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
+  "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
+  // code points, not chars: each element is a whole Unicode scalar
+  "([III)V": (cp: Int32Array, off: number, n: number) => {
+    let out = "";
+    for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
+    return out;
+  },
+};
+for (const desc in constructors) sm("<init>" + desc, constructors[desc]);
 // ART's string allocations, which String's constructors become
 rt.registerJnis("java/lang/StringFactory", {
-  "newStringFromBytes([BIII)Ljava/lang/String;": (b: Int8Array, high: number, off: number, n: number) => rt.newStr["([BIII)V"](b, high, off, n),
-  "newStringFromChars(II[C)Ljava/lang/String;": (off: number, n: number, chars: Uint16Array) => rt.strChars(chars, off, n),
+  "newStringFromBytes([BIII)Ljava/lang/String;": hibyteRange,
+  "newStringFromChars(II[C)Ljava/lang/String;": (off: number, n: number, chars: Uint16Array) => charRange(chars, off, n),
   "newStringFromString(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => s ?? rt.npe(),
-  "newStringFromUtf8Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => rt.newStr["([BII)V"](b, off, n),
+  "newStringFromUtf8Bytes([BII)Ljava/lang/String;": utf8Range,
   "newStringFromUtf16Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => {
     const chars = new Uint16Array(n);
     for (let i = 0; i < n; i++) chars[i] = (b[off + 2 * i] & 255) | ((b[off + 2 * i + 1] & 255) << 8);
@@ -155,7 +213,7 @@ sm("regionMatches(ILjava/lang/String;II)Z", function (toff: number, o: string, o
   if (toff < 0 || ooff < 0 || toff + len > this.length || ooff + len > o.length) return 0;
   return this.substr(toff, len) === o.substr(ooff, len) ? 1 : 0;
 });
-sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
+sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return after(csText(o ?? rt.npe()), (t: string) => this === t ? 1 : 0); });
 sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
 const intStream = (values: Int32Array) => scall("java/util/Arrays", "stream", "([I)Ljava/util/stream/IntStream;", values);
@@ -169,15 +227,6 @@ sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", funct
 sm("split(Ljava/lang/String;)[Ljava/lang/String;", function (p: string) { return stringSplit(this as string, p, 0); });
 sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: number) { return stringSplit(this as string, p, l); });
 
-const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
-/** A value's OWN toString — %s prints that, and so does every CharSequence a synchronous
- *  native is handed. A body that suspends cannot be awaited here and falls back to JS. */
-function jToString(v: unknown): string {
-  if (v === null || v === undefined) return "null";
-  if (typeof v !== "object") return String(v);
-  const r = (v as Record<string, (() => unknown) | undefined>)[M_TO_STRING]?.call(v);
-  return typeof r === "string" ? r : String(v);
-}
 function offsetCodePoints(text: string, index: number, offset: number): number {
   if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
   while (offset > 0 && index < text.length) {

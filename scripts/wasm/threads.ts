@@ -10,7 +10,7 @@ import { mountPlatform, startProcess } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 import { suspendedNatives } from "../../src/wasm/host/suspend.ts";
-import { rt } from "../../src/jvm/runtime.ts";
+import { driven, rt, type Gen } from "../../src/jvm/runtime.ts";
 import { perf } from "../../src/perf.ts";
 import { fnRunnable } from "../../src/android/mainloop.ts";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
@@ -66,11 +66,11 @@ const TH: Record<string, HostFn> = {
     })());
   },
   "await(I)I": async (x: number) => { await sleep(1); return x + 1; },
-  "driven(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) { const v: number = yield Promise.resolve(x * 3); return v + 1; } }),
-  "drivenEnters(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) {
+  "driven(I)I": driven(function* (x: number): Gen<number> { const v: number = yield Promise.resolve(x * 3); return v + 1; }),
+  "drivenEnters(I)I": driven(function* (x: number): Gen {
     const v: number = yield Promise.resolve(x), u: number = yield v + 1;
     return callbackEntry.scall("Th", "onDriven", "(I)I", u);
-  } }),
+  }),
   // async to import it as Suspending (flagged owns the plain import's report); `after` runs before it waits, where an `await` would lose the thread
   "afterEnters(I)I": async (x: number) => callbackEntry.after(sleep(1).then(() => x + 2), (v) => callbackEntry.scall("Th", "onDriven", "(I)I", v)),
   "nested(I)I": async (x: number) => (await w.entryAsync("Th", "inner", "(I)I")(x) as number) + 1,

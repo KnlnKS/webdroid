@@ -24,6 +24,8 @@ export interface TierBackend {
   /** where the realm's compiled code stands, as a harness reads it */
   status(): WasmStatus | undefined;
 }
+/** the tier once loadTier settles. Before then no Java has run: the reports (threads, status) are empty and what prepares or schedules code for the
+ *  tier does nothing, since the tier compiles what it runs on demand; only loadDex, whose classes Java would need, throws */
 let backend: TierBackend | undefined;
 export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
 export const tierStatus = (): WasmStatus | undefined => backend?.status();

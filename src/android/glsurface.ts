@@ -1,7 +1,7 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { awaited, rt, JObj, stubs, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, stubs, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
 import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -351,11 +351,11 @@ rt.register({
         const e = new JEGLSurface(); e.surf = { width: attrVal(at, 0x3057) || 1, height: attrVal(at, 0x3056) || 1, present: null, frames: 0 }; return e;
       },
     "eglCreateWindowSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljava/lang/Object;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
-      (display: unknown, _c: unknown, win: unknown) => {
+      waits((display: unknown, _c: unknown, win: unknown) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, noEglSurface);
         // no surface yet (the view has no size): EGL_NO_SURFACE, as a real EGL answers a dead ANativeWindow
         return after(windowSurface(win), (s) => s ? Object.assign(new JEGLSurface(), { surf: s }) : noEglSurface);
-      },
+      }),
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (display: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
@@ -424,10 +424,10 @@ function eglOut(array: Int32Array | null, offset: number, value: number): void {
 export function eglFailure<T>(error: number, result: T, thread = curThread): T { eglErrors.set(thread, error); return result; }
 export function takeEglError(thread = curThread): number { const error = eglErrors.get(thread) ?? 0x3000; eglErrors.delete(thread); return error; }
 const newSurface = (surf: GlSurface, owned: boolean) => eglObject("EGLSurface", handle({ surf, owned } satisfies Surf));
-const windowSurface14 = (display: JObj, config: JObj, window: unknown) => {
+const windowSurface14 = waits((display: JObj, config: JObj, window: unknown) => {
   if (!isDefault(display) || !isDefault(config)) return eglFailure(0x3005, noSurface());
   return after(windowSurface(window), (target) => target ? newSurface(target, false) : eglFailure(0x300b, noSurface()));
-};
+});
 rt.registerJnis("android/opengl/EGL14", {
   "_nativeClassInit()V": () => {
     const egl = linkClass("android/opengl/EGL14");

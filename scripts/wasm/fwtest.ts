@@ -7,22 +7,16 @@ const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 
 // imported after the policy is set: rt.register consults it, so the specs never land
-const { rt } = await import("../../src/jvm/runtime.ts");
 const { world } = await import("./lib.ts");
-const { mountPlatform, natives, nativeSource, startProcess } = await import("./harness.ts");
+const { attachHostClasses, mountPlatform, natives, startProcess } = await import("./harness.ts");
 const { ROOT } = await import("./paths.ts");
 const { PLATFORM_PATHS } = await import("../aosp.ts");
 
 await mountPlatform(ROOT);
-const w = world(PLATFORM_PATHS, { natives });
+// the exercises' modules register more host classes as they load
+const w = attachHostClasses(world(PLATFORM_PATHS, { natives }));
 const gaps = new Set<string>();
 w.onGap = (gap) => gaps.add(gap);
-const hosted = new Set<string>();
-/** the classes the host implements that have been registered since: the exercises' modules register more as they load, each when it does */
-const addHostClasses = () => { for (const spec of nativeSource.hostSpecs()) if (!hosted.has(spec.name)) { hosted.add(spec.name); w.addHostClass(spec); } };
-addHostClasses();
-const register = rt.register.bind(rt);
-rt.register = (spec) => { const r = register(spec); addHostClasses(); return r; };
 await startProcess(w);
 
 // the natives the cut classes declare, against the ones the Wasm tier binds to a host import

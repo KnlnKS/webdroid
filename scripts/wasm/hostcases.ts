@@ -20,7 +20,7 @@ rt.register({
   methods: {
     "inc()I": function (this: JCounter) { return ++this.n; },
     "get()I": function (this: JCounter) { return this.n; },
-    "getAsInt()I": "asInt",
+    "getAsInt()I": JCounter.prototype.asInt,
     "run()V": function (this: JCounter) { this.n += 100; },
     "self()Lwdtest/Counter;": function (this: JCounter) { return this; },
     "same(Lwdtest/Counter;)Z": function (this: JCounter, other: JCounter | null) { return +(this === other); },

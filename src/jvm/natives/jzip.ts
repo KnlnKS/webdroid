@@ -6,7 +6,7 @@ import { inflateSync } from "fflate";
 import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
-import { rt, type JObj, declaredField } from "../runtime.ts";
+import { rt, waits, type JObj, declaredField } from "../runtime.ts";
 import { utf8, u8 } from "../abi.ts";
 import { after } from "./jentry.ts";
 import { checkFromIndexSize } from "./jlang.ts";
@@ -61,12 +61,12 @@ rt.registerJnis("java/util/zip/Inflater", {
   "inflateBytesBytes(J[BII[BII)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
     return inflateBytes.call(this, h, view(i, io, il), view(o, oo, ol));
   },
-  "inflateBytesBuffer(J[BIIJI)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
+  "inflateBytesBuffer(J[BIIJI)J": waits(function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
     return after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, view(i, io, il), o));
-  },
-  "inflateBufferBytes(JJI[BII)J": function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
+  }),
+  "inflateBufferBytes(JJI[BII)J": waits(function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
     return after(memoryAt(input, il), (i) => inflateBytes.call(this, h, i, view(o, oo, ol)));
-  },
+  }),
   "inflateBufferBuffer(JJIJI)J": function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
     return after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, i, o)));
   },
@@ -131,10 +131,10 @@ rt.registerJnis("java/util/zip/Deflater", {
   "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary)),
   "deflateBytesBytes(J[BII[BIIII)J": (h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
     deflateBytes(h, view(i, io, il), view(o, oo, ol), flush, params),
-  "deflateBytesBuffer(J[BIIJIII)J": (h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
-    after(memoryAt(out, ol), (o) => deflateBytes(h, view(i, io, il), o, flush, params)),
-  "deflateBufferBytes(JJI[BIIII)J": (h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
-    after(memoryAt(input, il), (i) => deflateBytes(h, i, view(o, oo, ol), flush, params)),
+  "deflateBytesBuffer(J[BIIJIII)J": waits((h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
+    after(memoryAt(out, ol), (o) => deflateBytes(h, view(i, io, il), o, flush, params))),
+  "deflateBufferBytes(JJI[BIIII)J": waits((h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
+    after(memoryAt(input, il), (i) => deflateBytes(h, i, view(o, oo, ol), flush, params))),
   "deflateBufferBuffer(JJIJIII)J": (h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
     after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => deflateBytes(h, i, o, flush, params))),
   "getAdler(J)I": (h: bigint) => stream(h).adler | 0,

@@ -104,6 +104,11 @@ for (const a64 of abis) test(`${abi(a64)} FindClass, GetMethodID and the Call fa
   expect(await j.call(S.IsSameObject, await j.call(S.GetSuperclass, child), probe)).toBe(1);
   expect(await j.call(S.IsAssignableFrom, child, probe)).toBe(1);
   expect(await j.call(S.IsAssignableFrom, probe, child)).toBe(0);
+  // an array is covariant in a reference element type, and an int[] is an Object
+  const objects = await j.cls("[Ljava/lang/Object;");
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[LJniProbe$Child;"), await j.cls("[LJniProbe;"))).toBe(1);
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[[I"), objects)).toBe(1);
+  expect(await j.call(S.IsAssignableFrom, await j.cls("[I"), objects)).toBe(0);
 
   // a constructor with arguments, and an object no constructor has run on
   const ctor = await j.method(probe, "<init>", "(ILjava/lang/String;)V"), seven = await j.call(S.NewObjectA, probe, ctor, j.values(7, await j.string("seven")));
@@ -183,6 +188,10 @@ for (const a64 of abis) test(`${abi(a64)} strings cross as Java strings: UTF-8 a
   expect(mem.cstr(buf)).toBe("éllo");
   const made = await j.call(S.NewString, 0, 0);
   expect(await j.call(S.GetStringLength, made)).toBe(0);
+  // NewObject runs String's constructors: one over a builder takes its text
+  const strings = await j.cls("java/lang/String"), builders = await j.cls("java/lang/StringBuilder");
+  const builder = await j.call(S.NewObjectA, builders, await j.method(builders, "<init>", "(Ljava/lang/String;)V"), j.values(s));
+  expect(await j.utf(await j.call(S.NewObjectA, strings, await j.method(strings, "<init>", "(Ljava/lang/StringBuilder;)V"), j.values(builder)))).toBe(text);
   // Java gets the string it is given, and a string Java makes comes back as one
   const probe = await j.cls("JniProbe");
   const cat = await j.call(call("Static", "Object"), probe, await j.staticMethod(probe, "cat", "(Ljava/lang/String;I)Ljava/lang/String;"), s, 1);
