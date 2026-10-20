@@ -8,7 +8,7 @@ import { utf8 } from "../../jvm/abi.ts";
 import type { Cpu } from "../cpu.ts";
 import { stp, ptr, cstr, complete, type HostFn } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
-import { fail } from "../libc.ts";
+import { fail } from "../kernel.ts";
 import {
   AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, V4_LOOPBACK,
   parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,

@@ -7,14 +7,14 @@ import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, 
 import { E } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { fail, utf8, logLine, scanSink, kernelResult, readTs } from "./libc.ts";
-import { format, scan } from "./printf.ts";
-import { KLAYOUT } from "./syscall.ts";
+import { asWrappers, fail, kernelResult, logLine, readTs, KLAYOUT } from "./kernel.ts";
+import { format, scan, scanSink } from "./printf.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdWrite, fdDup2, javaCloseFd, javaLseekFd, javaPreadFd,
   javaTruncateFd, javaAllocateFd, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess, javaChangeFdAttributes,
   modifiedTime, AT_FDCWD, makePipe, pread, pwrite, listProcess, fillStat, localStat, S_IFDIR, S_IFREG, inoOf } from "./fs.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
+const utf8 = (s: string) => codec.enc.encode(s);
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -25,15 +25,15 @@ const pushback = new Map<number, number[]>();
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
 
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
-function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number | Promise<number> {
+function fdTemp(tpl: number, flags: number, dir: boolean): number | Promise<number> {
   const t = mem.cstr(tpl), destination = anchor(tpl);
-  if (!t.endsWith("XXXXXX")) return fail(cpu, E.INVAL);
+  if (!t.endsWith("XXXXXX")) return -E.INVAL;
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const attempt = (count: number): number | Promise<number> => {
-    if (count === 100) return fail(cpu,E.EXIST);
+    if (count === 100) return -E.EXIST;
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
-    const pending = dir ? mkdirProcess(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    const pending = dir ? mkdirProcess(name) : fdOpen(name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
     return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
   };
   return attempt(0);
@@ -89,10 +89,10 @@ function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
     if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
     return mem.u8[byte];
   };
-  return complete(fdRead(cpu, fd, byte, 1), done);
+  return complete(kernelResult(cpu, fdRead(fd, byte, 1)), done);
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
-  return complete(fdWrite(cpu, fileFd(fp), p, n), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
+  return complete(kernelResult(cpu, fdWrite(cpu, fileFd(fp), p, n)), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
 }
 function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   const b = utf8(s);
@@ -215,57 +215,62 @@ export function stdioInit(): void {
   const stdinP = mem.hostAlloc(PTR); stp(stdinP, sF); hostData("libc.so", "stdin", stdinP);
   const stdoutFp = sF + FILE.size;
 
-  const M: Record<string, HostFn> = {
-    open: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
-    creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
-    mkstemp: (cpu, a) => fdTemp(cpu, a.p(), 0, false),
-    mkostemp: (cpu, a) => fdTemp(cpu, a.p(), a.i(), false),
-    mkdtemp: (cpu, a) => { const p = a.p(), destination = anchor(p); return complete(fdTemp(cpu,p,0,true),n => n < 0 ? 0 : destination()); },
-    pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
-    pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
-    lseek64: (cpu, a) => complete(kernelResult(cpu,javaLseekFd(a.i(),Number(a.l()),a.i())),n => BigInt(n)),
-    stat: (cpu, a) => statProcess(cpu, a.str(), a.p()),
-    access: (cpu, a) => faccessatPath(cpu, AT_FDCWD, a.str(), a.i(), 0),
-    faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
-    chmod: (cpu, a) => changeProcess(cpu, a.str(), { mode: a.i() }),
-    chown: (cpu, a) => changeProcess(cpu, a.str(), { uid: a.i(), gid: a.i() }),
-    unlink: (cpu, a) => removeProcess(cpu, a.str(), false),
-    mkfifo: (cpu, a) => mknodProcess(cpu, a.str(), 0x1000 | a.i()),
-    remove: (cpu, a) => removeProcess(cpu, a.str()),
-    rename: (cpu, a) => renameProcess(cpu, a.str(), a.str()),
-    mkdir: (cpu, a) => mkdirProcess(cpu, a.str()),
-    rmdir: (cpu, a) => removeProcess(cpu, a.str(), true),
-    ftruncate64: (cpu, a) => kernelResult(cpu, javaTruncateFd(a.i(), Number(a.l()))),
-    // they report the error number itself
-    posix_fallocate: (_c, a) => complete(javaAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
-    posix_fallocate64: (_c, a) => complete(javaAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
-    sync: () => {},
-    dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
+  // the calls bionic makes straight to the kernel, which answer -1 with errno set
+  const K: Record<string, HostFn> = {
+    open: (_c, a) => fdOpen(a.str(), a.i()),
+    creat: (_c, a) => fdOpen(a.str(), 1 | O_CREAT | O_TRUNC),
+    mkstemp: (_c, a) => fdTemp(a.p(), 0, false),
+    mkostemp: (_c, a) => fdTemp(a.p(), a.i(), false),
+    pread: (_c, a) => pread(a.i(), a.p(), a.u(), a.i()),
+    pwrite: (_c, a) => pwrite(a.i(), a.p(), a.u(), a.i()),
+    lseek64: (_c, a) => complete(javaLseekFd(a.i(),Number(a.l()),a.i()),n => BigInt(n)),
+    stat: (_c, a) => statProcess(a.str(), a.p()),
+    access: (_c, a) => faccessatPath(AT_FDCWD, a.str(), a.i(), 0),
+    faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), a.i()),
+    chmod: (_c, a) => changeProcess(a.str(), { mode: a.i() }),
+    chown: (_c, a) => changeProcess(a.str(), { uid: a.i(), gid: a.i() }),
+    unlink: (_c, a) => removeProcess(a.str(), false),
+    mkfifo: (_c, a) => mknodProcess(a.str(), 0x1000 | a.i()),
+    remove: (_c, a) => removeProcess(a.str()),
+    rename: (_c, a) => renameProcess(a.str(), a.str()),
+    mkdir: (_c, a) => mkdirProcess(a.str()),
+    rmdir: (_c, a) => removeProcess(a.str(), true),
+    ftruncate64: (_c, a) => javaTruncateFd(a.i(), Number(a.l())),
+    dup2: (_c, a) => fdDup2(a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),
     epoll_wait: POLL_SYSCALLS.epoll_pwait,
-    __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(cpu, n, a.u(), "read"); return fdRead(cpu, fd, p, n); },
+    __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(cpu, n, a.u(), "read"); return fdRead(fd, p, n); },
     __write_chk: (cpu, a) => {
       const fd = a.i(), p = a.p(), n = a.va(), size = a.va();
       if (n > size || n > 0x7fffffffn) cpu.fault("fortify: write past the buffer");
       return fdWrite(cpu, fd, p, Number(n));
     },
-    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
-    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return pread(cpu, fd, p, n, off); },
-    futimens: (cpu, a) => kernelResult(cpu, javaChangeFdAttributes(a.i(), modifiedTime(a.p()))),
-    pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
-    fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
+    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return pread(fd, p, n, off); },
+    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return pread(fd, p, n, off); },
+    futimens: (_c, a) => javaChangeFdAttributes(a.i(), modifiedTime(a.p())),
     statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
     statvfs64: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs64: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
+    readlink: () => -E.INVAL,
+    symlink: () => -E.PERM, link: () => -E.PERM,
+    // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
+    utimes: (_c, a) => { const path = a.str(), times = a.p(); return changeProcess(path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
+    utime: (_c, a) => { const path = a.str(), times = a.p(); return changeProcess(path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
+  };
+  for (const [alias, name] of [["__open_2", "open"], ["lstat", "stat"]]) K[alias] = K[name];
+  Object.assign(K, { __openat_2: FS_SYSCALLS.openat, stat64: K.stat, lstat64: K.stat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });
+  const M: Record<string, HostFn> = {
+    mkdtemp: (cpu, a) => { const p = a.p(), destination = anchor(p); return complete(fdTemp(p, 0, true), (n) => { if (n >= 0) return destination(); fail(cpu, -n); return 0; }); },
+    // they report the error number itself
+    posix_fallocate: (_c, a) => complete(javaAllocateFd(a.i(), a.i(), a.i()), (r) => -r),
+    posix_fallocate64: (_c, a) => complete(javaAllocateFd(a.i(), Number(a.l()), Number(a.l())), (r) => -r),
+    sync: () => {},
+    pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
+    fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
     isatty: () => 0,
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
-    readlink: (cpu) => fail(cpu, E.INVAL),
-    symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
-    // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
-    utimes: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
-    utime: (cpu, a) => { const path = a.str(), times = a.p(); return changeProcess(cpu, path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
 
     opendir: (cpu, a) => openDir(cpu, a.str()),
     fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(cpu, f.path); },
@@ -323,16 +328,16 @@ export function stdioInit(): void {
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();
       const { o, f } = modeFlags(mode);
-      return complete(fdOpen(cpu,path,o),fd => fd<0 ? 0 : newFile(fd,f));
+      return complete(kernelResult(cpu, fdOpen(path, o)), fd => fd < 0 ? 0 : newFile(fd, f));
     },
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return openFd(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
     freopen: (cpu, a) => {
       const path=a.str(),mode=a.str(),fp=a.p(),{o,f}=modeFlags(mode);pushback.delete(fp);
-      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(fdOpen(cpu,path,o),fd => {
+      return complete(kernelResult(cpu,javaCloseFd(fileFd(fp))),()=>complete(kernelResult(cpu, fdOpen(path, o)), fd => {
         if(fd<0)return 0;files.set(fp,fd);mem.st16(fp+FILE.file,fd);mem.st16(fp+FILE.flags,f);return fp;
       }));
     },
-    tmpfile: (cpu) => { return complete(fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
+    tmpfile: (cpu) => { return complete(kernelResult(cpu, fdOpen(`/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC)), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
     fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = kernelResult(cpu, javaCloseFd(fd)); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (cpu, a) => { const fp = a.p(); return !fp || openFd(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {
@@ -346,7 +351,7 @@ export function stdioInit(): void {
       if (!pending?.length) pushback.delete(fp);
       if (used === total) return n;
       const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
-      return complete(fdRead(cpu, fileFd(fp), p + used, total - used), fin);
+      return complete(kernelResult(cpu, fdRead(fileFd(fp), p + used, total - used)), fin);
     },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; return complete(fwriteBytes(cpu, fp, p, total), written => Math.floor(written / sz)); },
     fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
@@ -417,9 +422,8 @@ export function stdioInit(): void {
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
-  for (const [alias, name] of [["__open_2", "open"], ["lstat", "stat"], ["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
-  Object.assign(M, { __openat_2: FS_SYSCALLS.openat, stat64: M.stat, lstat64: M.stat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });
+  for (const [alias, name] of [["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * FILE.size;
-  hostLib("libc.so", M);
+  hostLib("libc.so", { ...asWrappers(K), ...M });
 }

@@ -4,8 +4,6 @@
 import { mem, anchor } from "./mem.ts";
 import { PTR, complete, type HostFn } from "./host.ts";
 import { E } from "./abi.ts";
-import type { Cpu } from "./cpu.ts";
-import { fail } from "./libc.ts";
 import { openFd, installFile, fdBase, pollEvents, watchFd, O_CLOEXEC, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./fs.ts";
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 
@@ -35,7 +33,7 @@ export function pollEntries(entries: PollEntry[], timeout: number, signal?: Abor
   });
 }
 
-export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
+export function nativePoll(pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
   const entries: PollEntry[] = [];
   for (let i = 0; i < count; i++) entries.push({ fd: mem.ld32(pollfds + i * 8), events: mem.ld16u(pollfds + i * 8 + 4), revents: 0 });
   const target = anchor(pollfds);
@@ -51,8 +49,8 @@ const FD_SETSIZE = 1024;
 const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
 const setFd = (set: number, fd: number): void => { mem.st8(set + (fd >>> 3), mem.u8[set + (fd >>> 3)] | (1 << (fd & 7))); };
 /** select(2) over fd_sets, sharing readiness and wakeups with poll(2), waiting `ms` (-1: until one is ready) */
-export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): number | Promise<number> {
-  if (count < 0 || count > FD_SETSIZE) return fail(cpu, E.INVAL);
+export function nativeSelect(count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): number | Promise<number> {
+  if (count < 0 || count > FD_SETSIZE) return -E.INVAL;
   const setBytes = Math.ceil(count / (PTR * 8)) * PTR;
   const entries: PollEntry[] = [];
   for (let fd = 0; fd < count; fd++) {
@@ -64,7 +62,7 @@ export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet:
   }
   const anchored = [readSet, writeSet, exceptSet].map(anchor);
   const finish = (): number => {
-    if (entries.some((e) => e.revents & POLLNVAL)) return fail(cpu, E.BADF);
+    if (entries.some((e) => e.revents & POLLNVAL)) return -E.BADF;
     const sets = anchored.map((set) => set());
     for (const set of sets) if (set && setBytes) mem.memset(set, 0, setBytes);
     let ready = 0;
@@ -100,10 +98,10 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
   watch();
   return entry;
 }
-async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
+async function epollWait(epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
   const ep = openFd(epfd)?.epoll, deadline = performance.now() + timeout;
-  if (!ep) return fail(cpu, E.BADF);
-  if (max <= 0) return fail(cpu, E.INVAL);
+  if (!ep) return -E.BADF;
+  if (max <= 0) return -E.INVAL;
   for (;;) {
     let n = 0;
     for (const [fd, e] of ep.entries) {
@@ -124,29 +122,29 @@ async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, ti
       const timer = timeout < 0 ? undefined : setTimeout(done, remaining);
       ep.wake.add(done);
     });
-    if (openFd(epfd)?.epoll !== ep) return fail(cpu, E.BADF);
+    if (openFd(epfd)?.epoll !== ep) return -E.BADF;
   }
 }
 
 export const POLL_SYSCALLS: Record<string, HostFn> = {
-  epoll_create1: (cpu, a) => {
+  epoll_create1: (_c, a) => {
     const flags = a.i();
-    if (flags & ~O_CLOEXEC) return fail(cpu, E.INVAL);
+    if (flags & ~O_CLOEXEC) return -E.INVAL;
     return epollCreate(!!flags);
   },
-  epoll_ctl: (cpu, a) => {
+  epoll_ctl: (_c, a) => {
     const epfd = a.i(), ep = openFd(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
-    if (fd === epfd) return fail(cpu, E.INVAL);
-    if (!ep || !openFd(fd)) return fail(cpu, E.BADF);
+    if (fd === epfd) return -E.INVAL;
+    if (!ep || !openFd(fd)) return -E.BADF;
     const old = ep.entries.get(fd);
-    if (op === 1 && old) return fail(cpu, E.EXIST);
-    if ((op === 2 || op === 3) && !old) return fail(cpu, E.NOENT);
-    if (op < 1 || op > 3) return fail(cpu, E.INVAL);
+    if (op === 1 && old) return -E.EXIST;
+    if ((op === 2 || op === 3) && !old) return -E.NOENT;
+    if (op < 1 || op > 3) return -E.INVAL;
     old?.cancel();
     if (op === 2) ep.entries.delete(fd); else ep.entries.set(fd, epollWatch(ep, fd, mem.ld32(ev), mem.ld64(ev + 8)));
     for (const wake of ep.wake) wake();
     return 0;
   },
   // its sigmask is left as is
-  epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.va(), a.i(), a.i()),
+  epoll_pwait: (_c, a) => epollWait(a.i(), a.va(), a.i(), a.i()),
 };

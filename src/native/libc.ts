@@ -1,85 +1,40 @@
 // bionic libc surface: strings, memory, time, ctype, math, process stubs. An ARM32 process's
-// libc (libcInit); a 64-bit process runs bionic itself (bionic.ts). LIBC_SYSCALLS are the kernel's
-// memory mapping, time and identity calls, which both reach (syscall.ts). stdio is in stdio.ts,
-// printf/scanf in printf.ts.
+// libc (libcInit), which also answers the kernel's calls as bionic's wrappers do; a 64-bit process
+// runs bionic itself (bionic.ts). stdio is in stdio.ts, printf/scanf in printf.ts.
 
-import { mem, guestAt, wrote } from "./mem.ts";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host.ts";
+import { mem } from "./mem.ts";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp } from "./host.ts";
 import { E, strerror, PAGE_SIZE } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
-import { invalidateRange, nameThread, type Cpu } from "./cpu.ts";
+import { invalidateRange, type Cpu } from "./cpu.ts";
 import { exitGroup } from "./crash.ts";
-import { abortThread, SIGNAL_SYSCALLS } from "./signals.ts";
-import { format, scan } from "./printf.ts";
+import { abortThread } from "./signals.ts";
+import { format, scan, scanSink, snprintfInto } from "./printf.ts";
 import { stdioInit } from "./stdio.ts";
-import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs.ts";
-import { isRemoteFd } from "./process-fd.ts";
-import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread.ts";
-import { KLAYOUT, syscallEntry } from "./syscall.ts";
+import { pthreadInit } from "./pthread.ts";
+import { KERNEL_SYSCALLS, syscallEntry } from "./syscall.ts";
+import { asWrappers, fail, fillRandom, logLine, wrapped } from "./kernel.ts";
+import { mmapWith } from "./vm.ts";
 import { zlibInit } from "./zlib.ts";
 import { libmInit } from "./libm.ts";
-import { localeInit } from "./locale.ts";
-import { PROC_SYSCALLS, procInit } from "./proc.ts";
-import { NET_SYSCALLS, netInit } from "./socket/syscalls.ts";
-import { POLL_SYSCALLS } from "./poll.ts";
+import { localeInit, mbLen, wlen, wstr, WCTEST, WCTYPES } from "./locale.ts";
+import { auxv, procInit, niceOf, setNice, strncpy, strncat } from "./proc.ts";
+import { netInit } from "./socket/syscalls.ts";
 import { device } from "../shell/config.ts";
-import { procIdentity, sysconf, uname } from "../shell/procfs.ts";
-import { guestNow, wallMillis } from "../guest-clock.ts";
+import { sysconf } from "../shell/procfs.ts";
+import { wallMillis } from "../guest-clock.ts";
 import { processEnv } from "../shell/environment.ts";
 import { timersInit } from "./timers.ts";
-import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings.ts";
 /** the C locale's month and weekday names (strftime, asctime) */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** the ARM32 struct tm past its nine ints */
 export const TM = { gmtoff: 36, zone: 40, size: 44 };
-/** each of struct utsname's fields */
-const UTSNAME_FIELD = 65;
-/** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
-export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? wallMillis() : guestNow() + 1000;
-/** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
-export function readTs(p: number, unit = 1e6): number { return ldLong(p + KLAYOUT.TS_SEC) * 1000 + ldLong(p + KLAYOUT.TS_NSEC) / unit; }
-export function writeTs(p: number, ms: number, unit = 1e6): void {
-  const seconds = Math.floor(ms / 1000);
-  stLong(p + KLAYOUT.TS_SEC, seconds);
-  stLong(p + KLAYOUT.TS_NSEC, Math.floor((ms - seconds * 1000) * unit));
-}
-/** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
-export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
-function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
-/** the common "-1 and errno" return; a Java caller (no cpu) gets -errno, as the kernel returns it */
-export function fail(cpu: Cpu | null, e: number): number {
-  if (!cpu) return -e;
-  setErrno(cpu, e);
-  return -1;
-}
-/** a kernel result (-errno on failure) as libc returns it: -1 with errno set */
-export function kernelResult(cpu: Cpu | null, value: number): number;
-export function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number>;
-export function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number> {
-  return value instanceof Promise ? value.then((r) => kernelResult(cpu, r)) : value < 0 ? fail(cpu, -value) : value;
-}
-/** MAP_FAILED, pointer-wide, with errno set */
-const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
-function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }
-/** each thread's nice value, which setpriority(PRIO_PROCESS) sets (init allows every app any, RLIMIT_NICE 40) */
-const niceness = new Map<number, number>();
-const niceOf = (cpu: Cpu, who: number): number => niceness.get(who || cpu.osTid) ?? 0;
-function setNice(cpu: Cpu, who: number, nice: number): number { nice = Math.min(19, Math.max(-20, nice)); niceness.set(who || cpu.osTid, nice); return nice; }
 
 const randomWord = new Uint32Array(1);
-/** getRandomValues fills at most 64 KiB a call, and no shared view (guest memory): such a
- *  target is filled through a copy */
-export function randomBytes(target: Uint8Array): void {
-  const out = target.buffer instanceof ArrayBuffer ? target : new Uint8Array(target.length);
-  for (let off = 0; off < out.length; off += 65536) crypto.getRandomValues(out.subarray(off, off + 65536));
-  if (out !== target) target.set(out);
-}
-export function fillRandom(p: number, n: number): void { randomBytes(mem.bytes(p, n)); wrote(p, n); }
 function random32(): number { crypto.getRandomValues(randomWord); return randomWord[0] >>> 0; }
-export const utf8 = (s: string) => codec.enc.encode(s);
-export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
+const utf8 = (s: string) => codec.enc.encode(s);
 
 // ── ctype: BSD _ctype_ table (index c+1), the bit values bionic's <ctype.h> macros test
 const _U = 0x01, _L = 0x02, _N = 0x04, _S = 0x08, _P = 0x10, _C = 0x20, _X = 0x40, _B = 0x80;
@@ -120,12 +75,12 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
   if (endp) stp(endp, p);
   if (bits === 32 && big === null) {
     const max = unsigned ? 0xffffffff : 0x7fffffff;
-    if (n > (neg && !unsigned ? max + 1 : max)) { setErrno(cpu, E.RANGE); return neg && !unsigned ? -max - 1 : max; }
+    if (n > (neg && !unsigned ? max + 1 : max)) { fail(cpu, E.RANGE); return neg && !unsigned ? -max - 1 : max; }
     return !neg ? n : unsigned ? (0x100000000 - n) % 0x100000000 : 0 - n;
   }
   const v = big ?? BigInt(n), max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n;
   let r: bigint;
-  if (v > (neg && !unsigned ? max + 1n : max)) { setErrno(cpu, E.RANGE); r = neg && !unsigned ? -max - 1n : max; }
+  if (v > (neg && !unsigned ? max + 1n : max)) { fail(cpu, E.RANGE); r = neg && !unsigned ? -max - 1n : max; }
   else r = !neg ? v : unsigned ? BigInt.asUintN(bits, -v) : -v;
   return bits === 32 ? Number(r) : r;
 }
@@ -212,138 +167,6 @@ const next48 = (): void => {
   r48lo = t % 0x1000000;
 };
 
-let atRandom = 0;
-/** The auxiliary vector a process starts with: AT_PAGESZ, AT_HWCAP/AT_HWCAP2, AT_SECURE and
- *  AT_RANDOM's 16 bytes (the stack guard and setjmp cookie seed). An A64 process's AT_HWCAP has
- *  HWCAP_CRC32 alone, which the reference build's libc is compiled to assume; the other optional
- *  features stay unadvertised, steering libraries away from paths the emitter lacks. */
-export function auxv(): [number, number][] {
-  if (!atRandom) { atRandom = mem.hostAlloc(16); fillRandom(atRandom, 16); }
-  return [[6, 4096], [16, PTR === 8 ? 1 << 7 : 0], [26, 0], [23, 0], [25, atRandom]];
-}
-/** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
- *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
- *  scales by mem_unit where the byte counts would not fit */
-export function fillSysinfo(p: number): void {
-  const L = PTR, unit = L === 8 ? 1 : 4096;
-  const totalRam = device.cpu.memKb * 1024;
-  mem.memset(p, 0, L === 8 ? 112 : 64);
-  const put = (off: number, v: number) => stLong(p + off, v);
-  put(0, Math.floor(guestNow() / 1000));
-  put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
-  mem.st16(p + L * 10, 1);
-  mem.st32(p + (L === 8 ? 104 : 52), unit);
-}
-// File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
-// MAP_SHARED one is kept coherent with the file and its other mappings (mappings.ts)
-/** mmap, whose file offset `offOf` reads: an off_t, or mmap64's off64_t */
-const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, a) => {
-  const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offOf(a);
-  if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
-  const reserve = (flags & 0x20) !== 0 && prot === 0;
-  // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
-  // low and made executable later, as V8's is) must not land in a plane above it.
-  const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
-  if (!p || (flags & 0x10 && !(mem.mapFixed(hint, pages(n)) && (reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n))))) return mapFailed(cpu, E.NOMEM);
-  if (flags & 0x10) syncShared(hint, n, true);
-  if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-  if (fd !== -1 && !(flags & 0x20) && flags & 1 && isRemoteFd(fd))
-    return mapRemoteShared(BigInt(p), n, off, fd, prot).then(e => { if (!e) return p; mem.unmapVa(BigInt(p), n); return mapFailed(cpu, e); });
-  if (fd !== -1 && !(flags & 0x20)) {
-    const file = fdFile(fd), track = () => {
-      if (file) { if (flags & 1) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); else trackPrivateMap(BigInt(p), n, off, file); }
-      return p;
-    };
-    const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
-  }
-  return p;
-};
-/** the kernel's memory mapping, time and identity calls */
-export const LIBC_SYSCALLS: Record<string, HostFn> = {
-  getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
-  getppid: () => 1,
-  // the process leads its own group, as /proc/self/stat says; no other process is visible
-  getpgid: (cpu, a) => { const pid = a.i(); return pid === 0 || pid === cpu.pid ? cpu.pid : fail(cpu, E.SRCH); },
-  // PRIO_PROCESS names a thread; a process group's or user's nice stays 0
-  setpriority: (cpu, a) => { const which = a.i(), who = a.i(), nice = a.i(); if (which < 0 || which > 2) return fail(cpu, E.INVAL); if (!which) setNice(cpu, who, nice); return 0; },
-  // the kernel's answer is 20 - nice, which bionic's wrapper turns back into the nice value
-  getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? fail(cpu, E.INVAL) : 20 - (which ? 0 : niceOf(cpu, who)); },
-  uname: (_c, a) => {
-    const p = a.p();
-    const u = uname(PTR === 8), f = [u.sysname, u.nodename, u.release, u.version, u.machine, u.domainname];
-    for (let i = 0; i < f.length; i++) mem.putCstr(p + i * UTSNAME_FIELD, f[i], UTSNAME_FIELD);
-    return 0;
-  },
-  // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
-  mprotect: (cpu, a) => {
-    const va = a.va(), n = Number(a.va()), prot = a.i();
-    if (prot & 7) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
-    mem.decommitVa(va, n);
-    return 0;
-  },
-  mmap: mmapWith(offArg),
-  munmap: (cpu, a) => {
-    const va = a.va(), n = Math.ceil(Number(a.va()) / PAGE_SIZE) * PAGE_SIZE; // whole pages, as the kernel unmaps
-    if (va & BigInt(PAGE_SIZE - 1) || !n) return fail(cpu, E.INVAL);
-    syncShared(va, n, true);
-    return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
-  },
-  // A mapping shrinks in place, grows in place when the address space after it is free, and with
-  // MREMAP_MAYMOVE moves (to new_address with MREMAP_FIXED). A shared file mapping keeps its file
-  // range wherever it lands, and its new pages hold the file's bytes.
-  mremap: (cpu, a) => {
-    const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & 2 ? a.va() : 0n;
-    const mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
-    if (old & mask || fixed & mask || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
-    if (flags & 2 && fixed < old + BigInt(pages(oldSize)) && old < fixed + BigInt(pages(size))) return mapFailed(cpu, E.INVAL);
-    if (!(flags & 2) && pages(size) <= pages(oldSize)) {
-      const tail = pages(oldSize) - pages(size);
-      if (tail) { syncShared(old + BigInt(pages(size)), tail, true); mem.unmapVa(old + BigInt(pages(size)), tail); }
-      return result(old);
-    }
-    const mapping = fileMapAt(old);
-    let to = old;
-    if (flags & 2 || !mem.extendVa(old, oldSize, size)) {
-      if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
-      if (flags & 2) {
-        syncShared(fixed, size, true);
-        if (!mem.mapFixed(fixed, pages(size)) || !mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
-        invalidateRange(mem.txVa(fixed), size); mem.dropVa(fixed, size);
-        to = fixed;
-      } else {
-        const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
-        if (!moved) return mapFailed(cpu, E.NOMEM);
-        to = BigInt(moved);
-      }
-      syncShared(old, oldSize, true);
-      mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), Math.min(oldSize, size)));
-      mem.unmapVa(old, pages(oldSize));
-    } else syncShared(old, oldSize, true);
-    if (!mapping) return result(to);
-    const track = () => {
-      if (mapping.shared) trackSharedMap(to, size, mapping.off, mapping.file, mapping.writable); else trackPrivateMap(to, size, mapping.off, mapping.file);
-      return result(to);
-    };
-    if (size <= oldSize) return track();
-    const tail = contentAt(mapping.file, mapping.off + oldSize, size - oldSize);
-    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(oldSize)), bytes); return track(); };
-    return tail instanceof Promise ? tail.then(fill, () => mapFailed(cpu, E.IO)) : fill(tail);
-  },
-  // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
-  // cache, which already holds its stores, so its contents stay
-  madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
-  msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
-  mlock: () => 0, munlock: () => 0,
-  // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
-  prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) nameThread(cpu.jthread, s); } return 0; },
-  gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, wallMillis(), 1e3); return 0; },
-  clock_gettime: (_c, a) => {
-    const id = a.i(), ts = a.p();
-    writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0
-    return 0;
-  },
-  clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stLong(ts + KLAYOUT.TS_SEC, 0); stLong(ts + KLAYOUT.TS_NSEC, 1000); } return 0; },
-};
 /** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
  *  calls as well */
 export function libcInit(): void {
@@ -385,7 +208,7 @@ export function libcInit(): void {
 
   const M: Record<string, HostFn> = {
     __errno: (cpu) => cpu.errnoAddr,
-    __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
+    __set_errno: (cpu, a) => fail(cpu, a.i()),
     abort: (cpu) => abortThread(cpu),
     exit: (cpu, a) => exitGroup(cpu, a.i(), "exit"),
     _exit: (cpu, a) => exitGroup(cpu, a.i(), "_exit"),
@@ -429,7 +252,7 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mmap64: mmapWith((a) => Number(a.l())),
+    mmap64: wrapped(mmapWith((a) => Number(a.l()))),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     syscall: syscallEntry,
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
@@ -628,7 +451,7 @@ export function libcInit(): void {
     const d = a.p(), n = a.u(), value = a.i();
     mem.memset(d, value, n);
   };
-  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...M });
+  hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M });
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(TM.size), ascBuf = mem.hostAlloc(26);
   const inetBuf = mem.hostAlloc(20);
@@ -645,32 +468,6 @@ export function libcInit(): void {
   netInit();
 }
 
-const PRIO = ["", "", "V", "D", "I", "W", "E", "F", "S"];
-export function logLine(prio: number, tag: string, msg: string): void {
-  const line = `${PRIO[prio] ?? prio}/${tag}: ${msg.replace(/\n$/, "")}`;
-  if (prio >= 6) console.error("[logcat]", line); else if (prio === 5) console.warn("[logcat]", line); else console.log("[logcat]", line);
-}
-
-export function strncpy(d: number, s: number, n: number): void {
-  let i = 0;
-  for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
-  for (; i < n; i++) mem.u8[d + i] = 0;
-  wrote(d, n);
-}
-/** at most n bytes of s after d's string, then a NUL; the size of d's string with its NUL */
-export function strncat(d: number, s: number, n: number): number {
-  const dl = mem.strlen(d);
-  let i = 0;
-  for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
-  mem.u8[d + dl + i] = 0;
-  wrote(d + dl, i + 1);
-  return dl + i + 1;
-}
-export function snprintfInto(d: number, n: number, s: string): number {
-  const b = utf8(s);
-  if (n > 0) { const k = Math.min(b.length, n - 1); mem.write(d, b.subarray(0, k)); mem.st8(d + k, 0); }
-  return b.length;
-}
 function strstrAt(h: number, n: number, ci: boolean): number {
   const u8 = mem.u8, nl = mem.strlen(n), low = (c: number) => (ci && c >= 65 && c <= 90 ? c + 32 : c);
   if (!nl) return h;
@@ -696,17 +493,6 @@ function strcmpAt(x: number, y: number, n: number, ci: boolean): number {
   }
   return 0;
 }
-export function wlen(p: number): number { let n = 0; while (mem.ld32(p + n * 4)) n++; return n; }
-export function wstr(p: number, max = 0x7fffffff): string {
-  let s = "";
-  for (let i = 0; i < max; i++) { const c = mem.ld32(p + i * 4); if (!c) return s; s += String.fromCodePoint(c >>> 0 > 0x10ffff ? 0xfffd : c >>> 0); }
-  return s;
-}
-const WCTYPES = ["alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"];
-export const WCTEST: Record<string, RegExp> = {
-  alnum: /[\p{L}\p{N}]/u, alpha: /\p{L}/u, blank: /[ \t]/, cntrl: /\p{Cc}/u, digit: /\d/, graph: /[^\s\p{Cc}]/u, lower: /\p{Ll}/u,
-  print: /[^\p{Cc}]/u, punct: /\p{P}/u, space: /\s/, upper: /\p{Lu}/u, xdigit: /[0-9a-fA-F]/,
-};
 const tokSave = new Map<number, number>();
 function strtok(cpu: Cpu, s: number, delim: number): number {
   const save = tokSave.get(cpu.tid) ?? 0;
@@ -731,18 +517,4 @@ function strtokAt(s: number, delim: number): { tok: number; next: number } {
   while (u8[p] && !set[u8[p]]) p++;
   if (u8[p]) { mem.st8(p, 0); p++; }
   return { tok, next: p };
-}
-export function scanSink(a: { p(): number }) {
-  return (kind: string, v: unknown): number => {
-    const dst = a.p();
-    if (!dst) return 0;
-    if (kind === "i" || kind === "n") mem.st32(dst, v as number);
-    else if (kind === "h") mem.st16(dst, v as number);
-    else if (kind === "b") mem.st8(dst, v as number);
-    else if (kind === "l") mem.st64(dst, v as bigint);
-    else if (kind === "f") mem.stf32(dst, v as number);
-    else if (kind === "d") mem.stf64(dst, v as number);
-    else if (kind === "s") mem.putCstr(dst, v as string);
-    return 0;
-  };
 }

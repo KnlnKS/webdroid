@@ -1,7 +1,7 @@
 // One descriptor namespace shared by files, pipes, and relay-backed sockets.
 
 import { E } from "./abi.ts";
-import { logLine } from "./libc.ts";
+import { logLine } from "./kernel.ts";
 
 const claimed = new Set<number>([0, 1, 2]);
 let next = 3;

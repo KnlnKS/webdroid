@@ -4,10 +4,21 @@
 
 import { wrote, mem } from "./mem.ts";
 import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host.ts";
-import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import { format } from "./printf.ts";
 
+export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
+export function wlen(p: number): number { let n = 0; while (mem.ld32(p + n * 4)) n++; return n; }
+export function wstr(p: number, max = 0x7fffffff): string {
+  let s = "";
+  for (let i = 0; i < max; i++) { const c = mem.ld32(p + i * 4); if (!c) return s; s += String.fromCodePoint(c >>> 0 > 0x10ffff ? 0xfffd : c >>> 0); }
+  return s;
+}
+export const WCTYPES = ["alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"];
+export const WCTEST: Record<string, RegExp> = {
+  alnum: /[\p{L}\p{N}]/u, alpha: /\p{L}/u, blank: /[ \t]/, cntrl: /\p{Cc}/u, digit: /\d/, graph: /[^\s\p{Cc}]/u, lower: /\p{Ll}/u,
+  print: /[^\p{Cc}]/u, punct: /\p{P}/u, space: /\s/, upper: /\p{Lu}/u, xdigit: /[0-9a-fA-F]/,
+};
 const wput = (p: number, s: string): number => { let i = 0; for (const ch of s) mem.st32(p + 4 * i++, ch.codePointAt(0)!); mem.st32(p + 4 * i, 0); return i; };
 const cps = (s: string) => [...s].map((c) => c.codePointAt(0)!);
 
@@ -103,7 +114,7 @@ function mbsToWcs(dst: number, srcp: number, nms: number, len: number): number {
 function wcsToMbs(dst: number, srcp: number, nwc: number, len: number): number {
   const src = ldp(srcp);
   const s = wstr(src, nwc);
-  const b = utf8(s);
+  const b = codec.enc.encode(s);
   if (!dst) return b.length;
   let k = 0, i = 0;
   for (const ch of s) { const e = codec.enc.encode(ch); if (k + e.length > len) break; mem.u8.set(e, dst + k); k += e.length; i++; }

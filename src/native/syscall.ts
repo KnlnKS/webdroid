@@ -1,7 +1,7 @@
 // The kernel's system call boundary: the numbers a raw svc/swi (bionic's own wrappers) and libc's
-// syscall(2) reach. Most are served by the body of the same name in an owning module's record,
-// which answers the wrapper's way (-1 with errno set); Cpu.syscallReturn turns that into -errno.
-// The handlers here are the calls whose kernel shape differs from any wrapper's.
+// syscall(2) reach. Most are served by the body of the same name in an owning module's record
+// (KERNEL_SYSCALLS); each answers -errno on failure, as the kernel does. The handlers here are the
+// calls no wrapper of the ARM32 libc shares.
 
 import { mem, anchor } from "./mem.ts";
 import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
@@ -11,7 +11,8 @@ import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu.ts";
 import { exitGroup, installDebuggerdHandlers } from "./crash.ts";
 import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals.ts";
 import { writeSiginfo } from "./sigframe.ts";
-import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, kernelResult, readTs } from "./libc.ts";
+import { fillRandom, kernelResult, readTs, setKernelLayout } from "./kernel.ts";
+import { VM_SYSCALLS } from "./vm.ts";
 import { FS_SYSCALLS, fsInit, faccessatPath, getdents64, javaAllocateFd } from "./fs.ts";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread.ts";
 import { NET_SYSCALLS } from "./socket/syscalls.ts";
@@ -20,17 +21,8 @@ import { PROC_SYSCALLS } from "./proc.ts";
 import { TIMER_SYSCALLS } from "./timers.ts";
 import { device } from "../shell/config.ts";
 
-/** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
-const KERNEL32 = {
-  STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
-  ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, STATFS_SIZE: 88,
-};
-const KERNEL64: typeof KERNEL32 = {
-  STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
-  ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
-};
-/** the process ABI's kernel structs, chosen by kernelInit */
-export let KLAYOUT = KERNEL32;
+/** the kernel's calls by name, which the ARM32 libc's wrappers of the same names answer too */
+export const KERNEL_SYSCALLS: Record<string, HostFn> = { ...VM_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
 
 /** served by the body of the same arguments (an offset in a register on LP64 makes mmap direct;
  *  ILP32's mmap2 counts pages and _llseek splits the offset, so neither is in its table) */
@@ -42,13 +34,13 @@ const SAME64: Record<number, string> = {
   68: "pwrite64", 71: "sendfile", 78: "readlinkat", 79: "fstatat", 80: "fstat", 82: "fsync", 83: "fdatasync",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime", 88: "utimensat", 90: "capget", 101: "nanosleep",
   107: "timer_create", 108: "timer_gettime", 109: "timer_getoverrun", 110: "timer_settime", 111: "timer_delete",
-  113: "clock_gettime", 114: "clock_getres", 115: "clock_nanosleep", 120: "sched_getscheduler", 124: "sched_yield",
+  113: "clock_gettime", 114: "clock_getres", 115: "clock_nanosleep", 120: "sched_getscheduler", 121: "sched_getparam", 122: "sched_setaffinity", 124: "sched_yield",
   129: "kill", 133: "sigsuspend", 131: "tgkill", 132: "sigaltstack", 134: "rt_sigaction", 140: "setpriority", 141: "getpriority", 155: "getpgid",
   160: "uname", 163: "getrlimit", 164: "setrlimit", 166: "umask", 167: "prctl", 169: "gettimeofday", 173: "getppid",
-  174: "getuid", 175: "geteuid", 176: "getgid", 177: "getegid", 198: "socket", 199: "socketpair", 200: "bind", 201: "listen",
+  174: "getuid", 175: "geteuid", 176: "getgid", 177: "getegid", 179: "sysinfo", 198: "socket", 199: "socketpair", 200: "bind", 201: "listen",
   202: "accept", 203: "connect", 204: "getsockname", 205: "getpeername", 206: "sendto", 207: "recvfrom", 208: "setsockopt",
   209: "getsockopt", 210: "shutdown", 211: "sendmsg", 212: "recvmsg", 215: "munmap", 216: "mremap", 222: "mmap",
-  226: "mprotect", 227: "msync", 228: "mlock", 229: "munlock", 233: "madvise", 242: "accept4", 261: "prlimit64", 267: "syncfs",
+  226: "mprotect", 227: "msync", 228: "mlock", 229: "munlock", 232: "mincore", 233: "madvise", 242: "accept4", 261: "prlimit64", 267: "syncfs",
   276: "renameat", // renameat2, its flags unread
 };
 const SAME32: Record<number, string> = {
@@ -56,6 +48,7 @@ const SAME32: Record<number, string> = {
   350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
   221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 145: "readv", 146: "writev", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
   78: "gettimeofday", 91: "munmap", 125: "mprotect", 132: "getpgid", 174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
+  116: "sysinfo", 241: "sched_setaffinity",
 };
 
 const millis = (ts: number): number => (ts ? readTs(ts) : -1);
@@ -63,46 +56,44 @@ const millis = (ts: number): number => (ts ? readTs(ts) : -1);
 const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
 
 const A64: Record<number, HostFn> = {
-  47: (cpu, a) => {                                                              // fallocate: mode 0 grows the file
+  47: (_c, a) => {                                                              // fallocate: mode 0 grows the file
     const fd = a.i(), mode = a.i(), off = Number(a.l()), len = Number(a.l());
-    return mode ? fail(cpu, E.NOTSUP) : kernelResult(cpu, javaAllocateFd(fd, off, len));
+    return mode ? -E.NOTSUP : javaAllocateFd(fd, off, len);
   },
-  48: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), 0),                 // faccessat has no flags
-  61: (cpu, a) => getdents64(cpu, a.i(), a.p(), a.u()),
-  72: (cpu, a) => {                                                              // pselect6: a timespec, and a sigmask left as is
+  48: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),                 // faccessat has no flags
+  61: (_c, a) => getdents64(a.i(), a.p(), a.u()),
+  72: (_c, a) => {                                                              // pselect6: a timespec, and a sigmask left as is
     const n = a.i(), r = a.p(), w = a.p(), x = a.p(), ts = a.p();
-    return nativeSelect(cpu, n, r, w, x, millis(ts));
+    return nativeSelect(n, r, w, x, millis(ts));
   },
-  73: (cpu, a) => { const fds = a.p(), n = a.u(), ts = a.p(); return nativePoll(cpu, fds, n, millis(ts)); }, // ppoll
+  73: (_c, a) => { const fds = a.p(), n = a.u(), ts = a.p(); return nativePoll(fds, n, millis(ts)); }, // ppoll
   93: (cpu) => { cpu.finished = true; return Promise.resolve(0); },               // exit: this thread
   94: (cpu, a) => exitGroup(cpu, a.i(), "exit_group"),
   96: (cpu, a) => { cpu.clearChildTid = a.va(); return cpu.osTid; },               // set_tid_address
   98: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
   99: () => 0,                                                                   // set_robust_list: no process-shared robust mutexes to recover
-  121: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },                     // sched_getparam: SCHED_OTHER's priority
-  119: (cpu, a) => { a.i(); const policy = a.i() & ~0x40000000; return policy === 0 || policy === 3 || policy === 5 ? 0 : fail(cpu, E.PERM); }, // sched_setscheduler: the normal policies; real-time needs CAP_SYS_NICE
-  122: () => 0,                                                                  // sched_setaffinity: one core, nothing to pin
-  123: (cpu, a) => {                                                             // sched_getaffinity
+  119: (_c, a) => { a.i(); const policy = a.i() & ~0x40000000; return policy === 0 || policy === 3 || policy === 5 ? 0 : -E.PERM; }, // sched_setscheduler: the normal policies; real-time needs CAP_SYS_NICE
+  123: (_c, a) => {                                                              // sched_getaffinity
     const pid = a.i(), n = a.u(), set = a.p();
-    if (n < PTR || pid < 0) return fail(cpu, E.INVAL);
+    if (n < PTR || pid < 0) return -E.INVAL;
     mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1);
     return PTR;
   },
-  274: (cpu, a) => {                                                             // sched_setattr: as sched_setscheduler
+  274: (_c, a) => {                                                             // sched_setattr: as sched_setscheduler
     const pid = a.i(), attr = a.p(), flags = a.u(), size = attr ? mem.ld32(attr) || SCHED_ATTR_SIZE_VER0 : 0;
-    if (pid < 0 || !attr || flags) return fail(cpu, E.INVAL);
-    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) { mem.st32(attr, SCHED_ATTR_SIZE); return fail(cpu, E.TOOBIG); }
+    if (pid < 0 || !attr || flags) return -E.INVAL;
+    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) { mem.st32(attr, SCHED_ATTR_SIZE); return -E.TOOBIG; }
     const policy = mem.ld32(attr + 4);
-    return policy === 0 || policy === 3 || policy === 5 ? 0 : fail(cpu, policy <= 2 || policy === 6 ? E.PERM : E.INVAL);
+    return policy === 0 || policy === 3 || policy === 5 ? 0 : -(policy <= 2 || policy === 6 ? E.PERM : E.INVAL);
   },
-  275: (cpu, a) => {                                                             // sched_getattr: SCHED_OTHER at nice 0
+  275: (_c, a) => {                                                             // sched_getattr: SCHED_OTHER at nice 0
     const pid = a.i(), attr = a.p(), size = a.u(), flags = a.u();
-    if (pid < 0 || flags || size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) return fail(cpu, E.INVAL);
+    if (pid < 0 || flags || size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) return -E.INVAL;
     // the kernel's struct, its size the smaller of the caller's and its own, the rest zero
     mem.memset(attr, 0, size); mem.st32(attr, Math.min(size, SCHED_ATTR_SIZE));
     return 0;
   },
-  130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); return signalThread(cpu, t, sig); }, // tkill
+  130: (_c, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return -E.SRCH; return signalThread(t, sig); }, // tkill
   137: (cpu, a) => {                                                             // rt_sigtimedwait
     const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
@@ -113,41 +104,30 @@ const A64: Record<number, HostFn> = {
       return taken.sig;
     };
     const now = take();
-    if (now || ms === 0) return now || fail(cpu, E.AGAIN);
+    if (now || ms === 0) return now || -E.AGAIN;
     return new Promise<number>((resolve) => {
       const done = (r: number) => { cpu.sigQueued = null; unparkTimeout(timer); resolve(r); };
-      const timer = ms < 0 ? undefined : parkTimeout(() => done(fail(cpu, E.AGAIN)), ms);
+      const timer = ms < 0 ? undefined : parkTimeout(() => done(-E.AGAIN), ms);
       cpu.sigQueued = () => { const sig = take(); if (sig) done(sig); };
     });
   },
   168: (_c, a) => { const cpuOut = a.p(), node = a.p(); if (cpuOut) mem.st32(cpuOut, 0); if (node) mem.st32(node, 0); return 0; }, // getcpu
   172: (cpu) => cpu.pid,
   178: (cpu) => cpu.osTid,
-  179: (_c, a) => { fillSysinfo(a.p()); return 0; },
   220: (cpu, a) => { const flags = a.u(), stack = a.va(), ptid = a.p(), tls = a.va(), ctid = a.p(); return cloneThread(cpu, flags, stack, ptid, tls, ctid); },
-  232: (cpu, a) => {                                                             // mincore
-    const addr = a.va(), len = Number(a.va()), vec = a.p();
-    if (addr & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(len) || len <= 0) return fail(cpu, E.INVAL);
-    for (let i = 0; i < Math.ceil(len / PAGE_SIZE); i++) {
-      const resident = mem.residentVa(addr + BigInt(i * PAGE_SIZE));
-      if (resident < 0) return fail(cpu, E.NOMEM);
-      mem.st8(vec + i, resident);
-    }
-    return 0;
-  },
-  260: (cpu) => fail(cpu, E.CHILD),                                              // wait4: no guest child exists
+  260: () => -E.CHILD,                                              // wait4: no guest child exists
   240: (cpu, a) => {                                                             // rt_tgsigqueueinfo: the info is not carried
     const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i();
-    if (pid !== cpu.pid || !t || t.finished) return fail(cpu, E.SRCH);
-    return signalThread(cpu, t, sig);
+    if (pid !== cpu.pid || !t || t.finished) return -E.SRCH;
+    return signalThread(t, sig);
   },
   270: (cpu, a) => {                                                             // process_vm_readv, of this process: a crash reporter's safe read
     const pid = a.i(), local = a.p(), nLocal = a.u(), remote = a.p(), nRemote = a.u();
-    if (pid !== cpu.pid) return fail(cpu, E.SRCH);
+    if (pid !== cpu.pid) return -E.SRCH;
     const iov = (at: number, n: number) => Array.from({ length: n }, (_, i) => ({ va: mem.ld64(at + i * 16), len: Number(mem.ld64(at + i * 16 + 8)) }));
     const chunks: Uint8Array[] = [];
     for (const { va, len } of iov(remote, nRemote)) {
-      try { if (len) chunks.push(mem.bytes(mem.txVa(va & 0x00ffffffffffffffn), len).slice()); } catch { if (!chunks.length) return fail(cpu, E.FAULT); break; }
+      try { if (len) chunks.push(mem.bytes(mem.txVa(va & 0x00ffffffffffffffn), len).slice()); } catch { if (!chunks.length) return -E.FAULT; break; }
     }
     let moved = 0, at = 0, chunk = 0;
     for (const { va, len } of iov(local, nLocal)) {
@@ -163,7 +143,7 @@ const A64: Record<number, HostFn> = {
   278: (_c, a) => { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; }, // getrandom
 };
 const A32: Record<number, HostFn> = {
-  240: A64[98], 224: A64[178], 20: A64[172], 384: A64[278], 241: A64[122], 242: A64[123], 116: A64[179],
+  240: A64[98], 224: A64[178], 20: A64[172], 384: A64[278], 242: A64[123],
   // ARM's raw faccessat has three arguments; libc's faccessat wrapper has a fourth flags argument
   334: A64[48],
 };
@@ -185,15 +165,14 @@ let table: (HostFn | undefined)[] = [];
  *  syscall table and its file system's first descriptors. */
 export function kernelInit(): void {
   const wide = PTR === 8;
-  KLAYOUT = wide ? KERNEL64 : KERNEL32;
-  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
+  setKernelLayout(wide);
   table = [];
   for (const [nr, name] of Object.entries(wide ? SAME64 : SAME32)) {
-    if (!byName[name]) throw new Error(`kernel: no body for ${name}`);
-    table[+nr] = byName[name];
+    if (!KERNEL_SYSCALLS[name]) throw new Error(`kernel: no body for ${name}`);
+    table[+nr] = KERNEL_SYSCALLS[name];
   }
   for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
-  markKernelEntries([...Object.keys(byName), ...WRAPPERS, "syscall"]);
+  markKernelEntries([...Object.keys(KERNEL_SYSCALLS), ...WRAPPERS, "syscall"]);
   setRawSyscall(rawSyscall);
   installDebuggerdHandlers();
   fsInit();
@@ -204,7 +183,7 @@ export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promis
   const fn = table[nr];
   if (fn) return fn(cpu, a);
   calledMissing.add("syscall " + nr);
-  return fail(cpu, E.NOSYS);
+  return -E.NOSYS;
 }
-/** libc's syscall(2) */
-export const syscallEntry: HostFn = (cpu, a) => rawSyscall(cpu, a.i(), a);
+/** libc's syscall(2), -1 with errno set on failure */
+export const syscallEntry: HostFn = (cpu, a) => kernelResult(cpu, rawSyscall(cpu, a.i(), a));

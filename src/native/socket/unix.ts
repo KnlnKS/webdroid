@@ -7,7 +7,7 @@
 
 import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
-import { logLine } from "../libc.ts";
+import { logLine } from "../kernel.ts";
 import { complete } from "../host.ts";
 import { openFd, holdFile, dropFile, installSocket, naming, POLLIN, POLLERR, POLLHUP, POLLOUT, type OpenFile } from "../fs.ts";
 import { procIdentity } from "../../shell/procfs.ts";

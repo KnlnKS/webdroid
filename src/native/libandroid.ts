@@ -15,7 +15,7 @@ import { nativePoll } from "./poll.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 import { nativeAssets } from "../android/res.ts";
 import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os.ts";
-import { kernelResult } from "./libc.ts";
+import { kernelResult } from "./kernel.ts";
 
 // ── ANativeWindow: window.h's struct per surface, as a library built against <system/window.h> calls its function pointers
 // (Filament's perform(NATIVE_WINDOW_GET_NEXT_FRAME_ID)). The window has no buffers to dequeue: its frames come from EGL or lock/unlockAndPost.
@@ -170,7 +170,7 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint
   try {
     for (let i = 0; i < entries.length; i++) { mem.st32(pollfds + i * 8, entries[i][0]); mem.st16(pollfds + i * 8 + 4, pollEvents(entries[i][1].events)); }
     l.wake = new AbortController();
-    await nativePoll(cpu, pollfds, entries.length, l.woken ? 0 : ms, l.wake.signal);
+    await nativePoll(pollfds, entries.length, l.woken ? 0 : ms, l.wake.signal);
     l.wake = null;
     const woken = l.woken;
     l.woken = false;

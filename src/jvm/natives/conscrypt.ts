@@ -10,7 +10,7 @@ import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest.ts";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers.ts";
 import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio.ts";
 import { memoryAt } from "./jmemory.ts";
-import { randomBytes } from "../../native/libc.ts";
+import { randomBytes } from "../../native/kernel.ts";
 import { after, scall } from "./jentry.ts";
 import { concat, i8, jarray, u8 } from "../abi.ts";
 import {
