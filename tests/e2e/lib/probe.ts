@@ -480,7 +480,7 @@ function installProbe(cfg: ProbeConfig): void {
       newPlaceholders: fresh("placeholders", [...wd.rt.placeholders, ...snapshot?.placeholders ?? []]),
       nativeRequired: fresh("native", [...wd.nativeRequirements(), ...snapshot?.nativeRequired ?? []]),
       newErrors: fresh("errors", [...wd.logs as string[], ...workerErrors].filter((l) => ERROR_LINE.test(l))),
-      web: [...wd.web() as StepResult["web"], ...snapshot?.web ?? []].map(({ url, title, loaded }) => ({ url, title, loaded })),
+      web: ((snapshot?.web ?? []) as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),
       uiTree,
       frames,
     };

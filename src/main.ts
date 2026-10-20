@@ -23,7 +23,6 @@ import { rt } from "./jvm/runtime.ts";
 import { appHost } from "./android/apphost.ts";
 import { guestClockControl } from "./guest-clock.ts";
 import { native } from "./native/debug.ts";
-import { webViewInfo } from "./android/webframes.ts";
 import { packagesWithData, removePackageData } from "./shell/packagedata.ts";
 import { clearUserData, deletePackage } from "./android/appdata.ts";
 import { jitStats } from "./native/core.ts";
@@ -191,8 +190,6 @@ const wd = {
   visibleWorkerProcesses: (ms = 1500) => visibleWorkerProcesses(processBroker(), ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotate(orientation === "landscape"),
-  // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
-  web: () => webViewInfo(),
   // the shown processes' windows bottom to top, then the system windows above them
   uiTree: async (): Promise<Awaited<ReturnType<WorkerControl["uiTree"]>>> => {
     const nodes = [];
