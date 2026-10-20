@@ -129,8 +129,10 @@ export interface CompileService {
   submit(w: World, slot: number): boolean | "later";
   /** the World has first-tier units to merge (Tiering.mergeJob), which the service takes when no second-tier job waits */
   merge(w: World): void;
-  /** dex files were added to a defining namespace, or (null) something the service cannot follow was: it stops serving */
-  added(dexes: DexFile[] | null, loader?: Loader): void;
+  /** dex files were added to a defining namespace */
+  added(dexes: DexFile[], loader?: Loader): void;
+  /** something the service cannot follow was added: a started service stops serving */
+  retire(reason: string): void;
   namespaces(): void;
   proxy(definition: ProxyDefinition): void;
 }

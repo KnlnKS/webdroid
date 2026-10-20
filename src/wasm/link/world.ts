@@ -334,7 +334,7 @@ export class World {
   /** whether the guest memory is shared, which a module that imports it must declare */
   get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
-  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.added(null); }
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.retire(`host class ${spec.name} was added`); }
   /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
   private settlingHosts = false;
@@ -347,7 +347,7 @@ export class World {
     // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
     if (proxy) {
       this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
-    } else if (!this.settlingHosts) this.opts.compiler?.added(null);
+    } else if (!this.settlingHosts) this.opts.compiler?.retire(`class ${jc.name} was added without a dex`);
     this.assumptions.joined(this.cha.index([jc.name]));
     this.loaded([jc.name]);
   }
