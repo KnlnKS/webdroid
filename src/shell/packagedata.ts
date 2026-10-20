@@ -9,6 +9,7 @@ import { keystoreData } from "../android/keystore.ts";
 import { uriGrantData } from "../android/urigrants.ts";
 import { legacySnapshotData } from "../android/sqlite.ts";
 import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
+import { jobData } from "../android/job.ts";
 import { installData, knownUid, packages } from "../android/packages.ts";
 import { installedPath } from "../android/pm.ts";
 import { forgetPackage } from "./packages.ts";
@@ -26,7 +27,7 @@ export type PackageState = {
 };
 /** in the order they clear: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [
-  broker.alarms, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
+  broker.alarms, jobData, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
   broker.files, webData, broker.intents, broker.accounts, exitRecordData, installData,
