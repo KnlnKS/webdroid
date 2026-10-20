@@ -264,7 +264,7 @@ export class WebViewChromium extends JObj {
       const intercept = classNameOf(this.client) !== "android/webkit/WebViewClient";
       this.intercepting = intercept;
       const remote = this.hold.remote = new WebBridge(weakIfaces(callbacks.ifaces),
-        intercept ? callbacks.intercept : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
+        intercept ? callbacks.intercept : undefined, webRenderer(webOrigin(e)));
       this.hold.ends.push(el.ready(remote.id, callbacks.ready));
       void this.jar.then((jar) => {
         if (this.hold.remote === remote) this.hold.ends.push(jar.watch(callbacks.cookies(jar)));

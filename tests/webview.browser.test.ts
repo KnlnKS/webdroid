@@ -738,7 +738,7 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
       const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
         import {callProxy} from '${location.origin}/process-port.js';
         onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);webStorageTransport.calls=()=>proxy.endpoint;
-          const [a,b]=await Promise.all([webRenderer('ignored-wire-package','https://one.example'),webRenderer('ignored-wire-package','https://two.example')]);
+          const [a,b]=await Promise.all([webRenderer('https://one.example'),webRenderer('https://two.example')]);
           postMessage({a,b,local:typeof localStorage});};`;
       const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
       try {
