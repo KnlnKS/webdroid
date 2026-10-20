@@ -16,7 +16,7 @@ import { mergeInstall } from "../src/shell/install.ts";
 import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
 import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";
 import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
-import { hostedService } from "../src/android/binder.ts";
+import { hostedService, notConnected } from "../src/android/binder.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
 import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
@@ -28,8 +28,8 @@ import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/pro
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
-import { alarmTransport } from "../src/android/alarm.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { useAlarmScheduler } from "../src/android/alarm.ts";
+import { callProxy } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { scall, bootApp, packageRecord } from "./java.ts";
@@ -372,17 +372,17 @@ describe("pending-intents", () => {
       operation.intent.bytes.fill(0);
       expect(await vcall(await decodeIntent(broker.intents.get(id)!.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
       expect(await other.pendingCancel(id).catch(error => error.javaClass)).toBe("java/lang/SecurityException");
-      // Alarm ownership is canonical: closing a caller does not cancel its scheduled operation.
+      // An alarm is system_server's: its creator's death does not cancel its operation.
       let receiveAlarm!: (request: unknown) => void;
       const delivery = new Promise(resolve => receiveAlarm = resolve);
-      await creator.alarmSchedule(id,2,uptimeMillis()+50,0);
+      broker.alarms.schedule(id,2,uptimeMillis()+50,0);
       broker.fail(7701,"normal caller fixture death",NOT_CRASHED);
       broker.register(PKG,PKG + ":owner",7704);
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
       expect(await sibling.pendingKind(id)).toBe("activity");
-      await sibling.alarmCancel(id);
+      broker.alarms.cancel(id);
       await sibling.pendingCancel(id);
       expect(await sibling.pendingCreator(id)).toBeNull();
       const single = (await sibling.pendingCreate(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
@@ -397,20 +397,14 @@ describe("pending-intents", () => {
 
   test("PendingIntent reports its stored operation type", async () => {
     const context = await app(), intent = await newIntent();
-    const owner = { ...pendingTransport }, alarms = { ...alarmTransport }, { port1, port2 } = new MessageChannel();
+    const broker = new ProcessBroker(), { pid } = broker.register(PKG, PKG, 4321);
+    const client = callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods), records = client.endpoint, owner = { ...pendingTransport };
     let release!: () => void, entered!: () => void;
     const waiting = new Promise<void>(resolve => { entered = resolve; });
     const acknowledgment = new Promise<void>(resolve => { release = resolve; });
-    const stop = serveCalls(port1, { ...owner, cancel: async (id: number) => { entered(); await acknowledgment; await owner.cancel(id); },
-      alarmSchedule: alarms.schedule, alarmCancel: alarms.cancel });
-    type Calls = { [K in keyof PendingAccess]: (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> } & {
-      alarmSchedule(id: number, type: number, at: number, interval: number): Promise<void>;
-      alarmCancel(id: number): Promise<void>;
-    };
-    const client = callProxy<Calls>(port2, ["create", "cancel", "send", "operation", "kind", "flags", "creator", "alarmSchedule", "alarmCancel"]);
-    Object.assign(pendingTransport, Object.fromEntries(Object.keys(owner).map(name => [name, client.endpoint[name as keyof PendingAccess]])));
-    alarmTransport.schedule = client.endpoint.alarmSchedule;
-    alarmTransport.cancel = client.endpoint.alarmCancel;
+    Object.assign(pendingTransport, { create: records.pendingCreate, send: records.pendingSend, operation: records.pendingOperation, kind: records.pendingKind,
+      flags: records.pendingFlags, creator: records.pendingCreator, cancel: async (id: number) => { entered(); await acknowledgment; await records.pendingCancel(id); } } satisfies PendingAccess);
+    useAlarmScheduler(broker.alarms);
     try {
       const path = "/data/data/test/pending-fd.bin";
       vfs.write(path, Uint8Array.of(7));
@@ -449,7 +443,8 @@ describe("pending-intents", () => {
       const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
       expect(iof(error, "android/app/PendingIntent$CanceledException")).toBe(true);
     } finally {
-      release(); client.close(); stop(); Object.assign(pendingTransport, owner); Object.assign(alarmTransport, alarms);
+      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmScheduler({ schedule: notConnected, cancel: notConnected });
+      broker.fail(pid, "pending fixture cleanup", NOT_CRASHED); broker.intents.remove(PKG);
     }
   });
 });

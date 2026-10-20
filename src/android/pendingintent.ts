@@ -1,10 +1,9 @@
 import { awaited, type JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { type JIntent, newIntent, putExtra } from "./intent.ts";
-import { PROCESS_NAME, PROCESS_UID } from "./os.ts";
-import { exportBinder, importBinder, type ParcelData } from "./binder.ts";
-import { encodeIntent, decodeIntent, intentCodec } from "./intentipc.ts";
-import { PendingIntents, type PendingOperation } from "../shell/pendingintents.ts";
+import { exportBinder, importBinder, notConnected, type ParcelData } from "./binder.ts";
+import { encodeIntent, decodeIntent } from "./intentipc.ts";
+import type { PendingOperation } from "../shell/pendingintents.ts";
 import { broadcastIntent } from "./server/broadcastqueue.ts";
 import { startActivityFor } from "./server/atm.ts";
 import { startService } from "./server/activeservices.ts";
@@ -24,7 +23,6 @@ export const executePendingIntent = driven(function* (operation: PendingOperatio
     yield startActivityFor(thisApp(), intent);
   } else yield startService(intent, null, operation.kind === "foreground-service", operation.pkg);
 });
-export const localPendingIntents = new PendingIntents(intentCodec, executePendingIntent);
 export type PendingAccess = {
   create(pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]): Promise<number | null>;
   cancel(id: number): void | Promise<void>;
@@ -34,18 +32,9 @@ export type PendingAccess = {
   flags(id: number): number | Promise<number>;
   creator(id: number): { pkg: string; uid: number } | null | Promise<{ pkg: string; uid: number } | null>;
 };
+/** ActivityManagerService's PendingIntentController: the broker's records, which every process asks */
 export const pendingTransport: PendingAccess = {
-  create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]) =>
-    localPendingIntents.create({ pkg, kind, code, flags, intent, intents, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
-  cancel: (id: number) => localPendingIntents.cancel(id),
-  send: (id: number, fill: ParcelData | null) => localPendingIntents.send(id, fill),
-  operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
-  kind: (id: number): PendingOperation["kind"] | null => localPendingIntents.get(id)?.kind ?? null,
-  flags: (id: number): number => localPendingIntents.get(id)?.flags ?? 0,
-  creator: (id: number): { pkg: string; uid: number } | null => {
-    const operation = localPendingIntents.get(id);
-    return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
-  },
+  create: notConnected, cancel: notConnected, send: notConnected, operation: notConnected, kind: notConnected, flags: notConnected, creator: notConnected,
 };
 function targetId(target: unknown): number {
   const handle = exportBinder(target);

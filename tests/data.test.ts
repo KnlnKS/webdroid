@@ -14,7 +14,6 @@ import { serviceTransport } from "../src/android/server/activeservices.ts";
 import { providerProcesses } from "../src/android/server/am.ts";
 import { broadcastTransport } from "../src/android/server/broadcastqueue.ts";
 import { pendingTransport } from "../src/android/pendingintent.ts";
-import { alarmTransport } from "../src/android/alarm.ts";
 import { activityTransport } from "../src/android/server/atm.ts";
 import { newIntent } from "../src/android/intent.ts";
 import { decodeIntent } from "../src/android/intentipc.ts";
@@ -171,7 +170,7 @@ test("Worker activity commands retain local results across reentrant replies and
   await bootApp(owner);
   const previousLocation = {...locationTransport};
   const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
-  const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
+  const previousPending = {...pendingTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousPaths = filePathTransport.calls,
     previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
@@ -224,7 +223,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;
     Object.assign(locationTransport,previousLocation);
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
-    Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);
+    Object.assign(pendingTransport,previousPending);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
     filePathTransport.calls = previousPaths; for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors); vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);

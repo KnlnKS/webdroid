@@ -557,6 +557,5 @@ rt.register({ name: "webdroid/UiModeManagerService", ctor: class extends JObj {}
 } });
 
 hostStub("user", "webdroid/UserManagerService");
-hostStub("alarm", "webdroid/AlarmManagerService");
 hostStub("vibrator_manager", "webdroid/VibratorManagerService");
 hostStub("uimode", "webdroid/UiModeManagerService");

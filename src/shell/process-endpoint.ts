@@ -7,7 +7,7 @@ import { filePathTransport } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts.ts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
-import { alarmTransport } from "../android/alarm.ts";
+import { useAlarmScheduler } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
 import { PROCESS_PID, processTransport } from "../android/os.ts";
@@ -47,7 +47,7 @@ const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().b
 const location = remoteLocation(brokerCalls);
 const life = remoteProcessLife(brokerCalls, logUncaught);
 /** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
- *  and lives, SQLite, cookies, locations, PendingIntents, alarms and service starts */
+ *  and lives, SQLite, cookies, locations, PendingIntents and service starts */
 function connectCommandTransports(): void {
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
@@ -76,8 +76,6 @@ function connectCommandTransports(): void {
   pendingTransport.kind = id => brokerCalls().pendingKind(id);
   pendingTransport.flags = id => brokerCalls().pendingFlags(id);
   pendingTransport.creator = id => brokerCalls().pendingCreator(id);
-  alarmTransport.schedule = (id, type, at, interval) => brokerCalls().alarmSchedule(id, type, at, interval);
-  alarmTransport.cancel = id => brokerCalls().alarmCancel(id);
   const remoteStarts = {
     created: (cls: string, intent: ParcelData) => brokerCalls().serviceCreated(cls, intent),
     destroyed: (cls: string) => brokerCalls().serviceDestroyed(cls),
@@ -190,6 +188,7 @@ export function connectProcess(): ProcessEndpoint {
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
+  useAlarmScheduler(broker.alarms);
   const stopAccounts = useAccountStore(broker.accounts);
   if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
   const stopSettings = useSettingsStore(broker.settings);
