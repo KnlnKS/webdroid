@@ -3,6 +3,7 @@
 // with an app's install. One store serves every process through the broker; system_server watches
 // it and notifies every process's content observers of a write.
 import { DEVICE_SETTINGS } from "../android/device-settings.ts";
+import { storedText, storeText } from "./device-storage.ts";
 
 export type SettingsTable = "system" | "secure" | "global" | "config";
 export type SettingsAccess = {
@@ -21,7 +22,7 @@ export class SettingsStore {
     if (this.written) return this.written;
     this.written = {};
     try {
-      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(KEY) ?? "{}");
+      const saved: unknown = JSON.parse(storedText(KEY) ?? "{}");
       if (saved && typeof saved === "object") for (const [table, values] of Object.entries(saved)) {
         if (!(table in DEVICE_SETTINGS) || !values || typeof values !== "object") continue;
         const kept: Record<string, string | null> = Object.create(null);
@@ -47,7 +48,7 @@ export class SettingsStore {
     if (this.get(table, name) === value) return false;
     const written = this.load();
     (written[table] ??= Object.create(null) as Record<string, string | null>)[name] = value;
-    try { globalThis.localStorage?.setItem(KEY, JSON.stringify(written)); } catch { /* private mode keeps the write in memory */ }
+    storeText(KEY, JSON.stringify(written)); // where it cannot be stored, the write lives in memory
     this.changed(table, name);
     return true;
   }
@@ -58,10 +59,10 @@ export class SettingsStore {
   private userKey: string | null = null;
   /** the user's SSAID key (the ssaid table's userkey): 32 random bytes, minted on first use */
   ssaidKey(): string {
-    try { this.userKey ??= globalThis.localStorage?.getItem(KEY + ":ssaid") ?? null; } catch { /* storage unavailable */ }
+    this.userKey ??= storedText(KEY + ":ssaid") ?? null;
     if (!this.userKey) {
       this.userKey = crypto.getRandomValues(new Uint8Array(32)).toHex().toUpperCase();
-      try { globalThis.localStorage?.setItem(KEY + ":ssaid", this.userKey); } catch { /* private mode keeps it for the session */ }
+      storeText(KEY + ":ssaid", this.userKey); // where it cannot be stored, it lasts the session
     }
     return this.userKey;
   }

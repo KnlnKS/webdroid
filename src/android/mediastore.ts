@@ -11,6 +11,7 @@ import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./int
 import { newFile } from "../jvm/natives/jio.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { registerSystemProvider, matrixCursor, contentValues, uriBundle } from "./systemproviders.ts";
+import { persisted } from "../shell/device-storage.ts";
 
 const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_type", "_size",
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",
@@ -23,17 +24,16 @@ let dbReady: Promise<Database> | null = null;
 /** pending, trashed and favourite paths: MediaProvider's own columns, kept across reloads */
 type Flag = "is_pending" | "is_trashed" | "is_favorite";
 const FLAGS: Flag[] = ["is_pending", "is_trashed", "is_favorite"];
-const FLAGS_KEY = "wd:media:flags";
+const savedFlags = persisted("wd:media:", (saved) => saved && typeof saved === "object" ? saved as Partial<Record<Flag, string[]>> : null);
 let flags: Record<Flag, Set<string>> | null = null;
 function mediaFlags(): Record<Flag, Set<string>> {
   if (flags) return flags;
-  let saved: Partial<Record<Flag, string[]>> = {};
-  try { saved = JSON.parse(localStorage.getItem(FLAGS_KEY) ?? "{}"); } catch { /* no storage */ }
+  const saved = savedFlags.get("flags") ?? {};
   return flags = { is_pending: new Set(saved.is_pending), is_trashed: new Set(saved.is_trashed), is_favorite: new Set(saved.is_favorite) };
 }
 function saveFlags(): void {
   const all = mediaFlags();
-  try { localStorage.setItem(FLAGS_KEY, JSON.stringify(Object.fromEntries(FLAGS.map((f) => [f, [...all[f]]])))); } catch { /* no storage */ }
+  savedFlags.set("flags", Object.fromEntries(FLAGS.map((f) => [f, [...all[f]]])));
 }
 
 function hash(path: string): number {

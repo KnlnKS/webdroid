@@ -1,9 +1,11 @@
 /**
  * The one device profile. The screen is resolved at module init: `?screen=` / `WEBDROID_SCREEN`
  * pin one for a run and the shell's settings panel persists one. This file imports only recorded
- * data and treats every host global as optional, because the node scripts import it too.
+ * data and device-storage's guarded access, and treats every host global as optional, because the
+ * node scripts import it too.
  */
 import { DEVICE_PROPERTIES } from "./device-properties.ts";
+import { storedText, storeText } from "./device-storage.ts";
 
 /** AOSP DisplayMetrics.DENSITY_DEFAULT: the dpi at which one dp is one px. */
 const DENSITY_DEFAULT = 160;
@@ -54,23 +56,14 @@ export function parseScreen(s: string | null | undefined): Screen | null {
 /** the `?screen=` form parseScreen reads back */
 export const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
-/** localStorage throws outright in some privacy modes, so every touch of it is guarded. */
-function readStoredScreen(): Screen | null {
-  try { return parseScreen(globalThis.localStorage?.getItem(SCREEN_KEY)); } catch { return null; }
-}
-
-export function storeScreen(s: Screen | null): void {
-  try {
-    if (s) globalThis.localStorage?.setItem(SCREEN_KEY, formatScreen(s));
-    else globalThis.localStorage?.removeItem(SCREEN_KEY);
-  } catch { /* the setting is a convenience, not state anything depends on */ }
-}
+/** the setting is a convenience, not state anything depends on: a write that fails is dropped */
+export const storeScreen = (s: Screen | null): void => { storeText(SCREEN_KEY, s && formatScreen(s)); };
 
 /** A per-run pin beats a persisted preference, so an e2e run scores the geometry it asked for. */
 function resolveScreen(): Screen {
   const url = typeof location !== "undefined" ? new URLSearchParams(location.search).get("screen") : null;
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.WEBDROID_SCREEN;
-  return parseScreen(url) ?? parseScreen(env) ?? readStoredScreen() ?? DEFAULT;
+  return parseScreen(url) ?? parseScreen(env) ?? parseScreen(storedText(SCREEN_KEY)) ?? DEFAULT;
 }
 
 const screen = resolveScreen();

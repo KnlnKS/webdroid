@@ -1,3 +1,5 @@
+import { storedText, storeText } from "./device-storage.ts";
+
 export type StoredAccount = {
   name: string; type: string; owner: string; password: string | null;
   data: Record<string, string>; tokens: Record<string, string>; visibility: Record<string, number>;
@@ -83,6 +85,7 @@ export function canonicalAccountCommands(store: AccountStore, authority: () => A
   };
 }
 const strings = (value: unknown): value is Record<string, string> => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(v => typeof v === "string");
+const KEY = "wd:accounts";
 export class AccountStore {
   private loaded: StoredAccount[] | null = null;
   private nextId = 1;
@@ -92,7 +95,7 @@ export class AccountStore {
     if (this.loaded) return this.loaded;
     this.loaded = [];
     try {
-      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:accounts") ?? "[]");
+      const saved: unknown = JSON.parse(storedText(KEY) ?? "[]");
       if (Array.isArray(saved)) for (const value of saved) {
         if (!value || typeof value !== "object" || typeof value.name !== "string" || typeof value.type !== "string" || typeof value.owner !== "string" || !value.name || !value.type || !value.owner ||
           !(value.password === null || typeof value.password === "string") || !strings(value.data) || !strings(value.tokens) ||
@@ -104,7 +107,7 @@ export class AccountStore {
     return this.loaded;
   }
   persist(): void {
-    globalThis.localStorage?.setItem("wd:accounts", JSON.stringify(this.records.map(({ id, ...record }) => record)));
+    storeText(KEY, JSON.stringify(this.records.map(({ id, ...record }) => record)));
     for (const listener of this.listeners) listener();
   }
   /** AccountManagerService on a package's removal: the accounts its authenticator kept, and their
