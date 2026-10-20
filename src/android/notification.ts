@@ -13,7 +13,7 @@ import { systemResource } from "./resnative.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseRights, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
@@ -52,6 +52,12 @@ interface PostedNotification {
 }
 /** GroupHelper's view of an ungrouped notification; `icon` identifies its small icon as Icon.sameAs compares */
 interface Ungrouped { flags: number; icon: string; color: number; visibility: number }
+/** the scope a broker's call holds the descriptors of the notifications it reads in */
+function brokerScope() {
+  const scope = parcelScope();
+  if (!scope) throw new Error("Notification decode requires broker descriptor scope");
+  return scope;
+}
 /** NotificationManagerService's notification list and the state its posting rules keep, shared by
  *  every process through the broker */
 export class NotificationStore {
@@ -62,19 +68,14 @@ export class NotificationStore {
   async capture(notification: JObj): Promise<StoredParcel> {
     this.kernel.ensureReceiver(PROCESS_PID);
     const kernel = this.kernel;
-    const data = await parcelledWithRights(notification, kernel.rights(PROCESS_PID));
+    const data = await parcelled(notification, kernel.rights(PROCESS_PID));
     return StoredParcel.retain(kernel, PROCESS_PID, data);
   }
   readStored(data: StoredParcel): Promise<JObj> {
-    const scope = parcelScope();
-    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    return data.readLocal(PROCESS_PID, (data, rights) => unparcelledScoped(N, data, scope, rights));
+    const scope = brokerScope();
+    return data.readLocal(PROCESS_PID, (data, rights) => unparcelled(N, data, rights, scope));
   }
-  decode(data: ParcelData): JObj | Promise<JObj> {
-    const scope = parcelScope();
-    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
-    return unparcelledScoped(N, data, scope, this.kernel.rights(PROCESS_PID));
-  }
+  decode(data: ParcelData): JObj | Promise<JObj> { return unparcelled(N, data, this.kernel.rights(PROCESS_PID), brokerScope()); }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */
@@ -611,7 +612,7 @@ export function receiveForegroundNotification(pkg: string, caller: Caller, reque
 }
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
   if (notificationTransport.foreground) {
-    const data = notification && (yield* awaited(parcelledWithRights(notification, processRights)));
+    const data = notification && (yield* awaited(parcelled(notification, processRights)));
     try { yield* awaited(notificationTransport.foreground({ kind: "start", id, data })); }
     finally { if (data) yield* awaited(releaseRights(data, processRights, true)); }
     return;

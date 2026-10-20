@@ -7,7 +7,7 @@ import { packageUid } from "../src/android/packages.ts";
 import { grantPermissions } from "../src/android/permissions.ts";
 import { preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, type PreferenceCalls } from "../src/android/sharedprefs.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
-import { ownedSystemService, useSystemServiceAccess, parcelledWithRights, type BinderHandle } from "../src/android/binder.ts";
+import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandle } from "../src/android/binder.ts";
 import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
 import { PROCESS_PID } from "../src/android/os.ts";
 import { vfs } from "../src/shell/vfs.ts";
@@ -218,7 +218,7 @@ test("foreground broker retains transferred rights after sender death and reject
     expect(file.references).toBe(2);
     const previous = store.posted[0];
     expect(previous.pid).toBe(7701);
-    const broken = await parcelledWithRights(n, processRights);
+    const broken = await parcelled(n, processRights);
     broken.objects.push([999, {descriptor: -1}]);
     expect(await client.endpoint.notificationForeground({kind:"start",id:100,data:broken}).then(() => "", error => error.message)).toContain("Invalid Binder descriptor right");
     expect(store.posted[0]).toBe(previous);

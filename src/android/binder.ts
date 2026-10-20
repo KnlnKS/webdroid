@@ -102,15 +102,14 @@ export function systemToken(): JObj | Promise<JObj> {
 }
 /** the binder a writable descriptor's importer sends its final bytes back through */
 class JFileWriter extends JObj { fd = -1; }
-/** a parcel object on the wire: a descriptor as a right `rights` stages, when they can, else as a copy of its bytes */
-function* exportObject(o: unknown, rights?: DescriptorRights): Gen<BinderHandle | FileHandle | DescriptorHandle | null> {
+/** a parcel object on the wire: a descriptor as a right `rights` stages, when they can (or must, when
+ *  `strict`), else as a copy of its bytes */
+function* exportObject(o: unknown, rights: DescriptorRights | undefined, strict: boolean): Gen<BinderHandle | FileHandle | DescriptorHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
   if (rights) {
     const token = yield* awaited(rights.stage(o.fd));
-    if (token !== null) {
-      if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot stage Binder descriptor: " + token);
-      return {descriptor:token};
-    }
+    if (token !== null && token >= 0) return { descriptor: token };
+    if (token !== null || strict) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot stage Binder descriptor: " + token);
   }
   const contents = yield* awaited(fdContents(o.fd));
   if (!contents) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
@@ -139,24 +138,20 @@ function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null, ri
     return new OwnedFd(o.prot === undefined ? fdOverBytes(bytes, sink) : ashmemFd(bytes, o.prot, sink), scope);
   });
 }
-/** what a parcel carries across processes: its bytes and its side table */
-export const exportParcel = driven(function* exportParcel(p: NativeParcel): Gen<ParcelData> {
-  const objects: ParcelData["objects"] = [];
-  for (const [at, o] of p.objects) objects.push([at, yield* exportObject(o)]);
-  return { bytes: p.buf.slice(0, p.size), objects };
-});
-/** Staged rights are consumed by the broker before Binder delivery. Other serialized
- * stores require their own retained-Parcel lifecycle and cannot use these one-shot rights. */
-export const exportBinderParcel = driven(function* exportBinderParcel(p: NativeParcel): Gen<ParcelData> {
-  const data: ParcelData = {bytes:p.buf.slice(0,p.size),objects:[]};
+/** what a parcel carries across processes: its bytes and its side table, with its descriptors as
+ *  exportObject sends them; a failure discards the rights staged. The broker consumes rights a Binder
+ *  call stages before delivery; a store that retains a parcel stages its own (`strict`). */
+export const exportParcel = driven(function* exportParcel(p: NativeParcel, rights?: DescriptorRights, strict: boolean = false): Gen<ParcelData> {
+  const data: ParcelData = { bytes: p.buf.slice(0, p.size), objects: [] };
   try {
-    for (const [at,o] of p.objects) data.objects.push([at,yield* exportObject(o,processRights)]);
+    for (const [at, o] of p.objects) data.objects.push([at, yield* exportObject(o, rights, strict)]);
     return data;
   } catch (error) {
-    try { yield* awaited(releaseRights(data, processRights, true)); } catch (cleanup) { logUncaught(cleanup); }
+    if (rights) try { yield* awaited(releaseRights(data, rights, true)); } catch (cleanup) { logUncaught(cleanup); }
     throw error;
   }
 });
+const exportReply = (reply: NativeParcel) => exportParcel(reply, processRights);
 /** discards the descriptor rights `data` carries, which `rights` staged (`staged`) or received */
 export async function releaseRights(data: ParcelData, rights: DescriptorRights, staged: boolean): Promise<void> {
   await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? rights.discard(object.descriptor, staged) : undefined));
@@ -179,43 +174,23 @@ export const importParcel = driven(function* importParcel(data: ParcelData): Gen
   yield fillParcel(nativeParcel(parcel), data, processRights);
   return parcel;
 });
-/** a Parcelable as it crosses processes: what its writeToParcel writes */
-export const parcelled = driven(function* parcelled(o: JObj): Gen<ParcelData> {
+/** a Parcelable as it crosses processes: what its writeToParcel writes, its descriptors as rights
+ *  `rights` stages for a store that retains it */
+export const parcelled = driven(function* parcelled(o: JObj, rights?: DescriptorRights): Gen<ParcelData> {
   const parcel = yield* awaited(newParcel());
   try {
     yield vcall(o, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-    return yield* awaited(exportParcel(nativeParcel(parcel)));
+    return yield* awaited(exportParcel(nativeParcel(parcel), rights, true));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
-/** a Parcelable whose descriptors cross as rights `rights` stages, which a retaining broker consumes; a failure discards them */
-export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj, rights: DescriptorRights): Gen<ParcelData> {
-  const parcel=yield* awaited(newParcel()),data:ParcelData={bytes:new Uint8Array(),objects:[]};
-  try {
-    yield vcall(o,"writeToParcel","(Landroid/os/Parcel;I)V",parcel,0);
-    const native=nativeParcel(parcel);data.bytes=native.buf.slice(0,native.size);
-    for (const [at,object] of native.objects) {
-      if (!(object instanceof OwnedFd)) {data.objects.push([at,exportBinder(object)]);continue;}
-      const token=yield* awaited(rights.stage(object.fd));
-      if (token === null || token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Cannot retain descriptor right");
-      data.objects.push([at,{descriptor:token}]);
-    }
-    return data;
-  } catch (error) {yield* awaited(releaseRights(data,rights,true));throw error;}
-  finally {yield vcall(parcel,"recycle","()V");}
-});
-/** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
- *  imported, are released once read */
+/** a Parcelable of class `cls` read back by its CREATOR */
 const created = (cls: string, parcel: JObj) => after(linkInit(cls), (c) => vcall(c.static("CREATOR"), "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel));
-export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData): Gen<JObj> {
-  const parcel = yield* awaited(importParcel(data));
-  try { return yield* awaited(created(cls, parcel)); }
-  finally { yield vcall(parcel, "recycle", "()V"); }
-});
-/** Explicit broker borrowing; ordinary unparcelled callers retain their Java ownership. */
-export const unparcelledScoped = driven(function* (cls: string, data: ParcelData, scope: FdScope, rights: DescriptorRights): Gen<JObj> {
+/** a Parcelable of class `cls` from what another process sent, its parcel released once read; a
+ *  broker borrowing a stored parcel takes its descriptors with `rights` into its own `scope` */
+export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData, rights: DescriptorRights = processRights, scope?: FdScope): Gen<JObj> {
   const parcel = yield* awaited(newParcel());
   try {
-    yield* awaited(fillParcel(nativeParcel(parcel), data, rights, scope));
+    yield fillParcel(nativeParcel(parcel), data, rights, scope);
     return yield* awaited(created(cls, parcel));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
@@ -333,7 +308,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
   const run = () => withCallingIdentity(caller, () => rt.drive(function* (): Gen<TransactionReply> {
     // an escaped exception leaves the caller UNKNOWN_TRANSACTION
     const { handled, reply } = yield* execTransact(binder, request.code, request.flags, request.data.bytes.length, (data) => fillParcel(data, request.data, processRights),
-      oneway ? null : exportBinderParcel, (error) => reportException(error, UNCAUGHT_REMOTE));
+      oneway ? null : exportReply, (error) => reportException(error, UNCAUGHT_REMOTE));
     return { handled, data: reply! };
   }()));
   if (!oneway) return run();
@@ -464,7 +439,7 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   checkBuffer(data, (flags & FLAG_ONEWAY) !== 0, data.size);
   const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
-  const sent = yield* awaited(exportBinderParcel(data));
+  const sent = yield* awaited(exportParcel(data, processRights));
   try {
     const result = yield* awaited(binderTransport.transact({ handle: target, code, data:sent, flags, system: ipc().system }));
     if (reply) yield fillParcel(reply, result.data, processRights);
