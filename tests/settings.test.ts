@@ -4,7 +4,8 @@ import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
 import { packages, type PackageRecord } from "../src/android/packages.ts";
 import { setProcessIdentity } from "../src/android/os.ts";
-import { locationTransport } from "../src/android/locationmanager.ts";
+import { useGeolocation } from "../src/android/locationmanager.ts";
+import { BrowserLocation } from "../src/shell/geolocation.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { mkUri, uriText, type JUri } from "../src/android/net.ts";
 import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
@@ -78,18 +79,17 @@ describe("settings-provider", () => {
     expect(await thrown(() => scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "font_scale"))).toBe("android/provider/Settings$SettingNotFoundException: font_scale");
     expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe(DEVICE_PROPERTIES["ro.product.model"]);
     expect(await scall(GLOBAL, "getFloat", `(${CR}${S}F)F`, cr, "animator_duration_scale", 0.5)).toBe(0.5);
-    const enabled = locationTransport.enabled, available = locationTransport.available;
+    const geolocation = { available: false, enabled: false, last: null, subscribe() {}, remove() {} };
+    useGeolocation(geolocation);
     try {
       const service = rt.make("webdroid/LocationManagerService");
-      locationTransport.available = async () => false;
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(0);
-      locationTransport.available = async () => true;
+      geolocation.available = true;
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(1);
-      locationTransport.enabled = async () => false;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(0);
-      locationTransport.enabled = async () => true;
+      geolocation.enabled = true;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(3);
-    } finally { locationTransport.enabled = enabled; locationTransport.available = available; }
+    } finally { useGeolocation(new BrowserLocation()); }
   });
 
   test("an app reads its SSAID, the same for every package with its signer", async () => {

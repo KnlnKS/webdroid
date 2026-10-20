@@ -1,7 +1,6 @@
 import { webStorageTransport } from "../android/webstorage.ts";
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
-import { remoteLocation } from "./location-access.ts";
 import { remoteProcessLife } from "./process-life.ts";
 import { filePathTransport } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
@@ -30,7 +29,7 @@ import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android
 import { remoteSettings } from "./settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
-import { locationTransport } from "../android/locationmanager.ts";
+import { useGeolocation } from "../android/locationmanager.ts";
 import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
@@ -44,10 +43,9 @@ let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
-const location = remoteLocation(brokerCalls);
 const life = remoteProcessLife(brokerCalls, logUncaught);
 /** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
- *  and lives, SQLite, cookies, locations, PendingIntents and service starts */
+ *  and lives, SQLite, cookies, PendingIntents and service starts */
 function connectCommandTransports(): void {
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
@@ -68,7 +66,6 @@ function connectCommandTransports(): void {
   descriptorTransport.importCalls = brokerCalls;
   sqliteTransport.call = request => brokerCalls().sqlite(request);
   cookieTransport.calls = brokerCalls;
-  Object.assign(locationTransport, location.access);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
   pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
   pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
@@ -127,7 +124,6 @@ function connectRemoteStores(): void {
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();
-  location.close();
   life.close();
   activityResults.clear();
   // its presence routes system providers to system_server, which a closed port no longer reaches
@@ -189,6 +185,7 @@ export function connectProcess(): ProcessEndpoint {
   usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
   useAlarmScheduler(broker.alarms);
+  useGeolocation(broker.location);
   const stopAccounts = useAccountStore(broker.accounts);
   if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
   const stopSettings = useSettingsStore(broker.settings);
@@ -200,7 +197,6 @@ export function connectProcess(): ProcessEndpoint {
 export function createProcessEndpoint(): ProcessEndpoint {
   return {
     processDied: async token => life.died(token),
-    locationChanged: async (id,token,event) => location.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     cookiesChanged: async () => cookiesChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),

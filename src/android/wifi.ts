@@ -11,7 +11,7 @@ import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jentry.
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { packages } from "./packages.ts";
-import { locationTransport } from "./locationmanager.ts";
+import { locationEnabled } from "./locationmanager.ts";
 import { DNS_SERVER, netUp, theNetwork } from "./services.ts";
 
 const WIFI_STATE_ENABLED = 3, WIFI_STANDARD_LEGACY = 1, SECURITY_TYPE_OPEN = 0, REDACT_FOR_ACCESS_FINE_LOCATION = 1n;
@@ -26,7 +26,7 @@ const refuseChange = () => after(enforce("android.permission.CHANGE_WIFI_STATE")
  *  below Q) */
 function* canAccessScanResults(pkg: string): Gen<boolean> {
   const { uid } = callingIdentity(), check = (name: string) => checkUidPermission("android.permission." + name, uid);
-  return (yield* awaited(locationTransport.enabled())) && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
+  return (yield* awaited(locationEnabled())) && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
 }
 function* connectionInfo(): Gen<JObj> {
   const info = yield newObj("android/net/wifi/WifiInfo");

@@ -337,9 +337,6 @@ describe("pending-intents", () => {
       return encodeIntent(intent);
     };
     try {
-      expect(await other.locationLast().catch(error=>error.javaClass)).toBe("java/lang/SecurityException");
-      await creator.permissionGrant(PKG,["android.permission.ACCESS_FINE_LOCATION"]);
-      expect(await sibling.locationLast()).toBeNull();
       const data = await encoded("original");
       const cls = PKG + ".CanonicalService";
       owner.components.service.set(cls,{name:"service",attrs:[

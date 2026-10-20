@@ -98,12 +98,6 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return pointerInputOwnership();
     });
     expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,10,12],[1,2,60,80],[1,1,80,100]],closed:true});
-    const locationResult = await page.evaluate(async () => {
-      const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
-      return locationOwnership();
-    });
-    expect(locationResult).toEqual({available:true,denied:true,events:[12,24],copied:true,
-      stale:true,removed:true,peerSurvives:true,deathCloses:true});
     const diagnostic = await page.evaluate(async () => {
       const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return workerDiagnosticOwnership();

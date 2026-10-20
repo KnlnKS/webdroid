@@ -1,7 +1,6 @@
 // The browser fixtures' Worker halves: each Worker plays the role its URL names (fixture-calls.ts).
 import { callProxy, serveCalls, serveProcess, processProxy } from "../../../src/shell/process-port.ts";
 import { remoteProcessLife } from "../../../src/shell/process-life.ts";
-import { remoteLocation, type LocationCalls } from "../../../src/shell/location-access.ts";
 import { attachGuestClockPort, bootTime, guestClockControl, setGuestTimeout, uptimeMillis, wallMillis } from "../../../src/guest-clock.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "../../../src/shell/worker-bootstrap.ts";
 import { exitProcess } from "../../../src/process-exit.ts";
@@ -13,7 +12,7 @@ import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
 import type { BrokerCalls } from "../../../src/shell/processes.ts";
 import type { ImeView } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
-import { stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
+import { stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const post = (message: unknown, transfer: Transferable[] = []) => self.postMessage(message, { transfer });
 const brokerCalls = ({ broker, methods }: BrokerInit) => callProxy<BrokerCalls>(broker, methods).endpoint;
@@ -130,16 +129,6 @@ const roles: Record<string, () => (data: never) => void> = {
       });
       post({ ready: true });
     };
-  },
-  /** a process owning location callbacks the page subscribes through `control` */
-  location: () => ({ broker, endpoint, control }: { broker: MessagePort; endpoint: MessagePort; control: MessagePort }) => {
-    const calls = callProxy<LocationCalls>(broker, ["locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove"]).endpoint;
-    const remote = remoteLocation(() => calls), events: number[] = [];
-    serveProcess(endpoint, stubEndpoint({ locationChanged: async (id, token, event) => remote.changed(id, token, event) }));
-    serveCalls(control, {
-      subscribe: async () => remote.access.subscribe(41, false, true, event => { if (event.kind === "fix") events.push(event.fix.latitude); }),
-      remove: async () => remote.access.remove(41), read: async () => remote.access.last(), events: async () => events.slice(),
-    } satisfies LocationControl);
   },
   /** an editor whose first edit holds its input until the page releases it */
   ime: () => {

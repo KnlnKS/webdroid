@@ -18,7 +18,7 @@ import { callingIdentity, asSystem } from "./binder.ts";
 import { uriParts } from "./net.ts";
 import { packages, type PackageRecord } from "./packages.ts";
 import { notifyContent } from "./server/content.ts";
-import { locationTransport } from "./locationmanager.ts";
+import { locationEnabled } from "./locationmanager.ts";
 import { holdsPlatformPermission } from "./permissions.ts";
 import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings.ts";
 import { registerSystemProvider, matrixCursor } from "./systemproviders.ts";
@@ -127,7 +127,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
 /** settings whose value another owner keeps: LocationManagerService writes location_mode with the
  *  location switch, and DatabaseHelper names the device after its model until someone renames it */
 const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => unknown>>> = {
-  secure: { location_mode: () => after(locationTransport.enabled(), enabled => enabled ? "3" : "0") },
+  secure: { location_mode: () => after(locationEnabled(), enabled => enabled ? "3" : "0") },
   global: { device_name: (stored) => stored ?? staticField("android/os/Build", "MODEL") },
 };
 const valueOf = (table: Table, name: string): unknown => {

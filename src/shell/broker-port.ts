@@ -23,7 +23,7 @@ import { permissionDenied, unawaited, type BrokerCalls, type ProcessBroker } fro
 
 /** Process `pid`'s command port; every call fails once the process is dead. */
 export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: MessagePort; close(): void } {
-  const caller = broker.entry(pid), { callers, locations } = caller.session, { port1, port2 } = new MessageChannel();
+  const caller = broker.entry(pid), { callers } = caller.session, { port1, port2 } = new MessageChannel();
   // root and system act for any uid, as checkComponentPermission grants them
   const privileged = caller.uid === 0 || caller.uid === 1000;
   const accountCommands = canonicalAccountCommands(broker.accounts, () => {
@@ -53,18 +53,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   };
   const paths = canonicalFilePaths(authorizePath, caller.uid);
   const descriptors = broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid);
-  const locationAllowed = async () => {
-    if (privileged) return true;
-    const granted = await permissions.permissionCheck(caller.pkg, ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]);
-    broker.entry(pid);
-    return granted.some(Boolean);
-  };
-  const requireLocation = async () => {
-    if (!await locationAllowed()) throw rt.mkThrowable("java/lang/SecurityException", "Location permission denied");
-  };
-  const unsubscribe = (id: number, token: number) => {
-    if (locations.get(id) === token) { locations.delete(id); broker.location.remove(pid, id); }
-  };
   const starts = (cls: string) => {
     const owner = packages.get(caller.pkg), node = owner?.components.service.get(cls);
     if (!node || owner!.process(node) !== caller.process)
@@ -87,26 +75,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       }));
     },
     processUnwatch: async token => { watches.get(token)?.(); watches.delete(token); },
-    locationAvailable: async () => broker.location.available,
-    locationEnabled: async () => broker.location.enabled,
-    locationLast: async () => { await requireLocation(); return broker.location.last; },
-    locationSubscribe: async (id, token, high, active) => {
-      await requireLocation();
-      locations.set(id, token);
-      const current = () => broker.alive(pid) && locations.get(id) === token;
-      try {
-        broker.location.subscribe(pid, id, high, active, event => { unawaited((async () => {
-          try {
-            if (!current()) return;
-            const allowed = await locationAllowed();
-            if (!current()) return;
-            if (!allowed) { unsubscribe(id, token); return; }
-            await broker.request(broker.entry(pid), endpoint => endpoint.locationChanged(id, token, event));
-          } catch (error) { if (broker.alive(pid)) throw error; }
-        })()); });
-      } catch (error) { unsubscribe(id, token); throw error; }
-    },
-    locationRemove: async (id, token) => unsubscribe(id, token),
     serviceCreated: async (cls, intent) => starts(cls).created(cls, intent),
     serviceDestroyed: async cls => starts(cls).destroyed(cls),
     serviceStart: async (cls, intent) => starts(cls).start(cls, intent),

@@ -9,7 +9,6 @@ import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type
 import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint.ts";
 import { exitRecordTransport } from "../src/android/server/appexitinfo.ts";
 import { settingsStore, useSettingsStore } from "../src/android/settings.ts";
-import { locationTransport } from "../src/android/locationmanager.ts";
 import { serviceTransport } from "../src/android/server/activeservices.ts";
 import { providerProcesses } from "../src/android/server/am.ts";
 import { broadcastTransport } from "../src/android/server/broadcastqueue.ts";
@@ -168,7 +167,6 @@ test("account commands preserve credential ownership and await atomic owner muta
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
   const owner = await packageRecord("org.webdroid.test.activitycommands");
   await bootApp(owner);
-  const previousLocation = {...locationTransport};
   const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
   const previousPending = {...pendingTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
@@ -221,7 +219,6 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;
-    Object.assign(locationTransport,previousLocation);
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;

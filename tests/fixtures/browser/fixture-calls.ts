@@ -6,7 +6,7 @@ export const stubEndpoint = (overrides: Partial<ProcessEndpoint> = {}): ProcessE
   processDied: async () => {}, activity: async () => {}, transact: async request => ({ handled: 0, data: request.data }),
   service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
   broadcast: async (_intent, _component, _ordered, result) => result, cookiesChanged: async () => {},
-  locationChanged: async () => {}, accountsChanged: async () => {}, settingsChanged: async () => {},
+  accountsChanged: async () => {}, settingsChanged: async () => {},
   storageChanged: async () => {}, packageRemoved: async () => {}, kill: () => {}, ...overrides,
 });
 
@@ -17,4 +17,3 @@ export const fixtureWorker = (role: string): Worker => new Worker(fixtureUrl(rol
 /** how a fixture Worker reaches the broker: its port and the methods the Worker's proxy names */
 export type BrokerInit = { broker: MessagePort; methods: readonly (keyof BrokerCalls)[] };
 export type PointerCalls = { pointer(owner: number, action: number, x: number, y: number): Promise<void>; release(): Promise<void>; samples(): Promise<number[][]> };
-export type LocationControl = { subscribe(): Promise<void>; remove(): Promise<void>; read(): Promise<unknown>; events(): Promise<number[]> };

@@ -14,7 +14,7 @@ import { ProcessHost, workerControlMethods } from "../../../src/shell/process-ho
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
 import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
-import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type LocationControl, type PointerCalls } from "./fixture-calls.ts";
+import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
 type ClientEvent = { accountsChanged?: true; setting?: [string, string] };
@@ -507,57 +507,6 @@ export async function workerDiagnosticOwnership() {
     broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);
     clients.forEach(client=>client.close());worker.terminate();packages.delete(pkg);
-  }
-}
-
-/** A real Worker owns callbacks; only copied fixes cross the canonical browser location owner. */
-export async function locationOwnership() {
-  const broker = processBroker(), pkg = "test.location.owner", other = "test.location.denied";
-  for (const [i,name] of [pkg,other].entries()) {
-    const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
-    packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,17000+i,async()=>[]));
-  }
-  broker.permissions.grant(pkg,["android.permission.ACCESS_FINE_LOCATION"]);
-  const entry = broker.register(pkg,pkg,8501), denied = broker.register(other,other,8502), peer = broker.register(pkg,pkg+":peer",8503);
-  const oldGeo = Object.getOwnPropertyDescriptor(navigator,"geolocation");
-  let watched: PositionCallback | undefined, cleared = 0;
-  Object.defineProperty(navigator,"geolocation",{configurable:true,value:{
-    watchPosition(success:PositionCallback){watched=success;return 71;},clearWatch(){cleared++;},
-  }});
-  const worker = fixtureWorker("location"), endpoint = new MessageChannel(), control = new MessageChannel();
-  const client = callProxy<LocationControl>(control.port1,["subscribe","remove","read","events"]);
-  const deniedClient = callProxy<BrokerCalls>(broker.brokerPort(denied.pid),brokerMethods,[],error=>Object.assign(new Error(error.message??""),{javaClass:error.javaClass}));
-  const peerClient = callProxy<BrokerCalls>(broker.brokerPort(peer.pid),brokerMethods);
-  let peerEvents = 0;
-  broker.ready(peer.pid,stubEndpoint({locationChanged:async()=>{peerEvents++;}}));
-  const emit = (latitude:number) => watched!({coords:{latitude,longitude:2,accuracy:3,altitude:null,altitudeAccuracy:null,heading:null,speed:null},timestamp:Date.now()} as GeolocationPosition);
-  const waitEvents = async(count:number)=>{
-    for(let i=0;i<30;i++){const events=await client.endpoint.events();if(events.length===count)return events;await new Promise(r=>setTimeout(r,5));}
-    return client.endpoint.events();
-  };
-  try {
-    const reverse = broker.brokerPort(entry.pid);
-    worker.postMessage({broker:reverse,endpoint:endpoint.port1,control:control.port2},[reverse,endpoint.port1,control.port2]);
-    broker.readyPort(entry.pid,endpoint.port2);
-    const available = await peerClient.endpoint.locationAvailable();
-    const deniedRead = await deniedClient.endpoint.locationLast().catch(error=>error.message==="Location permission denied");
-    await client.endpoint.subscribe();emit(12);await waitEvents(1);
-    const copy = await client.endpoint.read() as {latitude:number}; copy.latitude=99;
-    const copied = broker.location.last?.latitude===12;
-    await client.endpoint.subscribe();
-    await (await entry.ready).locationChanged(41,1,{kind:"fix",fix:{...broker.location.last!,latitude:99}});
-    emit(24);const events=await waitEvents(2),stale=events.join(",")==="12,24";
-    await client.endpoint.remove();const removed=cleared===1;
-    await peerClient.endpoint.locationSubscribe(1,1,false,true);
-    await client.endpoint.subscribe();broker.fail(entry.pid,"location fixture death",NOT_CRASHED);
-    emit(48);for(let i=0;i<30&&!peerEvents;i++)await new Promise(r=>setTimeout(r,5));
-    const peerSurvives=peerEvents>0;
-    broker.fail(peer.pid,"location peer death",NOT_CRASHED);
-    return {available,denied:deniedRead,events,copied,stale,removed,peerSurvives,deathCloses:cleared===2};
-  } finally {
-    for(const pid of [8501,8502,8503])broker.fail(pid,"location fixture cleanup",NOT_CRASHED);
-    client.close();deniedClient.close();peerClient.close();worker.terminate();broker.permissions.clear(pkg);
-    if(oldGeo)Object.defineProperty(navigator,"geolocation",oldGeo);else Reflect.deleteProperty(navigator,"geolocation");
   }
 }
 
