@@ -2,9 +2,10 @@
 
 import { rt, declaredField } from "../jvm/runtime.ts";
 import { classNameOf } from "../jvm/natives/jentry.ts";
-import type { NativeBitmap } from "./bitmap.ts";
+import { type NativeBitmap, colorLongAt } from "./bitmap.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
 import { isRecording, transformOf, type Ctx2D } from "./recording.ts";
-import { localBounds, type Affine } from "./matrix.ts";
+import { localBounds, localMatrix, type Affine } from "./matrix.ts";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -39,9 +40,9 @@ export const emptyBox: Readonly<Box> = { left: 0, top: 0, right: 0, bottom: 0 };
 /**
  * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
  * modes Canvas2D cannot express are absent and fall back to plain source-over.
- * CLEAR maps to destination-out, which clears only where the source is opaque: prep() fills a
- * CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes with a
- * transparent one).
+ * CLEAR maps to destination-out, which clears only where the source is opaque: NativePaint.fillStyle
+ * fills a CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes
+ * with a transparent one). DST is absent too: a draw by it changes nothing.
  */
 export const COMPOSITE: Record<string, GlobalCompositeOperation> = {
   CLEAR: "destination-out", SRC: "copy", SRC_OVER: "source-over", DST_OVER: "destination-over",
@@ -182,10 +183,11 @@ export class NativeComposeShader extends NativeShader {
 /** a ComposeShader's native instance: `src` over `dst` by the SkBlendMode numbered `mode` */
 export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
   new NativeComposeShader(local, dst, src, mode === 2 ? null : COMPOSITE[BLEND_MODES[mode]] ?? "source-over");
+/** a gradient's style: a CanvasGradient, or the pattern of a tiled one, which carries the local matrix */
 export class NativeGradient extends NativeShader {
-  readonly grad: CanvasGradient;
-  constructor(local: Affine | null, grad: CanvasGradient) { super(local); this.grad = grad; }
-  override pattern(): CanvasGradient { return this.grad; }
+  readonly style: CanvasGradient | CanvasPattern;
+  constructor(local: Affine | null, style: CanvasGradient | CanvasPattern) { super(local); this.style = style; }
+  override pattern(): CanvasGradient | CanvasPattern { return this.style; }
 }
 let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 /** a 2D context that makes gradients for any canvas */
@@ -195,11 +197,34 @@ export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRendering
 /** a gradient's native instance: its sRGB ARGB colours at `positions` (evenly spaced when null),
  *  which SkGradientShader pins to [0, 1] and to no less than the position before */
 export function gradient(local: Affine | null, g: CanvasGradient, colors: Int32Array, positions: Float32Array | null): NativeGradient {
+  return new NativeGradient(local, withStops(g, colors, positions));
+}
+function withStops(g: CanvasGradient, colors: Int32Array, positions: Float32Array | null): CanvasGradient {
   for (let i = 0, prev = 0; i < colors.length; i++) {
     const at = positions ? prev = Math.min(Math.max(positions[i], prev), 1) : i / (colors.length - 1);
     g.addColorStop(at, cssColor(colors[i]));
   }
-  return new NativeGradient(local, g);
+  return g;
+}
+/** the texels of one period of a tiled gradient */
+const STRIP = 1024;
+/** a LinearGradient by Shader.TileMode's nativeInt `tile`. A Canvas2D gradient only clamps, so a
+ *  REPEAT, MIRROR or DECAL one is a strip of a period (and its reflection, for MIRROR) that a
+ *  pattern lays along the gradient's line, repeated (DECAL: transparent past its ends) and
+ *  stretched across it. */
+function linearGradient(local: Affine | null, x0: number, y0: number, x1: number, y1: number, colors: Int32Array, positions: Float32Array | null, tile: number): NativeGradient {
+  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+  if (tile === 0 || !len) return gradient(local, scratch2d().createLinearGradient(x0, y0, x1, y1), colors, positions);
+  // DECAL's strip ends in a texel of each end colour, so filtering fades it out past the ends, not before
+  const mirror = tile === 2, pad = tile === 3 ? 1 : 0, w = (mirror ? 2 * STRIP : STRIP) + 2 * pad;
+  const c = new OffscreenCanvas(w, 1).getContext("2d")!;
+  c.fillStyle = withStops(c.createLinearGradient(pad, 0, pad + STRIP, 0), colors, positions);
+  c.fillRect(0, 0, STRIP + 2 * pad, 1);
+  if (mirror) { c.setTransform(-1, 0, 0, 1, 2 * STRIP, 0); c.drawImage(c.canvas, 0, 0, STRIP, 1, 0, 0, STRIP, 1); }
+  const pattern = scratch2d().createPattern(c.canvas, pad ? "repeat-y" : "repeat")!;
+  const ux = dx / STRIP, uy = dy / STRIP, strip = new DOMMatrix([ux, uy, -dy / len, dx / len, x0 - pad * ux, y0 - pad * uy]);
+  pattern.setTransform(local ? new DOMMatrix(local).multiply(strip) : strip);
+  return new NativeGradient(local, pattern);
 }
 
 /** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
@@ -264,3 +289,79 @@ export function matrixColor(k: Float32Array, color: number): number {
   return ((clamp(k[15] * r + k[16] * g + k[17] * b + k[18] * a + k[19]) << 24) | (clamp(k[0] * r + k[1] * g + k[2] * b + k[3] * a + k[4]) << 16)
     | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
+
+// Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
+const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);
+rt.registerJnis("android/graphics/Color", {
+  "nativeRGBToHSV(III[F)V": (r: number, g: number, b: number, hsv: Float32Array) => {
+    const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+    let h = 0, s = 0;
+    if (delta) {
+      s = f(delta / max);
+      h = f(r === max ? (g - b) / delta : g === max ? 2 + f((b - r) / delta) : 4 + f((r - g) / delta));
+      h = f(h * 60);
+      if (h < 0) h = f(h + 360);
+    }
+    hsv[0] = h; hsv[1] = s; hsv[2] = f(max / 255);
+  },
+  "nativeHSVToColor(I[F)I": (a: number, hsv: Float32Array) => {
+    const s = Math.min(Math.max(hsv[1], 0), 1), v = Math.min(Math.max(hsv[2], 0), 1), vb = round(f(v * 255));
+    if (Math.abs(s) <= 1 / 4096) return (a << 24 | vb << 16 | vb << 8 | vb) | 0;
+    const hx = hsv[0] < 0 || hsv[0] >= 360 ? 0 : f(hsv[0] / 60), w = Math.floor(hx), fr = f(hx - w);
+    const p = round(f(f(f(1 - s) * v) * 255)), q = round(f(f(f(1 - f(s * fr)) * v) * 255)), t = round(f(f(f(1 - f(s * f(1 - fr))) * v) * 255));
+    const [r, g, b] = [[vb, t, p], [q, vb, p], [p, vb, t], [p, q, vb], [t, p, vb]][w] ?? [vb, p, q];
+    return (a << 24 | r << 16 | g << 8 | b) | 0;
+  },
+});
+
+// ── ColorFilter and Shader: the native instances a native paint draws with ───────────────────
+// Lighting and ColorMatrix filters change theirs in place; a shader's is fixed, and Shader makes
+// a new one when its Java side changes. `m` is the local matrix's handle, 0 for identity.
+const colorFilter = (h: bigint) => deref<NativeColorFilter>(h);
+const blendFilter = (color: number, mode: number) => handle(new NativeColorFilter(null, color, BLEND_MODES[mode]));
+/** SkColorFilters::Lighting: each RGB channel scaled by `mul`'s and offset by `add`'s */
+const setMul = (k: Float32Array, mul: number) => { k[0] = (mul >>> 16 & 255) / 255; k[6] = (mul >>> 8 & 255) / 255; k[12] = (mul & 255) / 255; };
+const setAdd = (k: Float32Array, add: number) => { k[4] = add >>> 16 & 255; k[9] = add >>> 8 & 255; k[14] = add & 255; };
+rt.registerJnis("android/graphics/ColorFilter", { "nativeGetFinalizer()J": () => FINALIZER });
+rt.registerJnis("android/graphics/PorterDuffColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+rt.registerJnis("android/graphics/BlendModeColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+rt.registerJnis("android/graphics/LightingColorFilter", {
+  "native_CreateLightingFilter(II)J": (mul: number, add: number) => {
+    const k = new Float32Array(20);
+    k[18] = 1; setMul(k, mul); setAdd(k, add);
+    return handle(new NativeColorFilter(k));
+  },
+  "native_SetLightingFilterMul(JI)V": (h: bigint, mul: number) => setMul(colorFilter(h).matrix!, mul),
+  "native_SetLightingFilterAdd(JI)V": (h: bigint, add: number) => setAdd(colorFilter(h).matrix!, add),
+});
+rt.registerJnis("android/graphics/ColorMatrixColorFilter", {
+  "nativeColorMatrixFilter([F)J": (k: Float32Array) => handle(new NativeColorFilter(k.slice(0, 20))),
+  "nativeSetColorMatrix(J[F)V": (h: bigint, k: Float32Array) => colorFilter(h).matrix!.set(k.subarray(0, 20)),
+});
+
+rt.registerJnis("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
+/** a gradient's ColorLongs, which Shader requires to share the space handle `cs` names, as sRGB ARGB */
+const stopColors = (colors: BigInt64Array, cs: bigint) => Int32Array.from(colors, (c) => colorLongAt(c, cs));
+rt.registerJnis("android/graphics/LinearGradient", {
+  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null, tile: number, cs: bigint) =>
+    handle(linearGradient(localMatrix(m), x0, y0, x1, y1, stopColors(colors, cs), positions, tile)),
+});
+rt.registerJnis("android/graphics/RadialGradient", {
+  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null, tile: number, cs: bigint) => {
+    // a radial gradient's period is a ring, which no pattern repeats: it clamps
+    if (tile !== 0) rt.noteMissing(`RadialGradient tile mode ${["REPEAT", "MIRROR", "DECAL"][tile - 1]}`);
+    return handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), stopColors(colors, cs), positions));
+  },
+});
+rt.registerJnis("android/graphics/SweepGradient", {
+  "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createConicGradient(0, cx, cy), stopColors(colors, cs), positions)),
+});
+rt.registerJnis("android/graphics/BitmapShader", {
+  "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>
+    handle(new NativeBitmapShader(localMatrix(m), deref<NativeBitmap>(b), tileX, tileY)),
+});
+rt.registerJnis("android/graphics/ComposeShader", {
+  "nativeCreate(JJJI)J": (m: bigint, dst: bigint, src: bigint, mode: number) =>
+    handle(composeShader(localMatrix(m), deref<NativeShader>(dst), deref<NativeShader>(src), mode)),
+});

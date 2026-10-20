@@ -1,7 +1,7 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { awaited, rt, JObj, stubs, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, JObj, stubs, driven, peerField, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
 import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -214,11 +214,10 @@ export class NativeSurfaceTexture {
   }
 }
 const SURFACE_TEXTURE = "android/graphics/SurfaceTexture";
-let stField = "";
-const stPtr = () => stField ||= declaredField(SURFACE_TEXTURE, "mSurfaceTexture");
+const stPtr = peerField<bigint>(SURFACE_TEXTURE, "mSurfaceTexture");
 /** the native SurfaceTexture behind a Java one, or null for any other object */
 export function surfaceTextureOf(o: unknown): NativeSurfaceTexture | null {
-  const n = o && typeof o === "object" && iof(o, SURFACE_TEXTURE) ? deref((o as Record<string, bigint>)[stPtr()]) : null;
+  const n = o && typeof o === "object" && iof(o, SURFACE_TEXTURE) ? deref(stPtr(o)) : null;
   return n instanceof NativeSurfaceTexture ? n : null;
 }
 const nst = (st: object) => surfaceTextureOf(st)!;
@@ -230,13 +229,13 @@ const throwIf = (status: number, invalid: string, other: string) => {
 };
 rt.registerJnis(SURFACE_TEXTURE, {
   // single-buffer mode needs no more than this: a producer here never waits on a free buffer
-  "nativeInit(ZIZLjava/lang/ref/WeakReference;)V": function (this: Record<string, bigint>, detached: number, texName: number, _single: number, weak: object) {
-    this[stPtr()] = ownedHandle(new NativeSurfaceTexture(texName, !!detached, weak));
+  "nativeInit(ZIZLjava/lang/ref/WeakReference;)V": function (this: JObj, detached: number, texName: number, _single: number, weak: object) {
+    setDeclared(this, SURFACE_TEXTURE, { mSurfaceTexture: ownedHandle(new NativeSurfaceTexture(texName, !!detached, weak)) });
   },
-  "nativeFinalize()V": function (this: Record<string, bigint>) {
-    const h = this[stPtr()];
+  "nativeFinalize()V": function (this: JObj) {
+    const h = stPtr(this);
     nst(this).weak = null;
-    this[stPtr()] = 0n;
+    setDeclared(this, SURFACE_TEXTURE, { mSurfaceTexture: 0n });
     release(h);
   },
   "nativeUpdateTexImage()V": function (this: object) {

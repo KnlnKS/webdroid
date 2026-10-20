@@ -1,6 +1,9 @@
 // The sfnt (TrueType/OpenType) tables minikin, Skia and FreeType read apart from glyphs: a font
 // file's faces, their metrics, style, variation axes and cmap coverage, and FontFileUtil's answers.
 
+/** the bytes as a buffer of their own, which FontFace and CanvasKit take whole */
+export const ownBuffer = (b: Uint8Array): ArrayBuffer =>
+  b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer as ArrayBuffer : b.slice().buffer;
 /** a face's table directory: offsets of its tables by tag */
 type Tables = { dv: DataView; at: Map<number, number> };
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
@@ -24,7 +27,8 @@ export function sfntTables(b: Uint8Array, ttcIndex: number): Tables | null {
   }
   return { dv, at };
 }
-const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164, T_POST = 0x706f7374, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
+export const T_HEAD = 0x68656164, T_COLR = 0x434f4c52;
+const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_POST = 0x706f7374, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
 export const T_CMAP = 0x636d6170;
 const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
 const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);

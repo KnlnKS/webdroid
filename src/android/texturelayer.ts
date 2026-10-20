@@ -1,7 +1,7 @@
 // TextureView's consumer and producer halves under AOSP's TextureView: hwui's DeferredLayerUpdater
 // (TextureLayer) over the view's SurfaceTexture, which RecordingCanvas.drawTextureLayer draws with
 // the layer's transform and paint, and the ANativeWindow TextureView.lockCanvas draws into.
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { handle, deref, release } from "./handles.ts";
 import { canvasOf } from "./canvas.ts";
 import { paintAt } from "./paint.ts";
@@ -72,16 +72,15 @@ export const textureLayerNatives = {
 // TextureView.lockCanvas: an ANativeWindow over the view's SurfaceTexture, a raster per lock that
 // unlocking queues as the texture's next frame
 interface NativeWindow { texture: NativeSurfaceTexture; raster: OffscreenCanvas | null }
-let windowField = "";
-const nativeWindow = () => windowField ||= declaredField("android/view/TextureView", "mNativeWindow");
-rt.registerJnis("android/view/TextureView", {
-  "nCreateNativeWindow(Landroid/graphics/SurfaceTexture;)V": function (this: Record<string, bigint>, st: JObj) {
+const TEXTURE_VIEW = "android/view/TextureView", nativeWindow = peerField<bigint>(TEXTURE_VIEW, "mNativeWindow");
+rt.registerJnis(TEXTURE_VIEW, {
+  "nCreateNativeWindow(Landroid/graphics/SurfaceTexture;)V": function (this: JObj, st: JObj) {
     const texture = surfaceTextureOf(st);
-    this[nativeWindow()] = texture ? handle({ texture, raster: null } satisfies NativeWindow) : 0n;
+    setDeclared(this, TEXTURE_VIEW, { mNativeWindow: texture ? handle({ texture, raster: null } satisfies NativeWindow) : 0n });
   },
-  "nDestroyNativeWindow()V": function (this: Record<string, bigint>) {
-    const h = this[nativeWindow()];
-    this[nativeWindow()] = 0n;
+  "nDestroyNativeWindow()V": function (this: JObj) {
+    const h = nativeWindow(this);
+    setDeclared(this, TEXTURE_VIEW, { mNativeWindow: 0n });
     if (h) release(h);
   },
   "nLockCanvas(JLandroid/graphics/Canvas;Landroid/graphics/Rect;)Z": (h: bigint, canvas: JObj) => {

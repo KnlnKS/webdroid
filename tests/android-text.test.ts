@@ -264,8 +264,7 @@ describe("minikin", () => {
       const { text, size } = cases[+i];
       await vcall(paint, "setTextSize", "(F)V", size);
       await vcall(paint, "setLetterSpacing", "(F)V", Math.fround(+spacing * 0.05));
-      const out = new Float32Array(text.length);
-      const native = await paintOf(paint);
+      const out = new Float32Array(text.length), native = await paintOf(paint);
       await withFonts(() => advances(styleOf(native), text, 0, text.length, out));
       out.forEach((a, k) => { if (Math.abs(a - +device[k]) > 0.01) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
     }

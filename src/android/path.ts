@@ -5,15 +5,16 @@
 // into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
 // which is what iteration, measurement, bounds and every non-native Path2D build read.
 
-import { rt, declaredField } from "../jvm/runtime.ts";
-import { deref, handle, release } from "./handles.ts";
-import { type Mat, mapPoint, snap } from "./matrix.ts";
+import { rt, noops, peerField } from "../jvm/runtime.ts";
+import { deref, handle, ownedHandle, release, FINALIZER } from "./handles.ts";
+import { type Mat, mapPoint, matrixAt, snap } from "./matrix.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { type PathCommands, pathOp as skiaPathOp } from "./skia.ts";
-import type { Box } from "./graphics.ts";
+import { setEdges, type Box } from "./graphics.ts";
 
 type PathOp = [string, ...number[]];
-type Verb = number[];
+/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
+export type Verb = number[];
 /** what the pen writes to: Path2D itself, the verb list, or a scan converter */
 export interface Sink {
   moveTo(x: number, y: number): void;
@@ -26,7 +27,7 @@ export interface Sink {
 }
 
 /** SkPath::Verb, which PathIterator reports */
-const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
+export const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
 /** Path$Direction.nativeInt */
 const CW = 0, CCW = 1;
 const NEARLY_ZERO = 1 / 4096;
@@ -211,7 +212,6 @@ class Pen {
 /** the unit quadrant conics' points: (1,0) (1,1) (0,1) (-1,1) (-1,0) (-1,-1) (0,-1) (1,-1) */
 const QUADRANT_PTS = [1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1, 0, -1, 1, -1];
 
-/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
 class VerbSink implements Sink {
   verbs: Verb[] = [];
   private x = 0; private y = 0;
@@ -293,6 +293,7 @@ export class NativePath {
   /** where the next verb starts */
   readonly pen = new Pen();
   private p2d: Path2D | null = null;
+  private vs: Verb[] | null = null;
   /** SkPathRef's generation ID, assigned when asked after a change; the empty path's is 1 */
   private gen = 1;
 
@@ -307,7 +308,9 @@ export class NativePath {
     }
     return this.p2d;
   }
-  private changed() { this.p2d = null; this.gen = 0; }
+  /** the verbs SkPath stores, until the path changes; they are not to be modified */
+  verbs(): Verb[] { return this.vs ??= pathVerbs(this.ops); }
+  private changed() { this.p2d = null; this.vs = null; this.gen = 0; }
   private add(op: PathOp) { this.ops.push(op); this.pen.op(op); this.changed(); }
   /** SkPath::injectMoveToIfNeeded: a segment with no open contour starts one where the pen is */
   private begin() { if (!this.pen.open) this.moveTo(this.pen.x, this.pen.y); }
@@ -375,7 +378,7 @@ export class NativePath {
     this.ops = [];
     this.fillRule = "nonzero"; this.inverseFill = false;
     this.pen.clear();
-    this.p2d = null; this.gen = 1;
+    this.p2d = this.vs = null; this.gen = 1;
   }
   set(src: NativePath) {
     if (src === this) return;
@@ -409,7 +412,7 @@ export class NativePath {
   /** SkPath::setLastPt: moves the last stored point, or starts the path there */
   setLastPoint(x: number, y: number) {
     if (!this.ops.length) return this.moveTo(x, y);
-    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(pathVerbs(this.ops)) : this.ops;
+    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(this.verbs()) : this.ops;
     let i = ops.length - 1;
     while (ops[i][0] === "z") i--;
     const op = ops[i];
@@ -424,7 +427,7 @@ export class NativePath {
   }
   /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
   isRect(): Box | null {
-    const vs = pathVerbs(this.ops), xs: number[] = [], ys: number[] = [];
+    const vs = this.verbs(), xs: number[] = [], ys: number[] = [];
     let i = 0;
     for (; i < vs.length; i++) {
       const v = vs[i];
@@ -448,12 +451,12 @@ export class NativePath {
   }
   /** SkPath::isInterpolatable: the same verbs */
   isInterpolatable(o: NativePath): boolean {
-    const a = pathVerbs(this.ops), b = pathVerbs(o.ops);
+    const a = this.verbs(), b = o.verbs();
     return a.length === b.length && a.every((v, i) => v[0] === b[i][0]);
   }
   /** SkPath::interpolate: out holds this path's verbs over points weighted `w` toward this path */
   interpolate(end: NativePath, w: number, out: NativePath): boolean {
-    const verbs = pathVerbs(this.ops), a = verbPoints(verbs), b = verbPoints(pathVerbs(end.ops));
+    const verbs = this.verbs(), a = verbPoints(verbs), b = verbPoints(end.verbs());
     if (a.length !== b.length) return false;
     if (!a.length) return true;
     let k = 0;
@@ -469,10 +472,9 @@ const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: tr
 export const walkPath = (path: NativePath, sink: Sink) => walkOps(path.ops, new Pen(sink));
 
 export const pathAt = (h: bigint) => deref<NativePath>(h);
-let mNativePath = "";
+const mNativePath = peerField<bigint>("android/graphics/Path", "mNativePath");
 /** the geometry behind a Java Path */
-export const nativePathOf = (p: object): NativePath =>
-  pathAt((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
+export const nativePathOf = (p: object): NativePath => pathAt(mNativePath(p));
 
 // ── Path.op: SkPathOps, through the tab's CanvasKit
 /** the path as CanvasKit's commands */
@@ -509,21 +511,20 @@ export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number
   });
 }
 
-/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it */
-export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
+/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it, once CanvasKit (which the page loads before anything draws) can subtract it */
+export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] | Promise<[Path2D, CanvasFillRule]> {
   if (path.fillRule === "evenodd") {
     const inverse = new Path2D();
     inverse.rect(l, t, r - l, b - t);
     inverse.addPath(path.path());
     return [inverse, "evenodd"];
   }
-  // the bounds less the path under its plain fill; the page's CanvasKit is loaded before anything draws
+  // the bounds less the path under its plain fill
   const outer = new NativePath(), plain = new NativePath(), result = new NativePath();
   outer.addRect(l, t, r, b, CW);
   plain.set(path);
   plain.setFillType(path.fillType() & 1);
-  if (pathOp(result, outer, plain, DIFFERENCE) instanceof Promise) throw new Error("CanvasKit is not loaded");
-  return [result.path(), result.fillRule];
+  return after(pathOp(result, outer, plain, DIFFERENCE), (): [Path2D, CanvasFillRule] => [result.path(), result.fillRule]);
 }
 
 type Pt = [number, number];
@@ -531,7 +532,7 @@ type Pt = [number, number];
 export function pathIsConvex(path: NativePath): boolean {
   const points: Pt[] = [];
   let start: Pt = [0, 0], ended = false;
-  for (const verb of pathVerbs(path.ops)) {
+  for (const verb of path.verbs()) {
     if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return false;
     if (verb[0] === MOVE) {
       if (points.length) ended = true;
@@ -593,7 +594,7 @@ export function approximate(p: NativePath, error: number): Float32Array {
     if (lx === x && ly === y) return;
     lens.push(lens.at(-1)! + Math.hypot(x - lx, y - ly)); xs.push(x); ys.push(y);
   };
-  const verbs = pathVerbs(p.ops);
+  const verbs = p.verbs();
   let mx = 0, my = 0;
   for (let i = 0; i < verbs.length; i++) {
     const v = verbs[i];
@@ -695,7 +696,7 @@ export class PathMeasure {
 
   /** SkPathMeasure::setPath: the path is copied, and the first contour with length measured */
   setPath(p: NativePath | undefined, forceClosed: boolean) {
-    this.verbs = p ? pathVerbs(p.ops) : [];
+    this.verbs = p ? p.verbs() : [];
     this.i = 0;
     this.forceClosed = forceClosed;
     this.nextContour();
@@ -886,7 +887,7 @@ function chopCubic(src: Float64Array, t: number, dst: Float64Array) {
 export class VerbIterator {
   private i = 0;
   readonly verbs: Verb[];
-  constructor(p: NativePath) { this.verbs = pathVerbs(p.ops); }
+  constructor(p: NativePath) { this.verbs = p.verbs(); }
   peek(): number { return this.verbs[this.i]?.[0] ?? DONE; }
   next(pts: Float32Array, off: number): number {
     const v = this.verbs[this.i];
@@ -897,10 +898,111 @@ export class VerbIterator {
   }
 }
 
+// ── the natives of Path, PathMeasure and PathIterator
+rt.registerJnis("android/graphics/Path", {
+  "nInit()J": () => handle(new NativePath()),
+  // a null source is an empty path
+  "nInit(J)J": (h: bigint) => { const p = new NativePath(); if (h) p.set(pathAt(h)); return handle(p); },
+  "nGetFinalizer()J": () => FINALIZER,
+  "nReset(J)V": (h: bigint) => pathAt(h).reset(),
+  "nRewind(J)V": (h: bigint) => pathAt(h).reset(),
+  "nSet(JJ)V": (h: bigint, s: bigint) => pathAt(h).set(pathAt(s)),
+  "nIsEmpty(J)Z": (h: bigint) => (pathAt(h).ops.length ? 0 : 1),
+  "nGetGenerationID(J)I": (h: bigint) => pathAt(h).generation(),
+  "nGetFillType(J)I": (h: bigint) => pathAt(h).fillType(),
+  "nSetFillType(JI)V": (h: bigint, ft: number) => pathAt(h).setFillType(ft),
+
+  "nMoveTo(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).moveTo(x, y),
+  "nLineTo(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).lineTo(x, y),
+  "nQuadTo(JFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number) => pathAt(h).quadTo(x1, y1, x2, y2),
+  "nCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => pathAt(h).cubicTo(a, b, c, d, e, f),
+  "nConicTo(JFFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number, w: number) => pathAt(h).conicTo(x1, y1, x2, y2, w),
+  // relative to the last point, which a close returns to the contour's start
+  "nRMoveTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = pathAt(h); p.moveTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRLineTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = pathAt(h); p.lineTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRQuadTo(JFFFF)V": (h: bigint, a: number, b: number, c: number, d: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.quadTo(x + a, y + b, x + c, y + d);
+  },
+  "nRCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.cubicTo(x + a, y + b, x + c, y + d, x + e, y + f);
+  },
+  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, w: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.conicTo(x + a, y + b, x + c, y + d, w);
+  },
+  "nClose(J)V": (h: bigint) => pathAt(h).close(),
+  "nSetLastPoint(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).setLastPoint(x, y),
+
+  "nAddRect(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => pathAt(h).addRect(l, t, r, b, d),
+  "nAddOval(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => pathAt(h).addOval(l, t, r, b, d),
+  "nAddCircle(JFFFI)V": (h: bigint, x: number, y: number, r: number, d: number) => pathAt(h).addCircle(x, y, r, d),
+  "nAddArc(JFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number) => pathAt(h).addArc(l, t, r, b, start, sweep),
+  "nArcTo(JFFFFFFZ)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number, force: number) =>
+    pathAt(h).arcTo(l, t, r, b, start, sweep, !!force),
+  // SkPath::addRoundRect ignores a negative radius
+  "nAddRoundRect(JFFFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, d: number) => {
+    if (rx >= 0 && ry >= 0) pathAt(h).addRoundRect(l, t, r, b, [rx, ry, rx, ry, rx, ry, rx, ry], d);
+  },
+  "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array, d: number) => pathAt(h).addRoundRect(l, t, r, b, radii, d),
+  "nAddPath(JJ)V": (h: bigint, o: bigint) => pathAt(h).append(pathAt(o)),
+  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => pathAt(h).append(pathAt(o), undefined, dx, dy),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => pathAt(h).append(pathAt(o), matrixAt(mat)),
+
+  "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => pathAt(h).offset(dx, dy),
+  "nTransform(JJ)V": (h: bigint, mat: bigint) => pathAt(h).transform(matrixAt(mat)),
+  // a null destination transforms in place
+  "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
+    const d = dst ? pathAt(dst) : pathAt(h);
+    d.set(pathAt(h));
+    d.transform(matrixAt(mat));
+  },
+  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: object) => setEdges(r, pathAt(h).bounds()),
+  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: object) => {
+    const b = pathAt(h).isRect();
+    if (b) setEdges(r, b);
+    return +!!b;
+  },
+  "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(pathAt(h)) ? 1 : 0),
+  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(pathAt(dst), pathAt(a), pathAt(b), op), (done) => +done),
+  "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (pathAt(a).isInterpolatable(pathAt(b)) ? 1 : 0),
+  "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => (pathAt(a).interpolate(pathAt(b), t, pathAt(out)) ? 1 : 0),
+  "nApproximate(JF)[F": (h: bigint, error: number) => approximate(pathAt(h), error),
+  ...noops("nIncReserve(JI)V"),
+});
+
+// PathMeasure frees its native state from finalize(), which never runs here
+const measure = (h: bigint) => deref<PathMeasure>(h);
+rt.registerJnis("android/graphics/PathMeasure", {
+  "native_create(JZ)J": (p: bigint, forceClosed: number) => {
+    const m = new PathMeasure();
+    m.setPath(p ? pathAt(p) : undefined, !!forceClosed);
+    return ownedHandle(m);
+  },
+  "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? pathAt(p) : undefined, !!forceClosed),
+  "native_getLength(J)F": (h: bigint) => measure(h).length(),
+  "native_getPosTan(JF[F[F)Z": (h: bigint, d: number, pos: Float32Array | null, tan: Float32Array | null) => (measure(h).getPosTan(d, pos, tan) ? 1 : 0),
+  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrixAt(m), flags) ? 1 : 0),
+  "native_getSegment(JFFJZ)Z": (h: bigint, start: number, stop: number, dst: bigint, moveTo: number) =>
+    (measure(h).getSegment(start, stop, pathAt(dst), !!moveTo) ? 1 : 0),
+  "native_isClosed(J)Z": (h: bigint) => (measure(h).isClosed() ? 1 : 0),
+  "native_nextContour(J)Z": (h: bigint) => (measure(h).nextContour() ? 1 : 0),
+  "native_destroy(J)V": release,
+});
+
+// nNext writes into the non-movable float[8] whose address is its handle (VMRuntime.addressOf)
+const iter = (h: bigint) => deref<VerbIterator>(h);
+rt.registerJnis("android/graphics/PathIterator", {
+  "nCreate(J)J": (p: bigint) => handle(new VerbIterator(pathAt(p))),
+  "nGetFinalizer()J": () => FINALIZER,
+  "nPeek(J)I": (h: bigint) => iter(h).peek(),
+  "nNext(JJ)I": (h: bigint, pts: bigint) => iter(h).next(deref<Float32Array>(pts), 0),
+});
+
 // ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
 // point arrays, as PathIterator does. Arcs come out as cubics rather than conics, so the
 // conic-evaluation mode and tolerance have nothing to convert and Conic never appears.
-const iter = (h: bigint) => deref<VerbIterator>(h);
 rt.registerJnis("androidx/graphics/path/PathIteratorPreApi34Impl", {
   "createInternalPathIterator(Landroid/graphics/Path;IF)J": (p: object) => handle(new VerbIterator(nativePathOf(p))),
   "destroyInternalPathIterator(J)V": release,

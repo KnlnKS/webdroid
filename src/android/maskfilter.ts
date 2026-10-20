@@ -9,6 +9,8 @@ import type { Ctx2D } from "./recording.ts";
 
 /** Blur::convertRadiusToSigma */
 const radiusToSigma = (r: number) => (r > 0 ? 0.57735 * r + 0.5 : 0);
+/** SkMaskBlurFilter pins a device sigma to this */
+export const MAX_SIGMA = 135;
 export abstract class NativeMaskFilter {
   /** whether apply writes the shape's final colours (a 3D mask), not coverage to be coloured */
   readonly colored: boolean = false;
@@ -24,7 +26,7 @@ export class BlurMask extends NativeMaskFilter {
   constructor(sigma: number, style: number) { super(); this.sigma = sigma; this.style = style; }
   /** SkBlurMask's margin: three box passes, or the Bessel window of a small sigma */
   override border() {
-    const sigma = Math.min(this.sigma, 135);
+    const sigma = Math.min(this.sigma, MAX_SIGMA);
     if (this.style === 3) return 0;
     if (sigma >= 2) {
       const window = Math.max(1, Math.floor(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5));
@@ -44,7 +46,7 @@ export class BlurMask extends NativeMaskFilter {
     return n - 1;
   }
   apply(ctx: Ctx2D, source: CanvasImageSource, x: number, y: number, scale: number) {
-    ctx.filter = `blur(${Math.min(this.sigma * scale, 135)}px)`;
+    ctx.filter = `blur(${Math.min(this.sigma * scale, MAX_SIGMA)}px)`;
     ctx.drawImage(source, x, y); ctx.filter = "none";
     if (this.style) {
       ctx.globalCompositeOperation = this.style === 2 ? "destination-out" : this.style === 3 ? "destination-in" : "source-over";
@@ -76,7 +78,7 @@ class EmbossMask extends NativeMaskFilter {
     ctx.drawImage(source, x, y);
     const src = ctx.getImageData(0, 0, w, h);
     ctx.clearRect(0, 0, w, h);
-    ctx.filter = `blur(${this.sigma * scale}px)`;
+    ctx.filter = `blur(${Math.min(this.sigma * scale, MAX_SIGMA)}px)`;
     ctx.drawImage(source, x, y); ctx.filter = "none";
     const blurred = ctx.getImageData(0, 0, w, h), b = blurred.data, s = src.data;
     // the inner blur: the blurred coverage inside the shape (merge_src_with_blur)

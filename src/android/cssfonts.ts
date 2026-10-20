@@ -5,14 +5,14 @@
 // away from 100 and 0) is pinned in an instance HarfBuzz makes.
 
 import { instanceFace } from "./harfbuzz.ts";
-import { type FvarAxis, faceCount, sfntFace } from "./sfnt.ts";
-import { type NativeFont, type FakedFont, type NativeTypeface, WGHT, ITAL, pending, isPlatformFont, resolveDefault, withFonts } from "./fonts.ts";
+import { type FvarAxis, faceCount, ownBuffer, sfntFace } from "./sfnt.ts";
+import { type NativeFont, type FakedFont, type NativeTypeface, WGHT, ITAL, WDTH, pending, isPlatformFont, resolveDefault, withFonts } from "./fonts.ts";
 import { whenMainIdle } from "./mainloop.ts";
 import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
 
 /** the value Chrome gives an axis on a canvas with a normal stretch and style */
 const chromeAxis = (a: FvarAxis) => a.tag === WDTH ? 100 : a.tag === SLNT ? 0 : a.tag === OPSZ ? NaN : a.def;
-const WDTH = 0x77647468, SLNT = 0x736c6e74, OPSZ = 0x6f70737a;
+const SLNT = 0x736c6e74, OPSZ = 0x6f70737a;
 const cssFaces = new WeakMap<NativeFont, Map<number, string | Promise<string>>>();
 let cssFaceIds = 0;
 /** the CSS family that draws `f` as minikin draws it, once registered */
@@ -62,9 +62,8 @@ async function registerCss(font: NativeFont, ital: number): Promise<string> {
   };
   // keep the browser's line metrics Paint's
   if (m) { desc.ascentOverride = `${m.ascent * 100}%`; desc.descentOverride = `${m.descent * 100}%`; }
-  const src = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
   try {
-    const face = new FontFace(name, src as ArrayBuffer, desc);
+    const face = new FontFace(name, ownBuffer(bytes), desc);
     await face.load();
     const fonts = typeof document !== "undefined" ? document.fonts
       : (globalThis as unknown as { fonts: FontFaceSet }).fonts;

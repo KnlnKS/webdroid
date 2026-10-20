@@ -2,7 +2,7 @@
 // android_view_MotionEvent.cpp's natives. MotionEvent, PointerCoords and PointerProperties run
 // from AOSP bytecode; TS reaches an event's native state through motionOf.
 
-import { rt, type JObj, declaredField } from "../jvm/runtime.ts";
+import { rt, type JObj, declaredField, peerField } from "../jvm/runtime.ts";
 import { ownedHandle, deref } from "./handles.ts";
 import { matrixOf } from "./matrix.ts";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel.ts";
@@ -205,8 +205,7 @@ export class NativeMotionEvent {
   }
 }
 
-let ptrField = "";
-const ptrOf = (ev: object) => (ev as Record<string, bigint>)[ptrField ||= declaredField(ME, "mNativePtr")];
+const ptrOf = peerField<bigint>(ME, "mNativePtr");
 const at = (h: bigint) => deref<NativeMotionEvent>(h);
 /** the event at `h` (a new one when 0) after `fill`, as a handle */
 const into = (h: bigint, fill: (e: NativeMotionEvent) => unknown): bigint => {

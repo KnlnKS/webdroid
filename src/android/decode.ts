@@ -6,7 +6,7 @@
 // pixels come from createImageBitmap (libheif for HEIF), sampled and scaled as the browser decodes
 // them, and become a NativeBitmap without an intermediate raster.
 
-import { awaited, rt, declaredField, driven, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, declaredField, peerField, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, ownedHandle, deref, release } from "./handles.ts";
 import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio.ts";
@@ -324,10 +324,9 @@ const setOuts = driven(function* setOuts(options: Options, w: number, h: number,
   options[o.outConfig] = yield javaConfig(config);
   options[o.outColorSpace] = config === ALPHA_8 ? null : yield namedSpace(0);
 });
-let configInt = "";
+const configInt = peerField<number>("android/graphics/Bitmap$Config", "nativeInt");
 /** GraphicsJNI::getNativeBitmapColorType: a Bitmap.Config's legacy number, 0 for none */
-const nativeConfig = (config: object | null): number =>
-  config ? (config as Record<string, number>)[configInt ||= declaredField("android/graphics/Bitmap$Config", "nativeInt")] : 0;
+const nativeConfig = (config: object | null): number => config ? configInt(config) : 0;
 const javaConfig = (config: number) => scall("android/graphics/Bitmap$Config", "nativeToConfig", "(I)Landroid/graphics/Bitmap$Config;", config);
 
 /** The decoded pixels as a bitmap: the reused one reconfigured to hold them, or a new one (HARDWARE

@@ -7,7 +7,7 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { scall } from "../jvm/natives/jentry.ts";
-import { deref, handle, ownedHandle, take } from "./handles.ts";
+import { deref, handle, ownedHandle, release, take } from "./handles.ts";
 import type { NativePaint } from "./paint.ts";
 import { type NativeRenderNode, prop as canvasProperty } from "./rendernode.ts";
 import { interpolatePaths, PathData } from "./pathparser.ts";
@@ -57,6 +57,107 @@ const INTERPOLATORS = {
 };
 rt.registerJnis("android/graphics/animation/NativeInterpolatorFactory", Object.fromEntries(
   Object.entries(INTERPOLATORS).map(([sig, make]) => [sig, (...a: never[]) => handle((make as (...a: never[]) => Interpolator)(...a))])));
+
+// ── android.graphics.Interpolator: hwui's SkiaInterpolator ─────────────────────────────
+// Key frames at unsigned millisecond times, each with the cubic that eases toward the next;
+// timeToValues answers SkiaInterpolatorBase::Result (0 normal, 1 freeze start, 2 freeze end).
+const IDENTITY_BLEND = [0.33333333, 0.33333333, 0.66666667, 0.66666667].map(Math.fround);
+class KeyFrames {
+  times!: Uint32Array; blends!: Float32Array; values!: Float32Array;
+  elems = 0; repeat = 1; mirror = false;
+  constructor(elems: number, frames: number) { this.reset(elems, frames); }
+  reset(elems: number, frames: number) {
+    this.elems = elems & 0xff; this.repeat = 1; this.mirror = false;
+    this.times = new Uint32Array(frames); this.blends = new Float32Array(frames * 4); this.values = new Float32Array(frames * this.elems);
+  }
+  /** SkiaInterpolator's binarySearch over the first `count` times: the index of a time the
+   *  bisection lands on, else ~ where `time` would go, after an equal time it did not land on
+   *  (so the last frame's own time is past the end: the device freezes there) */
+  search(time: number, count = this.times.length): number {
+    if (count <= 0) return ~0;
+    let lo = 0, hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1, t = this.times[mid];
+      if (t === time) return mid;
+      if (t < time) lo = mid + 1; else hi = mid;
+    }
+    return time < this.times[lo] ? ~lo : ~(lo + 1);
+  }
+  timeToValues(time: number, out: Float32Array | null): number {
+    const times = this.times, n = times.length, f = Math.fround;
+    let result = 0;
+    time >>>= 0;
+    if (this.repeat !== 1) {
+      const start = times[0], total = (times[n - 1] - start) >>> 0, end = Math.floor(f(this.repeat * total)) >>> 0;
+      let offset = (time - start) >>> 0;
+      if (offset >= end) {
+        const fraction = f(this.repeat - Math.trunc(this.repeat));
+        offset = fraction === 0 && this.repeat > 0 ? total : Math.floor(f(fraction * total)) >>> 0;
+        result = 2;
+      } else {
+        offset %= this.mirror ? total * 2 : total;
+        if (offset > total) offset = total * 2 - offset;
+      }
+      time = (offset + start) >>> 0;
+    }
+    let index = this.search(time), exact = true;
+    if (index < 0) {
+      index = ~index;
+      if (index === 0) result = 1;
+      else if (index === n) { index--; result = 2; }
+      else exact = false;
+    }
+    if (out) {
+      const e = this.elems, next = index * e;
+      if (exact) out.set(this.values.subarray(next, next + e));
+      else {
+        const b = (index - 1) * 4, t = unitCubicInterp(f((time - times[index - 1]) / (times[index] - times[index - 1])),
+          this.blends[b], this.blends[b + 1], this.blends[b + 2], this.blends[b + 3]);
+        for (let i = 0; i < e; i++) { const p = this.values[next - e + i]; out[i] = f(p + f(f(this.values[next + i] - p) * t)); }
+      }
+    }
+    return result;
+  }
+}
+/** SkiaInterpolatorBase::UnitCubicInterp: y on the unit cubic (0,0) (bx,by) (cx,cy) (1,1) at x,
+ *  found by bisection in 2.14 fixed point */
+function unitCubicInterp(value: number, bx: number, by: number, cx: number, cy: number): number {
+  const ONE = 1 << 14, dot14 = (v: number) => (v <= 0 ? 0 : v >= 1 ? ONE : Math.floor(v * 65536) >> 2);
+  const mul = (a: number, b: number) => (a * b + (1 << 13)) >> 14;
+  const evalCubic = (t: number, a: number, b: number, c: number) => mul(mul(mul(c, t) + b, t) + a, t);
+  const x = dot14(value);
+  if (x === 0) return 0;
+  if (x === ONE) return 1;
+  let b = dot14(bx), c = dot14(cx), A = 3 * b, B = 3 * (c - 2 * b), C = 3 * (b - c) + ONE;
+  let t = ONE >> 1, dt = ONE >> 1;
+  for (let i = 0; i < 13; i++) {
+    dt >>= 1;
+    if (x < evalCubic(t, A, B, C)) t -= dt;
+    else t += dt;
+  }
+  b = dot14(by); c = dot14(cy); A = 3 * b; B = 3 * (c - 2 * b); C = 3 * (b - c) + ONE;
+  return Math.fround(evalCubic(t, A, B, C) / ONE);
+}
+// Interpolator frees its native state from finalize(), which never runs here
+const keyFrames = (h: bigint) => deref<KeyFrames>(h);
+rt.registerJnis("android/graphics/Interpolator", {
+  "nativeConstructor(II)J": (elems: number, frames: number) => ownedHandle(new KeyFrames(elems, frames)),
+  "nativeDestructor(J)V": release,
+  "nativeReset(JII)V": (h: bigint, elems: number, frames: number) => keyFrames(h).reset(elems, frames),
+  // a key frame must come after the ones before it, or SkiaInterpolator leaves it unset
+  "nativeSetKeyFrame(JII[F[F)V": (h: bigint, index: number, msec: number, values: Float32Array, blend: Float32Array | null) => {
+    const k = keyFrames(h), time = msec >>> 0;
+    if (k.search(time, index) !== ~index) return;
+    k.times[index] = time;
+    k.blends.set(blend ? blend.subarray(0, 4) : IDENTITY_BLEND, index * 4);
+    k.values.set(values.subarray(0, k.elems), index * k.elems);
+  },
+  "nativeSetRepeatMirror(JFZ)V": (h: bigint, repeat: number, mirror: number) => {
+    const k = keyFrames(h);
+    k.repeat = Math.min(repeat, 32000); k.mirror = !!mirror;
+  },
+  "nativeTimeToValues(JI[F)I": (h: bigint, msec: number, values: Float32Array | null) => keyFrames(h).timeToValues(msec, values),
+});
 
 // ── BaseRenderNodeAnimator: play states, requests staged from Java, and a value animated from the
 // start value (the target's own unless one was set) to the final one

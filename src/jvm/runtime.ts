@@ -256,6 +256,12 @@ export function declaredField(cls: string, name: string): string {
   if (prop === undefined) declaredFields.set(key, prop = fieldNames.find?.(cls, name) ?? "");
   return prop;
 }
+/** a reader of `cls`'s instance field `name` for a native that reads it on every call, such as the
+ *  handle of a Java object's native peer: the property is resolved on first use */
+export function peerField<T>(cls: string, name: string): (o: object) => T {
+  let prop = "";
+  return (o) => (o as Record<string, T>)[prop ||= declaredField(cls, name)];
+}
 /** how the World names an instance field, which a facade of the object answers under that name */
 export const fieldNames = { find: null as ((cls: string, name: string) => string | undefined) | null };
 function fieldOf(cls: string, name: string): string {

@@ -1,11 +1,12 @@
 // BaseCanvas's draws (and BaseRecordingCanvas's, which record the same way into a display list):
 // each SkCanvas::drawXxx as its geometry, drawn through the paint by NativeCanvas.drawShape or,
-// for text and images, through the paint's alpha, blend mode and filters.
+// for text and images, inside the same beginPaint bracket.
 
 import { isRecording, recordOrRun, type Ctx2D } from "./recording.ts";
-import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
+import { rasterPlan, tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
 import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
 import { rt } from "../jvm/runtime.ts";
+import { after } from "../jvm/natives/jentry.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { deref } from "./handles.ts";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
@@ -14,39 +15,33 @@ import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, 
 import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping.ts";
 import { fontNatives } from "./fonts.ts";
 import { paintAdvance } from "./minikin.ts";
-import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
+import { NativePaint, UNBOUNDED, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
 import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
+import { BlurMask } from "./maskfilter.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
-import { type NativeCanvas, drawingCanvas, beginAlpha, beginShaderAlpha, endAlpha, unsupported } from "./canvas.ts";
+import { type NativeCanvas, drawingCanvas, beginPaint, endPaint, unsupported } from "./canvas.ts";
 
-function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
-  if (tryBitmapPath(nc, p, path)) return;
+function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
+  const plan = rasterPlan(nc, p);
+  if (plan && tryBitmapPath(nc, p, plan, path)) return;
   if (!path.inverseFill) {
-    nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path);
+    nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path, plan);
     return;
   }
   const bounds = canvasLocalBounds(nc.ctx);
   if (!bounds) return;
-  const [inverse, rule] = inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]);
-  nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
+  return after(inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]), ([inverse, rule]) => {
+    nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
+  });
 }
 function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
-  if (tryBitmapRect(nc, p, left, top, left + width, top + height)) return;
-  if (p.blend === "source-in" && p.style === 0) {
-    const shape = new Path2D();
-    shape.rect(left, top, width, height);
-    nc.ctx.save();
-    try {
-      nc.ctx.clip(shape);
-      nc.drawShape(p, (c) => c.fill(shape), (c) => c.stroke(shape));
-    } finally { nc.ctx.restore(); }
-    return;
-  }
+  const plan = rasterPlan(nc, p);
+  if (plan && tryBitmapRect(nc, p, plan, left, top, left + width, top + height)) return;
   nc.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height),
-    () => shapePath((g) => g.addRect(left, top, left + width, top + height, 0)));
+    () => shapePath((g) => g.addRect(left, top, left + width, top + height, 0)), plan);
 }
 /** a shape as SkCanvas makes it a path, for a path effect */
 function shapePath(build: (p: NativePath) => void): NativePath {
@@ -74,7 +69,8 @@ function drawColor(nc: NativeCanvas, color: number, mode: number) {
 function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: NativePaint) {
   if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
   const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
-  if (tryBitmapOval(nc, p, left, top, right, bottom, sweep)) return;
+  const plan = rasterPlan(nc, p);
+  if (plan && tryBitmapOval(nc, p, plan, left, top, right, bottom, sweep)) return;
   const path = new Path2D();
   const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
@@ -86,7 +82,7 @@ function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, s
     if (useCenter) g.moveTo(cx, cy);
     g.arcTo(left, top, right, bottom, start, sweep, !useCenter);
     if (useCenter) g.close();
-  }));
+  }), plan);
 }
 function drawOval(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   if (l === r || t === b) return;
@@ -100,10 +96,11 @@ const cornerRadii = (r: Float32Array) => [radii(r[0], r[1]), radii(r[2], r[3]), 
 export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
-  if (tryBitmapRoundRect(nc, p, left, top, left + width, top + height, rx, ry)) return;
+  const plan = rasterPlan(nc, p);
+  if (plan && tryBitmapRoundRect(nc, p, plan, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
   path.roundRect(left, top, width, height, radii(rx, ry));
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)));
+  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)), plan);
 }
 /** the ring between two round rects, each with one radius pair or one per corner (as a 2D
  *  context's roundRect takes them) */
@@ -129,25 +126,30 @@ function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n:
     drawPath(nc, g, q);
   }
 }
+const NOOP = () => {};
+/** SkDraw::drawPoints: lines stroked (style 1) and points filled (0), whatever the paint's style */
+function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D) => void, plan?: GlobalCompositeOperation | null) {
+  const was = p.style;
+  p.style = style;
+  try { nc.drawShape(p, style ? NOOP : draw, style ? draw : NOOP, undefined, plan); } finally { p.style = was; }
+}
 function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: number, p: NativePaint) {
   if (p.pathEffect && !p.dash) return effectedLines(nc, [x0, y0, x1, y1], 0, 4, p);
-  if (tryBitmapLine(nc, p, x0, y0, x1, y1)) return;
-  nc.prep(p, true);
-  nc.ctx.beginPath();
-  nc.ctx.moveTo(x0, y0);
-  nc.ctx.lineTo(x1, y1);
-  nc.ctx.stroke();
+  const plan = rasterPlan(nc, p);
+  if (plan && tryBitmapLine(nc, p, plan, x0, y0, x1, y1)) return;
+  drawAs(nc, p, 1, (c) => { c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); }, plan);
 }
 function drawLines(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
   checkPts(pts, off, n);
   if (p.pathEffect && !p.dash) return effectedLines(nc, pts, off, n, p);
-  nc.prep(p, true);
-  nc.ctx.beginPath();
-  for (let i = off, end = off + (n & ~3); i < end; i += 4) {
-    nc.ctx.moveTo(pts[i], pts[i + 1]);
-    nc.ctx.lineTo(pts[i + 2], pts[i + 3]);
-  }
-  nc.ctx.stroke();
+  drawAs(nc, p, 1, (c) => {
+    c.beginPath();
+    for (let i = off, end = off + (n & ~3); i < end; i += 4) {
+      c.moveTo(pts[i], pts[i + 1]);
+      c.lineTo(pts[i + 2], pts[i + 3]);
+    }
+    c.stroke();
+  });
 }
 /** Skia draws a point as the stroke's cap: a disc for a round cap, otherwise a square; a
  *  hairline point is one pixel */
@@ -157,10 +159,11 @@ function pointPath(ctx: Ctx2D, x: number, y: number, p: NativePaint) {
 }
 function drawPoints(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
   checkPts(pts, off, n);
-  nc.prep(p, false);
-  nc.ctx.beginPath();
-  for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(nc.ctx, pts[i], pts[i + 1], p);
-  nc.ctx.fill();
+  drawAs(nc, p, 0, (c) => {
+    c.beginPath();
+    for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(c, pts[i], pts[i + 1], p);
+    c.fill();
+  });
 }
 function drawRegion(nc: NativeCanvas, region: NativeRegion, p: NativePaint) {
   const path = new Path2D();
@@ -181,31 +184,43 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
   });
 }
 
-/** an image drawn through the paint as SkCanvas::drawImage does: its alpha, blend mode and colour
- *  filter; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
-function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, draw: (ctx: Ctx2D, image: CanvasImageSource) => void) {
-  if (b.config === ALPHA_8) {
-    const p = paint ?? defaultPaint;
-    if (p.maskFilter || p.shader) nc.drawMask(p, (ctx) => draw(ctx, b.image));
-    else draw(nc.ctx, tintedBmp(b, p.filteredColor()));
-    return;
-  }
-  const f = paint?.colorFilter, image = f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
-  const faded = !!paint && beginAlpha(nc.ctx, paint.color >>> 24), blend = paint?.compositeOp();
-  const prev = blend ? nc.ctx.globalCompositeOperation : null;
+/** an image drawn through the paint as SkCanvas::drawImageRect does, into the destination rect from
+ *  the source rect (the whole bitmap when there is none): its alpha, colour filter, blend mode and
+ *  shadow; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
+function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, dx: number, dy: number, dw: number, dh: number,
+  sx?: number, sy?: number, sw?: number, sh?: number) {
+  const p = paint ?? defaultPaint, alpha8 = b.config === ALPHA_8;
+  // only an ALPHA_8 bitmap's source is a solid colour, which drawMode may bound
+  const mode = p.blendName && (alpha8 ? p.drawMode() : p.blendName);
+  if (mode === "DST") return;
+  const op = mode ? COMPOSITE[mode] ?? null : null, unbounded = op !== null && UNBOUNDED.has(op);
+  if (alpha8 && (p.maskFilter || p.shader || unbounded)) return maskBitmap(nc, b, p, dx, dy, dw, dh, sx, sy, sw, sh);
+  const ctx = nc.ctx;
+  // CLEAR ignores the source: what the image covers is its destination rect
+  if (mode === "CLEAR" && !alpha8) return ctx.clearRect(dx, dy, dw, dh);
+  const f = p.colorFilter, source = alpha8 ? tintedBmp(b, mode === "CLEAR" ? -16777216 : p.filteredColor()) : f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
+  const undo = beginPaint(ctx, p, op, !alpha8, null);
   try {
-    if (blend) nc.ctx.globalCompositeOperation = blend;
-    draw(nc.ctx, image);
-  } finally {
-    if (prev) nc.ctx.globalCompositeOperation = prev;
-    if (faded) endAlpha(nc.ctx);
-  }
+    if (!unbounded) image(ctx, source, dx, dy, dw, dh, sx, sy, sw, sh);
+    else {
+      // the image covers its destination rect, which bounds the blend
+      ctx.save();
+      try { ctx.beginPath(); ctx.rect(dx, dy, dw, dh); ctx.clip(); image(ctx, source, dx, dy, dw, dh, sx, sy, sw, sh); }
+      finally { ctx.restore(); }
+    }
+  } finally { endPaint(ctx, undo); }
 }
+function maskBitmap(nc: NativeCanvas, b: NativeBitmap, p: NativePaint, dx: number, dy: number, dw: number, dh: number,
+  sx?: number, sy?: number, sw?: number, sh?: number) {
+  nc.drawMask(p, (m) => image(m.ctx, b.image, dx, dy, dw, dh, sx, sy, sw, sh));
+}
+const image = (ctx: Ctx2D, source: CanvasImageSource, dx: number, dy: number, dw: number, dh: number, sx?: number, sy?: number, sw?: number, sh?: number) =>
+  sw === undefined ? ctx.drawImage(source, dx, dy, dw, dh) : ctx.drawImage(source, sx!, sy!, sw, sh!, dx, dy, dw, dh);
 /** android_graphics_Canvas drawBitmap: a bitmap of another density than the canvas's is drawn in
  *  its own pixels under the scale between them */
 function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, paint: NativePaint | null, canvasDensity: number, bitmapDensity: number) {
   if (canvasDensity === bitmapDensity || !canvasDensity || !bitmapDensity) {
-    drawBitmap(nc, b, paint, (ctx, image) => ctx.drawImage(image, x, y));
+    drawBitmap(nc, b, paint, x, y, b.w, b.h);
     return;
   }
   const s = Math.fround(canvasDensity / bitmapDensity);
@@ -213,7 +228,7 @@ function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, p
   try {
     nc.ctx.translate(x, y);
     nc.ctx.scale(s, s);
-    drawBitmap(nc, b, paint, (ctx, image) => ctx.drawImage(image, 0, 0));
+    drawBitmap(nc, b, paint, 0, 0, b.w, b.h);
   } finally { nc.ctx.restore(); }
 }
 /** Canvas.drawPatch as android_graphics_Canvas draws it: a patch of another density is drawn in its
@@ -258,39 +273,46 @@ function skiaFace(p: NativePaint): boolean {
 function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: NativePaint) {
   const s = p.startHyphenEdit || p.endHyphenEdit ? hyphenEdited(text, p) : text, font = cssFont(s, p);
   if (tryDrawBitmapText(nc, text, x, y, p)) return;
-  const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
-  const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;
+  const mode = p.blendName && p.drawMode();
+  if (mode === "DST") return;
+  const op = mode ? COMPOSITE[mode] ?? null : null, mf = p.maskFilter, blur = mf instanceof BlurMask && mf.style === 0 ? mf : null;
+  // as drawShape: a mask filter other than a normal blur, and an unbounded mode, blend through the
+  // run's coverage
+  if (mf && !blur || op !== null && UNBOUNDED.has(op)) return maskText(nc, text, s, font, x, y, p);
+  const undo = beginPaint(nc.ctx, p, op, p.shader !== null, blur);
+  try { textRun(nc, text, s, font, x, y, p); } finally { endPaint(nc.ctx, undo); }
+}
+function maskText(nc: NativeCanvas, text: string, s: string, font: string, x: number, y: number, p: NativePaint) {
+  nc.drawMask(p, (m, q) => textRun(m, text, s, font, x, y, q));
+}
+/** the run `s` (`text` hyphen-edited) as the paint draws it, filled, stroked or both, and its
+ *  decorations */
+function textRun(nc: NativeCanvas, text: string, s: string, font: string, x: number, y: number, p: NativePaint) {
+  const ctx = nc.ctx;
   // SkFont's scale and skew: the glyphs under [scaleX skewX; 0 1] at the origin of the run
   const warped = p.textScaleX !== 1 || p.textSkewX !== 0;
-  try {
-    if (blend) ctx.globalCompositeOperation = blend;
-    ctx.font = font;
-    ctx.textRendering = "geometricPrecision";
-    if ("lang" in ctx) ctx.lang = p.language;
-    if (warped) { ctx.save(); ctx.transform(p.textScaleX, 0, p.textSkewX, 1, x - p.textScaleX * x - p.textSkewX * y, 0); }
+  ctx.font = font;
+  ctx.textRendering = "geometricPrecision";
+  if ("lang" in ctx) ctx.lang = p.language;
+  if (warped) { ctx.save(); ctx.transform(p.textScaleX, 0, p.textSkewX, 1, x - p.textScaleX * x - p.textSkewX * y, 0); }
+  nc.prep(p, false);
+  ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
+  ctx.textBaseline = "alphabetic";
+  if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
+  if (p.style !== 1) ctx.fillText(s, x, y);
+  if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) {
+    nc.prep(p, true);
+    ctx.strokeText(s, x, y);
+  }
+  if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
+  if (warped) ctx.restore();
+  // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
+  if (p.underline || p.strikeThru) {
+    const w = paintAdvance(p, text);
+    const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
     nc.prep(p, false);
-    ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
-    ctx.textBaseline = "alphabetic";
-    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
-    if (p.style !== 1) ctx.fillText(s, x, y);
-    if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) {
-      nc.prep(p, true);
-      ctx.strokeText(s, x, y);
-    }
-    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
-    if (warped) ctx.restore();
-    // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
-    if (p.underline || p.strikeThru) {
-      const w = paintAdvance(p, text);
-      const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
-      nc.prep(p, false);
-      if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
-      if (p.strikeThru) ctx.fillRect(sx, y + strikeThruPosition(p), w, Math.max(1, strikeThruThickness(p)));
-    }
-  } finally {
-    if (prev) ctx.globalCompositeOperation = prev;
-    if (shadow) ctx.restore();
-    if (shaded) endAlpha(ctx);
+    if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
+    if (p.strikeThru) ctx.fillRect(sx, y + strikeThruPosition(p), w, Math.max(1, strikeThruThickness(p)));
   }
 }
 const onPath = new PathMeasure(), posTan = new Float32Array(4);
@@ -348,13 +370,10 @@ const DRAWS: Record<string, unknown> = {
   "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawLines(nc, pts, off, n, nc.paint(p)); },
   "nDrawPoint(JFFJ)V": (h: bigint, x: number, y: number, p: bigint) => {
     const nc = drawingCanvas(h), paint = nc.paint(p);
-    nc.prep(paint, false);
-    nc.ctx.beginPath();
-    pointPath(nc.ctx, x, y, paint);
-    nc.ctx.fill();
+    drawAs(nc, paint, 0, (c) => { c.beginPath(); pointPath(c, x, y, paint); c.fill(); });
   },
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
-  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); drawPath(nc, pathAt(path), nc.paint(p)); },
+  "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); return drawPath(nc, pathAt(path), nc.paint(p)); },
   "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = drawingCanvas(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
   ...fontNatives({
   "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) => {
@@ -382,21 +401,21 @@ const DRAWS: Record<string, unknown> = {
   },
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, p: bigint) => {
     const nc = drawingCanvas(h);
-    drawBitmap(nc, bitmapAt(b), optPaint(nc, p), (ctx, image) => ctx.drawImage(image, sl, st, sr - sl, sb - st, dl, dt, dr - dl, db - dt));
+    drawBitmap(nc, bitmapAt(b), optPaint(nc, p), dl, dt, dr - dl, db - dt, sl, st, sr - sl, sb - st);
   },
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, p: bigint) => {
-    const nc = drawingCanvas(h);
+    const nc = drawingCanvas(h), bmp = bitmapAt(b);
     nc.ctx.save();
     try {
       applyMatrix(nc.ctx, matrixAt(m));
-      drawBitmap(nc, bitmapAt(b), optPaint(nc, p), (ctx, image) => ctx.drawImage(image, 0, 0));
+      drawBitmap(nc, bmp, optPaint(nc, p), 0, 0, bmp.w, bmp.h);
     } finally { nc.ctx.restore(); }
   },
   // colours rather than a Bitmap: put the pixels in one and draw that
   "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, alpha: number, p: bigint) => {
     const nc = drawingCanvas(h), b = new NativeBitmap(w, ih, ARGB_8888, alpha ? PREMUL : OPAQUE);
     setPixels(b, colors, offset, stride, 0, 0, w, ih);
-    drawBitmap(nc, b, optPaint(nc, p), (ctx, image) => ctx.drawImage(image, x, y));
+    drawBitmap(nc, b, optPaint(nc, p), x, y, w, ih);
   },
   "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, chunk: bigint, l: number, t: number, r: number, bo: number, p: bigint, dstDensity: number, srcDensity: number) => {
     const nc = drawingCanvas(h); drawPatch(nc, bitmapAt(b), deref<NinePatchChunk>(chunk), l, t, r, bo, optPaint(nc, p), dstDensity, srcDensity);

@@ -11,7 +11,7 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { awaited, rt, type JObj, declaredField, driven, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, peerField, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
@@ -34,7 +34,7 @@ let generation = 0;
 const nextGeneration = () => (generation = (generation + 1) | 0) || (generation = 1);
 
 export type RGBA = Uint8ClampedArray<ArrayBuffer>;
-/** a ColorSpace.Rgb's native instance (delegates.ts): skcms' a..g and the D50 matrix, column-major */
+/** a ColorSpace.Rgb's native instance: skcms' a..g and the D50 matrix, column-major */
 interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
 export class NativeBitmap {
@@ -325,6 +325,11 @@ function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
 /** a ColorLong in the colour space a ColorSpace.Rgb.Native handle names (0 for sRGB), as sRGB ARGB:
  *  the decoder for every native that receives a ColorLong (Paint, Canvas, gradients, Bitmap) */
 export const colorLongAt = (color: bigint, cs: bigint) => colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null);
+// skcms' transfer function (g, a, b, c, d, e, f) and a D50 XYZ matrix; the 2D context draws in sRGB
+rt.registerJnis("android/graphics/ColorSpace$Rgb$Native", {
+  "nativeCreate(FFFFFFF[F)J": (...args: [...number[], Float32Array]) => handle({ transfer: args.slice(0, 7), xyz: Float32Array.from(args[7] as Float32Array) }),
+  "nativeGetNativeFinalizer()J": () => FINALIZER,
+});
 const COLOR_SPACE = "android/graphics/ColorSpace";
 export const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
 /** GraphicsJNI::getColorSpace: a named space where the pixels' space is one, else the match or an "Unknown" Rgb */
@@ -342,9 +347,9 @@ const spaceOf = (h: bigint): NativeColorSpace | null => { const s = h ? deref<Na
 
 // ── the Java object
 const BITMAP = "android/graphics/Bitmap";
-let ptrField = "";
+const nativePtr = peerField<bigint>(BITMAP, "mNativePtr");
 /** the native state behind a Java Bitmap */
-export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>((b as Record<string, bigint>)[ptrField ||= declaredField(BITMAP, "mNativePtr")]);
+export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>(nativePtr(b));
 /** bitmap::createBitmap: the Java Bitmap around `b`; a density below 0 is Bitmap.getDefaultDensity */
 export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): object | Promise<object> {
   return newObj(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);

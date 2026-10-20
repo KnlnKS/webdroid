@@ -8,9 +8,8 @@ import { deref, ownedHandle, weakHandle } from "./handles.ts";
 import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics.ts";
 import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
 import { NativeBitmap } from "./bitmap.ts";
-import { CAPS, JOINS } from "./paint.ts";
+import { CAPS, JOINS, applyStroke } from "./paint.ts";
 import { NativePath, PathMeasure } from "./path.ts";
-import { deviceScale } from "./matrix.ts";
 import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser.ts";
 
 type Ctx = OffscreenCanvasRenderingContext2D;
@@ -123,12 +122,8 @@ export class FullPath extends VPath {
     }
     if (this.strokeGradient || p[STROKE_COLOR]) {
       ctx.strokeStyle = this.style(ctx, this.strokeGradient, p[STROKE_COLOR], p[STROKE_ALPHA]);
-      // a width of 0 is Skia's hairline: one device pixel whatever the scale
-      const width = p[STROKE_WIDTH], m = ctx.getTransform();
-      ctx.lineWidth = width > 0 ? width : 1 / (deviceScale(m) || 1);
-      ctx.lineCap = CAPS[p[CAP]] ?? "butt";
-      ctx.lineJoin = JOINS[p[JOIN]] ?? "miter";
-      ctx.miterLimit = p[MITER];
+      // hwui strokes a path anti-aliased
+      applyStroke(ctx, p[STROKE_WIDTH], true, CAPS[p[CAP]] ?? "butt", JOINS[p[JOIN]] ?? "miter", p[MITER]);
       ctx.stroke(p2d);
     }
   }

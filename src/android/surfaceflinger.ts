@@ -4,7 +4,7 @@
 // frame an EGL swap or a decoder produced; queueing it latches the buffer on its layer, and the
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
-import { rt, type JObj, declaredField, noEffect } from "../jvm/runtime.ts";
+import { rt, type JObj, noEffect, peerField } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
 import { asSystem } from "./binder.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
@@ -35,13 +35,13 @@ export class Layer {
   /** dsdx, dtdx, dtdy, dsdy */
   matrix: [number, number, number, number] | null = null;
   alpha = 1; hidden: boolean;
-  crop: { l: number; t: number; r: number; b: number } | null = null;
+  crop: Rect | null = null;
   cornerRadius = 0;
   /** an effect layer's solid color, r g b in 0..1 */
   color: [number, number, number] | null = null;
   /** the latched buffer, and the rect it scales into (BLASTBufferQueue's destination frame) */
   buffer: Frame | null = null;
-  dest: { l: number; t: number; r: number; b: number } | null = null;
+  dest: Rect | null = null;
   /** setRelativeLayer: the layer this one is Z-ordered among, and those Z-ordered among this one */
   relativeOf: Layer | null = null;
   readonly relatives: Layer[] = [];
@@ -134,8 +134,8 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     if (l.matrix) { const [a, b, c, d] = l.matrix; ctx.transform(a, b, c, d, 0, 0); }
     ctx.globalAlpha *= l.alpha;
     if (crop) {
-      ctx.beginPath(); ctx.roundRect(crop.l, crop.t, crop.r - crop.l, crop.b - crop.t, l.cornerRadius); ctx.clip();
-      screen = intersect(screen, deviceRect(ctx.getTransform(), crop.l, crop.t, crop.r, crop.b));
+      ctx.beginPath(); ctx.roundRect(crop[0], crop[1], crop[2] - crop[0], crop[3] - crop[1], l.cornerRadius); ctx.clip();
+      screen = intersect(screen, deviceRect(ctx.getTransform(), crop[0], crop[1], crop[2], crop[3]));
     }
   }
   placeWebContent(ctx.getTransform(), layer, screen);
@@ -147,7 +147,7 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
   } else {
     const buffer = layer.buffer!, dest = layer.dest;
     content = true;
-    if (dest) ctx.drawImage(buffer, dest.l, dest.t, dest.r - dest.l, dest.b - dest.t);
+    if (dest) ctx.drawImage(buffer, dest[0], dest[1], dest[2] - dest[0], dest[3] - dest[1]);
     else ctx.drawImage(buffer, 0, 0);
   }
   ctx.restore();
@@ -162,11 +162,11 @@ const placed = new Map<number, Rect>();
 function placeWebContent(m: DOMMatrix, layer: Layer, screen: Rect): void {
   const buffer = layer.buffer, dest = layer.dest;
   const [bw, bh] = !buffer ? [0, 0] : "displayWidth" in buffer ? [buffer.displayWidth, buffer.displayHeight] : [buffer.width, buffer.height];
-  const bounds = intersect(screen, layer.color ? screen : dest ? deviceRect(m, dest.l, dest.t, dest.r, dest.b) : deviceRect(m, 0, 0, bw, bh));
+  const bounds = intersect(screen, layer.color ? screen : dest ? deviceRect(m, dest[0], dest[1], dest[2], dest[3]) : deviceRect(m, 0, 0, bw, bh));
   for (const [id, r] of placed) if (r[0] < bounds[2] && bounds[0] < r[2] && r[1] < bounds[3] && bounds[1] < r[3]) placed.delete(id);
   const functors = buffer && drawnOn(buffer);
   if (!functors?.size) return;
-  const at = dest ? m.translate(dest.l, dest.t).scale((dest.r - dest.l) / bw, (dest.b - dest.t) / bh) : m;
+  const at = dest ? m.translate(dest[0], dest[1]).scale((dest[2] - dest[0]) / bw, (dest[3] - dest[1]) / bh) : m;
   for (const [id, [l, t, r, b]] of functors) {
     const rect = intersect(deviceRect(at, l, t, r, b), bounds);
     if (rect[2] > rect[0] && rect[3] > rect[1]) placed.set(id, rect);
@@ -259,10 +259,10 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetAlpha(JJF)V": op((l, a: number) => { l.alpha = a; }),
   "nativeSetColor(JJ[F)V": op((l, c: Float32Array) => { l.color = [c[0], c[1], c[2]]; }),
   "nativeSetWindowCrop(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
-    l.crop = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
+    l.crop = right > left && bottom > top ? [left, top, right, bottom] : null;
   }),
   "nativeSetDestinationFrame(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
-    l.dest = right > left && bottom > top ? { l: left, t: top, r: right, b: bottom } : null;
+    l.dest = right > left && bottom > top ? [left, top, right, bottom] : null;
   }),
   "nativeSetCornerRadius(JJF)V": op((l, r: number) => { l.cornerRadius = r; }),
   // an opaque layer composes as any other
@@ -351,18 +351,16 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   if (sync) {
     if (q.acquireSingle) q.sync = null;
     return after(newObj("android/view/SurfaceControl$Transaction"), (t) => {
-      tx((t as Record<string, bigint>)[transactionField()]).ops.push(...latch.ops);
+      tx(transactionField(t)).ops.push(...latch.ops);
       return vcall(sync, "accept", "(Ljava/lang/Object;)V", t);
     });
   }
   applyOps(latch);
 }
-let txField: string | null = null;
-const transactionField = () => txField ??= declaredField("android/view/SurfaceControl$Transaction", "mNativeObject");
-let sfField = "";
-const surfaceField = () => sfField ||= declaredField("android/view/Surface", "mNativeObject");
+const transactionField = peerField<bigint>("android/view/SurfaceControl$Transaction", "mNativeObject");
+const surfaceField = peerField<bigint>("android/view/Surface", "mNativeObject");
 export const nativeSurface = (javaSurface: JObj | null): Surface | null => {
-  const h = javaSurface ? (javaSurface as Record<string, bigint>)[surfaceField()] : 0n;
+  const h = javaSurface ? surfaceField(javaSurface) : 0n;
   return h ? deref<Surface>(h) : null;
 };
 /** the surface EGL and media producers draw: on a queue, sized by it, each frame queued as its next
@@ -401,7 +399,7 @@ rt.registerJnis("android/graphics/BLASTBufferQueue", {
   },
   "nativeGatherPendingTransactions(JJ)Landroid/view/SurfaceControl$Transaction;": async (h: bigint) => {
     const t = await newObj("android/view/SurfaceControl$Transaction", "()V");
-    tx((t as Record<string, bigint>)[transactionField()]).ops.push(...queue(h).pending.splice(0).flatMap((p) => p.ops));
+    tx(transactionField(t)).ops.push(...queue(h).pending.splice(0).flatMap((p) => p.ops));
     return t;
   },
   "nativeGetLastAcquiredFrameNum(J)J": (h: bigint) => queue(h).frame,

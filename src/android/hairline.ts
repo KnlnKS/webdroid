@@ -1,6 +1,13 @@
+// Skia's raster rules in a bitmap's device pixels, which a 2D context's own rasterization does not
+// follow: hairlines stepped as SkScan_Hairline steps them, and non-anti-aliased fills sampled at
+// pixel centres. bitmap-raster.ts decides which draws take them.
+
 import type { Ctx2D } from "./recording.ts";
 
 type Point = [number, number];
+/** the most device pixels a draw rasterizes in script, or reads back to blend (sampled fills,
+ *  inverse fills and coverage masks, CanvasKit text) */
+export const MAX_SAMPLED_PIXELS = 250_000;
 
 export function devicePoint(matrix: DOMMatrix, x: number, y: number): Point {
   const f = Math.fround;
@@ -121,7 +128,7 @@ function samplingRegion(ctx: Ctx2D, left: number, top: number, right: number, bo
   const x0 = Math.max(0, Math.floor(minX)), y0 = Math.max(0, Math.floor(minY));
   const x1 = Math.min(ctx.canvas.width, Math.ceil(maxX));
   const y1 = Math.min(ctx.canvas.height, Math.ceil(maxY));
-  if ((x1 - x0) * (y1 - y0) > 250_000) return null;
+  if ((x1 - x0) * (y1 - y0) > MAX_SAMPLED_PIXELS) return null;
   return { m, det, x0, y0, x1, y1 };
 }
 

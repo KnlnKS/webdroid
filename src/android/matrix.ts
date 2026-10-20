@@ -4,8 +4,9 @@
 // Transformation's) can be the array behind a Java Matrix. A 2D context holds only the affine
 // part: [a, b, c, d, e, f] = [M0, M3, M1, M4, M2, M5].
 
-import { rt, declaredField } from "../jvm/runtime.ts";
-import { handle, deref, FINALIZER } from "./handles.ts";
+import { rt, peerField, setDeclared, type JObj } from "../jvm/runtime.ts";
+import { handle, deref, ownedHandle, release, FINALIZER } from "./handles.ts";
+import type { NativeCanvas } from "./canvas.ts";
 import type { Ctx2D, Mat2D } from "./recording.ts";
 import { edges, setEdges } from "./graphics.ts";
 
@@ -63,8 +64,7 @@ export function mapPoint(m: Mat, x: number, y: number): [number, number] {
 }
 export const isIdentity = (m: Mat) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 0 && m[4] === 1 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1;
 
-let nativeInstance = "";
-const instanceOf = (m: object) => (m as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Matrix", "native_instance")];
+const instanceOf = peerField<bigint>("android/graphics/Matrix", "native_instance");
 /** the 3x3 behind a Java Matrix */
 export const matrixOf = (m: object): Mat => deref<Mat>(instanceOf(m));
 // A stack of 4x4 transforms (SkM44, row-major, float) viewed by SkCamera3D, whose location is
@@ -261,5 +261,40 @@ rt.registerJnis("android/graphics/Matrix", {
   "nMapRadius(JF)F": (h: bigint, r: number) => {
     const m = matrixAt(h), [ax, ay] = mapVector(m, r, 0), [bx, by] = mapVector(m, 0, r);
     return Math.fround(Math.sqrt(Math.hypot(ax, ay) * Math.hypot(bx, by)));
+  },
+});
+
+// ── android.graphics.Camera: Sk3DView ──────────────────────────────────────────────────
+// a Java Camera keeps its Sk3DView in native_instance, which its natives set and read themselves
+const CAMERA = "android/graphics/Camera", cameraInstance = peerField<bigint>(CAMERA, "native_instance");
+const camera = (c: object) => deref<Camera3D>(cameraInstance(c));
+rt.registerJnis(CAMERA, {
+  "nativeConstructor()V": function (this: JObj) { setDeclared(this, CAMERA, { native_instance: ownedHandle(new Camera3D()) }); },
+  "nativeDestructor()V": function (this: object) { release(cameraInstance(this)); },
+  "save()V": function (this: object) { const c = camera(this); c.stack.push(c.top.slice()); },
+  "restore()V": function (this: object) { const c = camera(this); if (c.stack.length > 1) c.stack.pop(); },
+  // SkM44::preTranslate
+  "translate(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).preConcat([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1]); },
+  "rotateX(F)V": function (this: object, deg: number) { camera(this).rotate(1, 0, 0, deg); },
+  "rotateY(F)V": function (this: object, deg: number) { camera(this).rotate(0, -1, 0, deg); },
+  "rotateZ(F)V": function (this: object, deg: number) { camera(this).rotate(0, 0, 1, deg); },
+  "rotate(FFF)V": function (this: object, x: number, y: number, z: number) {
+    const c = camera(this);
+    c.rotate(1, 0, 0, x); c.rotate(0, -1, 0, y); c.rotate(0, 0, 1, z);
+  },
+  "setLocation(FFF)V": function (this: object, x: number, y: number, z: number) { camera(this).location = [x, y, z].map((v) => Math.fround(v * 72)); },
+  "getLocationX()F": function (this: object) { return Math.fround(camera(this).location[0] / 72); },
+  "getLocationY()F": function (this: object) { return Math.fround(camera(this).location[1] / 72); },
+  "getLocationZ()F": function (this: object) { return Math.fround(camera(this).location[2] / 72); },
+  "nativeGetMatrix(J)V": function (this: object, m: bigint) { camera(this).matrix(matrixAt(m)); },
+  "nativeApplyToCanvas(J)V": function (this: object, h: bigint) {
+    const m = identity();
+    camera(this).matrix(m);
+    applyMatrix(deref<NativeCanvas>(h).ctx, m);
+  },
+  // SkPatch3D::dotWith, whose y term Skia computes as u.z*v.x - u.x*v.y
+  "dotWithNormal(FFF)F": function (this: object, x: number, y: number, z: number) {
+    const { u, v } = camera(this).patch();
+    return Math.fround((u[1] * v[2] - u[2] * v[1]) * x + (u[2] * v[0] - u[0] * v[1]) * y + (u[0] * v[1] - u[1] * v[0]) * z);
   },
 });
