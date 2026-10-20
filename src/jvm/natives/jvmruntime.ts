@@ -30,7 +30,8 @@ export function fixProcessBitness(names: Iterable<string>): void {
 export const is64BitProcess = (): boolean => wide ?? !is32Bit(rt.classpathNames());
 /** a native pointer's width in this process, which IOVecWrapper lays its iovecs out by */
 export const addressSize = (): number => is64BitProcess() ? 8 : 4;
-/** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
+/** the app's targetSdkVersion, which the linker answers native code: the shell sets it as the zygote specializes the process, and
+ *  ActivityThread binds it again through VMRuntime; ART's default is the development SDK */
 let targetSdk = 10000;
 export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
 export const targetSdkVersion = (): number => targetSdk;
@@ -61,7 +62,7 @@ let heapUtilization = 0.75;
 rt.registerJnis("dalvik/system/VMRuntime", {
   "registerAppInfo(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;I)V": () => {},
   "setDisabledCompatChangesNative([J)V": () => {},
-  "setTargetSdkVersionNative(I)V": () => {},
+  "setTargetSdkVersionNative(I)V": setTargetSdkVersion,
   "getCurrentInstructionSet()Ljava/lang/String;": () => is64BitProcess() ? "arm64" : "arm",
   "vmInstructionSet()Ljava/lang/String;": () => is64BitProcess() ? "arm64" : "arm",
   "vmLibrary()Ljava/lang/String;": () => "libart.so",

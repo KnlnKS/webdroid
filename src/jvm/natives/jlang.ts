@@ -117,8 +117,10 @@ rt.registerJnis("java/lang/Runtime", {
   "nativeLoad(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/String;": nativeLoad,
   "nativeGc()V": () => {},
   "maxMemory()J": () => BigInt(HEAP_LIMIT),
-  "totalMemory()J": () => 268435456n,
-  "freeMemory()J": () => 134217728n,
+  // The engine owns the heap and grows it on demand, and Java's share of it is not measurable here, so the footprint
+  // and its free part are fixed fractions of the limit: half the limit, a quarter of it free
+  "totalMemory()J": () => BigInt(HEAP_LIMIT / 2),
+  "freeMemory()J": () => BigInt(HEAP_LIMIT / 4),
 });
 rt.registerJni("dalvik/system/VMStack", "getClosestUserClassLoader()Ljava/lang/ClassLoader;", () => rt.userClassLoader());
 // libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock

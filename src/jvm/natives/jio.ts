@@ -201,7 +201,8 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
   "size0(Ljava/io/FileDescriptor;)J": waits((d: JObj) => after(javaFdStat(openFd(d)),st => {
     return BigInt(st ? st.size : lastError(-E.BADF, "Size failed"));
   })),
-  // one process holds every lock of a file here, which FileLockTable already arbitrates
+  // A process's own POSIX record locks never conflict, and FileLockTable arbitrates its channels' overlaps, so every lock
+  // a process asks for is granted. Locks are not arbitrated between processes: two processes' locks on one file both hold.
   "lock0(Ljava/io/FileDescriptor;ZJJZ)I": (d: JObj) => { openFd(d); return 0 /* LOCKED */; },
   "release0(Ljava/io/FileDescriptor;JJ)V": (d: JObj) => { openFd(d); },
   "preClose0(Ljava/io/FileDescriptor;)V": () => {},
