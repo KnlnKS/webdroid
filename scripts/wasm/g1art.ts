@@ -1,7 +1,7 @@
 // The ART headroom ratio: g1.ts's workloads (Bench.java and G1.java, each case cut into its own method) as one dex, run by app_process on the
 // reference device (booted, adb reachable) and timed per call as g1run times them, each run a fresh process. With --ref (a `g1 --json` report)
 // each row shows how many times slower the Wasm tier is than ART, first call and steady state.
-//   pnpm ts scripts/wasm/g1art.ts [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]
+//   pnpm wasm g1art [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { adb } from "../adb.ts";
