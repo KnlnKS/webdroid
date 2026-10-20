@@ -16,7 +16,8 @@ const columns = ["_id", "_data", "_display_name", "title", "mime_type", "media_t
   "date_added", "date_modified", "datetaken", "relative_path", "bucket_id", "bucket_display_name",
   "width", "height", "duration", "orientation", "is_pending", "is_trashed", "is_favorite"];
 const schema = `CREATE TABLE media (${columns.map((c) => `"${c}" ${c === "_data" || c === "_display_name" || c === "title" || c === "mime_type" || c === "relative_path" || c === "bucket_display_name" ? "TEXT" : "INTEGER"}`).join(", ")})`;
-type Entry = { source: object; size: number; id: number };
+/** an indexed file: what its row was made from, its _id, and its DATE_ADDED (epoch seconds) */
+type Entry = { source: object; size: number; id: number; added: number };
 const indexed = new Map<string, Entry>();
 let dbReady: Promise<Database> | null = null;
 /** pending, trashed and favourite paths: MediaProvider's own columns, kept across reloads */
@@ -50,13 +51,14 @@ function mediaFiles(): Map<string, { source: object; size: number }> {
   return files;
 }
 const INSERT = `INSERT INTO media (${columns.map((c) => `"${c}"`).join(",")}) VALUES (${columns.map(() => "?").join(",")})`;
-function row(path: string, size: number, id: number): (string | number | null)[] {
+/** `path`'s row, as a scan fills it: DATE_MODIFIED from the file's modification time, which stands
+ *  for DATE_TAKEN too (its own metadata is not read here) */
+function row(path: string, { size, id, added }: Entry): (string | number | null)[] {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const parent = path.slice(0, path.lastIndexOf("/"));
-  const mime = mimeOf(path);
-  const now = Math.floor(Date.now() / 1000);
+  const mime = mimeOf(path), modified = vfs.mtime(path);
   return [id, path, name, name.slice(0, name.lastIndexOf(".") < 0 ? name.length : name.lastIndexOf(".")), mime,
-    mediaType(mime), size, now, now, now * 1000, parent.slice("/sdcard/".length) + "/",
+    mediaType(mime), size, added, Math.floor(modified / 1000), modified, parent.slice("/sdcard/".length) + "/",
     hash(parent.toLowerCase()), parent.slice(parent.lastIndexOf("/") + 1), null, null, null, 0,
     ...FLAGS.map((f) => +mediaFlags()[f].has(path))];
 }
@@ -82,11 +84,13 @@ async function index(): Promise<Database> {
   const drop = db.prepare("DELETE FROM media WHERE _data = ?");
   const stmt = db.prepare(INSERT);
   try {
-    for (const path of removed) { drop.run([path]); indexed.delete(path); }
+    for (const path of removed) { drop.run([path]); if (!files.has(path)) indexed.delete(path); }
     for (const [path, file] of added) {
-      const id = hash(path);
-      stmt.run(row(path, file.size, id));
-      indexed.set(path, { ...file, id });
+      // A changed file keeps its row's DATE_ADDED. MediaProvider makes a row as the file is created,
+      // whose first modification time seen here stands for that.
+      const entry = { ...file, id: hash(path), added: indexed.get(path)?.added ?? Math.floor((vfs.mtime(path) || Date.now()) / 1000) };
+      stmt.run(row(path, entry));
+      indexed.set(path, entry);
     }
     db.run("COMMIT");
   } catch (error) {
@@ -187,7 +191,7 @@ export async function mediaUpdate(uri: string, values: Map<string, unknown>, sel
         indexed.delete(path); indexed.set(to, entry);
         for (const f of FLAGS) { const set = mediaFlags()[f]; if (set.delete(path)) set.add(to); }
         database.run("DELETE FROM media WHERE _data = ?", [path]);
-        database.run(INSERT, row(to, entry.size, entry.id));
+        database.run(INSERT, row(to, entry));
         path = to;
       }
     } else if (!flagged.length) continue;
