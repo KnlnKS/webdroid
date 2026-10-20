@@ -10,8 +10,6 @@ import { processFileBytes } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
 import type { JThrowable } from "./jthrowable.ts";
-// String and its builders, java.lang's natives with these
-import "./jstring.ts";
 
 /** Objects.checkFromIndexSize: [off, off + len) must lie within [0, length) */
 export function checkFromIndexSize(off: number, len: number, length: number, cls = "java/lang/IndexOutOfBoundsException"): void {

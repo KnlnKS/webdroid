@@ -1,12 +1,10 @@
 // Every native module, in dependency order. The browser shell and scripts/audit.ts import
 // THIS, never their own copy of the list — a drifted copy makes audit report implemented
-// classes as missing. nrun.ts deliberately loads a partial list instead: a registered native
-// shadows the dex class, and it exists to run the app's own bytecode.
-import "./jvm/natives/jbox.ts";
+// classes as missing. nrun.ts loads java.lang's and java.io's alone: it runs an app's own
+// bytecode, whose methods a spec (rt.register) of the same class would replace.
+import "./jvm/natives/jstring.ts";
 import "./jvm/natives/jlang.ts";
 import "./jvm/natives/fdlibm.ts";
-import "./jvm/natives/jcoll.ts";
-import "./jvm/natives/jvalues.ts";
 import "./jvm/natives/jmath.ts";
 import "./jvm/natives/jio.ts";
 import "./jvm/natives/jdex.ts";
