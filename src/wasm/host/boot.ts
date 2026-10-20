@@ -1,6 +1,7 @@
 // The Wasm tier's entry (src/jvm/tier.ts loads it). Each realm (the page, every process Worker) has a World over the platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark, perf } from "../../perf.ts";
+import { switchValue } from "../../switches.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "../link/aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
@@ -286,10 +287,10 @@ export function serveWarm(port: MessagePort): void {
  *  server has no build for the sources, which leaves all code to the on-demand compiler. */
 export function openAot(): Promise<FetchStore | undefined> {
   return globalThis.__wdAot ??= (async () => {
-    const current = await fetch("/aot/current.json");
+    // ?aot=<key> runs the build `pnpm aot --keep` added beside the current one, for matched comparisons of builds
+    const other = switchValue("aot"), current = await fetch(`/aot/current.json${other ? `?key=${other}` : ""}`);
     if (!current.ok) return undefined;
-    const manifest = await current.json() as { key: string };
-    const store = new FetchStore(`/aot/${manifest.key}/`, aotPort);
+    const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`, aotPort);
     const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
     // the natives the modules import as Suspending were chosen when the build was made
     declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);

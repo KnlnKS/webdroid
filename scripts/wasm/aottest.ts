@@ -26,13 +26,18 @@ const suite = checker("aottest"), { check } = suite;
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
-const containsInstalled = (w: ReturnType<typeof world>) => { const s = w.slots.at(w.slotOf(w.prog.resolve("java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z")!)); return s?.k === "method" && s.done; };
+const slotOf = (w: ReturnType<typeof world>, cls: string, name: string, desc: string) => w.slotOf(w.prog.resolve(cls, name, desc)!);
+const installed = (w: ReturnType<typeof world>, slot: number) => { const s = w.slots.at(slot); return s?.k === "method" && s.done; };
+const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w, "java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z"));
 {
   const w = world([join(out, "classes.dex"), ...jars], { natives });
   check("the build is attached", !!w.aot, true);
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
   check("it relies on no hierarchy decision", w.assumptions.decisions.has(key), false);
+  check("bodies run in place keep their frames, initialization order and stores", w.entry("Aot", "inlined", "()I")(), 31);
+  w.assumptions.undoCode(slotOf(w, "Aot", "first", "(LAot$Pair;)I"));
+  check("undoing a method undoes the code that runs its body in place", installed(w, slotOf(w, "Aot", "inlined", "()I")), false);
   // the warm Worker mirrors a module's imports from its bytes and compiles its methods by calling them into the warm trap
   const warm = new WarmWorld(), mirrored = w.aot!.loaded.filter((f) => /^c\d+\.wasm$/.test(f)).map((f) => warm.load(compileModule(fileOf(f)), fileOf(f)));
   check("the warm shim mirrors every loaded code module", mirrored.filter((m) => typeof m === "string").join(), "");

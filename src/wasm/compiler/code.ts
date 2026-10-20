@@ -1,7 +1,12 @@
 import { T, sleb, uleb, vt, type VT, type FuncBytes, definedGlobal, functionIndex } from "./wasmbin.ts";
+import type { MethodInfo } from "./program.ts";
 /** The global a call through the slot table (table 0) first sets to the slot it calls, which a lazy-link stub serving every slot of its signature reads:
  *  global 0 of every module with such calls */
 export const CALLEE = 0;
+/** a frame of method `m`, run in place inside a function's method, at its `pc`: `at` is the pc of the call it stands for */
+export type InlineFrame<M = MethodInfo> = [m: M, pc: number, at: number];
+/** the mark pc of the function's inline frame `i`, and the frame of a mark pc below -1: it is its own inverse */
+export const inlineMark = (i: number): number => -2 - i;
 /** instruction emitter for one function body */
 export class Code {
   nparams: number;
@@ -11,6 +16,8 @@ export class Code {
   /** DEX pc of the instruction being emitted; calls and throws record (byte offset, pc) so a Wasm frame offset maps back to a pc */
   pc = -1;
   marks: number[] = [];
+  /** the frames of methods run in place that its marks are made in (inlineMark) */
+  inline?: InlineFrame[];
   /** length of the local declarations finish() prepends */
   prefixLen = 0;
   constructor(nparams: number) { this.nparams = nparams; }
@@ -56,7 +63,7 @@ export class Code {
   /** global.get and global.set of the module's `k`th defined global (ModuleBuilder.defineGlobal) */
   ggetDefined(k: number): this { this.b.push(0x23); definedGlobal(k, this.b); return this; }
   gsetDefined(k: number): this { this.b.push(0x24); definedGlobal(k, this.b); return this; }
-  private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
+  private mark(): void { if (this.pc !== -1) this.marks.push(this.b.length, this.pc); }
   /** the functions called directly, and the number of calls through a table or a reference: what a body may run besides its own instructions */
   targets: number[] = [];
   indirect = 0;

@@ -5,7 +5,7 @@
 // regions with each frame it presents, read only once the window closes, and the scenario's UI state
 // is checked once afterwards.
 //
-//   pnpm lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--ecores] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
+//   pnpm lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--ecores] [--repeat N] [--timeline] [--json <file>] [--query <params>] [--cpuprofile <file>] (one file per Worker too) [--heapsample] (with --cpuprofile: live-heap allocation samples, .heapprofile) [--trace <file>] [--demand] (each tap's on-demand compiled methods in --json)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -15,8 +15,9 @@
 // runs on the efficiency cores: a slower device (a busy loop ran about 6x slower on an M4 Pro). CDP CPU throttling slows only pages, never Workers.
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
-//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true}] }   (pick offers a synthetic photo;
-//     fps scrolls back and forth for ms and reports presentation intervals and page long tasks)
+//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true} | {"back":true}],
+//     "repeat": [steps] }   (pick offers a synthetic photo; fps scrolls back and forth for ms and reports presentation intervals and page long tasks;
+//     --repeat N appends "repeat" N times and reports the median of its taps' third and later visits)
 // "gate": false makes a scenario a report, run only when named (heavy apps: YouTube, Reddit, ChatGPT, TikTok).
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated, and a scenario also fails when its launch loaded no build
 // module or a realm reported an uncaught error; each launch also
@@ -47,7 +48,7 @@ const args = process.argv.slice(2);
 const { flag, option } = consume(args);
 const heapSample = flag("--heapsample");
 const gpu = flag("--gpu"), warm = flag("--warm"), demand = flag("--demand"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
-const ecores = flag("--ecores");
+const ecores = flag("--ecores"), repeat = +(option("--repeat") ?? 0);
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 if (ecores && (engine !== "chrome" || process.platform !== "darwin")) throw new Error("lat --ecores runs Chrome under macOS's taskpolicy");
 const launchQuery = new URLSearchParams(query);
@@ -66,7 +67,7 @@ const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations",
  *  with the presentation intervals between them */
 type First = { first: number | null; settled: number | null; frames: number; changedTiles: number; maskedTiles: number; pid: string | null;
   intervals: { p50: number | null; p95: number | null; max: number | null; missed: number }; error?: string };
-type Tap = { intended: number | null; response?: First; timeline?: unknown; page?: unknown; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown; demandMark?: number[]; demand?: [string, boolean, boolean, boolean][] | null };
+type Tap = { intended: number | null; response?: First; timeline?: { answer?: { busy: number; frame: number }; error?: string }; page?: unknown; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown; demandMark?: number[]; demand?: [string, boolean, boolean, boolean][] | null };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
 type Launch = { demand?: [string, boolean, boolean, boolean][] | null; firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
   idle: number; perf: Record<string, number>; marks: string[]; timeline: number[][] };
@@ -274,12 +275,18 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   /**
    * Where a window's frames went, from the foreground Worker's timeline (src/timeline.ts), read after the window:
    * per presented frame its vsync-to-present time, doFrame, replay and composite durations, and each vsync that
-   * presented nothing while the app was drawing, by whether the main looper was busy at it.
+   * presented nothing while the app was drawing, by whether the main looper was busy at it. Between a tap's pointerup and its answering frame
+   * (`answer`), how long the looper was busy and its longest doFrame: the development metric, the Java and rendering work of the frame the tap waited
+   * for, on the Worker's clock without the presentation's jitter.
    */
-  const frameReport = async (from: number, to: number) => {
+  const frameReport = async (from: number, to: number, answer?: [number, number]) => {
     const events: [number, number, number][] = (await w.wd.foregroundTimeline(performance.timeOrigin + from)).map(([t, e, a]: number[]) => [t - performance.timeOrigin, e, a]);
     const spans = { doFrame: [] as number[], draw: [] as number[], composite: [] as number[], vsyncToPresent: [] as number[], inputToDispatch: [] as number[], busyAtVsync: [] as number[] };
-    let raf = -1, frame = -1, draw = -1, comp = -1, idle = true, wake = from, input = -1, presentedSince = true, drawing = false, missedBusy = 0, missedIdle = 0, vsyncs = 0;
+    // doFrames by their frame number: the next one can begin before the last one's end is noted
+    const frames = new Map<number, number>();
+    let raf = -1, draw = -1, comp = -1, idle = true, wake = from, input = -1, presentedSince = true, drawing = false, missedBusy = 0, missedIdle = 0, vsyncs = 0;
+    let busy = 0, longest = 0;
+    const answering = (a: number, b: number) => answer ? Math.max(0, Math.min(b, answer[1]) - Math.max(a, answer[0])) : 0;
     for (const [t, e, a] of events) {
       if (t > to) break;
       switch (e) {
@@ -291,23 +298,31 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
           raf = t; presentedSince = false; break;
         case E.InputIn: input = t; break;
         case E.InputDispatch: if (input >= 0) { spans.inputToDispatch.push(t - input); input = -1; } break;
-        case E.FrameBegin: frame = t; drawing = true; break;
-        case E.FrameEnd: if (frame >= 0) spans.doFrame.push(t - frame); frame = -1; break;
+        case E.FrameBegin: frames.set(a, t); drawing = true; break;
+        case E.FrameEnd: {
+          const begun = frames.get(a);
+          if (begun === undefined) break;
+          spans.doFrame.push(t - begun);
+          if (answer && begun >= answer[0] && t <= answer[1]) longest = Math.max(longest, t - begun);
+          frames.delete(a); break;
+        }
         case E.DrawBegin: draw = t; drawing = true; break;
         case E.DrawEnd: if (draw >= 0) spans.draw.push(t - draw); draw = -1; break;
         case E.CompositeBegin: comp = t; break;
         case E.CompositeEnd: if (comp >= 0) spans.composite.push(t - comp); comp = -1; break;
         case E.Present: if (raf >= 0) spans.vsyncToPresent.push(t - raf); presentedSince = true; break;
-        case E.LoopIdle: idle = true; drawing = frame >= 0; break;
+        case E.LoopIdle: if (!idle) busy += answering(wake, t); idle = true; drawing = frames.size > 0; break;
         case E.LoopWake: idle = false; wake = t; break;
       }
     }
+    if (!idle) busy += answering(wake, to);
     const stat = (xs: number[]) => {
       if (!xs.length) return null;
       const s = xs.slice().sort((a, b) => a - b), q = (p: number) => quantile(s, p);
       return { n: s.length, p50: q(0.5), p95: q(0.95), max: q(1) };
     };
     return { vsyncs, missedBusy, missedIdle, events: events.length, ...Object.fromEntries(Object.entries(spans).map(([k, v]) => [k, stat(v)])),
+      ...(answer ? { answer: { busy: Math.round(busy * 10) / 10, frame: Math.round(longest * 10) / 10 } } : {}),
       raw: events.filter(([t]) => t <= to).map(([t, e, a]) => [Math.round(t * 100) / 100, e, a]) };
   };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -385,6 +400,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const out = result.taps;
   for (const s of steps) {
     if (s.wait) { await sleep(s.wait); await idle(); continue; }
+    if (s.back) { await w.wd.back(); await sleep(300); await idle(); continue; }
     // as the e2e driver's privateStorage: without the host's pickers, a document or folder request takes the private storage
     if (s.privateStorage) { for (const name of ["showDirectoryPicker", "showOpenFilePicker", "showSaveFilePicker"]) Object.defineProperty(window, name, { value: undefined, configurable: true }); continue; }
     if (s.pick) {
@@ -465,7 +481,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       const topPid = appCanvas().dataset.pid ?? pid;
       const response = firstResponse(s.expect, window, tu, pressed ?? [x - 48, y - 48, x + 48, y + 48], topPid);
       window.forEach(shot => shot.crops.forEach(c => c.close()));
-      const after = await snapshot(), timeline = await frameReport(t0, compileAt).catch(e => ({ error: String(e) }));
+      const after = await snapshot(), timeline = await frameReport(t0, compileAt, response.first === null ? undefined : [tu, tu + response.first]).catch(e => ({ error: String(e) }));
       lto.disconnect();
       const page = timeline && "raw" in timeline ? { raw: (w.wd.pageTimeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
       await idle();
@@ -658,7 +674,15 @@ async function resetData(browser: Browser): Promise<void> {
   finally { await tab.close(); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+const median = (xs: number[]) => xs.length ? Math.round(xs.slice().sort((a, b) => a - b)[xs.length >> 1] * 10) / 10 : null;
+/** for each tap a scenario repeats (--repeat), the medians of its answered third and later visits */
+function repeatMedians(taps: Tap[]) {
+  return [...Map.groupBy(taps, (t) => t.m)].filter(([, v]) => v.length >= 3).map(([m, v]) => {
+    const later = v.slice(2).flatMap((t) => t.intended !== null && t.timeline?.answer ? [{ ms: t.intended, ...t.timeline.answer }] : []);
+    return { m, visits: v.length, answered: later.length, ms: median(later.map((x) => x.ms)), busy: median(later.map((x) => x.busy)), frame: median(later.map((x) => x.frame)) };
+  });
+}
+type Report = Capture & { repeats?: ReturnType<typeof repeatMedians>; engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string; browserErrors?: string[] };
 /** every realm's error lines */
 const browserErrors = (after?: Diagnostics): string[] => [...after?.frames.flatMap((f) => f.status === "ok" ? f.errors ?? [] : []) ?? [],
@@ -674,8 +698,8 @@ for (const name of names) {
   let profile: string | undefined, browser: Browser | undefined;
   const gated = gates(name);
   try {
-    const { apk, steps: scenarioSteps, launch: expectedLaunch, responses } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
-    const steps = scenarioSteps.map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
+    const { apk, steps: scenarioSteps, launch: expectedLaunch, responses, repeat: again = [] } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
+    const steps = [...scenarioSteps, ...Array.from({ length: repeat }, () => again).flat()].map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
     const validExpectation = (e: Expectation | undefined) => !!e?.nodes?.length && !!e.pixels?.length;
     if (!validExpectation(expectedLaunch) || steps.some((step: any) => step.m && !validExpectation(step.expect))) throw new Error("scenario intended-state expectations missing");
     if (engine === "webkit" && (cpuProfile || traceOut)) throw new Error("WebKit profiling and tracing require a separate protocol");
@@ -701,12 +725,15 @@ for (const name of names) {
     if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
     for (const t of taps) {
       t.compile = compileDeltas(t.compileBefore, t.compileAfter, t.compileWindow);
+      const answer = t.timeline?.answer;
       const over = t.intended === null || t.intended > LIMIT_MS || !t.compile.mainRealmCoverage;
       failed ||= over && gated;
       const detail = Object.entries(t.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
       const r = t.response, settled = r ? ` settled=${r.settled === null ? "none" : Math.round(r.settled)} frames=${r.frames} p95=${r.intervals.p95} missed=${r.intervals.missed}${r.error ? ` (${r.error})` : ""}` : "";
-      console.log(`${!over ? "ok  " : gated ? "FAIL" : "over"} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms ${settled} ${detail}`);
+      console.log(`${!over ? "ok  " : gated ? "FAIL" : "over"} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms ${settled}${answer ? ` busy=${answer.busy} frame=${answer.frame}` : ""} ${detail}`);
     }
+    if (repeat) for (const r of row.repeats = repeatMedians(taps))
+      console.log(`     ${name.padEnd(12)} ${r.m.padEnd(14)} visits 3-${r.visits} (${r.answered} answered): median ${r.ms} ms busy=${r.busy} frame=${r.frame}`);
     const span = (x: any) => x ? `${x.p50}/${x.p95}/${x.max}` : "-";
     for (const f of row.fps ?? []) {
       console.log(`     ${name.padEnd(12)} ${f.m.padEnd(14)} ${String(f.fps).padStart(5)} fps p50=${f.p50} p95=${f.p95} p99=${f.p99} >25ms=${f.over25} longTasks=${f.longTasks}/${f.longTaskMs}ms`);

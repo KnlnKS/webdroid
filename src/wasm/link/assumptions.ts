@@ -1,5 +1,7 @@
-// What compiled code relies on that classes defined later can falsify: class-hierarchy decisions and sites that fail because a class is not loaded. Either is
-// undone by putting the lazy-link stub back in the slots whose code relied on it (World.invalidate), so the next call compiles against what is there now.
+// What compiled code relies on that classes defined later can falsify: class-hierarchy decisions, sites that fail because a class is not loaded, and the code
+// of other methods it holds (a build's direct calls, bodies run in place). Each is undone by putting the lazy-link stub back in the slots whose code relied on it
+// (World.invalidate), so the next call compiles against what is there now. A decision is the compiled code's own, so undoing it leaves the code that holds the
+// method's alone; any other undoing takes that code too (undoCode).
 import { ACC, type MethodInfo } from "../compiler/program.ts";
 import { failed } from "../compiler/linkage.ts";
 import type { Compiler } from "../compiler/j2w.ts";
@@ -16,10 +18,12 @@ export class Assumptions {
   readonly decisions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
   readonly absent = new Map<string, Set<number>>();
+  /** the slots of the methods whose code holds a method's, by its slot */
+  private holders = new Map<number, Set<number>>();
   constructor(w: World) { this.w = w; }
 
   /** records what a unit's code relies on: `slot` owns what no method of the unit does */
-  record(cx: Pick<Compiler, "assumptions" | "absent">, slot?: number): void {
+  record(cx: Pick<Compiler, "assumptions" | "absent" | "held">, slot?: number): void {
     const w = this.w;
     // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
     const late = w.cha.late.size && cx.assumptions.length ? this.lateBy(new Set(cx.assumptions.map(([decl]) => decl)), w.cha.late) : undefined;
@@ -38,6 +42,20 @@ export class Assumptions {
       if (at === undefined) throw new Error("compiled absence has no invalidation owner");
       this.absentAt(name, at);
     }
+    this.hold(cx.held);
+  }
+  /** the code of the methods after each slot of `held` holds the code of the method of that slot (Compiler.held) */
+  hold(held: readonly number[][]): void {
+    for (const [callee, ...by] of held) { const s = this.holders.get(callee); if (s) for (const x of by) s.add(x); else this.holders.set(callee, new Set(by)); }
+  }
+  /** undoes the code of `slot` and, transitively, the code that holds it */
+  undoCode(slot: number): void {
+    const todo = [slot];
+    for (let i = 0; i < todo.length; i++) {
+      const by = this.holders.get(todo[i]);
+      if (by) { this.holders.delete(todo[i]); todo.push(...by); }
+      this.w.invalidate(todo[i]);
+    }
   }
   /** the code of `slot` fails a site because class `name` is not loaded */
   absentAt(name: string, slot: number): void {
@@ -48,7 +66,7 @@ export class Assumptions {
     if (this.absent.size) for (const name of added) {
       const slots = this.absent.get(name);
       if (!slots) continue;
-      for (const slot of slots) this.w.invalidate(slot);
+      for (const slot of slots) this.undoCode(slot);
       this.absent.delete(name);
     }
   }
@@ -94,7 +112,7 @@ export class Assumptions {
       if (sameTarget && samePrototype && this.holds(a, by)) continue;
       this.undo(key, a);
     }
-    for (const slots of this.absent.values()) for (const slot of slots) w.invalidate(slot);
+    for (const slots of this.absent.values()) for (const slot of slots) this.undoCode(slot);
     this.absent.clear();
   }
   private undo(key: string, a: Assumption): void {

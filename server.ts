@@ -126,7 +126,7 @@ const ROUTES: [RegExp, Route][] = [
     if (type === "text/html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
     return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
   }],
-  [/^\/aot\/current\.json$/, () => aotManifest()],
+  [/^\/aot\/current\.json$/, (req) => aotManifest(new URL(req.url).searchParams.get("key"))],
   [/^\/aot\/([^/]+)\/([^/]+)$/, (req, _, [key, file]) => aotFile(req, key, file)],
   [/^\/sqljs\/([^/]+)$/, (req, _, [file]) => serveFile(req, "vendor/sql.js/dist", file)],
   [/^\/(canvaskit\.wasm)$/, (req, _, [file]) => serveFile(req, "node_modules/canvaskit-wasm/bin", file, { "cache-control": IMMUTABLE })],

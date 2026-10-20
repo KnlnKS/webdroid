@@ -1,7 +1,7 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
 import { T } from "./wasmbin.ts";
-import { Code, OP } from "./code.ts";
-import type { Kind } from "./program.ts";
+import { Code, OP, inlineMark } from "./code.ts";
+import type { Kind, MethodInfo } from "./program.ts";
 import type { Compiler, FnTrace } from "./j2w.ts";
 import { oomMessage } from "../../jvm/abi.ts";
 import { prettyType } from "./linkage.ts";
@@ -152,10 +152,17 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
     const off = parseInt(m![2], 16);
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
-    const pc = at < 0 ? 0 : t.pcs[at];
-    out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
+    let pc = at < 0 ? 0 : t.pcs[at];
+    if (pc < -1) {
+      const [m, inner, outer] = t.inline![inlineMark(pc)];
+      out.push(frame(m, inner, lines));
+      if (out.length >= count) break;
+      pc = outer;
+    }
+    out.push(frame(t.m, pc, lines));
   }
   return out;
 }
+const frame = (m: MethodInfo, pc: number, lines: boolean): JavaFrame => ({ cls: dotted(m.cls), method: m.name, pc, line: lines && m.codeOff ? m.dex.lineAt(m.codeOff, pc) : -1 });
 
 export const isStackOverflow = (e: unknown): boolean => e instanceof RangeError && /call stack/i.test(e.message);

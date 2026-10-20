@@ -25,7 +25,7 @@
 //                (needs a build from `pnpm aot`)
 //   watdump      prints the code generated for a method
 //   aot          (pnpm aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process loads (aot-build, then
-//                aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `pnpm aot`, `aot-profile` (in this order, with the
+//                aot-startup), and makes that build the one the server offers (--keep adds it beside that one, for ?aot=<key>). `aot-profile --classes`, `pnpm aot`, `aot-profile` (in this order, with the
 //                server running) regroup the build by what launches of apps use and write its startup list.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -49,17 +49,17 @@ function exec(name: string, args: string[], env: NodeJS.ProcessEnv = process.env
   return spawnSync(node, argv, { stdio: "inherit", env }).status ?? 1;
 }
 
-/** builds the platform assets, records which of their modules a start loads and makes the build the current one */
+/** builds the platform assets, records which of their modules a start loads and makes the build the current one, or with --keep adds it beside that one */
 function buildAot(args: string[]): number {
-  const at = args.indexOf("--out"), keyed = at < 0;
-  const status = exec("aot-build", args);
+  const at = args.indexOf("--out"), keyed = at < 0, keep = args.includes("--keep");
+  const status = exec("aot-build", args.filter((a) => a !== "--keep"));
   if (status) return status;
   const manifest = keyed ? JSON.parse(readFileSync(join(AOT_ROOT, "latest.json"), "utf8")) as AotManifest : undefined, dir = manifest ? join(AOT_ROOT, manifest.key) : args[at + 1];
   if (!existsSync(join(dir, "startup.json"))) {
     const startup = exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
     if (startup) return startup;
   }
-  if (manifest) {
+  if (manifest && !keep) {
     writeWhole(join(AOT_ROOT, "current.json"), JSON.stringify(manifest));
     for (const old of readdirSync(AOT_ROOT).filter((f) => f !== manifest.key && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
   }

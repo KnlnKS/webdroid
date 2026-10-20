@@ -25,6 +25,14 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
   Worker, `--timeline` shows the app Worker's startup marks, `--trace` writes a browser-wide trace, and
   `WEBDROID_JS_FLAGS` passes V8 flags; `--engine webkit`, `--json <file>` and `--query <params>` are also
   accepted. For another app, add a temporary scenario and delete it afterwards.
+- **Repeat visits and the development metric.** `--repeat N` appends a scenario's `"repeat"` steps N times (Komikku:
+  back twice, then Settings and Appearance) and prints the medians of the third and later visits. Each tap also
+  reports `busy` (the main looper's work from `pointerup` to the answering frame) and `frame` (its longest `doFrame`),
+  both on the Worker's clock. A tap time adds the vsyncs an animation waits for (a Komikku screen answers in its third
+  frame) and their phase, so its medians move by ±10 ms on unchanged code; the medians of `frame` move by 2–7 ms
+  (Appearance 35.1–38.2 ms, Settings 16.2–22.9 ms over three runs of one build) and are what build comparisons read.
+  `pnpm aot --keep` adds a build beside the current one, which `?aot=<key>` (`--query aot=<key>`) runs, so alternating
+  runs compare builds of one source tree.
 - **What a tap time is.** A tap is timed from `pointerup` to the first presented frame
   that changes a response-region tile the settled frame also changed, outside the tapped node's bounds plus 72 px
   (press and ripple feedback), and outside tiles that already moved while pressed, so a screen still animating at
@@ -39,6 +47,9 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
 - **Claims need matched runs:** the same inputs, serial (`--jobs 1`), nothing else running on the host, at least
   three runs per side, alternating revisions. Compare a failure with the starting commit before calling it a
   regression; Calculator and Lichess are flaky on unchanged code.
+- **Instrumentation and first reads move frame times.** Under `--cpuprofile` Komikku's repeat frames run about 25%
+  faster than unprofiled ones, so compare only runs with the same instrumentation. A build's first run includes the
+  server's first read of its files, which slows its launch and first visits; set that run aside.
 - **Scroll needs `--gpu`.** Under SwiftShader the numbers measure the GPU process: in a scroll trace its compositor
   spent 5.5 of 9 s in `SwapBuffers` while the app Worker was busy 0.4 s. Scroll p95 used to be bimodal from run to
   run (about 18 or about 25 ms): a 120 Hz host rAF put every other frame on the 60 Hz virtual vsync's phase
@@ -78,6 +89,16 @@ e2e has no profiling switch; use Chrome's remote debugging port:
    `pid=<n>`) and write `w<pid>.cpuprofile` for DevTools.
 
 ## Current numbers
+
+With the build tier's direct calls, final binding and in-place bodies (`knlnks/perf-build-tier`, build `9a68aa31`,
+one cold and one warm `--gpu` run, 2026-10-20; not a matched comparison with the table below):
+
+| | First launch | Warm |
+|---|---|---|
+| Calculator M launch / taps | 2.43 s / 9–20 ms (`7` 11) | 1.20 s / 11–20 ms |
+| FitNotes launch / taps | 2.08 s / 7–78 ms (`start` 78) | 1.21 s / 11–67 ms (`start` 67) |
+| Komikku launch | 5.56 s | 2.20 s |
+| Komikku taps | `next` 25, `start` 60, `more` 42, `settings` 43, `appearance` 90 | `next` 31, `start` 47, `more` 47, `settings` 37, `appearance` 81 |
 
 `--gpu`, Worker processes, one job, Apple M4 Pro (14 cores), first response frame, medians of three alternating runs (2026-10-17). First launches wait for the install-time build; warm launches attach the build an earlier launch saved.
 
@@ -161,6 +182,12 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
   transition ends; its semantics appear only then. Second-tier planning and adoption take 4–12 ms per tap and
   render replay about 3 ms. V8 tiering is not a lever: a tenth of the default tier-up budget left Komikku's taps
   unchanged.
+- **Build code does what the engine cannot.** V8 inlines only calls within a module, and Liftoff, which runs screen
+  code that has run only a few times, inlines none. In build code a call that binds statically (direct, static or
+  super, or of a final class or method no host spec implements) calls its target directly when the module holds it,
+  and an empty, accessor, check or straight-line body runs in place (`inline.ts`). Komikku's repeat Appearance
+  `doFrame` fell from about 37 to 32 ms with these. GC takes 2–4% of heavy frames; the rest is Java (62–66%) and
+  display-list replay.
 - **First visits with a build** run compiled code; what remains is the app's Java and first uses. A platform font
   file loads whole on first shaping and its CSS face is validated on registration, so the large fallback files (CJK,
   color emoji, Tibetan) are read ahead while idle after the first frame; a small one costs a few ms on first use.

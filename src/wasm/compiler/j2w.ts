@@ -1,7 +1,7 @@
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
-import { Code, OP } from "./code.ts";
+import { Code, OP, type InlineFrame } from "./code.ts";
 import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
@@ -96,6 +96,8 @@ const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", 
 
 /** the module-local functions of Compiler.local that are the same in every module */
 const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
+/** how many methods a Compiler compiles inside one another's compile, at most, to bound a callee's frame (boundOf) */
+const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
@@ -110,8 +112,9 @@ export interface UnitOptions {
   copies?: MethodInfo[];
   /** the second tier: its methods do not count */
   hot?: boolean;
-  /** the methods go straight into their table slots when the module is instantiated and call each other through them, as precompiled code ("build",
-   *  aot.ts) or code merged from first-tier units ("merge"), which unlike precompiled code relies on the classes loaded now */
+  /** the methods go straight into their table slots when the module is instantiated, as precompiled code ("build", aot.ts), which calls the methods it
+   *  defines directly (Compiler.directFunc), or code merged from first-tier units ("merge"), which calls them through the slots and unlike
+   *  precompiled code relies on the classes loaded now */
   install?: "build" | "merge";
   /** classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
   ensures?: string[];
@@ -120,6 +123,11 @@ export interface UnitOptions {
   seq?: number;
 }
 const NO_PLAN: CallPlan = new Map();
+/** whether a virtual call of `t` through class `decl` runs `t` whatever the receiver: ART links no subclass of a final class and no override of a final method */
+function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
+  const d = prog.get(decl);
+  return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
+}
 export class Compiler implements Base {
   w: LinkEnv;
   mb = new ModuleBuilder();
@@ -128,12 +136,16 @@ export class Compiler implements Base {
   imp = HOST_IMPORT_INDEX;
   /** gaps this module's code ran into */
   gaps: string[] = [];
-  /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
-   *  whose methods the second tier replaces one by one) */
+  /** methods this module defines, by id: calls between them may be direct (directFunc), every other call goes through the table */
   fn = new Map<string, number>();
   /** the names and descriptors of `fn`'s methods: a virtual call of any other can have no target in the module */
   private keys = new Set<string>();
-  private direct = true;
+  /** how the unit's methods are installed (UnitOptions.install); a first-tier or hot unit installs only its head */
+  private install?: "build" | "merge";
+  /** the slots of the methods whose code holds another method's, by its slot (dependsOn) */
+  private holders = new Map<number, Set<number>>();
+  /** `holders` as a unit header carries them: a method's slot, then its holders' */
+  get held(): number[][] { return [...this.holders].map(([callee, by]) => [callee, ...by]); }
   private plan = NO_PLAN;
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
@@ -299,7 +311,8 @@ export class Compiler implements Base {
   /** the frame weight of `m` and what it calls, if it is a direct call of this unit and counts no depth. A method is compiled before its first caller finishes
    *  its prologue; a method that is being compiled (a cycle) has no bound */
   boundOf(m: MethodInfo): number | undefined {
-    if (!this.direct || !this.fn.has(mid(m))) return undefined;
+    // a deep chain of first calls is left to count its frames, not to the compiler's stack
+    if (this.directFunc(m) === undefined || this.nesting > MAX_NESTING) return undefined;
     this.compiled(m);
     return this.bound.get(mid(m));
   }
@@ -309,31 +322,61 @@ export class Compiler implements Base {
     if (this.codes.has(id)) return this.codes.get(id) ?? undefined;
     const owner = this.owner, assumer = this.assumer;
     this.codes.set(id, null);
-    this.owner = m; this.assumer = this.direct ? this.head : m;
+    this.owner = m; this.assumer = this.install ? m : this.head; this.nesting++;
     let code: Code | undefined;
     try { code = compileMethod(this, m); }
     catch (e) { if (e instanceof NeedsNumber) e.method ??= m; throw e; }
-    finally { this.owner = owner; this.assumer = assumer; }
+    finally { this.owner = owner; this.assumer = assumer; this.nesting--; }
     this.codes.set(id, code);
     return code;
   }
   private head?: MethodInfo;
-  directFunc(m: MethodInfo): number | undefined { return this.direct ? this.fn.get(mid(m)) : undefined; }
+  private nesting = 0;
+  /** the function of `m` that a call of it from the method being compiled may call directly: one of this module's, except in merged code, and in precompiled
+   *  code one the host has not taken (mayHold), whose code the caller then holds (Assumptions.undoCode undoes the caller with it) */
+  directFunc(m: MethodInfo): number | undefined {
+    const f = this.fn.get(mid(m));
+    if (f === undefined || !this.install) return f;
+    return this.install === "build" && this.mayHold(m) ? f : undefined;
+  }
+  /** whether the Java method being compiled may hold code of `m`'s, which must be the method's own and not one the host may take: a World without a build knows
+   *  none of them, and code without a Java method (a symbolic site, a synthetic body) has no slot to undo with `m` (dependsOn) */
+  private mayHold(m: MethodInfo): boolean {
+    const a = this.w.aot;
+    return !!this.owner && !!a && !a.overriddenAt(this.w.slotOf(m));
+  }
+  /** the method being compiled holds code of `m`'s, a direct call or its body run in place (inline.ts): undoing `m`'s code undoes the installed method it
+   *  counts against (Assumptions.undoCode) */
+  dependsOn(m: MethodInfo): void {
+    const by = this.assumer;
+    if (!by || m === by) return;
+    const callee = this.w.slotOf(m);
+    (this.holders.get(callee) ?? this.holders.set(callee, new Set()).get(callee)!).add(this.w.slotOf(by));
+  }
   /** calls `m`: directly when this module defines it, else through its table slot (a lazy-link stub until it is compiled) */
   callMethod(c: Code, m: MethodInfo): void {
     const f = this.directFunc(m);
-    if (f !== undefined) c.call(f); else c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m));
+    if (f === undefined) { c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m)); return; }
+    c.call(f);
+    if (this.install) this.dependsOn(m);
   }
+  /** whether a virtual call of `target` through `decl` runs `target`'s slot whatever the receiver: it dispatches finally and reaches no host spec's native. Only a
+   *  build knows every spec (a split bundle registers some late), so a World without one binds none */
+  staticallyBound(decl: string, target: MethodInfo): boolean {
+    const a = this.w.aot;
+    return !!a && finalDispatch(this.prog, decl, target) && !a.hostDispatch(decl, target);
+  }
+  /** whether a call of `m` may run its bytecode in place (inline.ts): the code is the method's, not an intrinsic's or the host's */
+  inlines(m: MethodInfo): boolean { return !this.intrinsic(m) && this.mayHold(m); }
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
    *  class, a dex) may implement it, even for a frame that is already running */
   devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
     // Raw host helpers have no Java method owner; a target outside the module changes no code (callGuards), so no assumption is made for it
-    if (!this.assumer || !this.direct || !this.keys.has(name + desc)) return "many";
+    if (!this.assumer || this.install || !this.keys.has(name + desc)) return "many";
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length !== 1) return "many";
-    // ART links no subclass of a final class and no override of a final method, so no later class can change these.
-    const d = this.prog.get(decl);
-    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
+    // no later class can change a final dispatch
+    if (!finalDispatch(this.prog, decl, t[0])) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see Planner.likely) */
@@ -708,7 +751,7 @@ export class Compiler implements Base {
     const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${seq}` : mid(m));
     all.forEach((m, i) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))); this.keys.add(m.key); });
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
-    this.direct = !install; this.head = methods[0];
+    this.install = install; this.head = methods[0];
     const codes = all.map((m) => this.compiled(m)!);
     phase.emit += performance.now() - t0 - (phase.prepare + phase.flow + phase.infer + phase.facts - analysed);
     const at: [number, number][] = [];
@@ -775,7 +818,7 @@ export class Compiler implements Base {
     const traces = fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen, n = code.marks.length / 2, offsets = new Int32Array(n), pcs = new Int32Array(n);
       for (let i = 0; i < n; i++) { offsets[i] = start + code.marks[2 * i]; pcs[i] = code.marks[2 * i + 1]; }
-      return { name, m, offsets, pcs };
+      return { name, m, offsets, pcs, ...code.inline && { inline: code.inline } };
     });
     // AOT traces are keyed by Java slot: an outlined loop's offsets join its method's trace without changing that format
     const chunks = new Map<string, FnTrace[]>();
@@ -792,5 +835,6 @@ export class Compiler implements Base {
   }
 }
 
-/** the side table that maps a Wasm frame offset of one function back to a DEX pc: offsets ascend, pcs[i] belongs to offsets[i] */
-export interface FnTrace { name: string; m?: MethodInfo; offsets: Int32Array; pcs: Int32Array }
+/** the side table that maps a Wasm frame offset of one function back to a DEX pc: offsets ascend, pcs[i] belongs to offsets[i]; a pc below -1 names a frame
+ *  of `inline` (Code.inline) */
+export interface FnTrace { name: string; m?: MethodInfo; offsets: Int32Array; pcs: Int32Array; inline?: InlineFrame[] }

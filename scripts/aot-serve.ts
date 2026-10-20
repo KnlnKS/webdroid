@@ -1,5 +1,6 @@
 // The platform build's two routes, for the dev server and for wasm/boot-probe.ts:
-//   /aot/current.json    the build `pnpm aot` made last, if it was made from these sources (a stale one would run code the compiler no longer produces)
+//   /aot/current.json    the build `pnpm aot` made current, or with ?key= the one it made last (`--keep`), if it was made from these sources (a stale one
+//                        would run code the compiler no longer produces)
 //   /aot/<key>/<file>    a file of that build, which never changes under its key
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -17,9 +18,9 @@ function currentSource(): string {
   return current.source;
 }
 
-export function aotManifest(): Response {
-  const path = join(AOT_ROOT, "current.json");
-  const manifest = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as AotManifest : undefined;
+export function aotManifest(key?: string | null): Response {
+  const manifest = (key ? ["current.json", "latest.json"] : ["current.json"]).map((f) => join(AOT_ROOT, f)).filter(existsSync)
+    .map((path) => JSON.parse(readFileSync(path, "utf8")) as AotManifest).find((m) => !key || m.key === key);
   // WEBDROID_AOT_STALE=1 serves the last build to sources whose edits leave it unchanged, such as diagnostics outside the compiler
   if (!manifest || manifest.source !== currentSource() && !process.env.WEBDROID_AOT_STALE) return new Response("no platform build for these sources; run: pnpm aot", { status: 404 });
   return Response.json(manifest, { headers: { "cache-control": "no-cache" } });

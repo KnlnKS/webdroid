@@ -20,6 +20,7 @@ import { methodCount, type Loader, type MethodInfo } from "../compiler/program.t
 import type { Compiler, FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/ids.ts";
 import { uleb } from "../compiler/wasmbin.ts";
+import { hostTakeover } from "./hostclass.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -58,6 +59,10 @@ export interface AotIndex {
   cOf: number[];
   /** the runtime functions of each y<module>.wasm */
   synths: string[][];
+  /** the instance methods each host spec's class implements (hostclass.ts hostTakeover): a call that may reach one is not bound statically */
+  hostKeys: [string, string[]][];
+  /** the slots of the methods the host takes over (hostTakeover), those of specs a split bundle registers late included */
+  overridden: number[];
 }
 /** what a module says about itself, in its custom section "aot" */
 export interface DHeader { version?: number; classes: number[]; touch: number[]; synth: string[] }
@@ -75,6 +80,8 @@ export interface UnitHeader {
   allocs: string[];
   /** classes missing at the build that sites of the module fail on, with the slot of the method they are in */
   missing: [string, number][];
+  /** the methods whose code holds another method's: its slot, then theirs (Compiler.held) */
+  held?: number[][];
 }
 export interface CHeader extends UnitHeader {
   classes: number[];
@@ -83,8 +90,7 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-// Emitted class import names replace type reflection, which can reject valid GC references.
-export const VERSION = 16;
+export const VERSION = 21;
 
 /** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
 function numberingDiff(a: Numbering, b: Numbering): string {
@@ -98,7 +104,7 @@ function numberingDiff(a: Numbering, b: Numbering): string {
 }
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 19;
+export const APP_VERSION = 20;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
 export interface AppIndex {
@@ -132,6 +138,7 @@ export interface AppIndex {
 export interface SHeader extends UnitHeader { names: string[] }
 /** what compiled code (built by `cx`, whose classes were touched while it was made) relies on, by the numbers of `w` */
 export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHeader {
+  const held = cx.held;
   const seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
   for (const [decl, name, desc, target, owner] of cx.assumptions) {
     const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
@@ -139,32 +146,42 @@ export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHead
   }
   return { version: VERSION, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
     classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions, allocs: [...cx.allocs],
-    missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]) };
+    missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
+    ...held.length && { held } };
 }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
 const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
+/** the keys of each value of `entries`, by value */
+function invert(entries: Iterable<[string, string[]]>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [k, vs] of entries) for (const v of vs) (out.get(v) ?? out.set(v, []).get(v)!).push(k);
+  return out;
+}
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
-/** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions */
-export function packModule(header: object, wasm: Uint8Array, traces?: { slot: number; offsets: Int32Array; pcs: Int32Array }[]): Uint8Array {
+/** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions (methods numbered by `w`) */
+export function packModule(header: object, wasm: Uint8Array, traced?: { w: World; traces: FnTrace[] }): Uint8Array {
   const section = (name: string, body: Uint8Array) => {
     const n = new TextEncoder().encode(name), pre: number[] = [0], inner: number[] = [];
     uleb(n.length, inner);
     uleb(n.length + inner.length + body.length, pre);
     return [Uint8Array.from(pre), Uint8Array.from(inner), n, body];
   };
-  // a function's trace is its slot, its length in bytes and then the count, ascending offsets and the pcs they belong to (both as differences): a reader skips the functions it does not want
-  const t: number[] = [];
-  for (const { slot, offsets, pcs } of traces ?? []) {
+  // a function's trace is its slot, its length in bytes and then the count, ascending offsets and the pcs they belong to (both as differences), then its
+  // inline frames (FnTrace.inline) as count and (slot, pc, at): a reader skips the functions it does not want
+  const t: number[] = [], { w, traces = [] } = traced ?? {};
+  for (const { m, offsets, pcs, inline = [] } of traces) {
     const body: number[] = [];
     uleb(offsets.length, body);
     let o = 0, p = 0;
     for (let i = 0; i < offsets.length; i++) { uleb(offsets[i] - o, body); o = offsets[i]; uleb((((pcs[i] - p) << 1) ^ ((pcs[i] - p) >> 31)) >>> 0, body); p = pcs[i]; }
-    uleb(slot, t); uleb(body.length, t);
+    uleb(inline.length, body);
+    for (const [im, pc, at] of inline) { uleb(w!.slotOf(im), body); uleb(pc, body); uleb(at, body); }
+    uleb(w!.slotOf(m!), t); uleb(body.length, t);
     for (const x of body) t.push(x);
   }
-  const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify({ version: VERSION, ...header }))), ...(traces ? section("aottrace", Uint8Array.from(t)) : [])];
+  const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify({ version: VERSION, ...header }))), ...(traced ? section("aottrace", Uint8Array.from(t)) : [])];
   const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
   let at = 0;
   for (const x of parts) { out.set(x, at); at += x.length; }
@@ -185,6 +202,8 @@ const LIVE = 1, DEAD = 2, LOADING = 3;
 export class AotRuntime {
   private w: World;
   readonly building: boolean;
+  /** the classes that implement each instance method a host spec implements */
+  private hostKeys = new Map<string, string[]>();
   /** the platform classes; the on-demand compiler numbers everything after them */
   nSeeded = 0;
   private index!: AotIndex;
@@ -234,6 +253,10 @@ export class AotRuntime {
     this.building = !!build;
     if (!build) return;
     this.nSeeded = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));
+    // the methods the host takes over keep their slots, as a process's World overrides them
+    const host = hostTakeover(w.prog, w.natives.source?.hostSpecs?.() ?? [], w.opts.hostWhole);
+    this.hostKeys = invert(host.implemented);
+    for (const m of host.taken) this.override(m);
     const dIds = new Map<string, number>(), cIds = new Map<string, number>(), id = (m: Map<string, number>, keys: string[], k: string | null) => {
       if (k === null) return -1;
       let i = m.get(k); if (i === undefined) { m.set(k, i = keys.length); keys.push(k); }
@@ -261,6 +284,7 @@ export class AotRuntime {
     }
     if (n < index.programClasses || seen.length !== index.dexes.length || seen.some((d, i) => d !== index.dexes[i])) return undefined;
     const a = new AotRuntime(w);
+    a.hostKeys = invert(index.hostKeys); a.overridden = new Set(index.overridden);
     a.index = index; a.store = store; a.nSeeded = index.classes; a.programClasses = index.programClasses;
     const mine = new Set(index.aotDexes);
     if (w.seedPlatform((d) => mine.has(dexSig(d))) !== index.classes) return undefined;
@@ -459,6 +483,13 @@ export class AotRuntime {
     const base = this.reservedBase(m.cls) ?? this.w.slots.preassigned.get(m.cls);
     if (base !== undefined) this.overridden.add(base + m.index);
   }
+  overriddenAt(slot: number): boolean { return this.overridden.has(slot); }
+  /** whether a call of `t` through `decl` may reach a host spec's native: a spec of a class related to `decl` below `t`'s implements it, or one of a class this
+   *  World does not have, which may be any */
+  hostDispatch(decl: string, t: MethodInfo): boolean {
+    const prog = this.w.prog;
+    return !!this.hostKeys.get(t.key)?.some((s) => !prog.get(s) || prog.isSubclass(s, t.cls) && (prog.isSubclass(s, decl) || prog.isSubclass(decl, s)));
+  }
   /** whether a loaded code module or app patch installed the method of `slot` */
   installed(slot: number): boolean {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
@@ -558,6 +589,7 @@ export class AotRuntime {
       this.overriddenSeen = this.overridden.size;
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
+    w.assumptions.hold(head.held ?? []);
     if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
@@ -577,10 +609,12 @@ export class AotRuntime {
     for (const cls of head.allocs) w.allocated.add(cls);
     // a site that fails because a class was not there is undone if it is now
     for (const [name, owner] of head.missing) {
-      if (w.prog.get(name)) { w.invalidate(owner); continue; }
+      if (w.prog.get(name)) { w.assumptions.undoCode(owner); continue; }
       w.assumptions.absentAt(name, owner);
     }
-    for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
+    for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.assumptions.undoCode(slot); this.cAbsent[c]!.add(slot); }
+    // code that holds a method of another module the host took since the build: that module may have undone the method before this one was loaded
+    for (const [callee, ...by] of head.held ?? []) if (this.overridden.has(callee)) for (const x of by) w.assumptions.undoCode(x);
     w.stats.aot.ms += performance.now() - t2;
     // the app build's patches of this module's methods: after its own code, which they replace where they have some
     for (const p of this.patchesOver.get(c) ?? []) this.loadC(p);
@@ -625,7 +659,8 @@ export class AotRuntime {
       offsets[i] = o += unleb(b, at);
       const z = unleb(b, at); pcs[i] = p += (z >>> 1) ^ -(z & 1);
     }
-    const t = { name, m, offsets, pcs };
+    const t: FnTrace = { name, m, offsets, pcs }, k = unleb(b, at);
+    if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.method(unleb(b, at))!.m, unleb(b, at), unleb(b, at)]);
     this.w.stacks.traces.set(name, t);
     return t;
   }
@@ -636,6 +671,6 @@ export class AotRuntime {
     const w = this.w;
     const withCode = [...w.prog.all()].filter((c) => c.dex);
     return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
-      extraNames: w.numbers.names.slice(this.nSeeded + 1), tail: w.numbers.tail, selectors: w.numbers.selKeys.slice(1), gaps: w.numbers.gapList, linkMessages: w.numbers.links.messages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths };
+      extraNames: w.numbers.names.slice(this.nSeeded + 1), tail: w.numbers.tail, selectors: w.numbers.selKeys.slice(1), gaps: w.numbers.gapList, linkMessages: w.numbers.links.messages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths, hostKeys: [...invert(this.hostKeys)], overridden: [...this.overridden].sort((x, y) => x - y) };
   }
 }

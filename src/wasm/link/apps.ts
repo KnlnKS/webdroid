@@ -174,7 +174,7 @@ function compileShard(w: World, plan: AppPlan, shard: number, frozen: boolean): 
     const wanted = new Set(group);
     const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
     const header: CHeader = { ...unitHeader(w, cx, touch), classes, mods: [], absent };
-    files.push([`a${module}.wasm`, packModule(header, built.bytes, built.traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })))]);
+    files.push([`a${module}.wasm`, packModule(header, built.bytes, { w, traces: built.traces })]);
     if (over < 0) for (const b of classes) cOf.push([b, module]); else patches.push([module, over]);
   });
   if (frozen) w.numbers.frozen(compile); else compile();

@@ -1,8 +1,8 @@
 import { emitSymbolicSite } from "./sites.ts";
 import { STRING } from "./strings.ts";
-import { Code, OP } from "./code.ts";
+import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { kindOf, type Kind, type MethodInfo } from "./program.ts";
+import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
 import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
@@ -14,13 +14,17 @@ import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { MAX_UNCOUNTED, isStackOverflow } from "./exc.ts";
-import { isInvoke } from "./opinfo.ts";
+import { isInvoke, narrowBits, wideBits } from "./opinfo.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { Outliner } from "./outline.ts";
+import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
 import { inferTyping, KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** what an invoke names: its kind without /range, the method's name and descriptor, the class whose methods it searches, and the resolved target */
 type InvokeSite = { kind: string; name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" };
+/** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
+ *  it has one (Compiler.devirt); String's constructor, which makes the string */
+type Binding = { k: "fixed"; m: MethodInfo; body?: Trivial } | { k: "virtual"; only?: MethodInfo } | { k: "string" };
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
 /** the key of each invoke kind whose resolution is the same for every caller (MethodCompiler.invokeTarget) */
@@ -275,20 +279,24 @@ export class MC {
     if (this.tries) return true;
     const open: string[] = [], cold: string[] = [], thrown = new Set<number>();
     for (const b of this.blockIns) if (b?.[b.length - 1].op === 0x27) for (const i of b) thrown.add(i.pc);
-    const bounded = (m: MethodInfo | "dynamic") => { const w = m === "dynamic" ? undefined : this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
+    const bounded = (m: MethodInfo) => { const w = this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
     for (const ins of calls) {
-      const t = this.callee(ins), key = String(ins.pc), virtual = this.virtuals.get(ins.pc);
-      if (t === null) continue;
       if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
-      // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
-      const guards = virtual ? this.callGuards(ins) : [];
-      if (guards.length) {
+      const b = this.binding(ins), key = String(ins.pc);
+      if (!b) continue;
+      if (b.k === "virtual") {
+        // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
+        const guards = this.guards(ins, b);
         for (const g of guards) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
-        cold.push(key + ":f");
-      } else if (!bounded(virtual ? "dynamic" : t)) {
-        // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
-        (thrown.has(ins.pc) ? cold : open).push(key);
+        if (guards.length) { cold.push(key + ":f"); continue; }
       }
+      // a check calls its method for a null argument, which the method rejects
+      const body = b.k === "fixed" ? b.body : undefined;
+      if (body?.k === "check") { cold.push(key); continue; }
+      const callee = b.k !== "fixed" ? undefined : body ? this.innerCall(body) : b.m;
+      if (callee === null) continue;
+      // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
+      if (!callee || !bounded(callee)) (thrown.has(ins.pc) ? cold : open).push(key);
     }
     // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
     if (open.length) {
@@ -300,35 +308,37 @@ export class MC {
     this.boundable = open.length === 0;
     return false;
   }
-  private callees = new Map<number, MethodInfo | null | "dynamic">();
-  /** the declaration used for virtual dispatch and guards */
-  private virtuals = new Map<number, [string, string, string]>();
-  private callGuards(ins: Ins): MethodInfo[] {
-    const target = this.callee(ins), virtual = this.virtuals.get(ins.pc);
-    if (target && target !== "dynamic") return this.cx.directFunc(target) === undefined ? [] : [target];
-    return virtual ? this.cx.guards(...virtual) : [];
-  }
   /** whether `ins` is one of the module's symbolic sites (sites.ts), whose references resolve when it runs */
   deferredSite(ins: Ins): boolean {
     return this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
   }
-  /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
-  callee(ins: Ins): MethodInfo | null | "dynamic" {
-    if (this.deferredSite(ins)) return "dynamic";
-    let r = this.callees.get(ins.pc);
-    if (r === undefined) this.callees.set(ins.pc, r = this.resolveCallee(ins));
-    return r;
+  private bindings = new Map<number, Binding | null>();
+  /** how an invoke other than invoke-polymorphic, invoke-custom and a symbolic site reaches its target; null if it calls no Java method */
+  binding(ins: Ins): Binding | null {
+    let b = this.bindings.get(ins.pc);
+    if (b === undefined) this.bindings.set(ins.pc, b = this.bind(ins));
+    return b;
   }
-  private resolveCallee(ins: Ins): MethodInfo | null | "dynamic" {
-    if (ins.op >= 0xfa) return "dynamic"; // invoke-polymorphic, invoke-custom
+  private bind(ins: Ins): Binding | null {
     const { kind, decl, name, target } = this.invoke(ins);
     if (target === "clone" || failed(target)) return null;
-    if (kind === "invoke-static") return target;
-    if (kind === "invoke-direct" && decl === STRING && name === "<init>") return "dynamic";
-    if (kind === "invoke-direct" || kind === "invoke-super") return target;
+    if (kind === "invoke-direct" && decl === STRING && name === "<init>") return { k: "string" };
+    if (kind !== "invoke-virtual" && kind !== "invoke-interface" || this.cx.staticallyBound(decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
     const only = this.cx.devirt(decl, name, target.desc);
-    this.virtuals.set(ins.pc, [decl, name, target.desc]);
-    return only === "many" ? "dynamic" : only;
+    return { k: "virtual", only: only === "many" ? undefined : only };
+  }
+  /** what a call of `m`, bound statically, runs in place (inline.ts) */
+  private bodyOf(m: MethodInfo): Trivial | undefined { return this.cx.inlines(m) ? trivialOf(this.cx.prog, m) : undefined; }
+  /** the call a body run in place makes, if it makes one: a call of a method whose body is empty only initializes a static one's class */
+  private innerCall(t: Seq): MethodInfo | null {
+    const s = t.steps.find((s) => "call" in s);
+    return s && "call" in s && !isEmpty(this.bodyOf(s.call)) ? s.call : null;
+  }
+  /** the implementations a virtual call tests for before it dispatches: the only one, else the unit's likely ones (Compiler.guards), if the unit has them */
+  private guards(ins: Ins, b: Extract<Binding, { k: "virtual" }>): MethodInfo[] {
+    if (b.only) return this.cx.directFunc(b.only) === undefined ? [] : [b.only];
+    const { decl, name, desc } = this.invoke(ins);
+    return this.cx.guards(decl, name, desc);
   }
   private invokes = new Map<number, InvokeSite>();
   /** the reference of an invoke other than invoke-polymorphic and invoke-custom, and what it resolves to, read once per site */
@@ -503,11 +513,8 @@ export class MC {
       case 0x0f: this.get("I", a); this.methodReturn(); return;
       case 0x10: this.get("J", a); this.methodReturn(); return;
       case 0x11: this.get("L", a); this.methodReturn(); return;
-      case 0x12: case 0x13: case 0x14: this.constNarrow(b); return; // const/4, const/16, const
-      case 0x15: this.constNarrow(b << 16); return; // const/high16
-      case 0x16: case 0x17: this.constWide(BigInt(b)); return; // const-wide/16, const-wide/32
-      case 0x18: this.constWide(ins.wideLit); return;
-      case 0x19: this.constWide(BigInt(b) << 48n); return; // const-wide/high16
+      case 0x12: case 0x13: case 0x14: case 0x15: this.constNarrow(narrowBits(op, b)); return;
+      case 0x16: case 0x17: case 0x18: case 0x19: this.constWide(wideBits(op, b, ins.wideLit)); return;
       case 0x1a: case 0x1b: cx.str.literal(c, dex.string(b)); this.set("L"); return; // const-string
       case 0x1c: if (this.unresolved(dex.type(b))) return; cx.constClass(c, dex.typeName(b)); this.set("L"); return;
       case 0x1d: case 0x1e: this.nonNull(a); this.monitor(op === 0x1d); return;
@@ -650,17 +657,24 @@ export class MC {
     return r;
   }
   emitIget(ins: Ins) {
-    const cx = this.cx, c = this.code, r = this.instanceField(ins);
+    const r = this.instanceField(ins);
     if (failed(r)) return this.linkFail(r);
-    const { decl, f } = r, st = cx.structFor(decl);
-    this.refTo(ins.b, st); c.structGet(st, cx.fieldIndex(decl, f)); this.set(f.kind);
+    this.fieldGet(r, ins.b); this.set(r.f.kind);
   }
   emitIput(ins: Ins) {
-    const cx = this.cx, c = this.code, r = this.instanceField(ins);
+    const r = this.instanceField(ins);
     if (failed(r)) return this.linkFail(r);
-    const { decl, f } = r, st = cx.structFor(decl);
-    this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
-    if (cx.w.claims(f)) { this.refTo(ins.b, st); c.externConvertAny(); this.get("J", ins.a); c.call(cx.imp.claim); }
+    this.fieldPut(r, ins.b, () => this.get(r.f.kind, ins.a));
+  }
+  private fieldGet({ decl, f }: { decl: string; f: FieldInfo }, obj: number) {
+    const cx = this.cx, st = cx.structFor(decl);
+    this.refTo(obj, st); this.code.structGet(st, cx.fieldIndex(decl, f));
+  }
+  /** stores what `value` pushes (in the field's kind) into `obj`'s field */
+  private fieldPut({ decl, f }: { decl: string; f: FieldInfo }, obj: number, value: () => void) {
+    const cx = this.cx, c = this.code, st = cx.structFor(decl);
+    this.refTo(obj, st); value(); c.structSet(st, cx.fieldIndex(decl, f));
+    if (cx.w.claims(f)) { this.refTo(obj, st); c.externConvertAny(); value(); c.call(cx.imp.claim); }
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.op >= 0x67, r = this.fieldOf(ins.b, true);
@@ -750,28 +764,26 @@ export class MC {
     const cx = this.cx, c = this.code, prog = cx.prog;
     if (ins.op >= 0xfc) return emitCustom(this, ins);
     if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
-    const { kind, name, desc, decl, target } = this.invoke(ins);
+    const { desc, decl, target } = this.invoke(ins);
     const p = this.dex.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
-    const isStatic = kind === "invoke-static";
-    const sigIdx = () => cx.descSig(desc, isStatic);
     if (target === "clone") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
-    const site = this.sites.has(String(ins.pc));
+    const b = this.binding(ins)!, site = this.sites.has(String(ins.pc));
+    if (b.k === "fixed" && b.body) { this.emitBody(ins, b.m, b.body, retK, site); return; }
     if (site) this.enterSite();
     const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
-    if (isStatic) {
-      this.ensure(target.cls); pushArgs(this, ins, p.params, 0); cx.callMethod(c, target);
-    } else if (kind === "invoke-direct" && decl === STRING && name === "<init>") {
+    if (b.k === "string") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
       pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
-    } else if (kind === "invoke-direct" || kind === "invoke-super") {
-      this.nonNull(ins.regs[0]); pushArgs(this, ins, p.params); cx.callMethod(c, target);
+    } else if (b.k === "fixed") {
+      if (target.isStatic) { this.ensure(target.cls); pushArgs(this, ins, p.params, 0); } else { this.nonNull(ins.regs[0]); pushArgs(this, ins, p.params); }
+      cx.callMethod(c, target);
     } else {
       // A native callback can load an override while this activation is still running.
       const declC = prog.get(decl);
       // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
-      const guards = this.callGuards(ins);
+      const guards = this.guards(ins, b);
       this.nonNull(ins.regs[0]); c.lset(this.tmpL);
       c.lget(this.tmpL); pushArgs(this, ins, p.params);
       c.lget(this.tmpL).refCast(cx.tObj).structGet(cx.tObj, 0);
@@ -789,16 +801,83 @@ export class MC {
           .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
       }
       // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
+      const type = cx.descSig(desc, false);
       if (guards.length) {
-        const slot = this.slotLocal(), type = sigIdx();
+        const slot = this.slotLocal();
         c.lset(slot);
         for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => cx.callMethod(c, g)); c.else_(); }
         c.lget(slot); wrap("f", () => c.callIndirect(type));
         for (const _ of guards) c.end();
-      } else c.callIndirect(sigIdx());
+      } else c.callIndirect(type);
     }
     if (site) this.leaveSite();
     this.finishResult(ins, retK);
+  }
+  /** the body of `m` (inline.ts) in place of the call `ins`: the checks the invoke makes in its own frame, then the body's steps */
+  private emitBody(ins: Ins, m: MethodInfo, t: Trivial, retK: Kind | "V", site: boolean) {
+    const cx = this.cx, c = this.code, regs: number[] = [];
+    let ri = 0;
+    if (!m.isStatic) regs.push(ins.regs[ri++]);
+    for (const pt of m.params) { regs.push(ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
+    cx.dependsOn(m);
+    if (m.isStatic) this.ensure(m.cls);
+    else {
+      const w = this.useWeb(regs[0]);
+      if (!this.facts.nonNull.has(w)) { this.nonNull(regs[0]); c.drop(); this.facts.nonNull.add(w); }
+    }
+    const call = (u: MethodInfo, args: () => void) => { if (site) this.enterSite(); args(); cx.callMethod(c, u); if (site) this.leaveSite(); };
+    if (t.k === "check") {
+      // a null first argument takes the call, which does more than return
+      this.get("L", regs[0]); c.refIsNull().if_();
+      call(m, () => pushArgs(this, ins, m.params, 0));
+      c.end();
+      return;
+    }
+    this.emitSteps(m, t, regs, call);
+    this.finishResult(ins, retK);
+  }
+  /** the locals that values of bodies run in place are kept in, by type: a body's values die with it, so the next body reuses them */
+  private bodyLocals = new Map<VT, number[]>();
+  /** the steps of body `t` of `m`, each in a frame of `m`, leaving the value it returns; `regs` holds its parameters */
+  private emitSteps(m: MethodInfo, t: Seq, regs: number[], call: (u: MethodInfo, args: () => void) => void) {
+    const cx = this.cx, c = this.code, locals: number[] = [], used = new Set<number>(), taken = new Map<VT, number>(), { steps, ret } = t;
+    // the value returned stays on the stack when the last step leaves it there
+    const onStack = !!ret && "t" in ret && ret.t === steps.length - 1;
+    for (const v of steps.flatMap((s) => "put" in s ? [s.v] : "call" in s ? s.args : []).concat(ret && !onStack ? [ret] : [])) if ("t" in v) used.add(v.t);
+    const local = (vt: VT) => {
+      const k = taken.get(vt) ?? 0, pool = this.bodyLocals.get(vt) ?? this.bodyLocals.set(vt, []).get(vt)!;
+      taken.set(vt, k + 1);
+      return pool[k] ??= this.root.newLocal(vt);
+    };
+    const push = (v: Val, kind: Kind) => {
+      if ("p" in v) this.get(kind, regs[v.p]);
+      else if ("t" in v) c.lget(locals[v.t]);
+      else if (kind === "L") c.anyNull(); else if (kind === "J") c.i64(BigInt(v.bits)); else c.i32(Number(v.bits));
+    };
+    steps.forEach((s, i) => {
+      const kind = this.inFrame(m, s.pc, (): Kind | "V" => {
+        if ("sget" in s) { const { owner, name, desc, kind } = s.sget.f; this.ensure(owner); c.gget(cx.staticGlobal(owner, name, desc)); return kind; }
+        if ("get" in s) { this.fieldGet(s.get, regs[s.obj]); return s.get.f.kind; }
+        if ("put" in s) { this.fieldPut(s.put, regs[s.obj], () => push(s.v, s.put.f.kind)); return "V"; }
+        const u = s.call;
+        if (u.isStatic) this.ensure(u.cls);
+        if (isEmpty(this.bodyOf(u))) { cx.dependsOn(u); return "V"; }
+        call(u, () => s.args.forEach((v, j) => push(v, j === 0 && !u.isStatic ? "L" : kindOf(u.params[j - (u.isStatic ? 0 : 1)]))));
+        return u.ret === "V" ? "V" : kindOf(u.ret);
+      });
+      if (kind === "V" || onStack && i === steps.length - 1) return;
+      if (used.has(i)) c.lset(locals[i] = local(cx.vtOf(kind))); else c.drop();
+    });
+    if (ret && !onStack) push(ret, kindOf(m.ret));
+  }
+  /** emits `emit` as code of `m`, run in place, at its `pc`: what it throws or calls carries a frame of `m` inside this method's (FnTrace.inline) */
+  private inFrame<R>(m: MethodInfo, pc: number, emit: () => R): R {
+    const c = this.code, at = c.pc, marks = c.marks.length;
+    c.pc = inlineMark(this.root.inline?.length ?? 0);
+    const r = emit();
+    c.pc = at;
+    if (c.marks.length !== marks) (this.root.inline ??= []).push([m, pc, at]);
+    return r;
   }
   slotl = -1;
   slotLocal() { if (this.slotl < 0) this.slotl = this.code.newLocal(T.i32); return this.slotl; }

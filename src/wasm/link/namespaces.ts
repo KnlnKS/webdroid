@@ -26,7 +26,7 @@ export class Namespaces {
     w.aot?.unbindApp();
     for (let b = 0; b < slots.blockClass.length; b++) {
       const dex = prog.get(slots.blockClass[b])?.dex;
-      if (dex && prog.loaderOfDex(dex) === prog.root) for (let i = 0; i < slots.methodsIn(b); i++) w.invalidate(slots.blockBase[b] + i);
+      if (dex && prog.loaderOfDex(dex) === prog.root) for (let i = 0; i < slots.methodsIn(b); i++) w.assumptions.undoCode(slots.blockBase[b] + i);
     }
     w.epoch++;
     w.opts.compiler?.namespaces();
@@ -120,7 +120,7 @@ export class Namespaces {
     // a slot without state has never been compiled here
     const builtUnder = (slot: number) => { const s = slots.peek(slot); return (!s || s.k === "method" && !s.hot && !w.demand.methods.has(s.m)) && !!w.aot?.fromAppBuild(slot); };
     for (let b = 0; b < slots.blockClass.length; b++) if (refreshed.has(slots.blockClass[b])) {
-      for (let i = 0; i < slots.methodsIn(b); i++) if (!kept || !builtUnder(slots.blockBase[b] + i)) w.invalidate(slots.blockBase[b] + i);
+      for (let i = 0; i < slots.methodsIn(b); i++) if (!kept || !builtUnder(slots.blockBase[b] + i)) w.assumptions.undoCode(slots.blockBase[b] + i);
     }
     if (names.some(name => prog.loaderOfDex(prog.get(name)!.dex!) === prog.root) && !kept) w.aot?.unbindApp();
     w.assumptions.rebound(resolved, (desc) => mentions(desc) ? depends : hierarchy);

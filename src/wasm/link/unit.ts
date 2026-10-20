@@ -4,6 +4,7 @@
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/ids.ts";
+import type { InlineFrame } from "../compiler/code.ts";
 import { unitHeader, type UnitHeader } from "./aot.ts";
 import type { Marks, Numbering } from "./numbers.ts";
 import type { World } from "./world.ts";
@@ -34,8 +35,8 @@ export interface UnitResult {
   /** the unit's module: its bytes as the worker sends them, since a compiled module does not cross to another agent cluster (as from the compile host's
    *  frame), then compiled where they arrive (CompileClient) */
   module: Uint8Array | WebAssembly.Module;
-  /** the stack traces of its functions: name, method id, Wasm offsets and the dex pcs they belong to */
-  traces: { name: string; m: string; offsets: Int32Array; pcs: Int32Array }[];
+  /** the stack traces of its functions: name, method id, Wasm offsets, the dex pcs they belong to and inline frames (FnTrace) by method id */
+  traces: { name: string; m: string; offsets: Int32Array; pcs: Int32Array; inline?: InlineFrame<string>[] }[];
 }
 
 export class UnitCompiler {
@@ -72,6 +73,6 @@ export class UnitCompiler {
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan, seq: job.unit });
     const touch = w.endTouch();
     return { header: unitHeader(w, cx, touch), numbering: w.numbers.since(this.known), module: bytes,
-      traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
+      traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs, inline: t.inline?.map(([m, pc, at]) => [mid(m), pc, at]) })) };
   }
 }

@@ -19,12 +19,12 @@ const worker = await bundleFor("browser", join(ROOT, "src/wasm/host/compile-work
 const appDir = fixture({ sources: [join(JAVA, "Pst.java")] });
 
 const server = await serve({ fetch(req) {
-  const p = new URL(req.url).pathname;
+  const url = new URL(req.url), p = url.pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
   if (p === "/probe.js") return new Response(bundle, { headers: { "content-type": "text/javascript" } });
   if (p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript" } });
   if (p === "/app.dex") return fileResponse(join(appDir, "classes.dex"), req);
-  if (p === "/aot/current.json") return aotManifest();
+  if (p === "/aot/current.json") return aotManifest(url.searchParams.get("key"));
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);
   if (aot) return aotFile(req, aot[1], aot[2]);
   return p.startsWith("/vendor/aosp/") && !p.includes("..") ? fileResponse(join(ROOT, p), req) : new Response("", { status: 404 });

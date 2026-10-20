@@ -8,3 +8,5 @@ export const switchOn = (name: string, fallback: boolean): boolean => {
   const v = query?.get(name);
   return v === null || v === undefined ? fallback : v !== "0" && v !== "false" && v !== "off";
 };
+/** the value of `name`, if the page gives one */
+export const switchValue = (name: string): string | undefined => query?.get(name) ?? undefined;

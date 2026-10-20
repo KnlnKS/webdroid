@@ -1,4 +1,5 @@
 import type { LinkFailure } from "./linkage.ts";
+import type { Trivial } from "./inline.ts";
 import { ACC, type DexFile, type ClassDef } from "../../jvm/dex.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 
@@ -471,8 +472,10 @@ export class Program {
   private chains = new Map<string, readonly string[]>();
   /** what the compiler resolved per reference of a dex (MethodCompiler.resolved), by reference index and use */
   readonly refMemo = new Map<DexFile, Map<number, unknown>>();
+  /** what a call of each method runs in place, or null (inline.ts trivialOf) */
+  readonly trivials = new Map<MethodInfo, Trivial | null>();
   /** drops what a change to the classes or their types can falsify */
-  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refMemo.clear(); }
+  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refMemo.clear(); this.trivials.clear(); }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);

@@ -23,7 +23,7 @@ export class Units {
     stats.compileMs += performance.now() - clock.start - (stats.compileMs - clock.accounted);
   }
   /** instantiates a built unit, has `place` put its functions where they are called, then records what their code relies on */
-  instantiate<T>(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
+  instantiate<T>(cx: Pick<Compiler, "assumptions" | "absent" | "held">, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.account(clock);
     const exports = this.w.instantiate(built.bytes, imports).exports;

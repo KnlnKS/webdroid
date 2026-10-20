@@ -141,7 +141,7 @@ cGroups.forEach((blocks, k) => {
   nMethods += methods.length;
   const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
     absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
-  const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
+  const plain = packModule(header, bytes), file = packModule(header, bytes, { w, traces });
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
 });

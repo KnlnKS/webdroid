@@ -24,6 +24,7 @@
     {"wait":2000},
     {"fps":[540,1800,540,600],"ms":8000,"name":"scroll-appearance"}
   ],
+  "repeat": [{"back":true},{"wait":800},{"back":true},{"wait":800},{"m":"settings","text":"Settings"},{"wait":1200},{"m":"appearance","text":"Appearance"},{"wait":1500}],
   "responses": {
     "next": {"nodes":[{"text":"Select a folder"}],"pixels":[{"region":[0,200,1080,2000],"changed":true,"nonUniform":true}]},
     "start": {"nodes":[{"text":"Updates"}],"pixels":[{"region":[0,200,1080,2000],"changed":true,"nonUniform":true}]},

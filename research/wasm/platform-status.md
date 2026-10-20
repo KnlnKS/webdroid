@@ -5,8 +5,8 @@ limits, not speed). Recheck the secondary sources before relying on them.
 
 Reproduce from `research/wasm` after `pnpm install`:
 - `node probe.mjs <chrome|chromium|webkit> [--flags=a,b] [--nolimits]`: the matrix, as JSON
-- `DEBUG=pw:browser node probe-tiering.mjs hints|cache [chrome|chromium|node] [http,cacheStorage,blobUrl,compileBytes]`
-  reads V8's `--trace-wasm-compilation-times`. `FUNCS=<n>` sets the size of the cache module.
+- `DEBUG=pw:browser node probe-tiering.mjs hints [chrome|chromium|node]` reads V8's `--trace-wasm-compilation-times`;
+  `node probe-tiering.mjs cache [chrome|chromium] [http,sw,cache]` takes `MB`, `HOT`, `OPTIONS=0`, `HEADED=1` and `JS_FLAGS`.
 
 ## Measured matrix (2026-10-04; JSPI rows 2026-10-07)
 
@@ -29,7 +29,7 @@ launch reports `sandbox_extension_issue_file_to_process ... Operation not permit
 | Max function body | 7,654,000 B valid, 7,654,321 B invalid | same |
 | Max locals per function | 50,000 valid, 50,001 invalid | same |
 | Sync `new WebAssembly.Module` on the main thread | rejects 8 MiB or more ("disallowed on the main thread, if the buffer size is larger than 8M"); 4 MB, and async `compile` of 9 MB, work | no limit up to 16 MB |
-| Code cache for fetched or runtime-built modules | not observed (below) | n/a |
+| Code cache | optimized code returns from an HTTP response or a Service Worker's Cache Storage, not from `cache.match` (below) | n/a |
 
 These runs corrected two earlier claims: the function body limit is about 7.65 MB in V8 and JSC, not 128 KB, and
 Chrome's main-thread sync-compile limit is 8 MiB, not 4 KB. The 50,000-locals figure stands. WasmFX was not probed.
@@ -66,16 +66,18 @@ Node needs `--experimental-wasm-jspi` (package.json scripts start through `scrip
   `0x26` runs Liftoff then TurboFan, `0x06` Liftoff eagerly, and a wrong count is a CompileError.
 - With `--wasm-dynamic-tiering` off, V8 tiers every function up eagerly. Pages cannot set that switch.
 
-## Code cache (not observed)
+## Code cache
 
-- **2026-10-04.** A 1.25 MB module of 3,000 functions was loaded four ways: `compileStreaming` of an `immutable`
-  HTTP response, a Cache Storage response built from bytes, a blob URL and `WebAssembly.compile`. Each ran in four
-  fresh launches on a shared profile, all functions tiered to TurboFan. Every run recompiled all 3,000, with
-  identical traces and compile times. Headless only.
-- **2026-10-11**, with `FUNCS=30000 ... cache chromium http,cacheStorage` (12.5 MB module, three launches each).
-  Eager compilation (`--no-wasm-lazy-compilation`) took 75–86 ms on every launch and async instantiation about 6 ms.
-  Chrome refuses `new WebAssembly.Instance` above 8 MB on a page's main thread.
-- So platform code ships as build-time AOT modules. Large images are compiled once per tab and posted to Workers.
+- **2026-10-19**, `MB=8 node probe-tiering.mjs cache chrome`: an 8 MB module compiled with the tier's options, lazy
+  compilation and dynamic tiering, eight hot functions tiered up, then 8 s idle; a fresh browser per launch on one
+  profile. A later launch's first call ran at optimized speed (2.2–2.6 ms, against 3.7–4.4 ms in Liftoff):
+  - from an `immutable` HTTP response from launch 2, on the page and in a Worker;
+  - from a Service Worker answering out of Cache Storage from launch 3 (launch 2 is the first to read that entry);
+  - never from `compileStreaming` of a `cache.match` response.
+  Headed runs and dropping the compile options changed nothing. With one hot function nothing was cached until
+  `--wasm-caching-threshold` was lowered: V8 caches a module once it holds 1 KB of new optimized code and has compiled
+  nothing for 2 s (`--wasm-caching-timeout-ms`), or at once at 1 MB.
+- The earlier "not observed" runs (2026-10-04, 10-11) compiled eagerly or from bytes.
 
 ## Engines without JSPI
 

@@ -8,18 +8,38 @@
 //    inherits from a superclass in a class of their own that the class resolves them in. The class keeps its members, so ids and slots stay put.
 //  - The host object is made when a native first needs it (host/bridge.ts): a Java object that Java code allocated, as a bytecode subclass does,
 //    gets its host object at its first host call, which is its constructor.
-import { ACC, type JClass, type Loader, type MethodInfo } from "../compiler/program.ts";
+import { ACC, type JClass, type Loader, type MethodInfo, type Program } from "../compiler/program.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HOSTED, type HostSpec } from "./hostapi.ts";
 import type { World } from "./world.ts";
 
-const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell";
+const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell", CLINIT = "<clinit>()V";
 
 /** the method `key` ("name(desc)ret", with "static " for a static one) as a native of class `cls` */
 function native(cls: string, key: string, index: number): MethodInfo {
   const isStatic = key.startsWith(STATIC), k = isStatic ? key.slice(STATIC.length) : key, at = k.indexOf("("), name = k.slice(0, at), desc = k.slice(at), p = parseMethodDesc(desc);
   return { cls, name, desc, flags: ACC.PUBLIC | ACC.NATIVE | (isStatic ? ACC.STATIC : 0), dex: null!, methodIdx: -1, codeOff: 0, key: k, isStatic, isCtor: name === "<init>", params: p.params, ret: p.ret, index };
+}
+/** whether `spec` takes the place of methods of its dex class `jc` (overlay), rather than standing for an interface with a class of natives (javaClass) */
+const overlays = (jc: JClass, spec: HostSpec): boolean => !jc.isInterface || !!spec.statics;
+/** the methods of dex class `jc` whose code the natives of `spec` replace (`whole`: the host implements the class whole, so its initializer does not run) */
+function hostTakes(jc: JClass, spec: HostSpec, whole: boolean): MethodInfo[] {
+  if (!overlays(jc, spec)) return [];
+  const clinit = jc.byKey.get(CLINIT), out = clinit && (!spec.platformClinit || whole) ? [clinit] : [];
+  if (!jc.isInterface) for (const key of spec.methods) { const m = native(spec.name, key, 0), own = jc.byKey.get(m.key); if (own && own.isStatic === m.isStatic) out.push(own); }
+  return out;
+}
+/** what defining `specs` takes from the code of `prog`'s classes: the methods whose code the host replaces, and the instance methods (name+descriptor) each spec's
+ *  class implements, which its objects run even where the class inherits them, since overlay gives it their natives (AotRuntime.hostDispatch) */
+export function hostTakeover(prog: Program, specs: readonly HostSpec[], whole?: (name: string) => boolean): { taken: MethodInfo[]; implemented: [string, string[]][] } {
+  const taken: MethodInfo[] = [], implemented: [string, string[]][] = [];
+  for (const spec of specs) {
+    const jc = prog.get(spec.name), keys = spec.methods.filter((k) => !k.startsWith(STATIC) && k[0] !== "<");
+    if (jc?.dex) taken.push(...hostTakes(jc, spec, !!whole?.(jc.name)));
+    if (keys.length) implemented.push([spec.name, keys]);
+  }
+  return { taken, implemented };
 }
 const classOf = (name: string, sup: string, ifaces: string[], flags: number): JClass =>
   ({ name, dex: null, def: null, sup, ifaces, flags, isInterface: false, fields: [], methods: [], byKey: new Map() });
@@ -55,7 +75,7 @@ export class HostClasses {
   private define(spec: HostSpec): boolean {
     const prog = this.w.prog, have = prog.get(spec.name);
     if (have?.dex) {
-      if (have.isInterface && !spec.statics) { this.javaClass(spec); return true; }
+      if (!overlays(have, spec)) { this.javaClass(spec); return true; }
       // the methods a superclass declares are found through the whole chain
       for (let c: JClass | undefined = have; c?.sup; c = prog.get(c.sup)) if (!prog.get(c.sup)) return false;
       this.overlay(have, spec);
@@ -119,18 +139,18 @@ export class HostClasses {
     const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
     const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
     for (const m of over.methods) over.byKey.set(m.key, m);
-    const taken: MethodInfo[] = [], virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
-    // a class a spec implements is initialized without its `<clinit>`: with the values the spec names, if any
-    const clinit = over.byKey.get("<clinit>()V");
-    if (clinit && !spec.platformClinit) {
-      // the platform build's class module runs the `<clinit>` slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values
-      clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit);
-      if (!spec.statics) bodies.set(clinit, () => {});
+    const taken = hostTakes(jc, spec, !!this.w.opts.hostWhole?.(jc.name)).map((m) => over.byKey.get(m.key)!), virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
+    for (const own of taken) {
+      if (own.key !== CLINIT) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; if (!own.isStatic && !own.isCtor) virtual.push(own.key); continue; }
+      // a class a spec implements is initialized without its `<clinit>`: with the values the spec names, if any. The platform build's class module runs the `<clinit>`
+      // slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values; a class the host implements whole does not run its platform initializer
+      if (!spec.platformClinit) { own.flags |= ACC.NATIVE; own.codeOff = 0; }
+      if (!spec.statics || spec.platformClinit) bodies.set(own, () => {});
     }
     // an interface keeps its abstract methods: the objects that implement them are of a class of natives (javaClass)
     for (const key of jc.isInterface ? [] : spec.methods) {
       const m = native(spec.name, key, 0), own = over.byKey.get(m.key);
-      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); if (!m.isStatic && !m.isCtor) virtual.push(m.key); continue; }
+      if (own && own.isStatic === m.isStatic) continue;
       // a method a superclass declares: the class resolves it in `hosted`, where the spec's native is
       const up = !m.isCtor && prog.resolve(spec.name, m.name, m.desc);
       if (!up || up.isStatic !== m.isStatic) continue;
@@ -138,8 +158,6 @@ export class HostClasses {
       hosted.methods.push(m); over.byKey.set(m.key, m);
       if (!m.isStatic) virtual.push(m.key);
     }
-    // a class the host implements whole does not run its platform initializer: one taken above already stores the spec's values
-    if (clinit && !taken.includes(clinit) && this.w.opts.hostWhole?.(jc.name)) { bodies.set(clinit, () => {}); taken.push(clinit); }
     this.w.addClass(over, bodies);
     if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.classModules.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);

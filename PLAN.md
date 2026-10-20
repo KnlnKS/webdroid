@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-17
+# Webdroid status — 2026-10-20
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -33,9 +33,13 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   slower than without them on a loaded host (history, "Restored units cost Komikku's taps"); unresolved.
   Komikku's warm taps (32–89 ms) are first-tier Java composing the new screen in one `doFrame` (38–61 ms) plus GC
   bursts of up to 30 ms. Heavy apps are reports (`"gate": false`). Scroll p95 is 17.3–17.8 ms with no missed vsyncs.
-  Every re-architecture plan item is done, rejected, or measured with nothing to recover
-  ([status](docs/perf-handoff.md#plan-status-2026-10-14)). What remains of a tap is the app's own Java, which runs 3.2×
-  slower than on ART in Kotlin-shaped workloads; skipping every Wasm cast left warm taps unchanged. See [performance.md](docs/performance.md).
+  What remains of a tap is the app's own Java, which runs 3.2× slower than on ART in Kotlin-shaped workloads
+  (2026-10-14). V8 inlines only calls within a module, and Liftoff none. Build code therefore calls a module's
+  statically bound methods directly, binds calls of final classes and methods, and runs empty, accessor, check and
+  straight-line bodies in place. Komikku's repeat Appearance `doFrame` fell from about 37 to 32–34 ms (history,
+  "Final binding and trivial inlining", "Straight-line bodies in place"). Measured and not levers: the engine code
+  cache, GC (2–4% of heavy frames), nested inlining and guarded inlining of a virtual call's one loaded
+  implementation. See [performance.md](docs/performance.md).
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. Outside the corpus, NewPipe was exercised end to end on 2026-10-15, and Google Maps (2026-10-15) draws its
@@ -47,6 +51,16 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   `main`; this branch is not deployed. See [deployment.md](docs/deployment.md).
 
 ## Gate state
+
+On `knlnks/perf-build-tier` after its review fixes (2026-10-20, `a217ecc3`): typecheck passes, along with 1,171 unit
+tests, `fwtest` (31 of 31) and all 16 `wasm all` suites. On build `9a68aa31` (`pnpm aot`, then `aot-profile`, whose
+first run lost Calculator's renderer once in its settled phase; the rerun was healthy), the `--jobs 1` quick gate
+reaches 7 of 7 flows in 149.6 s with no missing APIs, errors, required natives, draw errors, settle timeouts or wedges.
+One cold and one warm `lat` pass put every Calculator M, FitNotes and Komikku tap within 150 ms (performance.md,
+"Current numbers"). Mihon failed both cold passes on live content: its launch showed the app's "New version available!
+v0.21.2" dialog over the welcome screen the scenario expects. A cold pass before `aot-profile`, the first to read the
+new build, put Komikku's first `appearance` at 163 ms, its `doFrame` waiting 52 ms on one build module (the wait's
+bound) and 30 ms on three more.
 
 After the review cleanup (2026-10-19, on `df2c075a`): typecheck passes, 1,169 unit tests and all 16 `wasm all` suites
 pass. After `aot-profile --classes`, `aot` and `aot-profile` (1,103 code modules, 397 startup files, one prefix), the

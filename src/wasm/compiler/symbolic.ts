@@ -6,14 +6,11 @@ import type { Kind, MethodInfo } from "./program.ts";
 import type { SymbolicSite } from "./sites.ts";
 import { T } from "./wasmbin.ts";
 
-// A resolved symbolic site's operation: no method IR or copied callees, its inputs are the caller's bits, and virtual calls go through the receiver's current slot.
+// A resolved symbolic site's operation: no method IR or copied callees, and its inputs are the caller's bits.
 class SymbolicMC extends MC {
   private inputs: SymbolicSite[4];
   outputLocal = -1;
   constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; }
-  override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {
-    return /^invoke-(virtual|interface)/.test(ins.name) ? "dynamic" : super.callee(ins);
-  }
   override consumeResult(): void {}
   protected override copyReference(reg: number): void { this.get("L", reg); this.set("L"); }
   override set(_kind: Kind): void { this.code.lset(this.outputLocal); }
@@ -32,7 +29,7 @@ export function compileSymbolicSite(w: LinkEnv, m: MethodInfo, ins: PreparedInst
   const cx = new Compiler(w);
   // These helpers have no Java frame; stable names let engines reuse identical module code.
   const built = cx.buildSynthetic("symbolic:operation", inputs.map(i => i[1]), (c: Code) => {
-    const mc = new SymbolicMC(cx, m, inputs); mc.code = c;
+    const mc = new SymbolicMC(cx, m, inputs); mc.root = mc.code = c;
     mc.tmpL = c.newLocal(T.anyref);
     if (output !== "V") mc.outputLocal = c.newLocal(cx.vtOf(output));
     const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref), weights = cx.emitEnter(c, entry);
