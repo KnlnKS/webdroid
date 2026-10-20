@@ -2,7 +2,7 @@
 // that stores its arguments and calls its super's) becomes its steps, and a static check that returns at once unless its first argument is null (Kotlin's
 // parameter checks) that test, calling the method when the argument is null. Stack traces stay the call's: a null receiver throws at the call, as the invoke
 // does, and what a step throws or calls carries a frame of the method (Code.inline), so traces and caller-sensitive lookups see it.
-import { decodeInstructions, ifTarget, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { argRegisters, decodeInstructions, ifTarget, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { ACC } from "../../jvm/dex.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage.ts";
@@ -84,9 +84,8 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
       if (called || declared[0] === "[") return;
       const t = resolveInvoke(prog, kind, declared, ref.name, m.dex.methodDesc(x.b), m.cls);
       if (failed(t) || t.cls === STRING || !t.isStatic && (m.isStatic || paramIn(x.regs[0]) !== 0)) return;
-      const args: Val[] = t.isStatic ? [] : [{ p: 0 }];
-      let ri = args.length;
-      for (const pt of t.params) { const v = val(x.regs[ri]); if (!v || !fits(v, pt)) return; args.push(v); ri += isWide(pt) ? 2 : 1; }
+      const args: Val[] = t.isStatic ? [] : [{ p: 0 }], regs = argRegisters(x, t.params, args.length);
+      for (let i = 0; i < regs.length; i++) { const v = val(regs[i]); if (!v || !fits(v, t.params[i])) return; args.push(v); }
       steps.push({ pc: x.pc, call: t, args });
       called = justCalled = true;
     } else if (op === RETURN_VOID) done = true;

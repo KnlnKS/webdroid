@@ -3,12 +3,12 @@
 // and unbox or cast its answer.
 import { T } from "./wasmbin.ts";
 import { ACC, javaName, kindOf, type FieldInfo, type MethodInfo, type Program, descOf, typeName } from "./program.ts";
-import { isWide, descToName, parseMethodDesc } from "../../jvm/abi.ts";
+import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import { BOX, box, unbox } from "./primitives.ts";
 import type { Code } from "./code.ts";
 import type { Compiler } from "./j2w.ts";
 import type { MC } from "./method.ts";
-import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "./linkage.ts";
 import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
@@ -136,11 +136,11 @@ export function emitCustom(mc: MC, ins: Ins): void {
 function emitBoxedInvoke(mc: MC, ins: Ins, proto: number, firstReg: number, handle: () => void, site: string, mode: InvokeMode): void {
   const { cx, code: c } = mc, { params, ret } = mc.dex.protoTypes(proto), arr = c.newLocal(T.anyref);
   cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
-  for (let i = 0, ri = firstReg; i < params.length; ri += isWide(params[i++]) ? 2 : 1) {
+  argRegisters(ins, params, firstReg).forEach((r, i) => {
     const p = params[i];
     c.lget(arr); cx.arrayData(c).i32(i);
-    mc.get(kindOf(p), ins.regs[ri]); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
-  }
+    mc.get(kindOf(p), r); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
+  });
   emitInvokeImport(cx, c, handle, () => c.lget(arr), site, mode);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }

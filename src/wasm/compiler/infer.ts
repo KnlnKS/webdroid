@@ -8,7 +8,7 @@
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
-import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
+import { argRegisters, type PreparedInstruction, type PreparedMethod } from "../../jvm/prepared.ts";
 import { isInvoke, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { OP } from "./code.ts";
 import { T, type VT } from "./wasmbin.ts";
@@ -339,9 +339,9 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
       else if (op === 0xfc || op === 0xfd) params = dex.protoParamTypes(dex.callSiteProto(b));
       else params = dex.protoParamTypes(dex.method(b).proto);
     } catch { return E(x.regs.flatMap((r) => [r, N32])); }
-    let k = 0;
-    if (isInstanceInvoke(op)) u.push(x.regs[k++], R);
-    for (const t of params) { const m = valueKind(t); if (x.regs[k] === undefined) break; u.push(x.regs[k], m); k += m & WIDE ? 2 : 1; }
+    const first = isInstanceInvoke(op) ? 1 : 0, regs = argRegisters(x, params, first);
+    if (first) u.push(x.regs[0], R);
+    for (let i = 0; i < regs.length && regs[i] !== undefined; i++) u.push(regs[i], valueKind(params[i]));
     return E(u);
   }
   if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }

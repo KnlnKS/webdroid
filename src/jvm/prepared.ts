@@ -1,5 +1,6 @@
 import type { CodeItem } from "./dex.ts";
 import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes.ts";
+import { isWide } from "./abi.ts";
 
 export interface PreparedInstruction {
   readonly pc: number;
@@ -163,6 +164,12 @@ export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readon
     case "12x": case "22x": case "32x": case "22b": case "22t": case "22s": case "22c": return [a, b];
     default: return [a];
   }
+}
+/** the registers an invoke passes `params` in, the first at `ins.regs[from]`: a wide value takes two */
+export function argRegisters(ins: PreparedInstruction, params: readonly string[], from: number): number[] {
+  const out = new Array<number>(params.length);
+  for (let i = 0, r = from; i < params.length; r += isWide(params[i++]) ? 2 : 1) out[i] = ins.regs[r];
+  return out;
 }
 export function prepareMethod(code: CodeItem): PreparedMethod {
   const instructions = decodeInstructions(code.insns), n = instructions.length, size = code.insns.length + 1;

@@ -6,7 +6,7 @@ import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts
 import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
-import { prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { argRegisters, prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
@@ -806,10 +806,8 @@ export class MC {
   }
   /** the body of `m` (inline.ts) in place of the call `ins`: the checks the invoke makes in its own frame, then the body's steps */
   private emitBody(ins: Ins, m: MethodInfo, t: Trivial, retK: Kind | "V", site: boolean) {
-    const cx = this.cx, c = this.code, regs: number[] = [];
-    let ri = 0;
-    if (!m.isStatic) regs.push(ins.regs[ri++]);
-    for (const pt of m.params) { regs.push(ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
+    const cx = this.cx, c = this.code, regs = argRegisters(ins, m.params, m.isStatic ? 0 : 1);
+    if (!m.isStatic) regs.unshift(ins.regs[0]);
     cx.dependsOn(m);
     if (m.isStatic) this.ensure(m.cls);
     else {
@@ -894,7 +892,8 @@ export class MC {
   }
 }
 
-/** pushes the arguments of `params` from the invoke's registers, the first at `ins.regs[ri]` (past the receiver unless it is 0) */
-function pushArgs(mc: MC, ins: Ins, params: string[], ri = 1) {
-  for (const pt of params) { mc.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
+/** pushes the arguments of `params` from the invoke's registers, the first at `ins.regs[from]` (past the receiver unless it is 0) */
+function pushArgs(mc: MC, ins: Ins, params: string[], from = 1) {
+  const regs = argRegisters(ins, params, from);
+  for (let i = 0; i < regs.length; i++) mc.get(kindOf(params[i]), regs[i]);
 }
