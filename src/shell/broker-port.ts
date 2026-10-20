@@ -1,6 +1,5 @@
 // The broker's side of a process's command port: the serialized operations a process may ask of
 // system_server, each made as the process the port belongs to.
-import { accountAuthority } from "../android/accounts.ts";
 import { SYSTEM_SERVICES, asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
@@ -13,7 +12,6 @@ import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
 import { rt } from "../jvm/runtime.ts";
-import { canonicalAccountCommands } from "./accounts.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
@@ -26,11 +24,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const caller = broker.entry(pid), { callers } = caller.session, { port1, port2 } = new MessageChannel();
   // root and system act for any uid, as checkComponentPermission grants them
   const privileged = caller.uid === 0 || caller.uid === 1000;
-  const accountCommands = canonicalAccountCommands(broker.accounts, () => {
-    const caller = broker.entry(pid);
-    return accountAuthority(caller.pkg, caller.uid);
-  });
-  const accounts = () => { broker.watchAccounts(pid); return accountCommands; };
   const permissions = canonicalPermissionCommands(broker.permissions, pkg => {
     broker.entry(pid);
     if (privileged || ownedBy(pkg, caller.uid) || holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
@@ -138,11 +131,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     preferenceFiles: async pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); },
     permissionCheck: async (pkg, names) => permissions.permissionCheck(pkg, names),
     permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
-    accountList: async query => accounts().accountList(query),
-    accountRead: async key => accounts().accountRead(key),
-    accountExists: async key => accounts().accountExists(key),
-    accountCached: async (key, type) => accounts().accountCached(key, type),
-    accountChange: async change => accounts().accountChange(change),
     ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {
       if (!broker.alive(pid)) return false;
       unawaited(broker.request(broker.entry(pid), endpoint => endpoint.cookiesChanged()));

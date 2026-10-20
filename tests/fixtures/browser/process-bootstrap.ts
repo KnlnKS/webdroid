@@ -17,7 +17,7 @@ import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerS
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
-type ClientEvent = { accountsChanged?: true; setting?: [string, string] };
+type ClientEvent = { setting?: [string, string] };
 /** a client fixture Worker calling the broker as `pid`: `ask` answers a call's value, or `{error}` with its
  *  message; given `events`, the Worker serves `pid`'s endpoint and reports its notifications there */
 function brokerWorker(broker: ProcessBroker, pid: number, events?: (event: ClientEvent) => void) {
@@ -319,10 +319,9 @@ export async function storeOwnership() {
   const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.ready(8302,stubEndpoint()); broker.ready(8303,stubEndpoint());
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
-  let settingChanged!:()=>void,accountChanged!:()=>void,accountChanges=0;
+  let settingChanged!:()=>void;
   const settingChanges: string[][] = [];
   const {ask,worker}=brokerWorker(broker,8301,event=>{
-    if(event.accountsChanged){accountChanges++;accountChanged?.();}
     if(event.setting){settingChanges.push(event.setting);settingChanged?.();}
   });
   try {
@@ -334,20 +333,6 @@ export async function storeOwnership() {
     const rows=await peers[0].endpoint.settingsEntries("global");
     rows.find(([name])=>name==="webdroid_worker_setting")![1]="copied";
     const sameKey=await ask("settingsSsaid")===await peers[0].endpoint.settingsSsaid();
-    broker.accounts.add({name:"worker-account",type:"test.worker",owner:foreign,password:"private-password",
-      data:{private:"data"},tokens:{session:"visible-token"},visibility:{[pkg]:1}});
-    const query={type:"test.worker",pkg};
-    const summaries=await ask("accountList",query) as {name:string,type:string,id:number,visibility:Record<string,number>}[];
-    const key={name:summaries[0].name,type:summaries[0].type,id:summaries[0].id};
-    const publicOnly=!Object.keys(summaries[0]).some(k=>["password","data","tokens"].includes(k));
-    summaries[0].visibility[pkg]=4;
-    const exists=await ask("accountExists",key),cached=await ask("accountCached",key,"session") as {token:string};
-    const deniedRead=await ask("accountRead",key) as {error:string};
-    const deniedWrite=await ask("accountChange",{kind:"password",key,value:"replacement"}) as {error:string};
-    const accountNotice=new Promise<void>(resolve=>accountChanged=resolve);
-    broker.accounts.records.find(s=>s.id===key.id)!.name="renamed-account";
-    broker.accounts.persist();await accountNotice;
-    const renamed=await ask("accountCached",key,"session") as {account:{name:string},token:string};
     const permission="android.permission.POST_NOTIFICATIONS", extra="android.permission.CAMERA";
     const before=await ask("permissionCheck",pkg,[permission]);
     await ask("permissionGrant",pkg,[permission]);
@@ -397,19 +382,11 @@ export async function storeOwnership() {
     await (await entries[1].ready).activity({kind:"back"});
     worker.terminate();broker.fail(8301,"store Worker ended",NOT_CRASHED);
     const settingsSurvivor=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
-    const accountSurvivor=await peers[0].endpoint.accountCached(key,"session");
-    const changesBefore=accountChanges;broker.accounts.persist();
-    await peers[0].endpoint.accountExists(key);
-    const cleaned=accountChanges===changesBefore;
-    return {prefs,paths:{made,repeated,directory:((ownerStat.value?.mode ?? 0) & 0o170000) === 0o040000,copied:freshList.value?.includes("databases"),foreignPath,metadata,retainedMetadata,changedMode,restoredMetadata},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
-      renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},
+    return {prefs,paths:{made,repeated,directory:((ownerStat.value?.mode ?? 0) & 0o170000) === 0o040000,copied:freshList.value?.includes("databases"),foreignPath,metadata,retainedMetadata,changedMode,restoredMetadata},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
   }finally{
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
-    for (let i=broker.accounts.records.length-1;i>=0;i--)
-      if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
-    broker.accounts.persist();
     for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
     broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);

@@ -237,7 +237,7 @@ export const bindAsSystem = driven(function* (component: JComponentName, key: st
   const parts = (yield* componentParts$(component))!;
   const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls);
-  if (!owner || !node || !appHost) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
+  if (!owner || !node) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
   const intent = yield* awaited(newIntent(action));
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield* awaited(mkComponentName(owner.pkg, cls)));
   const process = owner.process(node), bound = Promise.withResolvers<JObj | null>();

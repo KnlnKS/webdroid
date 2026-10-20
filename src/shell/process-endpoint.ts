@@ -4,7 +4,7 @@ import { webStorageTransport } from "../android/webstorage.ts";
 import { remoteProcessLife } from "./process-life.ts";
 import { filePathTransport } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
-import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts.ts";
+import { useAccountStore } from "../android/accounts.ts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
 import { useAlarmScheduler } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
@@ -112,13 +112,6 @@ function connectRemoteStores(): void {
     permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
     permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),
   });
-  useAccountAccess({
-    accountList: query => brokerCalls().accountList(query),
-    accountRead: key => brokerCalls().accountRead(key),
-    accountExists: key => brokerCalls().accountExists(key),
-    accountCached: (key, type) => brokerCalls().accountCached(key, type),
-    accountChange: change => brokerCalls().accountChange(change),
-  });
   exitRecordTransport.records = pkg => brokerCalls().exitRecords(pkg);
   exitRecordTransport.publish = record => brokerCalls().processExited(record);
 }
@@ -186,8 +179,7 @@ export function connectProcess(): ProcessEndpoint {
   useFocusedUid(() => broker.foregroundUid());
   useAlarmScheduler(broker.alarms);
   useGeolocation(broker.location);
-  const stopAccounts = useAccountStore(broker.accounts);
-  if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
+  useAccountStore(broker.accounts);
   const stopSettings = useSettingsStore(broker.settings);
   if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   return createProcessEndpoint();
@@ -197,7 +189,6 @@ export function connectProcess(): ProcessEndpoint {
 export function createProcessEndpoint(): ProcessEndpoint {
   return {
     processDied: async token => life.died(token),
-    accountsChanged: async () => accountsChanged(),
     cookiesChanged: async () => cookiesChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
     storageChanged: async (key, value) => storageChanged(key, value),

@@ -90,8 +90,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const { storeOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return storeOwnership();
     });
-    expect(stores).toEqual({prefs:{ack:true,fresh:["one"],keys:["array","other"],foreignDenied:true,emptyForeignDenied:true,publicPolicy:"test.stores.shared",policyDenied:true,files:["worker"]},paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13,metadata:true,retainedMetadata:true,changedMode:true,restoredMetadata:true},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},accounts:{publicOnly:true,exists:true,token:"visible-token",deniedRead:true,deniedWrite:true,
-      renamed:"renamed-account",survivor:"renamed-account",changes:1,cleaned:true},
+    expect(stores).toEqual({prefs:{ack:true,fresh:["one"],keys:["array","other"],foreignDenied:true,emptyForeignDenied:true,publicPolicy:"test.stores.shared",policyDenied:true,files:["worker"]},paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13,metadata:true,retainedMetadata:true,changedMode:true,restoredMetadata:true},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},
       settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});
     const pointers = await page.evaluate(async () => {
       const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");

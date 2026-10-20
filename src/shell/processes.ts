@@ -6,7 +6,7 @@ import type { ProcessLifeCalls } from "./process-life.ts";
 import type { PendingAccess } from "../android/pendingintent.ts";
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
 import { Alarms } from "./alarms.ts";
-import { AccountStore, type AccountCalls } from "./accounts.ts";
+import { AccountStore } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
@@ -82,7 +82,6 @@ export type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   cookiesChanged: () => Promise<void>;
-  accountsChanged: () => Promise<void>;
   settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
   storageChanged: (key: string, value: string | null) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
@@ -93,7 +92,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
+export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   systemService: (name: string) => Promise<BinderHandle | null>;
   systemProvider: (authority: string) => Promise<BinderHandle | null>;
@@ -114,7 +113,7 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & ServiceS
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 /** in a fixed order: census decodes a timeline's call indexes by it */
-export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
+export const brokerMethods = methodsOf<BrokerCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "systemService", "systemProvider", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods]);
 export type Entry = { pkg: string; process: string; uid: number; pid: number;
   /** the page's side of the Worker it runs in; the page's own process has none */
   host: ProcessHost | null;
@@ -137,13 +136,12 @@ export class ProcessSession {
   /** the command ports it holds */
   readonly callers = new Set<() => void>();
   sqlite: ReturnType<typeof createSQLiteSession> | null = null;
-  /** what tells it of account and settings changes */
-  accounts: (() => void) | null = null;
+  /** what tells it of settings changes */
   settings: (() => void) | null = null;
   dispose(): void {
-    this.sqlite?.close(); this.settings?.(); this.accounts?.(); this.endpoint?.();
+    this.sqlite?.close(); this.settings?.(); this.endpoint?.();
     for (const close of [...this.callers, ...this.bootstrap]) close();
-    this.sqlite = this.settings = this.accounts = this.endpoint = null;
+    this.sqlite = this.settings = this.endpoint = null;
     this.bootstrap.length = 0; this.callers.clear();
   }
 }
@@ -274,7 +272,6 @@ export class ProcessBroker {
   private async bootstrap(pid: number): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     this.watchSettings(pid);
-    this.watchAccounts(pid);
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
@@ -319,14 +316,6 @@ export class ProcessBroker {
       entry.session.endpoint = () => { stop(); proxy.close(); };
       entry.resolve(proxy.endpoint);
     } catch (error) { closePort(port); stop(); throw error; }
-  }
-  /** Root uses its local Java watcher; remote processes keep only this owner-side notifier. */
-  watchAccounts(pid: number, local?: () => void): void {
-    const entry = this.entry(pid), session = entry.session;
-    if (local) { session.accounts?.(); session.accounts = local; return; }
-    session.accounts ??= this.accounts.watch(() => {
-      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.accountsChanged()));
-    });
   }
   watchSettings(pid: number): void {
     const entry = this.entry(pid);

@@ -84,8 +84,7 @@ const roles: Record<string, () => (data: never) => void> = {
     return (data: (BrokerInit & { endpoint?: MessagePort }) | { id: number; method: string; args: unknown[] }) => {
       if ("broker" in data) {
         broker = brokerCalls(data) as unknown as typeof broker;
-        if (data.endpoint) serveProcess(data.endpoint, stubEndpoint({ accountsChanged: async () => post({ accountsChanged: true }),
-          settingsChanged: async (table, name) => post({ setting: [table, name] }) }));
+        if (data.endpoint) serveProcess(data.endpoint, stubEndpoint({ settingsChanged: async (table, name) => post({ setting: [table, name] }) }));
         return post({ ready: true });
       }
       const { id, method, args } = data;

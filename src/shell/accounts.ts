@@ -17,13 +17,12 @@ export type AccountChange =
 export type AccountQuery = { type: string | null; pkg: string; managed?: boolean };
 export type CachedAccount = { account: AccountSummary; token?: string };
 export interface AccountAccess {
-  accountList(query: AccountQuery): AccountSummary[] | Promise<AccountSummary[]>;
-  accountRead(key: AccountKey): StoredAccount | null | Promise<StoredAccount | null>;
-  accountExists(key: AccountKey): boolean | Promise<boolean>;
-  accountCached(key: AccountKey, tokenType: string): CachedAccount | null | Promise<CachedAccount | null>;
-  accountChange(change: AccountChange): number | Promise<number>;
+  accountList(query: AccountQuery): AccountSummary[];
+  accountRead(key: AccountKey): StoredAccount | null;
+  accountExists(key: AccountKey): boolean;
+  accountCached(key: AccountKey, tokenType: string): CachedAccount | null;
+  accountChange(change: AccountChange): number;
 }
-export type AccountCalls = { [K in keyof AccountAccess]: (...args: Parameters<AccountAccess[K]>) => Promise<Awaited<ReturnType<AccountAccess[K]>>> };
 export type AccountAuthority = { caller: string; authenticator(type: string): string | undefined; sameUid(a: string, b: string): boolean; known(pkg: string): boolean; denied(type: string): never };
 const summary = (s: StoredAccount): AccountSummary => ({ name: s.name, type: s.type, owner: s.owner, id: s.id, visibility: { ...s.visibility } });
 const copy = (s: StoredAccount): StoredAccount => ({ ...s, data: Object.assign(Object.create(null), s.data), tokens: Object.assign(Object.create(null), s.tokens), visibility: Object.assign(Object.create(null), s.visibility) });
