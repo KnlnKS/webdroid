@@ -64,18 +64,6 @@ export function uchar(name: string, desc: string): (...args: unknown[]) => unkno
   return (...args: unknown[]) => fn ? fn(...args) : after(linkInit("android/icu/lang/UCharacter"),
     (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
-/** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. The rest
- *  are Wasm intrinsics (src/wasm/link/chars.ts). */
-function characterNatives(): Record<string, (...args: never[]) => unknown> {
-  const hasProperty = uchar("hasBinaryProperty", "(II)Z"), numeric = uchar("getUnicodeNumericValue", "(I)D");
-  return {
-    // UProperty.ALPHABETIC and IDEOGRAPHIC
-    "isAlphabeticImpl(I)Z": (c: number) => hasProperty(c, 0),
-    "isIdeographicImpl(I)Z": (c: number) => hasProperty(c, 17),
-    // U_NO_NUMERIC_VALUE is -1; a value that is negative or not an integer is -2
-    "getNumericValueImpl(I)I": (c: number) => after(numeric(c) as number | Promise<number>, (v: number) => v === -123456789 ? -1 : v < 0 || Math.floor(v + 0.5) !== v ? -2 : v | 0),
-  };
-}
 
 const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "libcore/icu/ICU": {
@@ -127,6 +115,5 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   },
   // a preload of ICU4C's zone bundles, which ICU4J opens on demand
   "com/android/icu/util/UResourceBundleNative": { "cacheTimeZoneBundles()V": () => {} },
-  "java/lang/Character": characterNatives(),
 };
 for (const [cls, methods] of Object.entries(natives)) rt.registerJnis(cls, methods);
