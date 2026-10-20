@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { cli } from "./args.ts";
 import { inventory } from "./fuzz/inventory.ts";
 import { replayBundle, runCampaign } from "./fuzz/campaign.ts";
 import { generateApiCases, generateGraphicsCases } from "./fuzz/generate.ts";
@@ -9,36 +10,21 @@ import { generateUiAction } from "./fuzz/ui-model.ts";
 import { runInjectedSmoke } from "./fuzz/self-test.ts";
 
 const [command, ...args] = process.argv.slice(2);
+const value = { type: "string" } as const;
+const { values: options, positionals } = cli("pnpm fuzz <inventory|api|graphics|ui|replay|smoke> [options] (scripts/fuzz/README.md)",
+  { seed: value, cases: value, steps: value, oracle: value, out: value, sdk: { type: "string", default: "35" }, framework: value, json: value, "no-reached": { type: "boolean" } }, { args });
 
-function value(name: string): string | undefined {
-  const index = args.indexOf(name);
-  if (index >= 0) return args[index + 1];
-  return args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
-}
-
-function integer(name: string, fallback: number): number {
-  const raw = value(name);
+function integer(name: "seed" | "cases" | "steps", fallback: number): number {
+  const raw = options[name];
   const parsed = raw === undefined ? fallback : Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative integer`);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`--${name} must be a non-negative integer`);
   return parsed;
 }
 
-function positional(): string[] {
-  const optionsWithValues = new Set(["--sdk", "--json", "--seed", "--cases", "--steps", "--oracle", "--out"]);
-  const output: string[] = [];
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index]!;
-    if (optionsWithValues.has(arg)) { index++; continue; }
-    if (!arg.startsWith("-")) output.push(arg);
-  }
-  return output;
-}
-
 async function campaign(kind: "api" | "graphics"): Promise<void> {
-  const seed = integer("--seed", randomSeed());
-  const cases = integer("--cases", 1_000);
-  const oracle = value("--oracle");
-  const out = value("--out") ?? `fuzz-results/${kind}-${seed}`;
+  const seed = integer("seed", randomSeed());
+  const cases = integer("cases", 1_000);
+  const { oracle } = options, out = options.out ?? `fuzz-results/${kind}-${seed}`;
   if (!oracle) throw new Error(`${kind} requires --oracle <adb-serial>`);
   if (!cases) throw new Error("--cases must be at least 1");
   console.log(`seed ${seed}`);
@@ -65,23 +51,22 @@ async function smoke(): Promise<void> {
 
 switch (command) {
   case "inventory":
-    await inventory(args);
+    await inventory({ sdk: options.sdk, framework: options.framework, json: options.json, reached: !options["no-reached"] });
     break;
   case "api":
   case "graphics":
     await campaign(command);
     break;
   case "ui": {
-    const seed = integer("--seed", randomSeed()), steps = integer("--steps", 100);
-    const out = value("--out") ?? `fuzz-results/ui-${seed}`;
+    const seed = integer("seed", randomSeed()), steps = integer("steps", 100);
+    const out = options.out ?? `fuzz-results/ui-${seed}`;
     console.log(`seed ${seed}`);
     console.log(`steps ${steps}`);
-    await runUi({ apks: positional(), seed, steps, oracle: value("--oracle"), out });
+    await runUi({ apks: positionals, seed, steps, oracle: options.oracle, out });
     break;
   }
   case "replay": {
-    const path = args.find((arg) => !arg.startsWith("-"));
-    const oracle = value("--oracle");
+    const [path] = positionals, { oracle } = options;
     if (!path) throw new Error("usage: pnpm fuzz replay <failure.json> [--oracle <adb-serial>]");
     const header = JSON.parse(readFileSync(path, "utf8")) as { kind?: unknown; injected?: unknown };
     const kind = header.kind;

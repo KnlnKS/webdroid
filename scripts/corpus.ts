@@ -2,16 +2,15 @@
 //   pnpm corpus [apk ...] [--json out.json] [--wait ms] [--observe ms]
 import { writeFileSync } from "node:fs";
 import type { Page } from "playwright";
-import { argv } from "./args.ts";
+import { cli } from "./args.ts";
 import { corpusApks } from "./apk-corpus.ts";
 import { CONTEXT_OPTS, launchBrowser, webdroidUrl } from "./browser.ts";
 import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
-const args = process.argv.slice(2);
-const { opt, positional } = argv(args, ["--json", "--wait", "--observe"]);
-const waitMs = parseInt(opt("--wait", "12000")!);
-const observeMs = parseInt(opt("--observe", "1500")!);
-const apks = positional.length ? positional : corpusApks();
+const { values: { wait, observe, json: out }, positionals } = cli("pnpm corpus [apk ...] [--wait ms] [--observe ms] [--json out.json]",
+  { wait: { type: "string", default: "12000" }, observe: { type: "string", default: "1500" }, json: { type: "string" } });
+const waitMs = parseInt(wait), observeMs = parseInt(observe);
+const apks = positionals.length ? positionals : corpusApks();
 
 interface Row {
   apk: string;
@@ -104,7 +103,6 @@ for (const [title, items] of [["missing APIs", ranked], ["native requirements", 
   for (const [key, apks] of items.slice(0, 40)) console.log(`  ${String(apks.length).padStart(2)}/${rows.length}  ${key}`);
 }
 
-const out = opt("--json");
 if (out) {
   writeFileSync(out, JSON.stringify({ rows, ranked, rankedNative }, null, 1));
   console.log(`\nwrote ${out}`);

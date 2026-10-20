@@ -9,10 +9,12 @@ import { JAVA, ROOT } from "./paths.ts";
 import { cutWorkloads } from "./tools.ts";
 import { androidFixture, tempDir } from "../java.ts";
 import { geo, med } from "./g1report.ts";
+import { cli } from "../args.ts";
 
-const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
-const reps = +flag("--reps", "100"), runs = +flag("--runs", "3"), refPath = flag("--ref", ""), engine = flag("--engine", "chrome");
-const only = process.argv.slice(2).filter((a, i, all) => !a.startsWith("--") && !all[i - 1]?.startsWith("--"));
+const text = (d: string) => ({ type: "string", default: d }) as const;
+const { values: opts, positionals: only } = cli("pnpm wasm g1art [workload ...] [--reps 100] [--runs 3] [--ref g1.json] [--engine chrome|node]",
+  { reps: text("100"), runs: text("3"), ref: text(""), engine: text("chrome") });
+const reps = +opts.reps, runs = +opts.runs, refPath = opts.ref, engine = opts.engine;
 
 const dir = tempDir(), classOf = new Map<string, string>();
 for (const [cls, file] of [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]]) {

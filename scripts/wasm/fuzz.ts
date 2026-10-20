@@ -14,13 +14,16 @@ import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, onJdk, tempDir } from "../java.ts";
-import { argv } from "../args.ts";
+import { cli } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
 const LEAVES = 8;
 let cur = 0;
-const { flag, opt } = argv(process.argv);
-const seed = +(opt("--seed") ?? 1), count = +(opt("--methods") ?? 200), perMethod = +(opt("--cases") ?? 12), depth = +(opt("--depth") ?? 3);
+const { values: opts } = cli("pnpm wasm fuzz [--seed n] [--methods n] [--cases n] [--depth n] [--file F.java] [--irreducible] [--debug]", {
+  seed: { type: "string", default: "1" }, methods: { type: "string", default: "200" }, cases: { type: "string", default: "12" }, depth: { type: "string", default: "3" },
+  file: { type: "string" }, irreducible: { type: "boolean" }, debug: { type: "boolean" },
+});
+const seed = +opts.seed, count = +opts.methods, perMethod = +opts.cases, depth = +opts.depth;
 let state = seed >>> 0 || 1;
 const rnd = (n: number) => { state ^= state << 13; state >>>= 0; state ^= state >>> 17; state ^= state << 5; state >>>= 0; return state % n; };
 const pick = <T>(a: T[]) => a[rnd(a.length)];
@@ -129,10 +132,10 @@ const generated = `public class F {
 }\n`;
 
 const out = tempDir("j2w-fuzz-");
-const file = opt("--file"), irreducible = flag("--irreducible");
+const { file, irreducible } = opts;
 if (irreducible) writeFileSync(join(out, "F.class"), irreducibleClass("F", count, rnd));
 else writeFileSync(join(out, "F.java"), file === undefined ? generated : readFileSync(file, "utf8"));
-fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA, "Ref.java")], debug: flag("--debug"), classes: /^F(\$.*)?\.class$/ });
+fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA, "Ref.java")], debug: opts.debug, classes: /^F(\$.*)?\.class$/ });
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);

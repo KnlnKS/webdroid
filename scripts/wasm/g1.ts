@@ -1,7 +1,7 @@
 // G1 timing: all selected Bench and G1 workloads on the Wasm tier, first call and steady state, in node and in headless Chrome (so Liftoff and TurboFan
 // tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java or java/G1.java; all selected workloads are attempted and failures
 // retained. Every measurement is a fresh process/context; every run of a workload must answer alike.
-//   pnpm wasm g1 [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."] [--installed DIR [--inline]]
+//   pnpm wasm g1 [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags="--flag ..."] [--installed DIR [--inline]] [--phases]
 // --ref compares with the numbers (and answers) of an earlier --json run and measures only its workloads, for A/B work on the compiler.
 // --installed DIR runs the Wasm tier as a launch of the installed app (g1app.ts made DIR over the platform build in WEBDROID_AOT): its saved build attached, the host's classes, and in
 // Chrome a forcibly prestarted compile worker; setup time is reported separately. The saved app's measured-demand startup list replaces the platform default in this supplemental
@@ -21,23 +21,18 @@ import { androidFixture } from "../java.ts";
 import { sourceKey } from "../aot-key.ts";
 import { createHash } from "node:crypto";
 import { geo, med, sampleError } from "./g1report.ts";
+import { cli } from "../args.ts";
 import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 const here = import.meta.dirname;
-const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
-const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", ""), v8Flags = flag("--v8-flags", "");
+const text = (d: string) => ({ type: "string", default: d }) as const, flag = { type: "boolean", default: false } as const;
+const { values: opts, positionals: only } = cli("pnpm wasm g1 [workload ...] [the options scripts/wasm/g1.ts lists]",
+  { reps: text("100"), runs: text("5"), engines: text("node,chrome"), json: text(""), ref: text(""), "v8-flags": text(""), installed: text(""), inline: flag, phases: flag });
+const reps = +opts.reps, runs = +opts.runs, engines = opts.engines.split(","), jsonOut = opts.json, refPath = opts.ref, v8Flags = opts["v8-flags"];
 /** the workloads as an installed app: the saved build g1app.ts made in this directory (with WEBDROID_AOT its platform build) */
-const installedDir = flag("--installed", ""), inlineTier = process.argv.includes("--inline");
+const installedDir = opts.installed, inlineTier = opts.inline;
 if (process.env.G1_APP && process.env.G1_APP !== installedDir) throw new Error("G1_APP requires the same explicit --installed directory");
 if (inlineTier && !installedDir) throw new Error("--inline requires --installed");
-const valueFlags = new Set(["--reps", "--runs", "--engines", "--json", "--ref", "--v8-flags", "--installed"]);
-const switchFlags = new Set(["--inline", "--phases"]), only: string[] = [];
-for (let i = 2; i < process.argv.length; i++) {
-  const arg = process.argv[i];
-  if (valueFlags.has(arg)) { if (!process.argv[i + 1] || arg !== "--v8-flags" && process.argv[i + 1].startsWith("--")) throw new Error(`${arg} needs a value`); i++; }
-  else if (arg.startsWith("--")) { if (!switchFlags.has(arg)) throw new Error(`unknown option: ${arg}`); }
-  else only.push(arg);
-}
 if (![reps, runs].every(n => Number.isInteger(n) && n > 0) || engines.some(e => !["node", "chrome"].includes(e)) || new Set(engines).size !== engines.length) throw new Error("positive integer reps/runs and distinct node/chrome engines required");
 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
@@ -202,7 +197,7 @@ for (const engine of engines) {
     rows.push({ w, result: e[0].result, first: f(e, "first"), completedCalls: e.map((x) => x.completedCalls), boot: e.map((x) => x.bootMs ?? 0), ahead: e.map((x) => x.ahead ?? 0), appRead: e.map((x) => x.appReadMs ?? 0), worldSetup: e.map((x) => x.worldSetupMs ?? 0), workerStart: e.map((x) => x.workerStartMs ?? 0), prestartedWorker: e.map((x) => !!x.prestartedWorker), calls: e.map((x) => (x.stats?.methods ?? 0) - (x.setup?.methods ?? x.boot?.methods ?? 0)), steady: f(e, "steady"), warm: f(e, "warm"), ...(r && { firstRatio: xf, steadyRatio: xs }) });
     console.log(w.padEnd(11), rng(f(e, "first")).padStart(11), ...(r ? [xf.toFixed(2).padStart(6)] : []), rng(f(e, "steady")).padStart(12), ...(r ? [xs.toFixed(2).padStart(6)] : []), "  ", med(f(e, "warm")).toFixed(3), " ", med(e.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
-  if (process.argv.includes("--phases")) {
+  if (opts.phases) {
     // what the engine and our compiler spent from World creation to the end of the first call, split at the end of process setup (medians over runs, ms)
     const keys = ["prepare", "flow", "infer", "facts", "emit", "encode"], total = (xs: number[]) => med(xs);
     console.log("\nphases (ms): boot = process setup, setup = prestarted worker work, first = the first call, rest = the calls after it;  compile = our compiler (prepare flow infer facts emit encode), module/inst = V8, class = class modules (build, link)");

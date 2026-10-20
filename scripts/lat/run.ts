@@ -35,7 +35,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { chromium, webkit } from "playwright";
 import { installLatencyObserver } from "./observe.ts";
 import { matchesState, compileDeltas, type Expectation } from "./expect.ts";
-import { consume } from "../args.ts";
+import { cli } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
 import { BASE_URL, chromeArgs } from "../browser.ts";
 import { ERROR_LINE, pageDiagnostics } from "../../tests/e2e/lib/processes.ts";
@@ -44,11 +44,11 @@ const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
 const SCENARIOS = join(import.meta.dirname, "scenarios");
 
-const args = process.argv.slice(2);
-const { flag, option } = consume(args);
-const heapSample = flag("--heapsample");
-const gpu = flag("--gpu"), warm = flag("--warm"), demand = flag("--demand"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
-const ecores = flag("--ecores"), repeat = +(option("--repeat") ?? 0);
+const flag = { type: "boolean", default: false } as const, value = { type: "string" } as const;
+const { values: { heapsample: heapSample, gpu, warm, demand, timeline, json: jsonOut, query, cpuprofile: cpuProfile, trace: traceOut, engine, ecores, repeat: repeatArg }, positionals: args } = cli(
+  "pnpm lat [scenario ...] [the options scripts/lat/run.ts lists]",
+  { heapsample: flag, gpu: flag, warm: flag, demand: flag, timeline: flag, ecores: flag, json: value, query: value, cpuprofile: value, trace: value, engine: { type: "string", default: "chrome" }, repeat: { type: "string", default: "0" } });
+const repeat = +repeatArg;
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 if (ecores && (engine !== "chrome" || process.platform !== "darwin")) throw new Error("lat --ecores runs Chrome under macOS's taskpolicy");
 const launchQuery = new URLSearchParams(query);
