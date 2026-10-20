@@ -585,19 +585,17 @@ export class MC {
     c.lget(d); this.get("I", ins.c); this.get(kind, ins.a);
     c.arraySet(cx.tData[k]);
   }
-  fieldOf(idx: number, isStatic: boolean) { return this.resolved(8 * idx + 5 + +isStatic, () => resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls)); }
+  fieldOf(idx: number, isStatic: boolean) { return this.resolved(this.refs.fields, 2 * idx + +isStatic, () => resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls)); }
   /** the method invoke `kind` of method reference `idx` names; invoke-super's depends on the caller */
   private invokeTarget(idx: number, kind: Invoke, declared: string, name: string, desc: string): MethodInfo | LinkFailure {
     const resolve = () => resolveInvoke(this.cx.prog, kind, declared, name, desc, this.m.cls);
-    return kind === Invoke.Super ? resolve() : this.resolved(8 * idx + kind, resolve);
+    return kind === Invoke.Super ? resolve() : this.resolved(this.refs.invokes, 8 * idx + kind, resolve);
   }
-  /** a resolution of a reference of this method's dex: what succeeded is the same for every caller while the Program's classes hold (Program.refMemo), a failure names its caller */
-  private resolved<T extends object>(key: number, resolve: () => T): T {
-    const memo = this.cx.prog.refMemo;
-    let refs = memo.get(this.dex);
-    if (!refs) memo.set(this.dex, refs = new Map());
-    let r = refs.get(key) as T | undefined;
-    if (r === undefined) { r = resolve(); if (!failed(r)) refs.set(key, r); }
+  private get refs() { return this.cx.prog.refsOf(this.dex); }
+  /** a resolution of a reference of this method's dex: what succeeded is the same for every caller while the Program's classes hold (Program.refsOf), a failure names its caller */
+  private resolved<T extends object>(memo: Map<number, T>, key: number, resolve: () => T | LinkFailure): T | LinkFailure {
+    let r: T | LinkFailure | undefined = memo.get(key);
+    if (r === undefined) { r = resolve(); if (!failed(r)) memo.set(key, r); }
     return r;
   }
   /** the field an iget or iput names; String's representation has no fields to translate an access of */

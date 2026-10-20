@@ -1,5 +1,5 @@
 import { descToName } from "../../jvm/abi.ts";
-import { ACC, declaredMethods, javaName, type MethodInfo } from "../compiler/program.ts";
+import { ACC, javaName, type MethodInfo } from "../compiler/program.ts";
 import { symbolicMethod, canAccess } from "../compiler/linkage.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { T } from "../compiler/wasmbin.ts";
@@ -16,7 +16,7 @@ function virtualMethods(w: World, cls: string, caller: string): Map<string, Decl
   const methods = new Map<string, Declaration>();
   for (const name of [...w.prog.chain(cls)].reverse()) {
     const c = w.prog.require(name);
-    for (const [key, flags] of declaredMethods(c)) {
+    for (const [key, flags] of c.declared()) {
       if (virtual(key, flags) && canAccess(w.prog, caller, c, flags)) methods.set(javaName(key), { cls: name, key, flags });
     }
   }
@@ -30,7 +30,7 @@ function defaultMethod(w: World, cls: string, key: string): Declaration | undefi
     seen.add(name);
     const c = w.prog.get(name);
     if (!c) return;
-    const entry = declaredMethods(c).find(([candidate, flags]) => virtual(candidate, flags) && javaName(candidate) === key);
+    const entry = c.declared().find(([candidate, flags]) => virtual(candidate, flags) && javaName(candidate) === key);
     if (entry) {
       if (!(entry[1] & ACC.ABSTRACT)) found.push({ cls: name, key: entry[0], flags: entry[1] });
       return;
@@ -66,7 +66,7 @@ function constraints(w: World, cls: string): Pair[] {
   }
   for (const name of differentIfaces) {
     const iface = w.prog.require(name);
-    for (const [key, flags] of declaredMethods(iface)) {
+    for (const [key, flags] of iface.declared()) {
       if (!virtual(key, flags)) continue;
       const base = { cls: name, key, flags }, method = methods.get(javaName(key)) ?? defaultMethod(w, cls, javaName(key));
       if (method && changed(method, base)) pairs.push([method, base]);

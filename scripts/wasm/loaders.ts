@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { loadDexes, program, world } from "./lib.ts";
-import { Program, ACC, javaName, type JClass } from "../../src/wasm/compiler/program.ts";
+import { Program, ACC, PlainClass, javaName } from "../../src/wasm/compiler/program.ts";
 import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/exc.ts";
 import { mid } from "../../src/wasm/compiler/ids.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
@@ -229,7 +229,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const strand = w.sched.strand();
     try { await waitingHelper(strand); } catch (error) { checkMissing(error); asyncFailed = true; } finally { strand.end(); }
     if (!syncFailed || !asyncFailed || w.assumptions.absent.get(later)?.size !== 2) fail("helper dependencies lack invalidation slots");
-    w.addClass({ name: later, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, new Map());
+    w.addClass(new PlainClass(later, "java/lang/Object", [], ACC.PUBLIC), new Map());
     const resumed = w.sched.strand();
     try {
       if (helper() !== 42 || await waitingHelper(resumed) !== 42) fail("retained helper did not recover after class arrival");
@@ -384,7 +384,7 @@ for (const asynchronous of [false, true]) {
   const hostedSpec = { name: childClass.name, sup: childClass.sup, ifaces: [], methods: ["toString()Ljava/lang/String;"], fields: [], ctor: class {} };
   layered.addHostClass(hostedSpec);
   if (p.loaderOf(childClass.name + HOSTED) !== child || p.lookup(p.boot, childClass.name + HOSTED)) fail("hosted custom class lost its defining loader");
-  const iface: JClass = { name: `fixture/HostedInterface@${child.id}`, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC | ACC.INTERFACE | ACC.ABSTRACT, isInterface: true, fields: [], methods: [], byKey: new Map() };
+  const iface = new PlainClass(`fixture/HostedInterface@${child.id}`, "java/lang/Object", [], ACC.PUBLIC | ACC.INTERFACE | ACC.ABSTRACT);
   layered.addClass(iface, new Map(), child);
   const shell = layered.hosts.javaClass({ ...hostedSpec, name: iface.name, methods: [] });
   if (p.loaderOf(shell) !== child || p.lookup(p.boot, shell)) fail("hosted interface shell lost its defining loader");
@@ -392,13 +392,13 @@ for (const asynchronous of [false, true]) {
 }
 {
   const base = new Program([]), custom = base.newLoader(base.boot, null);
-  const synthetic = (name: string): JClass => ({ name, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() });
+  const synthetic = (name: string) => new PlainClass(name, "java/lang/Object", [], ACC.PUBLIC);
   base.addClass(synthetic("fixture/BaseApp"), base.root);
   base.addClass(synthetic("fixture/BaseBoot@0"), base.boot);
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
   const peer = synthetic("fixture/Peer");
   base.addClass(peer, base.root);
-  const appClass = base.require("fixture/BaseApp"), childClass = base.require(`fixture/BaseCustom@${custom.id}`);
+  const appClass = base.require("fixture/BaseApp") as PlainClass, childClass = base.require(`fixture/BaseCustom@${custom.id}`);
   if (!canAccess(base, peer.name, appClass, 0) || canAccess(base, childClass.name, appClass, 0)
     || !canAccess(base, childClass.name, appClass, ACC.PUBLIC)) fail("runtime package access lost defining-loader identity");
   appClass.flags = 0;
@@ -472,7 +472,7 @@ for (const asynchronous of [false, true]) {
     for (const mode of [0, 1]) {
       const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;
       const loader = definingLoader(resolver, object), owner = `fixture/NativeOwner@${loader.id}`;
-      resolver.prog.addClass({ name: owner, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, loader);
+      resolver.prog.addClass(new PlainClass(owner, "java/lang/Object", [], ACC.PUBLIC), loader);
       const cpu = new Cpu(mainThread, "loader-jni"); cpu.nativeClass = { name: owner };
       const getEnv = ldp(ldp(javaVM.addr) + 6 * PTR);
       if (await cpu.call(getEnv, [javaVM.addr, environment, 0x10006])) fail("JNI fixture GetEnv failed");

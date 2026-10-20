@@ -5,7 +5,7 @@ import { Compiler, NeedsNumber } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
 import { compileModule } from "./module.ts";
 import { APP_VERSION, packModule, unitHeader, type AotRuntime, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot.ts";
-import { methodCount, type MethodInfo } from "../compiler/program.ts";
+import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import { LinkIds, type Marks, type Numbering } from "./numbers.ts";
 import { walkRefs } from "../../jvm/opcodes.ts";
@@ -199,7 +199,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   // the classes a code module names are all linked when it is loaded, so their modules are wanted as soon as it is
   for (const name of plan.dNames) {
     const jc = w.prog.get(name);
-    const bytes = D_BYTES_PER_CLASS + (jc ? methodCount(jc) * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD : 0);
+    const bytes = D_BYTES_PER_CLASS + (jc ? jc.methodCount * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD : 0);
     if (size && size + bytes > D_MODULE_BYTES) flush();
     group.push(name); size += bytes;
   }

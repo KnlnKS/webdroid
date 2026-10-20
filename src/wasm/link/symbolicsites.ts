@@ -3,7 +3,7 @@ import { symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
 import { compileSymbolicSite } from "../compiler/symbolic.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { Code } from "../compiler/code.ts";
-import { methodAt, type MethodInfo } from "../compiler/program.ts";
+import type { MethodInfo } from "../compiler/program.ts";
 import { Compiler } from "../compiler/j2w.ts";
 import { initiatedInstruction, resolveInstruction } from "./resolution.ts";
 import { decodeInstruction } from "../../jvm/prepared.ts";
@@ -27,7 +27,7 @@ export class SymbolicSites {
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
       const pending = fresh.map(([name, cls, index, pc, inputs, output]) => {
-        const method = methodAt(this.w.prog.require(cls), index);
+        const method = this.w.prog.require(cls).methodAt(index);
         if (!method) throw new Error(`Missing symbolic site method ${name}`);
         const slot = this.symbolicTable.grow(1);
         const plain = cx.mb.importFunc("symbolic", name, cx.sig([], "V")), wait = cx.mb.importFunc("symbolic", name + "#s", cx.sig([], "V"));

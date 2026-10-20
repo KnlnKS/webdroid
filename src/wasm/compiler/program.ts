@@ -1,5 +1,6 @@
 import type { LinkFailure } from "./linkage.ts";
 import type { Trivial } from "./inline.ts";
+import type { Index } from "./cha.ts";
 import { ACC, type DexFile, type ClassDef } from "../../jvm/dex.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 
@@ -23,6 +24,8 @@ export interface DefaultConflict extends LinkFailure {
   candidates: readonly MethodInfo[];
 }
 export type DispatchTarget = MethodInfo | DefaultConflict | undefined;
+/** what resolved of a dex's references, while the Program's classes hold: invokes by 8 * method_id + Invoke, fields by 2 * field_id + whether static */
+export interface ResolvedRefs { invokes: Map<number, MethodInfo>; fields: Map<number, { decl: string; f: FieldInfo }> }
 
 /** Conflict is an invocation error, not an abstract or missing declaration. */
 export function selectDefault(maximal: readonly MethodInfo[], includeAbstract = false): DispatchTarget {
@@ -31,9 +34,50 @@ export function selectDefault(maximal: readonly MethodInfo[], includeAbstract = 
   return defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
 }
 
+/** a class: a DexClass, whose members its dex holds and which are read when asked for, or a PlainClass, whose members are records made for it */
 export interface JClass {
-  name: string; dex: DexFile | null; def: ClassDef | null; sup: string | null; ifaces: string[]; flags: number;
-  isInterface: boolean; fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo>;
+  readonly name: string; readonly dex: DexFile | null; readonly def: ClassDef | null; readonly sup: string | null; readonly ifaces: string[]; readonly flags: number;
+  readonly isInterface: boolean; readonly fields: FieldInfo[]; readonly methods: MethodInfo[]; readonly byKey: Map<string, MethodInfo>;
+  /** how many methods (and so table slots) it has */
+  readonly methodCount: number;
+  /** its class_def in its dex, or -1 where its members are not read from one */
+  readonly defIdx: number;
+  /** its superclass, if any, then its interfaces */
+  supertypes(): string[];
+  /** the method it declares at `index` (its table slot's offset), without materializing the others */
+  methodAt(index: number): MethodInfo | undefined;
+  /** the method it declares under `key` (the key as its dex spells it if `raw`), without materializing the others */
+  method(key: string, raw?: boolean): MethodInfo | undefined;
+  /** the keys and access flags of the methods it declares */
+  declared(): [key: string, flags: number][];
+  /** whether it declares a method that can be overridden (not static, private or a constructor) whose descriptor names one of the class descriptors `types`, or an
+   *  array of one; any such method without `types` */
+  declaresNaming(types?: ReadonlySet<string>): boolean;
+  /** whether it may declare a static field whose type is one of the class descriptors `types` or an array of one */
+  declaresStaticOf(types: ReadonlySet<string>): boolean;
+}
+/** a class whose members are records made for it: a stub, a class of natives or a proxy class, or a class of the host standing for a dex's (hostclass.ts), whose
+ *  methods are no longer the dex's */
+export class PlainClass implements JClass {
+  readonly name: string; sup: string | null; ifaces: string[]; flags: number;
+  readonly methods: MethodInfo[]; readonly fields: FieldInfo[]; readonly dex: DexFile | null; readonly def: ClassDef | null;
+  readonly byKey = new Map<string, MethodInfo>();
+  constructor(name: string, sup: string | null, ifaces: string[], flags: number, methods: MethodInfo[] = [], fields: FieldInfo[] = [], dex: DexFile | null = null, def: ClassDef | null = null) {
+    this.name = name; this.sup = sup; this.ifaces = ifaces; this.flags = flags; this.methods = methods; this.fields = fields; this.dex = dex; this.def = def;
+    for (const m of methods) this.byKey.set(m.key, m);
+  }
+  get isInterface() { return (this.flags & ACC.INTERFACE) !== 0; }
+  get methodCount() { return this.methods.length; }
+  get defIdx() { return -1; }
+  add(m: MethodInfo): void { this.methods.push(m); this.byKey.set(m.key, m); }
+  supertypes(): string[] { return this.sup ? [this.sup, ...this.ifaces] : this.ifaces; }
+  methodAt(index: number): MethodInfo | undefined { return this.methods[index]; }
+  method(key: string, raw = false): MethodInfo | undefined { return raw ? this.methods.find(m => javaName(m.key) === key) : this.byKey.get(key); }
+  declared(): [string, number][] { return this.methods.map((m) => [m.key, m.flags]); }
+  declaresNaming(types?: ReadonlySet<string>): boolean {
+    return this.methods.some(m => !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.name !== "<init>" && (!types || [...javaName(m.desc).matchAll(/L[^;]+;/g)].some(t => types.has(t[0]))));
+  }
+  declaresStaticOf(): boolean { return true; }
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
@@ -81,18 +125,18 @@ export const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefi
 /** a class of a dex file. Its header (supertypes, flags) is read when asked for and its members are built when the first of them is, so a Program holds
  *  little for the thousands of platform classes a process never uses. */
 class DexClass implements JClass {
-  readonly name: string; readonly dex: DexFile; readonly idx: number;
+  readonly name: string; readonly dex: DexFile; readonly defIdx: number;
   // declared, not defined: an object of a class nothing asks about holds only its name, dex and index
   private declare header_?: { flags: number; sup: string | null; ifaces: string[] };
   private declare def_?: ClassDef;
   private declare members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private declare fields_?: FieldInfo[];
   private declare methodInfos?: Map<number, MethodInfo>;
-  constructor(name: string, dex: DexFile, idx: number) { this.name = name; this.dex = dex; this.idx = idx; }
+  constructor(name: string, dex: DexFile, defIdx: number) { this.name = name; this.dex = dex; this.defIdx = defIdx; }
   refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
     if (!changedTypes) this.header_ = undefined;
     else if (this.header_) {
-      const h = this.dex.classHeader(this.idx);
+      const h = this.dex.classHeader(this.defIdx);
       if (h.superIdx !== 0xffffffff && changedTypes.has(this.dex.rawType(h.superIdx)) || h.interfaces.some(i => changedTypes.has(this.dex.rawType(i)))) this.header_ = undefined;
     }
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
@@ -119,26 +163,26 @@ class DexClass implements JClass {
   }
   private get header() { return this.header_ ??= this.readHeader(); }
   private readHeader() {
-    const h = this.dex.classHeader(this.idx), dex = this.dex;
+    const h = this.dex.classHeader(this.defIdx), dex = this.dex;
     return { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : dex.typeName(h.superIdx), ifaces: h.interfaces.map((t) => dex.typeName(t)) };
   }
-  /** its superclass, if any, then its interfaces, without keeping a header for a class nothing else asks about */
+  /** without keeping a header for a class nothing else asks about */
   supertypes(): string[] { const { sup, ifaces } = this.header_ ?? this.readHeader(); return sup ? [sup, ...ifaces] : ifaces; }
   get flags() { return this.header.flags; }
   get sup() { return this.header.sup; }
   get ifaces() { return this.header.ifaces; }
   get isInterface() { return (this.header.flags & ACC.INTERFACE) !== 0; }
-  get def(): ClassDef { return this.def_ ??= this.dex.classDef(this.idx); }
-  /** how many methods it declares, which the members need not be built to tell */
-  get nMethods() { return this.members_ ? this.members_.methods.length : this.dex.declaredMethodCount(this.idx); }
+  get def(): ClassDef { return this.def_ ??= this.dex.classDef(this.defIdx); }
+  /** which the members need not be built to tell */
+  get methodCount() { return this.members_ ? this.members_.methods.length : this.dex.declaredMethodCount(this.defIdx); }
   private get members() { return this.members_ ??= this.build(); }
   get fields() { return this.fields_ ??= this.buildFields(); }
   get methods() { return this.members.methods; }
   get byKey() { return this.members.byKey; }
-  /** the keys and access flags of its methods, for the class-hierarchy index (no record of the methods is kept) */
+  /** for the class-hierarchy index: no record of the methods is kept */
   declared(): [key: string, flags: number][] {
     if (this.members_) return this.members_.methods.map((m) => [m.key, m.flags]);
-    const def = this.dex.classDef(this.idx);
+    const def = this.dex.classDef(this.defIdx);
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
   /** what `method` found in the dex's ids, by key (a raw key after a NUL), null for none: the same questions come back for a class */
@@ -149,17 +193,19 @@ class DexClass implements JClass {
     const memo = raw ? "\0" + key : key;
     let m = this.looked?.get(memo);
     if (m === undefined) {
-      const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at), raw);
-      (this.looked ??= new Map()).set(memo, m = (i < 0 ? undefined : this.dex.declaredAt(this.idx, i)) ?? null);
+      const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.defIdx), key.slice(0, at), key.slice(at), raw);
+      (this.looked ??= new Map()).set(memo, m = (i < 0 ? undefined : this.dex.declaredAt(this.defIdx, i)) ?? null);
     }
     return m ? this.members_?.methods[m.index] ?? this.methodInfo(m, m.index) : undefined;
   }
-  /** the method at `index` (direct methods first, then virtual), without building the others */
+  /** direct methods first, then virtual */
   methodAt(index: number): MethodInfo | undefined {
     if (this.members_) return this.members_.methods[index];
     const def = this.def, m = index < def.directMethods.length ? def.directMethods[index] : def.virtualMethods[index - def.directMethods.length];
     return m && this.methodInfo(m, index);
   }
+  declaresNaming(types?: ReadonlySet<string>): boolean { return this.dex.declaresVirtual(this.defIdx, types && this.dex.typesNaming(types)); }
+  declaresStaticOf(types: ReadonlySet<string>): boolean { return this.dex.declaresStaticOf(this.defIdx, this.dex.typesNaming(types)); }
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
     if (cached) return cached;
@@ -189,26 +235,6 @@ class DexClass implements JClass {
     return { methods, byKey: new Map(methods.map((m) => [m.key, m])) };
   }
 }
-export const supertypes = (c: JClass): string[] => (c instanceof DexClass ? c.supertypes() : c.sup ? [c.sup, ...c.ifaces] : c.ifaces);
-/** how many methods (and so table slots) a class has */
-export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMethods : c.methods.length);
-/** the method a class declares at `index` (its table slot's offset), without materializing the others */
-export const methodAt = (c: JClass, index: number): MethodInfo | undefined => (c instanceof DexClass ? c.methodAt(index) : c.methods[index]);
-/** One declared method without materializing unrelated members. */
-export function declaredMethod(c: JClass | undefined, key: string, raw = false): MethodInfo | undefined {
-  if (c instanceof DexClass) return c.method(key, raw);
-  return raw ? c?.methods.find(m => javaName(m.key) === key) : c?.byKey.get(key);
-}
-/** the class_def of a class in its dex, or -1 for a class no dex defines */
-export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx : -1);
-/** the keys and access flags of the methods a class declares */
-export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
-/** whether a class declares a method that can be overridden (not static, private or a constructor) whose descriptor names one of the class descriptors `types`,
- *  or an array of one; any such method without `types` */
-export const declaresNaming = (c: JClass, types?: ReadonlySet<string>): boolean => c instanceof DexClass ? c.dex.declaresVirtual(c.idx, types && c.dex.typesNaming(types))
-  : c.methods.some(m => !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.name !== "<init>" && (!types || [...javaName(m.desc).matchAll(/L[^;]+;/g)].some(t => types.has(t[0]))));
-/** whether a class may declare a static field whose type is one of the class descriptors `types` or an array of one */
-export const declaresStaticOf = (c: JClass, types: ReadonlySet<string>): boolean => !(c instanceof DexClass) || c.dex.declaresStaticOf(c.idx, c.dex.typesNaming(types));
 
 export class Program {
   readonly base?: Program;
@@ -224,8 +250,8 @@ export class Program {
   private bootPath = false;
   /** The default namespace resolves as `lookup` does, ART's native path for a PathClassLoader over the boot loader, until its loader is found to be another kind. */
   dynamicRoot = false;
-  /** analyses of the classes that outlive a World (cha.ts keeps the platform's class hierarchy here, so the frames of a page build it once) */
-  readonly shared = new Map<string, unknown>();
+  /** the class-hierarchy index of its classes (cha.ts), which outlives a World: the frames of a page build the platform's once */
+  cha?: Index;
   /** `base` is the platform's Program, which is immutable from now on and may be shared by the Programs of several processes: this one adds the app's dexes and the classes
    *  its loaders define, and the default loader's namespace is the base's first, then this one's */
   constructor(dexes: DexFile[], base?: Program) {
@@ -426,7 +452,7 @@ export class Program {
   /** the classes this Program adds to its base's */
   own(): IterableIterator<JClass> { return this.classes.values(); }
   private stub(name: string, sup: string | null): JClass {
-    const c: JClass = { name, dex: null, def: null, sup, ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() };
+    const c = new PlainClass(name, sup, [], ACC.PUBLIC);
     this.classes.set(name, c); this.syntheticLoaders.set(name, this.boot); return c;
   }
   /** Classes the compiler's own helpers instantiate; stubbed when the loaded dexes (no framework) lack them. */
@@ -470,19 +496,20 @@ export class Program {
   private implMemo = new Map<string, Map<string, DispatchTarget>>();
   private layouts = new Map<string, readonly FieldInfo[]>();
   private chains = new Map<string, readonly string[]>();
-  /** what the compiler resolved per reference of a dex (MC.resolved), by reference index and use */
-  readonly refMemo = new Map<DexFile, Map<number, unknown>>();
+  /** what the compiler resolved of each dex's references (MC.resolved) */
+  private refs = new Map<DexFile, ResolvedRefs>();
+  refsOf(dex: DexFile): ResolvedRefs { let r = this.refs.get(dex); if (!r) this.refs.set(dex, r = { invokes: new Map(), fields: new Map() }); return r; }
   /** what a call of each method runs in place, or null (inline.ts trivialOf) */
   readonly trivials = new Map<MethodInfo, Trivial | null>();
   /** drops what a change to the classes or their types can falsify */
-  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refMemo.clear(); this.trivials.clear(); }
+  private forget(): void { this.ancestorMemo.clear(); this.implMemo.clear(); this.layouts.clear(); this.chains.clear(); this.refs.clear(); this.trivials.clear(); }
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);
     if (!s) {
       s = new Set([a]);
       const c = this.get(a);
-      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of this.ancestors(p)) s.add(x);
+      if (c) for (const p of c.supertypes()) for (const x of this.ancestors(p)) s.add(x);
       this.ancestorMemo.set(a, s);
     }
     return s;
@@ -495,13 +522,13 @@ export class Program {
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = declaredMethod(c, key); if (m) return m;
+      const m = c.method(key); if (m) return m;
     }
     const seen = new Set<string>();
     const visit = (n: string): MethodInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) return m;
+      const m = c.method(key); if (m && !(m.flags & ACC.STATIC)) return m;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return undefined;
     };
@@ -528,9 +555,9 @@ export class Program {
   }
   private findImpl(cls: string, key: string): DispatchTarget {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) return m.flags & ACC.ABSTRACT ? undefined : m;
+      const m = c.method(key); if (m && !(m.flags & ACC.STATIC)) return m.flags & ACC.ABSTRACT ? undefined : m;
     }
-    return selectDefault(this.maximalInterfaceMethods(this.chain(cls).flatMap(n => this.require(n).ifaces), c => declaredMethod(c, key)));
+    return selectDefault(this.maximalInterfaceMethods(this.chain(cls).flatMap(n => this.require(n).ifaces), c => c.method(key)));
   }
   /** Abstract declarations participate in dominance even when only a concrete body is requested. */
   maximalInterfaceMethods(roots: readonly string[], lookup: (c: JClass) => MethodInfo | undefined): MethodInfo[] {

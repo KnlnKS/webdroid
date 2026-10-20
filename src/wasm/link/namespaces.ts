@@ -1,6 +1,6 @@
 // Namespaces that change after code linked against them: a class loader binding its libraries, one initiating a class, the app's loader resolving through Java.
 // Code linked under the old resolution is undone; a change that would alter the dispatch or hierarchy of linked classes is refused with a LinkageError.
-import { changedTypes, declaresNaming, declaresStaticOf, javaName, type Loader } from "../compiler/program.ts";
+import { changedTypes, javaName, type Loader } from "../compiler/program.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import type { World } from "./world.ts";
 
@@ -53,7 +53,7 @@ export class Namespaces {
         if (changed.has(name)) return true;
         const hit = affected.get(name); if (hit !== undefined) return hit;
         affected.set(name, true);
-        const c = prog.get(name), result = !!c && (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(depends);
+        const c = prog.get(name), result = !!c && c.supertypes().some(depends);
         affected.set(name, result); return result;
       };
       return depends;
@@ -64,21 +64,21 @@ export class Namespaces {
     // Changed identities affect dispatch through matching signatures or inherited types, including unlinked interfaces.
     const hierarchy = exact ? dependentOn(new Set([...changing].filter(name => {
       const c = prog.get(name)!;
-      return (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(parent => changed.has(javaName(parent)));
+      return c.supertypes().some(parent => changed.has(javaName(parent)));
     }))) : depends;
     // A class's slots come from the methods its superclass chain declares; testing their keys spares building its slots and members.
     const chainMentions = new Map<string, boolean>();
     const mentioned = (name: string): boolean => {
       let hit = chainMentions.get(name); if (hit !== undefined) return hit;
       const c = prog.get(name);
-      hit = !!c && (!!c.sup && mentioned(c.sup) || !c.isInterface && declaresNaming(c, types));
+      hit = !!c && (!!c.sup && mentioned(c.sup) || !c.isInterface && c.declaresNaming(types));
       chainMentions.set(name, hit); return hit;
     };
     const dispatchOf = (name: string) => w.dispatch.vslots(name).map(key => symbolicDispatchFor(prog, name, key));
     const dispatch = [...w.classes.keys()].filter(name => depends(name) && (hierarchy(name) || mentioned(name))).map(name => ({ name, methods: dispatchOf(name) }));
     // Only the classes of the dexes that resolve through the changed loader have their types rewritten.
     const existing = [...w.classes].filter(([name]) => changing.has(name)).map(([name, rt]) => {
-      const c = prog.get(name)!, statics = !types || declaresStaticOf(c, types) ? c.fields.filter(f => f.isStatic) : [];
+      const c = prog.get(name)!, statics = !types || c.declaresStaticOf(types) ? c.fields.filter(f => f.isStatic) : [];
       return { name, rt, sup: c.sup, ifaces: [...c.ifaces], statics: statics.map(field => ({ field, desc: field.desc })) };
     });
     const names = change();

@@ -1,6 +1,6 @@
 // The funcref table's slots and what each holds. A class owns a block (one slot per method, then its `ensure`); runtime functions take one slot each
 // between blocks. Every reservation after the platform classes is numbered (numbers.ts) in the same order, so Worlds that replay it agree on every slot.
-import { methodAt, type MethodInfo } from "../compiler/program.ts";
+import type { MethodInfo } from "../compiler/program.ts";
 import type { Synth } from "../compiler/rtfns.ts";
 import type { Thrower } from "../compiler/exc.ts";
 import type { Tail } from "./numbers.ts";
@@ -72,7 +72,7 @@ export class SlotTable {
     if (b < 0) return undefined;
     const i = slot - this.blockBase[b];
     if (i === this.blockSize[b] - 1) return this.entries[slot] = { k: "ensure" };
-    return this.entries[slot] = { k: "method", m: methodAt(this.w.prog.get(this.blockClass[b])!, i)!, done: !!this.w.aot?.installed(slot) };
+    return this.entries[slot] = { k: "method", m: this.w.prog.get(this.blockClass[b])!.methodAt(i)!, done: !!this.w.aot?.installed(slot) };
   }
   /** the method entry of `slot`, made if need be */
   method(slot: number): MethodSlot | undefined { const s = this.at(slot); return s?.k === "method" ? s : undefined; }

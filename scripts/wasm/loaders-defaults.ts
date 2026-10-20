@@ -2,7 +2,7 @@
 // redeclarations that dominate a default after the interfaces were recompiled (binary evolution), as AbstractMethodError.
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ACC, Program } from "../../src/wasm/compiler/program.ts";
+import { ACC, PlainClass, Program } from "../../src/wasm/compiler/program.ts";
 import { symbolicImplFor } from "../../src/wasm/compiler/linkage.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { loadDexes, program, world } from "./lib.ts";
@@ -22,7 +22,7 @@ async function interfaceSuper({ check, fail }: Suite, dex: string): Promise<void
     const p = new Program(loadDexes(dex), core()), target = world(p), loader = p.newLoader(p.root, null);
     target.addDexes(loadDexes(dex), loader);
     const face = p.definedBy(loader, "InterfaceSuper$C")!, replacement = p.definedBy(loader, "InterfaceSuper$B")!;
-    p.addClass({ name: "Outside", sup: "java/lang/Object", ifaces: [face], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, p.root);
+    p.addClass(new PlainClass("Outside", "java/lang/Object", [face], ACC.PUBLIC), p.root);
     target.link("Outside");
     if ((target as any).classes.has(face)) fail("dependency control interface already linked");
     try { target.namespaces.initiateClass(loader, "InterfaceSuper$B", replacement); fail("changed inherited default accepted"); }

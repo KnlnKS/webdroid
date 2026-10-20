@@ -3,7 +3,7 @@
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex.ts";
 import { PRIMS, descToName, dotName } from "../../jvm/abi.ts";
-import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { ACC, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
 
@@ -40,9 +40,9 @@ const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
 export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
-  const m = declaredMethod(c, name + desc);
+  const m = c.method(name + desc);
   // the file's own spelling differs only where a loader qualifies a type, in the query or the class's dex
-  return m || c.dex && !c.dex.resolveType && !desc.includes("@") ? m : declaredMethod(c, name + javaName(desc), true);
+  return m || c.dex && !c.dex.resolveType && !desc.includes("@") ? m : c.method(name + javaName(desc), true);
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */

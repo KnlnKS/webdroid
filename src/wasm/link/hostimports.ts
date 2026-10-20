@@ -1,6 +1,6 @@
 // The functions compiled code imports as "host" (compiler/j2w.ts HOST_IMPORTS): what it asks of the runtime outside Wasm.
 import { MATH_IMPORTS, type HostImport } from "../compiler/j2w.ts";
-import { javaName, methodAt } from "../compiler/program.ts";
+import { javaName } from "../compiler/program.ts";
 import { SLOT, excMessage, type JavaFrame } from "../compiler/exc.ts";
 import { unresolvedClass } from "../compiler/linkage.ts";
 import { mid } from "../compiler/ids.ts";
@@ -39,7 +39,7 @@ export function hostImports(w: World): HostImports {
     sched.parkNative(value); return none;
   };
   const catchBlock = (cls: number, index: number, pc: number, throwable: object) => {
-    const method = methodAt(w.prog.require(w.nameOf(cls)), index);
+    const method = w.prog.require(w.nameOf(cls)).methodAt(index);
     if (!method) throw new Error("Missing catch dispatcher method");
     return resolveCatch(w, method, pc, throwable, sched.current());
   };

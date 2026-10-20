@@ -8,7 +8,7 @@
 //    inherits from a superclass in a class of their own that the class resolves them in. The class keeps its members, so ids and slots stay put.
 //  - The host object is made when a native first needs it (host/bridge.ts): a Java object that Java code allocated, as a bytecode subclass does,
 //    gets its host object at its first host call, which is its constructor.
-import { ACC, type JClass, type Loader, type MethodInfo, type Program } from "../compiler/program.ts";
+import { ACC, PlainClass, type JClass, type Loader, type MethodInfo, type Program } from "../compiler/program.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HOSTED, type HostSpec } from "./hostapi.ts";
@@ -41,9 +41,6 @@ export function hostTakeover(prog: Program, specs: readonly HostSpec[], whole?: 
   }
   return { taken, implemented };
 }
-const classOf = (name: string, sup: string, ifaces: string[], flags: number): JClass =>
-  ({ name, dex: null, def: null, sup, ifaces, flags, isInterface: false, fields: [], methods: [], byKey: new Map() });
-
 export class HostClasses {
   private w: World;
   private pending = new Map<string, HostSpec>();
@@ -120,13 +117,13 @@ export class HostClasses {
   }
   /** a class of natives */
   private synthesize(spec: HostSpec, loader?: Loader): void {
-    const sup = spec.sup ?? OBJECT, jc = classOf(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
-    for (const key of spec.methods) { const m = native(spec.name, key, jc.methods.length); jc.methods.push(m); jc.byKey.set(m.key, m); }
+    const sup = spec.sup ?? OBJECT, jc = new PlainClass(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
+    for (const key of spec.methods) jc.add(native(spec.name, key, jc.methods.length));
     // the constructor Java finds when the spec declares none is the superclass's
     if (!jc.byKey.has("<init>()V")) {
       const m = native(spec.name, "<init>()V", jc.methods.length);
       m.flags = ACC.PUBLIC;
-      jc.methods.push(m); jc.byKey.set(m.key, m);
+      jc.add(m);
       bodies.set(m, (cx, _m, c) => { const init = cx.prog.resolve(sup, "<init>", "()V"); if (init) { c.lget(0); cx.callMethod(c, init); } });
     }
     const owner = loader ?? (this.w.prog.loaderOf(spec.name).id ? this.w.prog.loaderOf(spec.name) : this.w.prog.boot);
@@ -136,9 +133,8 @@ export class HostClasses {
   /** the natives of `spec` take the place of the methods of the dex class `jc` they name, in a class of this World's Program that stands for it: the platform's own classes, which
    *  Worlds share, are not changed. Methods keep their positions, so ids, slots and the AOT build's numbering are the platform's. */
   private overlay(jc: JClass, spec: HostSpec): void {
-    const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
-    const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
-    for (const m of over.methods) over.byKey.set(m.key, m);
+    const prog = this.w.prog, hosted = new PlainClass(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
+    const over = new PlainClass(jc.name, jc.sup, jc.ifaces, jc.flags, jc.methods.map((m) => ({ ...m })), jc.fields, jc.dex, jc.def);
     const taken = hostTakes(jc, spec, !!this.w.opts.hostWhole?.(jc.name)).map((m) => over.byKey.get(m.key)!), virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
     for (const own of taken) {
       if (own.key !== CLINIT) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; if (!own.isStatic && !own.isCtor) virtual.push(own.key); continue; }
