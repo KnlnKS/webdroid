@@ -5,7 +5,7 @@
 # Idempotent: re-running rewrites config.ini but keeps the existing userdata.
 set -euo pipefail
 
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
+export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
 AVD_NAME="${AVD_NAME:-webdroid_api35_ref}"

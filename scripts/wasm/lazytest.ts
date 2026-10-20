@@ -5,7 +5,8 @@ import { loadDexes, world } from "./lib.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { JAVA, platformJars } from "./paths.ts";
-import { checker, filesIn, fixture } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { filesIn, fixture } from "../java.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 
 const jars = platformJars("core-oj", "core-libart");

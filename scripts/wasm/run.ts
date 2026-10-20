@@ -1,5 +1,5 @@
 // The Wasm backend's tests and tools, each in a node process of its own: pnpm wasm <suite> [args], or `all` for the tests marked so; `pnpm wasm` lists
-// them. They need javac and java (../java.ts finds a JDK) and the Android SDK (its d8 dexes every fixture, tools.ts).
+// them. They need a JDK (../java.ts finds one) and the Android SDK, whose d8 dexes every fixture.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

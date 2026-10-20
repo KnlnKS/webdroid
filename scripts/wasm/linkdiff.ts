@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { loadDexes, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { checker, filesIn, fixture, javac, onJdk, tempDir } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { filesIn, fixture, javac, onJdk, tempDir } from "../java.ts";
 
 const out = tempDir(), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
 const src = (d: string, ...n: string[]) => n.map((x) => join(JAVA, "lk", d, `${x}.java`));

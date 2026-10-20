@@ -24,7 +24,8 @@ import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { checker, fixture } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { fixture, jdkTool } from "../java.ts";
 
 const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
@@ -128,7 +129,7 @@ const CASES: [string, number][] = [
 ].filter(([n]) => !only || only.includes(n as string)) as [string, number][];
 if (!CASES.length) CASES.push(["reentrant", 3]);
 // a case that deadlocks the JDK is a bug in the case
-const ref = spawnSync("java", ["-Xss512k", "-cp", out, "Ref"], { input: CASES.map(([n, a]) => `Th.${n} ${a}`).join("\n") + "\n", timeout: 120000, encoding: "utf8" });
+const ref = spawnSync(jdkTool("java"), ["-Xss512k", "-cp", out, "Ref"], { input: CASES.map(([n, a]) => `Th.${n} ${a}`).join("\n") + "\n", timeout: 120000, encoding: "utf8" });
 if (ref.status !== 0) throw new Error(`the JDK run failed (${ref.error ?? ref.stderr})`);
 const jdk = ref.stdout.trim().split("\n");
 for (const [i, [name, arg]] of CASES.entries()) {

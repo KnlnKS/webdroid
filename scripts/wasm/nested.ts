@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
-import { checker, fixture } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { fixture } from "../java.ts";
 
 const dex = join(fixture({ sources: [join(JAVA, "Nest.java")], release: 11, minApi: 34 }), "classes.dex");
 await mountPlatform(ROOT);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime.ts";
 import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry.ts";
 import { JAVA } from "./paths.ts";
-import { androidFixture, javac, tempDir } from "./tools.ts";
+import { androidFixture, javac, tempDir } from "../java.ts";
 
 /** how a host method that waits enters Java again: the harness gives the World's */
 export const enter: { call: (cls: string, name: string, desc: string) => Promise<unknown> } = { call: async (cls, name, desc) => scall(cls, name, desc) };

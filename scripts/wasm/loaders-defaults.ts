@@ -7,7 +7,8 @@ import { symbolicImplFor } from "../../src/wasm/compiler/linkage.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { loadDexes, program, world } from "./lib.ts";
 import { JAVA, platformJars } from "./paths.ts";
-import { androidFixture, filesIn, java, javac, tempDir, type Suite } from "./tools.ts";
+import type { Suite } from "./tools.ts";
+import { androidFixture, filesIn, java, javac, tempDir } from "../java.ts";
 
 const core = () => program(platformJars("core-oj", "core-libart"));
 

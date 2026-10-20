@@ -5,7 +5,7 @@ import { writeFileSync } from "node:fs";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { G1_DIR, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { shellIn } from "./tools.ts";
+import { shellIn } from "../java.ts";
 
 const [workload, filter] = process.argv.slice(2);
 const dex = join(G1_DIR, "classes.dex");

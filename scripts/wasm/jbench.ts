@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { mountPlatform, natives, startProcess } from "./harness.ts";
 import { PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { androidFixture, cutWorkloads, tempDir } from "./tools.ts";
+import { cutWorkloads } from "./tools.ts";
+import { androidFixture, tempDir } from "../java.ts";
 
 const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = tempDir();
 const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));

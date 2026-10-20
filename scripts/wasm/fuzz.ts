@@ -12,7 +12,8 @@ import { irreducibleClass } from "./irfuzz.ts";
 import { Irreducible, Flow } from "../../src/jvm/structure.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
-import { checker, fixture, onJdk, tempDir } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { fixture, onJdk, tempDir } from "../java.ts";
 import { argv } from "../args.ts";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */

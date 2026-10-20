@@ -36,7 +36,7 @@ import { loadPlatformJar } from "../src/android/framework.ts";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { postScriptName } from "../src/android/sfnt.ts";
-import { adb, asRoot, probeSdk, pull, runDex } from "./adb.ts";
+import { adb, asRoot, pull, runDex } from "./adb.ts";
 import { nodeCommand } from "./node.ts";
 import { buildFixed, identity, recordIdentity, writeProperties } from "./identity.ts";
 
@@ -206,7 +206,7 @@ async function recordCompatChanges() {
 
 /** android.system.OsConstants as the reference device's libcore initializes them (initConstants) */
 async function recordOsConstants() {
-  const values = (await runDex("scripts/DumpOsConstants.java")).split("\n")
+  const values = runDex("scripts/DumpOsConstants.java").split("\n")
     .map((line) => line.trim().split(" ")).filter(([name, value]) => name && /^-?\d+$/.test(value)).map(([n, v]) => [n, v] as const);
   writeGenerated("src/android/os-constants.ts", ": android.system.OsConstants on the reference device.",
     constObject("OS_CONSTANTS", "Record<string, number>", values), `${values.length} constants`);
@@ -214,7 +214,7 @@ async function recordOsConstants() {
 
 /** the single-byte charsets as the reference device's ICU converters decode them, byte by byte */
 async function recordCharsets() {
-  const rows = (await runDex("scripts/DumpCharsets.java")).split("\n").map((line) => {
+  const rows = runDex("scripts/DumpCharsets.java").split("\n").map((line) => {
     const [name, aliases, replacement, table, oneWay] = line.trim().split("\t");
     const chars = String.fromCharCode(...table.trim().split(" ").map((h) => parseInt(h, 16)));
     const list = (s: string | undefined) => `[${s?.trim() ? s.trim().split(" ").join(", ") : ""}]`;
@@ -300,7 +300,7 @@ async function recordProperties() {
  *  device reports having (InputDevice.hasKeys), which come from its key layout and its kernel's keys */
 async function recordInputDevices() {
   const keys: Record<string, number[]> = {};
-  for (const line of (await runDex("scripts/DumpInputDevices.java", { sdk: probeSdk() })).split("\n")) {
+  for (const line of runDex("scripts/DumpInputDevices.java", { android: true }).split("\n")) {
     const [name, codes = ""] = line.trim().split("\t");
     if (name === "Virtual" || name === "virtio_input_multi_touch_1") keys[name] = codes.split(" ").filter(Boolean).map(Number);
   }

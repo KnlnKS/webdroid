@@ -8,7 +8,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 import { BASE_URL, CONTEXT_OPTS, launchBrowser } from "./browser.ts";
-import { adb, probeSdk, runDex, tempDir } from "./adb.ts";
+import { adb, runDex } from "./adb.ts";
+import { tempDir } from "./java.ts";
 
 const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
 /** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
@@ -38,7 +39,7 @@ if (process.argv.includes("--record")) {
   writeFileSync(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
   adb("push", `${dir}/cases.txt`, "/data/local/tmp/webdroid-textlayout.txt");
   adb("push", `${dir}/widths.txt`, "/data/local/tmp/webdroid-textwidths.txt");
-  const out = (await runDex("scripts/TextLayoutProbe.java", { sdk: probeSdk(), args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] })).split("\n");
+  const out = runDex("scripts/TextLayoutProbe.java", { android: true, args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] }).split("\n");
   const layouts = out.filter((l) => !l.startsWith("widths "));
   writeFileSync(FIXTURE, `${cases.trimEnd().split("\n").map((c, i) => `case ${i}\t${c}`).join("\n")}\n${layouts.join("\n")}\n`);
   writeFileSync(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");

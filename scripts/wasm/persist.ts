@@ -25,7 +25,8 @@ import { current, fakeAot, loadDexes } from "./lib.ts";
 import { worldOptions } from "../../src/wasm/host/boot.ts";
 import { addHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
 import { JAVA, PLATFORM_PATHS, ROOT } from "./paths.ts";
-import { checker, filesIn, fixture } from "./tools.ts";
+import { checker } from "./tools.ts";
+import { filesIn, fixture } from "../java.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
 
 const AOT = process.env.WEBDROID_AOT;

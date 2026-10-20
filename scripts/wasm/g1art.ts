@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { adb } from "../adb.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { androidFixture, cutWorkloads, tempDir } from "./tools.ts";
+import { cutWorkloads } from "./tools.ts";
+import { androidFixture, tempDir } from "../java.ts";
 import { geo, med } from "./g1report.ts";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
