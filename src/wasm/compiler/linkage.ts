@@ -2,9 +2,10 @@
 // common_throws.cc): NoClassDefFoundError, NoSuchFieldError, NoSuchMethodError and IncompatibleClassChangeError, with ART's messages. These are
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex.ts";
-import { PRIMS, descToName } from "../../jvm/abi.ts";
-import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { PRIMS, descToName, dotName } from "../../jvm/abi.ts";
+import { ACC, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;
@@ -13,7 +14,7 @@ export interface LinkFailure {
   absent?: string;
 }
 
-const dotted = (n: string) => javaName(n).replace(/\//g, ".");
+const dotted = (n: string) => dotName(javaName(n));
 /** a descriptor as ART's PrettyDescriptor prints it */
 export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]?.name ?? "void");
 const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);
@@ -33,13 +34,14 @@ export function typeFailure(prog: Program, desc: string): LinkFailure | undefine
 /** the class a NoClassDefFoundError's message from here names */
 export const unresolvedClass = (message: string): string | undefined => message.startsWith(UNRESOLVED) ? classOfType(message.slice(UNRESOLVED.length)) : undefined;
 
+/** by Invoke, the kind ART names in its messages */
+const INVOKE_TYPE = ["virtual", "super", "direct", "static", "interface"];
 const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.isCtor || m.flags & ACC.PRIVATE ? "direct" : prog.get(m.cls)?.isInterface ? "interface" : "virtual");
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
 export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
-  const m = declaredMethod(c, name + desc);
   // the file's own spelling differs only where a loader qualifies a type, in the query or the class's dex
-  return m || c.dex && !c.dex.resolveType && !desc.includes("@") ? m : declaredMethod(c, name + javaName(desc), true);
+  return c.method(name + desc) ?? c.method(name + javaName(desc), true);
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
@@ -136,28 +138,49 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
   return target && failed(target) ? { ...target, message: `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}` } : target;
 }
 
-/** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method, `kind` the opcode without /range. */
-export function resolveInvoke(prog: Program, kind: string, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
+/** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method. */
+export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
   const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = () => declared(prog, referrer);
   if (!c) return fail("ncdfr", UNRESOLVED + descriptor(declaredCls), declaredCls);
-  if (kind === "invoke-interface" && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
-  if (kind === "invoke-virtual" && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
-  const expected = kind.slice(7);
-  const owner = kind === "invoke-super" && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
-  const m = kind === "invoke-super" && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
+  if (kind === Invoke.Interface && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
+  if (kind === Invoke.Virtual && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
+  const expected = INVOKE_TYPE[kind];
+  const owner = kind === Invoke.Super && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
+  const m = kind === Invoke.Super && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
   if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descriptor(cls)} or its super classes${declared(prog, cls)}`);
   if (failed(m)) return m;
-  if (m.isStatic !== (kind === "invoke-static")) {
+  if (m.isStatic !== (kind === Invoke.Static)) {
     const found = invokeType(m, prog);
     return fail("icce", `The method '${prettyMethod(m)}' was expected to be of type ${expected} but instead was found to be of type ${found}${at()}`);
   }
   return m;
 }
 
+/** what an invoke names: the method's name and descriptor, the class whose methods it searches (an array's are Object's) and the resolved target, except an array's clone, which copies it */
+export interface InvokeSite { name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" }
+/** the site that invoke `kind` of method reference `ref` makes in `m`, as the compiler binds it (MC.binding) and the planner plans it (Planner.calls) */
+export function invokeSite(prog: Program, m: MethodInfo, ref: number, kind: Invoke): InvokeSite {
+  const types = prog.typesOf(m.dex), mr = m.dex.method(ref), desc = types.methodDesc(ref), declared = types.typeName(mr.cls);
+  const decl = declared[0] === "[" ? "java/lang/Object" : declared;
+  if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return { name: mr.name, desc, decl, target: "clone" };
+  const resolve = () => resolveInvoke(prog, kind, declared, mr.name, desc, m.cls);
+  // invoke-super's target depends on the caller
+  return { name: mr.name, desc, decl, target: kind === Invoke.Super ? resolve() : resolved(prog.refsOf(m.dex).invokes, 8 * ref + kind, resolve) };
+}
+/** a resolution of a reference of a dex: what succeeded is the same for every caller while the Program's classes hold (Program.refsOf), a failure names its caller */
+function resolved<T extends object>(memo: Map<number, T>, key: number, resolve: () => T | LinkFailure): T | LinkFailure {
+  let r: T | LinkFailure | undefined = memo.get(key);
+  if (r === undefined) { r = resolve(); if (!failed(r)) memo.set(key, r); }
+  return r;
+}
+
 /** the field an iget/iput/sget/sput names, or why it does not resolve */
 export function resolveFieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
-  const fr = dex.field(idx), decl = dex.typeName(fr.cls), type = dex.rawType(fr.type);
-  if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + dex.type(fr.cls), decl);
+  return resolved(prog.refsOf(dex).fields, 2 * idx + +isStatic, () => fieldRef(prog, dex, idx, isStatic, referrer));
+}
+function fieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
+  const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
+  if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
   const f = resolveSymbolicField(prog, decl, fr.name, type);
   if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);
   if (f.isStatic !== isStatic) {

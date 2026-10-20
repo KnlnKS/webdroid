@@ -9,7 +9,7 @@ import { caseLine, compare, genCases } from "./cases.ts";
 import { mountPlatform, natives } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { irreducibleClass } from "./irfuzz.ts";
-import { Irreducible, Flow } from "../../src/jvm/structure.ts";
+import { Irreducible, Flow } from "../../src/wasm/compiler/structure.ts";
 import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { checker } from "./tools.ts";

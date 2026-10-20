@@ -5,10 +5,9 @@
 // a short loop costs neither the state of an activation nor the engine's compiling of two more functions. The second tier runs code that has
 // already been hot: its loops stay in the method, unless the first tier saw one run LONG_ROUNDS chunks in one entry (World.longLoops).
 import { Code, OP } from "./code.ts";
-import { T, ref, refNull, type VT } from "./wasmbin.ts";
+import { T, ref, refNull, uleb, type VT } from "./wasmbin.ts";
 import { kindOf } from "./program.ts";
-import { endsBlock, branchTargets } from "../../jvm/prepared.ts";
-import { type Flow, Go } from "../../jvm/structure.ts";
+import { type Flow, Go } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { CHUNK_MARK, COUNT_SLOTS } from "./exc.ts";
 import { FUEL } from "./hostcalls.ts";
@@ -24,7 +23,42 @@ const ChunkStatus = { Done: 0, Again: 1, Return: 2, Throw: 3, Exit: 4 } as const
 
 type Region = Flow["regions"][number];
 type Scope = Region["scopes"][number];
-interface Chunk { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] }
+/** the body of a method whose loops run in chunks: its locals may live in their state struct, so one of a non-null type is declared nullable and made
+ *  non-null where it is read, and the locals the body uses are kept */
+export class OutlinedCode extends Code {
+  readonly locals = new Set<number>();
+  readonly nonNullLocals: Set<number>;
+  constructor(nparams: number, nonNullLocals = new Set<number>()) { super(nparams); this.nonNullLocals = nonNullLocals; }
+  override newLocal(t: VT): number {
+    const i = this.nparams + this.localTypes.length;
+    if (typeof t !== "number" && !t.nullable) { this.nonNullLocals.add(i); t = { ...t, nullable: true }; }
+    this.localTypes.push(t); return i;
+  }
+  override lget(i: number, nonNull = true): this { return this.access(0x20, i, nonNull); }
+  override lset(i: number): this { return this.access(0x21, i, false); }
+  override ltee(i: number): this { return this.access(0x22, i, true); }
+  protected access(op: number, i: number, nonNull: boolean, index = i): this {
+    this.locals.add(i);
+    this.b.push(op); uleb(index, this.b);
+    if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull();
+    return this;
+  }
+}
+/** a chunk's body, sharing the method's locals: they are numbered once its state is laid out (Outliner.build), so each access waits for materialize */
+class ChunkCode extends OutlinedCode {
+  localMap = new Map<number, number>();
+  private materializing = false;
+  constructor(root: OutlinedCode) { super(root.nparams, root.nonNullLocals); this.localTypes = root.localTypes; }
+  protected override access(op: number, i: number, nonNull: boolean): this {
+    if (!this.materializing) { this.locals.add(i); this.defer(() => { this.access(op, i, nonNull); }); return this; }
+    const index = this.localMap.get(i);
+    if (index === undefined) throw new Error(`Unmapped outlined local ${i}`);
+    return super.access(op, i, nonNull, index);
+  }
+  override materialize(): void { this.materializing = true; super.materialize(); this.materializing = false; }
+}
+
+interface Chunk { code: ChunkCode; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] }
 
 export class Outliner {
   /** the dispatch cycle of each region in one: each runs in one chunk with a dispatch of its own */
@@ -49,7 +83,6 @@ export class Outliner {
   /** the locals with which the method's own code calls its chunks */
   declare(): void {
     const mc = this.mc, c = mc.code;
-    c.nullableLocals = true;
     this.controlLocal = c.newLocal(T.i32);
     if (mc.m.ret !== "V") this.resultLocal = c.newLocal(mc.cx.vtOf(kindOf(mc.m.ret)));
     if (!mc.tries) mc.excLocal = c.newLocal(T.anyref);
@@ -76,14 +109,14 @@ export class Outliner {
     this.status(ChunkStatus.Return);
     return true;
   }
-  /** a jump out of the chunk being emitted: a dispatch within its cycle, or one of its exits, which the code calling it takes; answers whether it was one */
-  exit(targetPc: number, final: boolean, go: Go, label: string): boolean {
+  /** a jump of block `from` out of the chunk being emitted: a dispatch within its cycle, or one of its exits, which the code calling it takes; answers whether it was one */
+  exit(from: number, targetPc: number, final: boolean, go: Go, label: string): boolean {
     const mc = this.mc, c = mc.code, ch = this.chunk;
     if (!ch) return false;
     if (go === Go.Dispatch && ch.cycle?.includes(mc.regionOfPc.get(targetPc)!)) { c.i32(mc.regionOfPc.get(targetPc)!).lset(mc.regionLocal).br(mc.depth("$cycleDisp")); return true; }
     if (go === Go.Next || mc.nest.includes(label)) return false;
-    let i = ch.exits.findIndex((e) => e.pc === targetPc && e.block === mc.block && e.final === final);
-    if (i < 0) { i = ch.exits.length; ch.exits.push({ pc: targetPc, block: mc.block, final }); }
+    let i = ch.exits.findIndex((e) => e.pc === targetPc && e.block === from && e.final === final);
+    if (i < 0) { i = ch.exits.length; ch.exits.push({ pc: targetPc, block: from, final }); }
     this.status(ChunkStatus.Exit + i);
     return true;
   }
@@ -176,8 +209,8 @@ export class Outliner {
   }
   /** a function of its own for what `emit` emits, which answers a status (call) and takes and leaves the method's locals in the state struct */
   private body(label: string, emit: () => void, cycle?: number[]): Chunk {
-    const mc = this.mc, root = mc.root, parent = mc.code, nest = mc.nest, outer = this.chunk;
-    const body = new Code(root.nparams); body.localTypes = root.localTypes; body.nullableLocals = true; body.nonNullLocals = root.nonNullLocals; body.compactLocals = true;
+    const mc = this.mc, root = mc.root as OutlinedCode, parent = mc.code as OutlinedCode, nest = mc.nest, outer = this.chunk;
+    const body = new ChunkCode(root);
     body.defer((c) => {
       // the chunk's own parameter, the state struct, which no local of the method maps to
       c.raw(0x20, 0).lset(this.stateLocal);
@@ -223,8 +256,8 @@ export class Outliner {
     c.lget(this.controlLocal).i32(ChunkStatus.Throw).raw(OP.i32_eq).if_().lget(mc.excLocal).throw_(cx.tag).end();
     for (let i = 0; i < ch.exits.length; i++) {
       c.lget(this.controlLocal).i32(ChunkStatus.Exit + i).raw(OP.i32_eq).if_(); mc.push("if");
-      const saved = mc.block, exit = ch.exits[i]; mc.block = exit.block;
-      mc.jump(exit.pc, exit.final); mc.block = saved; mc.pop(); c.end();
+      const exit = ch.exits[i];
+      mc.jump(exit.block, exit.pc, exit.final); mc.pop(); c.end();
     }
     mc.pop(); c.end();
   }
@@ -238,30 +271,14 @@ export class Outliner {
 
 /** the dispatch cycles of the method's regions: the strong components of their jumps and handler edges, so acyclic handler paths stay in the method */
 function dispatchCycles(mc: MC): Map<number, number[]> {
-  const { regions, blockAt } = mc.flow, n = regions.length, cycleOf = new Map<number, number[]>();
+  const regions = mc.flow.regions, n = regions.length, cycleOf = new Map<number, number[]>();
   if (n < 2) return cycleOf;
-  const owner = new Int32Array(mc.flow.starts.length).fill(-1);
+  const { succ, hsucc } = mc.prepared, owner = new Int32Array(succ.length).fill(-1);
   regions.forEach((r, k) => { for (const b of r.order) owner[b] = k; });
   const edges = Array.from({ length: n }, () => new Set<number>()), reverse = Array.from({ length: n }, () => new Set<number>());
-  for (let k = 0; k < n; k++) for (const b of regions[k].order) {
-    const ins = mc.blockIns[b].at(-1)!;
-    const targets = [...branchTargets(mc.item, ins)];
-    if (!endsBlock(ins.op)) targets.push(ins.pc + ins.len);
-    for (const pc of targets) {
-      const to = owner[blockAt[pc]];
-      if (to !== k) { edges[k].add(to); reverse[to].add(k); }
-    }
-  }
-  const { instructions, leaders, handlers } = mc.prepared;
-  let from = -1;
-  if (mc.tries) instructions.forEach((ins, i) => {
-    if (leaders[ins.pc]) from = owner[blockAt[ins.pc]];
-    const hs = handlers[i];
-    if (from >= 0 && hs) for (const pc of hs) {
-      const to = owner[blockAt[pc]];
-      if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
-    }
-  });
+  const link = (from: number, to: number) => { if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); } };
+  for (let k = 0; k < n; k++) for (const b of regions[k].order) for (const s of succ[b]) link(k, owner[s]);
+  for (let b = 0; b < succ.length; b++) if (owner[b] >= 0) for (const h of hsucc[b]) link(owner[b], owner[h]);
   const seen = new Set<number>(), order: number[] = [];
   for (let start = 0; start < n; start++) {
     if (seen.has(start)) continue;

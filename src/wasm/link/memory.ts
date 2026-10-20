@@ -6,7 +6,7 @@
 import { Code, OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { rtfns } from "../compiler/rtfns.ts";
-import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import { kindVT, type Compiler, type Intrinsic } from "../compiler/j2w.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import { elemKindOf } from "../compiler/consts.ts";
 import { PRIMS } from "../../jvm/abi.ts";
@@ -35,11 +35,8 @@ export function memoryScalarMethod(cx: Compiler, peek: boolean, bits: 8 | 16 | 3
 export function emitMemoryScalar(cx: Compiler, c: Code, m: MethodInfo, peek: boolean, bits: 8 | 16 | 32 | 64, inlineRuntime = false): void {
   const call = (name: string) => {
     if (!inlineRuntime) { cx.callRt(c, name); return; }
-    const fn = cx.memo(`memory:inline:${name}`, () => {
-      const d = rtfns.get(name)!, fn = cx.mb.reserveFunc(cx.sig(d.params, d.ret), "$" + name), body = new Code(d.params.length);
-      d.body(cx, body); cx.mb.setBody(fn, body.finish()); return fn;
-    });
-    c.call(fn);
+    const d = rtfns.get(name)!;
+    c.call(cx.defineFn(`memory:inline:${name}`, d.params.map(kindVT), d.ret === "V" ? [] : [kindVT(d.ret)], (body) => d.body(cx, body)));
   };
   guest(c, 0).if_(peek ? bits === 64 ? T.i64 : T.i32 : undefined).lget(0).raw(OP.i32_wrap_i64);
   if (!peek) c.lget(1);

@@ -4,8 +4,8 @@ import { OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { ACC, kindOf, type Kind, typeName } from "./program.ts";
 import { elemKindOf } from "./consts.ts";
-import { descToName, isWide, varHandleValues } from "../../jvm/abi.ts";
-import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { descToName, varHandleValues } from "../../jvm/abi.ts";
+import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import type { Compiler } from "./j2w.ts";
 import type { Code } from "./code.ts";
 import type { MC } from "./method.ts";
@@ -47,8 +47,7 @@ export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type
 }
 
 export function emitPolymorphic(mc: MC, ins: Ins): void {
-  const { dex } = mc;
-  const mr = dex.method(ins.b), cls = dex.typeName(mr.cls), mode = mr.name;
+  const mr = mc.dex.method(ins.b), cls = mc.types.typeName(mr.cls), mode = mr.name;
   if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
   if (cls !== VH || varHandleValues(mode) === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
   if (!emitExactAccess(mc, ins, mode)) return emitHandleCall(mc, ins, false, mode);
@@ -56,7 +55,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
 
 /** Compare the live libcore accessor classes, including defining loader identity, before using unboxed storage. */
 function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
-  const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => dex.type(t)), ret = dex.type(proto.ret);
+  const { cx, code: c, dex, types } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => types.type(t)), ret = types.type(proto.ret);
   const nv = varHandleValues(mode)!;
   if (params.length < nv) return false;
   const coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);
@@ -74,7 +73,7 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
     : coords.length === 2 && coords[0][0] === "[" && coords[1] === "I" && coords[0].slice(1) === variable ? "java/lang/invoke/ArrayElementVarHandle" : undefined;
   if (coords.length === 1 && cx.structFor(descToName(coords[0])) === cx.tStr) return false;
   if (!storage || valueKind(variable) & (KF | KD) && op.startsWith("getAndBitwise")) return false;
-  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
+  const regs = argRegisters(ins, params, 1);
   const handle = c.newLocal(T.anyref), match = c.newLocal(T.i32), vt = cx.structFor(VH), clsDesc = "Ljava/lang/Class;";
   const classes = c.newLocal(ref(cx.tData.ref)), expected = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);

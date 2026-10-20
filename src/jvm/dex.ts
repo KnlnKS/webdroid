@@ -48,6 +48,25 @@ export interface ClassDef {
 // `dex` because element values reference types/enums by index into the dex they came from
 export type ClassAnnotations = { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]>; params: Map<number, EncAnnotation[][]> };
 export interface EncAnnotation { visibility: number; type: string; elements: Record<string, EncVal>; dex: DexFile; }
+/** the descriptors a dex's references name: as the file spells them (DexFile), or as the loader that defines its classes sees them (loadergraph.ts LoaderTypes) */
+export interface DexTypes {
+  /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
+  type(i: number): string;
+  /** the binary name of `type(i)` */
+  typeName(i: number): string;
+  /** full descriptor "(params)ret" of method index i */
+  methodDesc(i: number): string;
+  /** the parameter and return types of method index i, as parseMethodDesc gives them for its descriptor */
+  methodTypes(i: number): { params: string[]; ret: string };
+  /** name and descriptor of method index i */
+  methodKey(i: number): string;
+  /** full descriptor "(params)ret" of proto index pi */
+  protoDesc(pi: number): string;
+  protoTypes(pi: number): { params: string[]; ret: string };
+  protoParamTypes(pi: number): string[];
+  /** annotations for a class_def: the class's own, and per field, method and method PARAMETER; shared, so read-only */
+  classAnnotations(def: ClassDef): ClassAnnotations;
+}
 
 interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
 
@@ -101,7 +120,7 @@ class PagedCache<T> {
   clear(): void { this.pages.fill(undefined); }
 }
 
-export class DexFile {
+export class DexFile implements DexTypes {
   bytes: Uint8Array; name: string;
   view: DataView;
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
@@ -115,7 +134,6 @@ export class DexFile {
 
   private stringCache: PagedCache<string>;
   private typeCache: PagedCache<string>;
-  private typeNames: PagedCache<string>;
   private rawTypeNames: PagedCache<string>;
   private classDefCache?: Map<string, number>;
   private protoCache: PagedCache<ProtoRef>;
@@ -150,7 +168,6 @@ export class DexFile {
     const protoCount = v.getUint32(h + 72, true), fieldCount = v.getUint32(h + 80, true), methodCount = v.getUint32(h + 88, true);
     this.stringCache = new PagedCache(this.stringCount);
     this.typeCache = new PagedCache(this.typeCount);
-    this.typeNames = new PagedCache(this.typeCount);
     this.rawTypeNames = new PagedCache(this.typeCount);
     this.protoCache = new PagedCache(protoCount);
     this.fieldCache = new PagedCache(fieldCount);
@@ -228,21 +245,11 @@ export class DexFile {
     for (let i = heads[nameIdx]; i; i = next[i - 1]) yield i - 1;
   }
 
-  private typeResolver?: (descriptor: string) => string;
-  /** How the defining loader resolves references. Its library graph may arrive after metadata was inspected; raw DEX descriptors never change. */
-  get resolveType(): ((descriptor: string) => string) | undefined { return this.typeResolver; }
-  set resolveType(resolve: ((descriptor: string) => string) | undefined) {
-    if (this.typeResolver === resolve) return;
-    this.typeResolver = resolve;
-    this.typeCache.clear(); this.typeNames.clear();
-    this.descCache.length = this.paramTypeCache.length = this.typesCache.length = 0;
-  }
-  /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
-  type(i: number): string { return this.typeCache.get(i) ?? this.typeCache.set(i, this.resolveType ? this.resolveType(this.rawType(i)) : this.rawType(i)); }
-  /** the descriptor as the file spells it */
+  // as the file spells the types (a loader's view of them: Program.typesOf); the raw* readers say so where both are at hand
+  type(i: number): string { return this.typeCache.get(i) ?? this.typeCache.set(i, this.rawType(i)); }
   rawType(i: number): string { return this.string(this.view.getUint32(this.typeIdsOff + i * 4, true)); }
-  /** binary names of `type(i)` and `rawType(i)`, kept so lookups by them hash each name once */
-  typeName(i: number): string { return this.typeNames.get(i) ?? this.typeNames.set(i, this.resolveType ? descToName(this.type(i)) : this.rawTypeName(i)); }
+  typeName(i: number): string { return this.rawTypeName(i); }
+  /** kept, so lookups by them hash each name once */
   rawTypeName(i: number): string { return this.rawTypeNames.get(i) ?? this.rawTypeNames.set(i, descToName(this.peekString(this.view.getUint32(this.typeIdsOff + i * 4, true)))); }
   /** the last answer of `typesNaming`: a rebind asks each dex about the same descriptors for every class it checks, through sets its callers build apart */
   private typesNamed?: { descs: ReadonlySet<string>; found: ReadonlySet<number> };
@@ -303,17 +310,6 @@ export class DexFile {
   }
 
   get methodCount(): number { return this.methodCache.length; }
-  *methodsOf(descriptor: string): Generator<number> {
-    const owner = (i: number) => this.type(this.view.getUint16(this.methodIdsOff + i * 8, true));
-    // DEX method_ids sort by type_idx; type_ids sort by their UTF-16 descriptors.
-    let lo = 0, hi = this.methodCount;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (owner(mid) < descriptor) lo = mid + 1;
-      else hi = mid;
-    }
-    for (; lo < this.methodCount && owner(lo) === descriptor; lo++) yield lo;
-  }
   method(i: number): MethodRef {
     let m = this.methodCache.get(i);
     if (m === undefined) {
@@ -344,15 +340,12 @@ export class DexFile {
 
   private descCache: (string | undefined)[] = [];
   private paramTypeCache: (string[] | undefined)[] = [];
-  /** full descriptor "(params)ret" of method index i */
   methodDesc(i: number): string { return this.protoDesc(this.method(i).proto); }
   private typesCache: ({ params: string[]; ret: string } | undefined)[] = [];
-  /** the parameter and return types of method index i, as parseMethodDesc gives them for its descriptor */
   methodTypes(i: number): { params: string[]; ret: string } { return this.protoTypes(this.method(i).proto); }
   protoTypes(pi: number): { params: string[]; ret: string } {
     return this.typesCache[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.proto(pi).ret) };
   }
-  /** full descriptor "(params)ret" of proto index pi */
   protoDesc(pi: number): string {
     let d = this.descCache[pi];
     if (d === undefined) {
@@ -361,7 +354,7 @@ export class DexFile {
     }
     return d;
   }
-  /** name and descriptor of method index i, without keeping a record of the method */
+  /** without keeping a record of the method */
   methodKey(i: number): string {
     const off = this.methodIdsOff + i * 8;
     return this.string(this.view.getUint32(off + 4, true)) + this.protoDesc(this.view.getUint16(off + 2, true));
@@ -438,8 +431,8 @@ export class DexFile {
     }
     return false;
   }
-  /** the method_id of class `typeIdx` named `name` with descriptor `desc`, or -1. method_ids sort by class, then name, then proto */
-  findMethod(typeIdx: number, name: string, desc: string, raw = false): number {
+  /** the method_id of class `typeIdx` named `name` with descriptor `desc` as `types` spell it, or -1. method_ids sort by class, then name, then proto */
+  findMethod(typeIdx: number, name: string, desc: string, types: DexTypes = this): number {
     const n = this.findString(name);
     if (n < 0) return -1;
     const v = this.view, at = (i: number) => this.methodIdsOff + i * 8;
@@ -449,9 +442,7 @@ export class DexFile {
       if (c < typeIdx || c === typeIdx && s < n) lo = mid + 1; else hi = mid;
     }
     for (let i = lo; i < this.methodCount && v.getUint16(at(i), true) === typeIdx && v.getUint32(at(i) + 4, true) === n; i++) {
-      const pi = v.getUint16(at(i) + 2, true), p = raw ? this.proto(pi) : undefined;
-      const candidate = p ? "(" + p.params.map(t => this.rawType(t)).join("") + ")" + this.rawType(p.ret) : this.protoDesc(pi);
-      if (candidate === desc) return i;
+      if (types.protoDesc(v.getUint16(at(i) + 2, true)) === desc) return i;
     }
     return -1;
   }
@@ -478,22 +469,22 @@ export class DexFile {
     return def;
   }
 
-  /** annotations for a class_def: the class's own, and per field, method and method PARAMETER; shared, so read-only */
-  classAnnotations(def: ClassDef): ClassAnnotations {
+  /** as `types` name the annotations' types, kept in `cache` */
+  classAnnotations(def: ClassDef, types: DexTypes = this, cache = this.annotations): ClassAnnotations {
     const dir = def.annotationsOff;
-    let out = this.annotations.get(dir);
+    let out = cache.get(dir);
     if (out) return out;
     out = { cls: [], methods: new Map(), fields: new Map(), params: new Map() };
-    this.annotations.set(dir, out);
+    cache.set(dir, out);
     if (!dir) return out;
     const v = this.view;
     const classAnnoOff = v.getUint32(dir, true);
     const fieldsSize = v.getUint32(dir + 4, true);
     const methodsSize = v.getUint32(dir + 8, true);
-    if (classAnnoOff) out.cls = this.annotationSet(classAnnoOff);
+    if (classAnnoOff) out.cls = this.annotationSet(classAnnoOff, types);
     let p = dir + 16;
     for (const [n, into] of [[fieldsSize, out.fields], [methodsSize, out.methods]] as const) {
-      for (let i = 0; i < n; i++, p += 8) into.set(v.getUint32(p, true), this.annotationSet(v.getUint32(p + 4, true)));
+      for (let i = 0; i < n; i++, p += 8) into.set(v.getUint32(p, true), this.annotationSet(v.getUint32(p + 4, true), types));
     }
     // annotated_parameters: one annotation_set_ref_list per method, one set per parameter.
     // Retrofit, Dagger and Jackson read nothing else — @Query, @Named, @JsonProperty are all here.
@@ -505,13 +496,13 @@ export class DexFile {
       if (!listOff) continue;
       const n = v.getUint32(listOff, true);
       const per: EncAnnotation[][] = [];
-      for (let k = 0; k < n; k++) per.push(this.annotationSet(v.getUint32(listOff + 4 + k * 4, true)));
+      for (let k = 0; k < n; k++) per.push(this.annotationSet(v.getUint32(listOff + 4 + k * 4, true), types));
       out.params.set(methodIdx, per);
     }
     return out;
   }
 
-  private annotationSet(off: number): EncAnnotation[] {
+  private annotationSet(off: number, types: DexTypes): EncAnnotation[] {
     if (!off) return [];
     const v = this.view;
     const size = v.getUint32(off, true);
@@ -520,20 +511,20 @@ export class DexFile {
       const itemOff = v.getUint32(off + 4 + i * 4, true);
       // annotation_item: visibility(u8) + encoded_annotation
       const r = new Reader(this.bytes, itemOff + 1);
-      const annotation = this.encodedAnnotation(r); annotation.visibility = this.bytes[itemOff]; out.push(annotation);
+      const annotation = this.encodedAnnotation(r, types); annotation.visibility = this.bytes[itemOff]; out.push(annotation);
     }
     return out;
   }
 
-  private encodedAnnotation(r: Reader): EncAnnotation {
+  private encodedAnnotation(r: Reader, types: DexTypes): EncAnnotation {
     const typeIdx = r.uleb();
     const size = r.uleb();
     const elements: Record<string, EncVal> = {};
     for (let i = 0; i < size; i++) {
       const nameIdx = r.uleb();
-      elements[this.string(nameIdx)] = this.encodedValue(r);
+      elements[this.string(nameIdx)] = this.encodedValue(r, types);
     }
-    return { visibility: 1, type: descToName(this.type(typeIdx)), elements, dex: this };
+    return { visibility: 1, type: types.typeName(typeIdx), elements, dex: this };
   }
 
   /** map_list entry for a TYPE_* code, or undefined. The header stops at class_defs, so
@@ -672,7 +663,7 @@ export class DexFile {
     return out;
   }
 
-  private encodedValue(r: Reader): EncVal {
+  private encodedValue(r: Reader, types: DexTypes = this): EncVal {
     const b = r.u8();
     const type = b & 0x1f, arg = b >> 5;
     const size = arg + 1;
@@ -698,10 +689,10 @@ export class DexFile {
       case 0x1c: { // array
         const n = r.uleb();
         const out: EncVal[] = [];
-        for (let j = 0; j < n; j++) out.push(this.encodedValue(r));
+        for (let j = 0; j < n; j++) out.push(this.encodedValue(r, types));
         return out;
       }
-      case 0x1d: return { kind: "annotation", anno: this.encodedAnnotation(r) };
+      case 0x1d: return { kind: "annotation", anno: this.encodedAnnotation(r, types) };
       case 0x1e: return null;
       case 0x1f: return arg !== 0;
       default: throw new Error(`encoded_value type 0x${type.toString(16)}`);

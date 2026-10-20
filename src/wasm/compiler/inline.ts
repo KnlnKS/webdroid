@@ -2,11 +2,11 @@
 // that stores its arguments and calls its super's) becomes its steps, and a static check that returns at once unless its first argument is null (Kotlin's
 // parameter checks) that test, calling the method when the argument is null. Stack traces stay the call's: a null receiver throws at the call, as the invoke
 // does, and what a step throws or calls carries a frame of the method (Code.inline), so traces and caller-sensitive lookups see it.
-import { decodeInstructions, ifTarget, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { argRegisters, decodeInstructions, ifTarget, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { ACC } from "../../jvm/dex.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage.ts";
-import { narrowBits, wideBits } from "./opinfo.ts";
+import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { STRING } from "./strings.ts";
 import type { FieldInfo, MethodInfo, Program } from "./program.ts";
 
@@ -19,7 +19,6 @@ export type Step = { pc: number } & ({ sget: Field } | { get: Field; obj: number
 export type Seq = { k: "seq"; steps: Step[]; ret?: Val };
 export type Trivial = Seq | { k: "check" };
 const IGET = 0x52, IPUT = 0x59, SGET = 0x60, FIELD_OPS = 7, RETURN_VOID = 0x0e, RETURN = 0x0f, RETURN_OBJECT = 0x11, IF_EQZ = 0x38, IF_NEZ = 0x39;
-const BOUND = new Set(["invoke-direct", "invoke-static", "invoke-super"]);
 const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
 
 /** what a call of `m` reduces to, if its code is trivial and its references link as the Program resolves them */
@@ -50,7 +49,7 @@ function check(m: MethodInfo, p0: number, insns: PreparedInstruction[]): Trivial
 /** static field reads, reads and stores of parameters' fields, at most one call, and a return of a parameter, a constant or a step's value */
 function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstruction[]): Seq | undefined {
   // what each register holds, and whether it is the first of a pair
-  const regs = new Map<number, [Val, boolean]>(), steps: Step[] = [];
+  const regs = new Map<number, [Val, boolean]>(), steps: Step[] = [], types = prog.typesOf(m.dex);
   let r = p0, n = 0, ret: Val | undefined, done = false, called = false, justCalled = false;
   const define = (reg: number, wide: boolean, v: Val) => {
     for (const [at, [, w]] of regs) if (at <= reg + (wide ? 1 : 0) && reg <= at + (w ? 1 : 0)) regs.delete(at);
@@ -65,7 +64,7 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
   const fits = (v: Val, desc: string) => !("bits" in v) || !isRef(desc) || v.bits === 0;
   const step = (s: Step): Val => ({ t: steps.push(s) - 1 });
   for (const x of insns) {
-    const op = x.op, afterCall = justCalled, kind = x.name.replace("/range", "");
+    const op = x.op, afterCall = justCalled, kind = isInvoke(op) ? invokeKind(op) : -1;
     justCalled = false;
     if (done) return;
     if (op >= 0x0a && op <= 0x0c) { if (!afterCall) return; define(x.a, op === 0x0b, { t: steps.length - 1 }); } // move-result
@@ -80,14 +79,13 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
       if (op < IPUT) { define(x.a, op === IGET + 1, step({ pc: x.pc, get: f, obj })); continue; }
       if (!v || !fits(v, f.f.desc)) return;
       steps.push({ pc: x.pc, put: f, obj, v });
-    } else if (BOUND.has(kind)) {
-      const ref = m.dex.method(x.b), declared = m.dex.typeName(ref.cls);
+    } else if (kind === Invoke.Super || kind === Invoke.Direct || kind === Invoke.Static) {
+      const ref = m.dex.method(x.b), declared = types.typeName(ref.cls);
       if (called || declared[0] === "[") return;
-      const t = resolveInvoke(prog, kind, declared, ref.name, m.dex.methodDesc(x.b), m.cls);
+      const t = resolveInvoke(prog, kind, declared, ref.name, types.methodDesc(x.b), m.cls);
       if (failed(t) || t.cls === STRING || !t.isStatic && (m.isStatic || paramIn(x.regs[0]) !== 0)) return;
-      const args: Val[] = t.isStatic ? [] : [{ p: 0 }];
-      let ri = args.length;
-      for (const pt of t.params) { const v = val(x.regs[ri]); if (!v || !fits(v, pt)) return; args.push(v); ri += isWide(pt) ? 2 : 1; }
+      const args: Val[] = t.isStatic ? [] : [{ p: 0 }], regs = argRegisters(x, t.params, args.length);
+      for (let i = 0; i < regs.length; i++) { const v = val(regs[i]); if (!v || !fits(v, t.params[i])) return; args.push(v); }
       steps.push({ pc: x.pc, call: t, args });
       called = justCalled = true;
     } else if (op === RETURN_VOID) done = true;

@@ -10,7 +10,7 @@ import { descToName } from "../../jvm/abi.ts";
 import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
-import { WIDEN, BOX } from "../compiler/primitives.ts";
+import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt, type Synth } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
@@ -24,9 +24,10 @@ const ITE = "java/lang/reflect/InvocationTargetException";
 
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
-function members(jc: JClass | undefined): string[] {
-  const v = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/MemberClasses")?.elements.value;
-  return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [descToName(jc!.dex!.type(e.idx))] : []) : [];
+function members(w: World, jc: JClass | undefined): string[] {
+  if (!jc?.def) return [];
+  const types = w.prog.typesOf(jc.dex!), v = types.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/MemberClasses")?.elements.value;
+  return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [types.typeName(e.idx)] : []) : [];
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
@@ -55,8 +56,8 @@ export function hostReflect(w: World, kind: number, a: number, b: number): numbe
   }
   if (kind === RInfo.MethodNamedAt) return named[b];
   if (kind === RInfo.SerialInit) return jc?.byKey.has("<init>()V") ? w.synthSlot("sinit:" + jc.name) : 0;
-  if (kind === RInfo.MemberCount) return members(jc).length;
-  if (kind === RInfo.Member) return w.idOf(members(jc)[b]);
+  if (kind === RInfo.MemberCount) return members(w, jc).length;
+  if (kind === RInfo.Member) return w.idOf(members(w, jc)[b]);
   const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
   switch (kind) {
     case RInfo.MethodNameLen: return m.name.length;
@@ -151,9 +152,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
     c.callIndirect(sig);
   }
   if (m.ret === "V") c.anyNull();
-  else if (BOX[m.ret]) {
-    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); cx.callNamed(c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
-  }
+  else if (BOX[m.ret]) box(cx, c, m.ret);
 }
 
 const execField = (cx: Compiler, cls: string, name: string, d: string) => cx.fieldIndex(cls, { owner: EXEC, name, desc: d });

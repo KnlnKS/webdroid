@@ -4,7 +4,6 @@
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { ACC, javaName, type JClass, typeName } from "../compiler/program.ts";
-import { descToName } from "../../jvm/abi.ts";
 import { idOfClass, fieldId, PRIM } from "./classes.ts";
 
 import { rt } from "../compiler/rtfns.ts";
@@ -21,7 +20,7 @@ const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 
 const TextKind = { SimpleName: 0 } as const;
 
-const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);
+const annotationsOf = (w: World, jc: JClass | undefined) => jc?.def && w.prog.typesOf(jc.dex!).classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
 const visible = (set: EncAnnotation[] | undefined) => (set ?? []).filter((a) => a.visibility === RUNTIME);
 const present = (set: EncAnnotation[] | undefined, type: string) => visible(set).some((a) => a.type === type);
@@ -39,11 +38,11 @@ export function hostMembers(w: World, kind: number, a: number, b: number): numbe
       return listed.length;
     }
     case MInfo.ExecAt: return listed[b];
-    case MInfo.ClassAnn: return +present(annotationsOf(cls(a))?.cls, w.nameOf(b));
-    case MInfo.ExecAnn: { const m = methodAt(w, b); return +present(annotationsOf(w.prog.get(m.cls))?.methods.get(m.methodIdx), w.nameOf(a)); }
+    case MInfo.ClassAnn: return +present(annotationsOf(w, cls(a))?.cls, w.nameOf(b));
+    case MInfo.ExecAnn: { const m = methodAt(w, b); return +present(annotationsOf(w, w.prog.get(m.cls))?.methods.get(m.methodIdx), w.nameOf(a)); }
     case MInfo.FieldAnn: {
       const jc = cls(b >>> 12)!, ids = [...jc.def!.staticFields, ...jc.def!.instanceFields];
-      return +present(annotationsOf(jc)?.fields.get(ids[b & 0xfff].fieldIdx), w.nameOf(a));
+      return +present(annotationsOf(w, jc)?.fields.get(ids[b & 0xfff].fieldIdx), w.nameOf(a));
     }
     case MInfo.CompareParams: {
       // the parameter lists of two methods (cookies a and b) by length, then by the class ids of their types: 0 when they agree
@@ -54,27 +53,27 @@ export function hostMembers(w: World, kind: number, a: number, b: number): numbe
     }
     case MInfo.ThrowsCount: case MInfo.ThrowsAt: {
       // the classes in the method's dalvik.annotation.Throws (system visibility), by class id
-      const m = methodAt(w, a), jc = w.prog.get(m.cls)!, v = annotationsOf(jc)?.methods.get(m.methodIdx)?.find((x) => x.type === THROWS)?.elements.value;
-      const types = Array.isArray(v) ? v.map((e) => w.idOf(jc.dex!.typeName((e as { idx: number }).idx))) : [];
+      const m = methodAt(w, a), jc = w.prog.get(m.cls)!, v = annotationsOf(w, jc)?.methods.get(m.methodIdx)?.find((x) => x.type === THROWS)?.elements.value;
+      const types = Array.isArray(v) ? v.map((e) => w.idOf(w.prog.typesOf(jc.dex!).typeName((e as { idx: number }).idx))) : [];
       return kind === MInfo.ThrowsCount ? types.length : types[b];
     }
     case MInfo.EnclosingOwner: {
       // the class a member class is declared in, else the class of the method a local or anonymous class is declared in
-      const jc = cls(a)!, set = annotationsOf(jc)?.cls, v = (set?.find((x) => x.type === ENCLOSING_CLASS) ?? set?.find((x) => x.type === ENCLOSING_METHOD))?.elements.value as { idx: number } | undefined;
+      const jc = cls(a)!, set = annotationsOf(w, jc)?.cls, v = (set?.find((x) => x.type === ENCLOSING_CLASS) ?? set?.find((x) => x.type === ENCLOSING_METHOD))?.elements.value as { idx: number } | undefined;
       if (!v) return 0;
-      return w.idOf(jc.dex!.typeName(set!.some((x) => x.type === ENCLOSING_CLASS) ? v.idx : jc.dex!.method(v.idx).cls));
+      return w.idOf(w.prog.typesOf(jc.dex!).typeName(set!.some((x) => x.type === ENCLOSING_CLASS) ? v.idx : jc.dex!.method(v.idx).cls));
     }
-    case MInfo.IsAnonymous: return +!!annotationsOf(cls(a))?.cls.find((x) => x.type === INNER && x.elements.name === null);
+    case MInfo.IsAnonymous: return +!!annotationsOf(w, cls(a))?.cls.find((x) => x.type === INNER && x.elements.name === null);
     case MInfo.IsRecord: return +(cls(a)?.sup === "java/lang/Record");
     case MInfo.DeclaringClass: {
-      const jc = cls(a), v = annotationsOf(jc)?.cls.find((x) => x.type === ENCLOSING_CLASS)?.elements.value as { idx: number } | undefined;
-      return v ? w.idOf(descToName(jc!.dex!.type(v.idx))) : 0;
+      const jc = cls(a), v = annotationsOf(w, jc)?.cls.find((x) => x.type === ENCLOSING_CLASS)?.elements.value as { idx: number } | undefined;
+      return v ? w.idOf(w.prog.typesOf(jc!.dex!).typeName(v.idx)) : 0;
     }
     case MInfo.EnclosingClass: case MInfo.EnclosingIndex: {
       // the method a local or anonymous class is declared in (b: asking for a constructor); -1 when it has none of that kind
-      const jc = cls(a)!, v = annotationsOf(jc)?.cls.find((x) => x.type === ENCLOSING_METHOD)?.elements.value as { idx: number } | undefined;
+      const jc = cls(a)!, v = annotationsOf(w, jc)?.cls.find((x) => x.type === ENCLOSING_METHOD)?.elements.value as { idx: number } | undefined;
       if (!v) return -1;
-      const owner = w.prog.get(jc.dex!.typeName(jc.dex!.method(v.idx).cls)), index = owner?.methods.findIndex((m) => m.dex === jc.dex && m.methodIdx === v.idx) ?? -1;
+      const owner = w.prog.get(w.prog.typesOf(jc.dex!).typeName(jc.dex!.method(v.idx).cls)), index = owner?.methods.findIndex((m) => m.dex === jc.dex && m.methodIdx === v.idx) ?? -1;
       if (index < 0 || (owner!.methods[index].name === "<init>") !== !!b) return -1;
       return kind === MInfo.EnclosingClass ? w.idOf(owner!.name) : index;
     }
@@ -85,7 +84,7 @@ export function hostMembers(w: World, kind: number, a: number, b: number): numbe
 export function hostText(w: World, kind: number, a: number): string {
   const name = w.nameOf(a);
   if (name in PRIM) return PRIM[name][2];
-  const jc = w.prog.get(name), inner = annotationsOf(jc)?.cls.find((x) => x.type === INNER);
+  const jc = w.prog.get(name), inner = annotationsOf(w, jc)?.cls.find((x) => x.type === INNER);
   // a member class has its name in InnerClass; a local or anonymous class has none ("" for an anonymous one); a top-level class is named after its package
   return inner ? (inner.elements.name as string | null) ?? "" : javaName(name.slice(name.lastIndexOf("/") + 1));
 }

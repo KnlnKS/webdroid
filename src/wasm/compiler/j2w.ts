@@ -1,20 +1,22 @@
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { HEAP_LIMIT, parseMethodDesc } from "../../jvm/abi.ts";
+import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
 import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
-import type { PreparedMethod } from "../../jvm/prepared.ts";
-import type { Typing } from "./infer.ts";
+import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
+import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
-import { rtfns, type Synth } from "./rtfns.ts";
+import { rtfns } from "./rtfns.ts";
 import type { LinkFailure } from "./linkage.ts";
-import { Block, Sync, FUEL, emitBlock, emitSync } from "./hostcalls.ts";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
+import { FUEL } from "./hostcalls.ts";
+import { SLOT, INIT_DONE, THROWERS, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
 import { STRING, StructStrings } from "./strings.ts";
+import { helpers as HELPERS } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -36,7 +38,7 @@ export function declareBase(mb: ModuleBuilder): Base {
     tData[k] = mb.addType({ k: "array", elem: { t: dataElem[k], mut: true } });
     tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData[k]), mut: false }], sup: tObj, final: false });
   }
-  // a String when it is a struct (structstrings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
+  // a String when it is a struct (strings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
   const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
@@ -94,8 +96,6 @@ const HOST_IMPORT_INDEX = Object.fromEntries(HOST_IMPORT_NAMES.map((name, i) => 
 const RUNS_JAVA = new Set((["initSignatures", "initSignaturesWait", "mhInvoke", "proxy", "obj", "dexOpen", "dexOpenMemory", "classByName", "net", "sync", "block",
   "catchBlock", "catchBlockWait"] as const).map((name) => HOST_IMPORT_INDEX[name]));
 
-/** the module-local functions of Compiler.local that are the same in every module */
-const GENERIC_LOCALS = new Set(["count", "countLoop", "enter"]);
 /** how many methods a Compiler compiles inside one another's compile, at most, to bound a callee's frame (boundOf) */
 const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
@@ -106,6 +106,8 @@ export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrins
   | "needsSymbolicSite" | "guestShared" | "units">;
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
+/** a function of Compiler.buildSynthetics */
+export interface SyntheticFn { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void; slot?: number; exportAs?: string }
 /** how Compiler.buildUnit compiles its methods */
 export interface UnitOptions {
   /** compiled beside the methods for the unit's own calls and not exported; what they assume about the class hierarchy counts against the first method */
@@ -127,6 +129,12 @@ const NO_PLAN: CallPlan = new Map();
 function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
   const d = prog.get(decl);
   return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
+}
+/** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
+ *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
+export function staticallyBound(w: Pick<LinkEnv, "prog" | "aot">, kind: Invoke, decl: string, target: MethodInfo): boolean {
+  if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
+  return !!w.aot && finalDispatch(w.prog, decl, target) && !w.aot.hostDispatch(decl, target);
 }
 export class Compiler implements Base {
   w: LinkEnv;
@@ -169,7 +177,7 @@ export class Compiler implements Base {
   str: StructStrings;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
-  methodAnalyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
+  private analyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
   symbolicTable?: number;
   symbolicImports = new Map<string, { slot: number; site: SymbolicSite }>();
   private memory = false;
@@ -219,6 +227,19 @@ export class Compiler implements Base {
     const shared = this.w.guestShared;
     this.mb.importMemory("rt", "gmem", 1, shared ? 65535 : undefined, shared);
     this.memory = this.guestMemory = true;
+  }
+  /** a function of this module named "$" + `key`, defined on first use; a `shared` one is the same in every module. A call is much shorter than the sequence,
+   *  which keeps the callers small for the engine's inliner */
+  defineFn(key: string, params: readonly VT[], results: readonly VT[], body: (c: Code) => void, shared = false): number {
+    const type = () => this.mb.addFuncType(params, results);
+    return this.memo(key, () => {
+      const f = this.mb.reserveFunc(type(), "$" + key), c = new Code(params.length);
+      // a helper may call itself
+      this.helpers.set(key, f);
+      body(c);
+      this.mb.setBody(f, c.finish());
+      return f;
+    }, shared ? type : undefined);
   }
   /** a function of this module defined on first use under `key`; one that is the same in every module (of `type`) a sharing unit imports or exports */
   memo(key: string, make: () => number, type?: () => number): number {
@@ -360,12 +381,6 @@ export class Compiler implements Base {
     c.call(f);
     if (this.install) this.dependsOn(m);
   }
-  /** whether a virtual call of `target` through `decl` runs `target`'s slot whatever the receiver: it dispatches finally and reaches no host spec's native. Only a
-   *  build knows every spec (a split bundle registers some late), so a World without one binds none */
-  staticallyBound(decl: string, target: MethodInfo): boolean {
-    const a = this.w.aot;
-    return !!a && finalDispatch(this.prog, decl, target) && !a.hostDispatch(decl, target);
-  }
   /** whether a call of `m` may run its bytecode in place (inline.ts): the code is the method's, not an intrinsic's or the host's */
   inlines(m: MethodInfo): boolean { return !this.intrinsic(m) && this.mayHold(m); }
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
@@ -396,25 +411,25 @@ export class Compiler implements Base {
     };
     c.i32(slot);
     if (iterations === undefined) {
-      c.call(this.local("count", ["I"], "V", (b) => {
+      c.call(this.defineFn("count", [T.i32], [], (b) => {
         b.i32(0).mem(OP.i32_load, 2, WARM_AT).if_().unreachable().end();
         count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
-      }));
+      }, true));
       return;
     }
     // the budget is reached by this activation's iterations when the count crosses it
-    c.lget(iterations).call(this.local("countLoop", ["I", "I"], "V", (b) => count(b, (b) => b.lget(1), (b, n) => {
+    c.lget(iterations).call(this.defineFn("countLoop", [T.i32, T.i32], [], (b) => count(b, (b) => b.lget(1), (b, n) => {
       b.lget(n).lget(1).raw(OP.i32_sub).i32(HOT_BUDGET).raw(OP.i32_lt_u).lget(n).i32(HOT_BUDGET).raw(OP.i32_ge_u, OP.i32_and);
-    })));
+    }), true));
   }
   /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
   emitEnter(c: Code, entry: number): number[] {
     const weight = c.i32Patched();
-    c.call(this.local("enter", ["I"], "I", (b) => {
+    c.call(this.defineFn("enter", [T.i32], [T.i32], (b) => {
       const g = this.global("rt", "depth", T.i32, true), depth = b.newLocal(T.i32);
       b.gget(g).ltee(depth).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); this.callThrower(b, "soe"); b.end();
       b.lget(depth).lget(0).raw(OP.i32_add).gset(g).lget(depth);
-    })).lset(entry);
+    }, true)).lset(entry);
     return [weight];
   }
   /** sets the depth to what it was before the frame (`frame` false) or with the frame counted (the weight, patched in at the end of the method) */
@@ -470,14 +485,11 @@ export class Compiler implements Base {
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {
     // a function of this module that makes the indirect call keeps each failing arm a plain call, which the engine inlines and sizes more cheaply
-    const params = THROWERS[name].params, f = this.memo("throw:" + name, () => {
-      const fn = this.mb.reserveFunc(this.sig(params, "V"), "$throw_" + name), t = new Code(params.length);
+    const params = THROWERS[name].params;
+    c.call(this.defineFn("throw:" + name, params.map(kindVT), [], (t) => {
       params.forEach((_, i) => t.lget(i));
       t.i32(SLOT[name]).callIndirect(this.sig(params, "V")).unreachable();
-      this.mb.setBody(fn, t.finish());
-      return fn;
-    }, () => this.sig(params, "V"));
-    c.call(f).unreachable();
+    }, true)).unreachable();
   }
 
   // ---------- allocation
@@ -485,23 +497,13 @@ export class Compiler implements Base {
     const g = this.global("rt", "alloc", T.i32, true);
     c.gget(g); add(); c.raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
   }
-  /** a function of this module with the given body: a call is much shorter than the sequence, which keeps the callers small for the engine's inliner */
-  private local(key: string, params: Kind[], ret: Kind | "V", body: (c: Code) => void, result?: VT): number {
-    const type = () => result ? this.mb.addFuncType(params.map((k) => this.vtOf(k)), [result]) : this.sig(params, ret);
-    return this.memo(key, () => {
-      const f = this.mb.reserveFunc(type(), "$" + key), c = new Code(params.length);
-      body(c);
-      this.mb.setBody(f, c.finish());
-      return f;
-    }, GENERIC_LOCALS.has(key) ? type : undefined);
-  }
   /** push the Class of `name` */
   constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
   /** call the method of `cls` that `name` and `desc` resolve to */
   callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
-  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
   /** the element array of the array object on the stack */
   arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
+  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
   vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
   /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
   emitStoreCheck(c: Code, arr: number, value: () => void): void {
@@ -527,21 +529,21 @@ export class Compiler implements Base {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
     if (cls === STRING) { this.str.literal(c, ""); return; }
     this.w.allocated.add(cls); this.allocs.add(cls);
-    c.call(this.local("new:" + cls, [], "L", (n) => {
+    c.call(this.defineFn("new:" + cls, [], [ref(this.structFor(cls))], (n) => {
       const lay = this.prog.layout(cls);
       this.allocBytes(n, () => n.i32(12 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
       n.gget(this.vtGlobal(cls)).refAsNonNull().i64(0n);
       for (const f of lay) { if (f.kind === "I") n.i32(0); else if (f.kind === "J") n.i64(0n); else n.anyNull(); }
       n.structNew(this.structFor(cls));
-    }, ref(this.structFor(cls))));
+    }));
   }
   /** push a new array of class `desc` whose length `pushLen` pushes; negative or oversized lengths throw */
   emitNewArray(c: Code, desc: string, pushLen: () => void): void {
     const ek = elemKindOf(desc), shift = { i8: 0, i16: 1, i32: 2, i64: 3, ref: 2 }[ek];
     pushLen();
-    c.call(this.local("newarray:" + desc, ["I"], "L", (n) => {
+    c.call(this.defineFn("newarray:" + desc, [T.i32], [ref(this.tArr[ek])], (n) => {
       n.gget(this.vtGlobal(desc)).refAsNonNull().i64(0n).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
-    }, ref(this.tArr[ek])));
+    }));
   }
   /** replaces the anyref on the stack with whether it is an instance of class, interface or array `name` (null is not) */
   emitInstanceOf(c: Code, name: string): void {
@@ -571,173 +573,23 @@ export class Compiler implements Base {
 
   // ---------- module-local helpers, defined on first use
   helper(name: string): number {
-    const mb = this.mb, t = (p: VT[], r: VT[]) => mb.addFuncType(p, r);
-    return this.memo(name, () => {
-      const [sigIdx, body] = this.helperBody(name, t), f = mb.reserveFunc(sigIdx, "$" + name);
-      // a helper may call itself
-      this.helpers.set(name, f);
-      mb.setBody(f, body());
-      return f;
-    }, () => this.helperBody(name, t)[0]);
+    const f = this.helpers.get(name);
+    if (f !== undefined) return f;
+    const make = HELPERS.get(name);
+    if (!make) throw new Error("unknown helper " + name);
+    const { params, results, body } = make(this);
+    return this.defineFn(name, params, results, body, true);
   }
-  private helperBody(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] {
-    const { tVT, tObj } = this, vtR = refNull(tVT), L = T.anyref;
-    const div = (wide: boolean, rem: boolean): [number, () => number[]] => {
-      const W = wide ? T.i64 : T.i32;
-      return [t([W, W], [W]), () => {
-        const c = new Code(2);
-        c.lget(1).raw(wide ? OP.i64_eqz : OP.i32_eqz).if_(); this.callThrower(c, "arith"); c.end();
-        // x / -1 = -x and x % -1 = 0 without the INT_MIN trap
-        c.lget(1); wide ? c.i64(-1n) : c.i32(-1); c.raw(wide ? OP.i64_eq : OP.i32_eq).if_(W);
-        if (rem) wide ? c.i64(0n) : c.i32(0);
-        else { wide ? c.i64(0n) : c.i32(0); c.lget(0).raw(wide ? OP.i64_sub : OP.i32_sub); }
-        c.else_().lget(0).lget(1).raw(wide ? (rem ? OP.i64_rem_s : OP.i64_div_s) : (rem ? OP.i32_rem_s : OP.i32_div_s)).end();
-        return c.finish();
-      }];
-    };
-    const cmp = (W: number, lt: number, gt: number, eq: number, nanGreater: boolean): [number, () => number[]] => [t([W, W], [T.i32]), () => {
-      const c = new Code(2);
-      c.lget(0).lget(1).raw(eq).if_(T.i32).i32(0).else_();
-      if (nanGreater) c.lget(0).lget(1).raw(lt).if_(T.i32).i32(-1).else_().i32(1).end();
-      else c.lget(0).lget(1).raw(gt).if_(T.i32).i32(1).else_().i32(-1).end();
-      return c.end().finish();
-    }];
-    /** obj when it is null or passes `test` (of obj, class id and any depth), else ClassCastException */
-    const cast = (params: number[], test: (c: Code) => void): [number, () => number[]] => [t([L, T.i32, ...params], [L]), () => {
-      const c = new Code(2 + params.length);
-      c.lget(0).refIsNull().raw(OP.i32_eqz).if_();
-      test(c);
-      c.raw(OP.i32_eqz).if_().lget(0).call(this.helper("vtab")).i32(H.ID).arrayGet(tVT).lget(1); this.callThrower(c, "cce"); c.end();
-      c.end().lget(0);
-      return c.finish();
-    }];
-    switch (name) {
-      case "idiv": return div(false, false);
-      case "irem": return div(false, true);
-      case "ldiv": return div(true, false);
-      case "lrem": return div(true, true);
-      case "cmplf": return cmp(T.f32, OP.f32_lt, OP.f32_gt, OP.f32_eq, false);
-      case "cmpgf": return cmp(T.f32, OP.f32_lt, OP.f32_gt, OP.f32_eq, true);
-      case "cmpld": return cmp(T.f64, OP.f64_lt, OP.f64_gt, OP.f64_eq, false);
-      case "cmpgd": return cmp(T.f64, OP.f64_lt, OP.f64_gt, OP.f64_eq, true);
-      case "cast": return cast([T.i32], (c) => c.lget(0).lget(1).lget(2).call(this.helper("iof")));
-      case "castImpl": return cast([], (c) => c.lget(0).lget(1).call(this.helper("implements")));
-      case "castArr": return cast([], (c) => { c.lget(0).lget(1); this.callRt(c, "instArr"); });
-      // iof(obj, class id, depth): obj != null && vt[DEPTH] >= depth && vt[DISPLAY + depth] == id
-      case "iof": return [t([L, T.i32, T.i32], [T.i32]), () => {
-        const c = new Code(3), vt = c.newLocal(vtR);
-        c.lget(0).refIsNull().if_().i32(0).ret().end();
-        c.lget(0).call(this.helper("vtab")).lset(vt);
-        c.lget(vt).refAsNonNull().i32(H.DEPTH).arrayGet(tVT).lget(2).raw(OP.i32_lt_s).if_().i32(0).ret().end();
-        c.lget(vt).refAsNonNull().lget(2).i32(H.DISPLAY).raw(OP.i32_add).arrayGet(tVT).lget(1).raw(OP.i32_eq);
-        return c.finish();
-      }];
-      // implements(obj, interface id): scan the interface ids after the slow-pair region (see World.vtWords)
-      case "implements": return [t([L, T.i32], [T.i32]), () => {
-        const c = new Code(2), vt = c.newLocal(vtR), p = c.newLocal(T.i32), n = c.newLocal(T.i32), i = c.newLocal(T.i32);
-        c.lget(0).refIsNull().if_().i32(0).ret().end();
-        c.lget(0).call(this.helper("vtab")).lset(vt);
-        c.lget(vt).refAsNonNull().i32(H.EXTRA).arrayGet(tVT).lset(p);
-        c.lget(p).lget(vt).refAsNonNull().lget(p).arrayGet(tVT).i32(2).raw(OP.i32_mul).raw(OP.i32_add).i32(2).raw(OP.i32_add).lset(p);
-        c.lget(vt).refAsNonNull().lget(p).arrayGet(tVT).lset(n);
-        c.lget(p).i32(1).raw(OP.i32_add).lset(p);
-        c.block().loop();
-        c.lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
-        c.lget(vt).refAsNonNull().lget(p).lget(i).raw(OP.i32_add).arrayGet(tVT).lget(1).raw(OP.i32_eq).if_().i32(1).ret().end();
-        c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().i32(0);
-        return c.finish();
-      }];
-      // imtslow(vt, selector): the slot of the implementation; scans the learned pairs, else asks the host and learns the answer
-      case "imtslow": return [t([vtR, T.i32], [T.i32]), () => {
-        const c = new Code(2), p = c.newLocal(T.i32), n = c.newLocal(T.i32), i = c.newLocal(T.i32), slot = c.newLocal(T.i32);
-        c.lget(0).refAsNonNull().i32(H.EXTRA).arrayGet(tVT).lset(p);
-        c.lget(0).refAsNonNull().lget(p).i32(1).raw(OP.i32_add).arrayGet(tVT).lset(n);
-        c.block().loop();
-        c.lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
-        const at = (off: number) => c.lget(0).refAsNonNull().lget(p).lget(i).i32(2).raw(OP.i32_mul).raw(OP.i32_add).i32(off).raw(OP.i32_add);
-        at(2).arrayGet(tVT).lget(1).raw(OP.i32_eq).if_().lget(0).refAsNonNull().lget(p).lget(i).i32(2).raw(OP.i32_mul).raw(OP.i32_add).i32(3).raw(OP.i32_add).arrayGet(tVT).ret().end();
-        c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-        c.lget(0).refAsNonNull().i32(H.ID).arrayGet(tVT).lget(1).call(this.imp.imtMiss).lset(slot);
-        // learn it while there is room (cap = vt[p], n = vt[p + 1])
-        c.lget(n).lget(0).refAsNonNull().lget(p).arrayGet(tVT).raw(OP.i32_lt_s).if_();
-        const put = (off: number, v: () => void) => { c.lget(0).refAsNonNull().lget(p).lget(n).i32(2).raw(OP.i32_mul).raw(OP.i32_add).i32(off).raw(OP.i32_add); v(); c.arraySet(tVT); };
-        put(2, () => c.lget(1)); put(3, () => c.lget(slot));
-        c.lget(0).refAsNonNull().lget(p).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_add).arraySet(tVT).end();
-        return c.lget(slot).finish();
-      }];
-      // aput:<element kind>(array, index, value): the store of an array element out of line, for code that runs once (method.ts emitAput)
-      case "aput:i8": case "aput:i16": case "aput:i32": case "aput:i64": case "aput:ref": {
-        const k = name.slice(5) as ElemKind;
-        return [t([L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], []), () => {
-          const c = new Code(3), data = c.newLocal(ref(this.tData[k]));
-          c.lget(0).refCast(this.tArr[k]).structGet(this.tArr[k], 2).lset(data);
-          c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); this.callThrower(c, "aioobe"); c.end();
-          if (k === "ref") this.emitStoreCheck(c, 0, () => c.lget(2));
-          return c.lget(data).lget(1).lget(2).arraySet(this.tData[k]).finish();
-        }];
-      }
-      // the header word: the monitor (thin lock owner and count, or an inflated monitor's index) in its low half, the identity hash in its high half
-      case "hash": return [t([L], [T.i32]), () => {
-        const c = new Code(1), w = c.newLocal(T.i64), hv = c.newLocal(T.i32), g = this.global("rt", "hash", T.i32, true);
-        c.lget(0).refTest(tObj).raw(OP.i32_eqz).if_().lget(0).call(this.helper("shash")).ret().end();
-        c.lget(0).refCast(tObj).structGet(tObj, 1).ltee(w).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64).ltee(hv).raw(OP.i32_eqz).if_()
-          .gget(g).i32(0x3c6ef372 | 0).raw(OP.i32_add).ltee(hv).gset(g)
-          .lget(0).refCast(tObj).lget(w).lget(hv).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or).structSet(tObj, 1).end();
-        return c.lget(hv).finish();
-      }];
-      // menter(obj), mexit(obj): the thin lock in the header word's low half (monitor.ts): the owning strand's id << 8 | count. `lock ^ id << 8` is the count when the
-      // strand holds the lock, so one unsigned compare tells that from free, another strand's and inflated (negative); anything but those cases is the host's
-      case "menter": case "mexit": {
-        const enter = name === "menter";
-        return [t([L], []), () => {
-          const c = new Code(1), o = c.newLocal(ref(tObj)), w = c.newLocal(T.i64), l = c.newLocal(T.i32), s8 = c.newLocal(T.i32);
-          c.gget(this.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).lset(s8);
-          c.lget(0).refCast(tObj).ltee(o).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64).lset(l);
-          const store = (v: () => void) => { c.lget(o).lget(w); v(); c.raw(enter ? OP.i64_add : OP.i64_sub).structSet(tObj, 1); };
-          if (enter) {
-            c.lget(l).raw(OP.i32_eqz).if_();
-            store(() => c.lget(s8).i32(1).raw(OP.i32_or, OP.i64_extend_i32_u));
-            c.ret().end();
-            c.lget(l).lget(s8).raw(OP.i32_xor).i32(255).raw(OP.i32_lt_u).if_();
-            store(() => c.i64(1n));
-            c.ret().end();
-          } else {
-            c.lget(l).lget(s8).raw(OP.i32_xor).lset(s8);
-            c.lget(s8).i32(256).raw(OP.i32_lt_u).if_();
-            store(() => c.lget(l).raw(OP.i64_extend_i32_u).i64(1n).lget(s8).i32(1).raw(OP.i32_eq).select());
-            c.ret().end();
-          }
-          c.lget(0); this.callRt(c, enter ? "menterSlow" : "mexitSlow");
-          return c.finish();
-        }];
-      }
-      // newLen(len, shift): the length itself once it is a legal array length and the allocation fits the budget
-      case "newLen": return [t([T.i32, T.i32], [T.i32]), () => {
-        const c = new Code(2), bytes = c.newLocal(T.i64), g = this.global("rt", "alloc", T.i32, true);
-        c.lget(0).i32(0).raw(OP.i32_lt_s).if_().lget(0); this.callThrower(c, "nase"); c.end();
-        c.lget(0).raw(OP.i64_extend_i32_u).lget(1).raw(OP.i64_extend_i32_u, OP.i64_shl).lset(bytes);
-        c.lget(bytes).i64(BigInt(HEAP_LIMIT)).raw(OP.i64_gt_u).if_().lget(bytes); this.callThrower(c, "oom"); c.end();
-        c.gget(g).lget(bytes).raw(OP.i32_wrap_i64, OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
-        return c.lget(0).finish();
-      }];
-      // allocSlow(): the allocation window is used up; the host decides whether the heap really is full. Garbage that only a finalizer frees (a native handle
-      // its owner holds) counts until the event loop has run the finalizers, so a full heap gets two turns of the loop, each with a collection, before it is an error
-      case "allocSlow": return [t([], []), () => {
-        const c = new Code(0), g = this.global("rt", "alloc", T.i32, true);
-        c.i32(-ALLOC_WINDOW).gset(g);
-        for (let turn = 0; turn < 2; turn++) {
-          c.call(this.imp.heapCheck).if_();
-          emitSync(this, c, Sync.CanSuspend); c.if_();
-          emitBlock(this, c, Block.Yield, null, null, () => c.i32(1)); c.drop().end();
-        }
-        c.call(this.imp.heapCheck).if_().i64(BigInt(ALLOC_WINDOW)); this.callThrower(c, "oom"); c.end();
-        c.end().end();
-        return c.finish();
-      }];
-    }
-    const s = this.str.helper(name, t);
-    if (s) return s;
-    throw new Error("unknown helper " + name);
+
+  /** `m`'s decoded code and typing, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
+  analysis(m: MethodInfo, last = false): { prepared: PreparedMethod; typing: Typing } {
+    let a = this.analyses.get(m);
+    if (a) { if (last) this.analyses.delete(m); return a; }
+    const phase = this.w.stats.phase, item = m.dex.code(m.codeOff), t0 = performance.now(), prepared = prepareMethod(item), t1 = performance.now();
+    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared) };
+    phase.prepare += t1 - t0; phase.infer += performance.now() - t1;
+    if (!last) this.analyses.set(m, a);
+    return a;
   }
 
   // ---------- units
@@ -760,12 +612,7 @@ export class Compiler implements Base {
       if (i >= methods.length) return;
       if (install) at.push([w.slotOf(m), f]); else mb.export("m" + w.slotOf(m), "func", f);
     });
-    // consecutive slots are one segment
-    at.sort((a, b) => a[0] - b[0]);
-    for (let i = 0, j = 0; i < at.length; i = j) {
-      while (++j < at.length && at[j][0] === at[j - 1][0] + 1);
-      mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
-    }
+    this.installSlots(at);
     const inits = ensures.map((cls) => {
       const name = "$ensure:" + cls, f = mb.reserveFunc(this.sig([], "V"), name), code = new Code(0);
       w.classModules.ensureBody(this, cls, code);
@@ -774,37 +621,33 @@ export class Compiler implements Base {
     });
     return this.finishModule([...all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })), ...inits]);
   }
-  buildSyntheticGroup(bodies: { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void }[]) {
-    const parts = bodies.map(body => ({ ...body, f: this.mb.reserveFunc(this.sig(body.params, body.ret), "$" + body.name), code: new Code(body.params.length) }));
-    for (const part of parts) { part.body(part.code); this.mb.setBody(part.f, part.code.finish()); this.mb.export(part.name, "func", part.f); }
-    return this.finishModule(parts.map(part => ({ name: "$" + part.name, f: part.f, code: part.code })));
+  /** functions installed in their table slots when the module is instantiated, consecutive slots as one segment */
+  private installSlots(at: [slot: number, f: number][]): void {
+    at.sort((a, b) => a[0] - b[0]);
+    for (let i = 0, j = 0; i < at.length; i = j) {
+      while (++j < at.length && at[j][0] === at[j - 1][0] + 1);
+      this.mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
+    }
   }
-  /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
-  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {
-    const f = this.mb.reserveFunc(this.sig(params, ret), "$" + name), c = new Code(params.length);
-    body(c);
-    this.mb.setBody(f, c.finish());
-    this.mb.export("m", "func", f);
-    return this.finishModule([{ name: "$" + name, f, code: c }]);
-  }
-  /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy
-   *  decision or on a class being absent is left out: nothing here could undo it. */
-  buildSynthetics(fns: { name: string; slot: number; d: Synth }[]): { bytes: Uint8Array; traces: FnTrace[]; kept: string[] } {
-    const mb = this.mb, parts: { name: string; slot: number; f: number; code: Code }[] = [];
-    for (const { name, slot, d } of fns) {
-      const f = mb.reserveFunc(this.sig(d.params, d.ret), "$" + name), code = new Code(d.params.length), assumed = this.assumptions.length, absent = this.absent.length;
-      d.body(this, code);
+  /** a module of generated functions (throwers, runtime functions, symbolic sites, host helpers). One with a `slot` is put in it when the module is instantiated
+   *  (a build's, link/apps.ts), and left out if its code relies on a class-hierarchy decision or on a class being absent, which nothing could undo; the
+   *  others are exported, under `exportAs` or their name */
+  buildSynthetics(fns: SyntheticFn[]): { bytes: Uint8Array; traces: FnTrace[]; kept: string[] } {
+    const mb = this.mb, parts: { name: string; f: number; code: Code }[] = [], at: [number, number][] = [];
+    for (const { name, params, ret, body, slot, exportAs } of fns) {
+      const f = mb.reserveFunc(this.sig(params, ret), "$" + name), code = new Code(params.length), assumed = this.assumptions.length, absent = this.absent.length;
+      body(code);
       mb.setBody(f, code.finish());
-      if (this.assumptions.length !== assumed || this.absent.length !== absent) { this.assumptions.length = assumed; this.absent.length = absent; continue; }
-      parts.push({ name, slot, f, code });
+      if (slot === undefined) mb.export(exportAs ?? name, "func", f);
+      else if (this.assumptions.length !== assumed || this.absent.length !== absent) { this.assumptions.length = assumed; this.absent.length = absent; continue; }
+      else at.push([slot, f]);
+      parts.push({ name, f, code });
     }
-    parts.sort((a, b) => a.slot - b.slot);
-    for (let i = 0, j = 0; i < parts.length; i = j) {
-      while (++j < parts.length && parts[j].slot === parts[j - 1].slot + 1);
-      mb.addElemActive(0, parts[i].slot, parts.slice(i, j).map((p) => p.f));
-    }
+    this.installSlots(at);
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
+  /** a module of one generated function, exported as "m"; `ret` is its result kind */
+  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V") { return this.buildSynthetics([{ name, params, ret, body, exportAs: "m" }]); }
   /** the functions of outlined loops (outline.ts), with the function of the method each is part of */
   outlines: { name: string; f: number; code: Code; m: MethodInfo; owner: string }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {

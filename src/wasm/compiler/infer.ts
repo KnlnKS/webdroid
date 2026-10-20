@@ -8,9 +8,8 @@
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
-import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
-import { buildCfg } from "./cfg.ts";
-import { isInvoke, isInstanceInvoke } from "./opinfo.ts";
+import { argRegisters, type PreparedInstruction, type PreparedMethod } from "../../jvm/prepared.ts";
+import { isInvoke, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { OP } from "./code.ts";
 import { T, type VT } from "./wasmbin.ts";
 import type { Kind } from "./program.ts";
@@ -55,9 +54,8 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   const R_ = code.regs, ins = prepared.instructions;
   if (!ins.length) return "empty";
   for (const x of ins) if (x.op >= 0xe3 && x.op <= 0xf2) return "quickened";
-  const cfg = buildCfg(code, prepared), handlerOfIdx = cfg.handlers;
-  const n = ins.length;
-  if (cfg.n * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
+  const { first, last, succ, hsucc, handlers: handlerOfIdx } = prepared, B = first.length, n = ins.length;
+  if (B * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
 
   // ---- per-instruction effects
   const sig = parseMethodDesc(desc);
@@ -66,11 +64,11 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
   for (let i = 0; i < n; i++) effs[i] = effect(dex, ins[i], i ? ins[i - 1] : null, retMask);
 
   // ---- liveness (block live-in bitsets of W words), handler edges treated as successors
-  const B = cfg.n, W = (R_ + 31) >> 5;
+  const W = (R_ + 31) >> 5;
   const liveIn = new Int32Array(B * W);
   const preds: number[][] = new Array(B), work: number[] = new Array(B), inWork = new Uint8Array(B).fill(1);
   for (let b = 0; b < B; b++) { preds[b] = []; work[b] = B - 1 - b; }
-  for (let b = 0; b < B; b++) { for (const s of cfg.succ[b]) preds[s].push(b); for (const s of cfg.hsucc[b]) preds[s].push(b); }
+  for (let b = 0; b < B; b++) { for (const s of succ[b]) preds[s].push(b); for (const s of hsucc[b]) preds[s].push(b); }
   const tmp = new Int32Array(W);
   const orLive = (b: number) => { for (let w = 0, o = b * W; w < W; w++) tmp[w] |= liveIn[o + w]; };
   const set = (r: number, on: boolean) => { if (on) tmp[r >> 5] |= 1 << r; else tmp[r >> 5] &= ~(1 << r); };
@@ -82,11 +80,11 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
     const hs = handlerOfIdx[i];
     if (hs) for (const h of hs) orLive(h);
   };
-  const liveOut = (b: number) => { tmp.fill(0); for (const s of cfg.succ[b]) orLive(s); };
+  const liveOut = (b: number) => { tmp.fill(0); for (const s of succ[b]) orLive(s); };
   while (work.length) {
     const b = work.pop()!; inWork[b] = 0;
     liveOut(b);
-    for (let i = cfg.lastIdx[b]; i >= cfg.firstIdx[b]; i--) stepLive(i);
+    for (let i = last[b]; i >= first[b]; i--) stepLive(i);
     let changed = 0;
     for (let w = 0, o = b * W; w < W; w++) { changed |= tmp[w] & ~liveIn[o + w]; liveIn[o + w] |= tmp[w]; }
     if (changed) for (const p of preds[b]) if (!inWork[p]) { inWork[p] = 1; work.push(p); }
@@ -157,7 +155,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
     const b = queue.pop()!; queued[b] = 0;
     st.set(inState[b]!);
     if (++guard > B * 50 + 1000) return "no-fixpoint";
-    for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
+    for (let i = first[b]; i <= last[b]; i++) {
       const e = effs[i], hs = handlerOfIdx[i];
       reached[i] = 1;
       if (hs) for (const h of hs) joinInto(h, st);
@@ -176,7 +174,7 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
         if (e.dm & WIDE && e.d + 1 < R_) st[e.d + 1] = node;
       }
     }
-    for (const s of cfg.succ[b]) joinInto(s, st);
+    for (const s of succ[b]) joinInto(s, st);
   }
   const ranges = (visit: (node: number, instruction: number) => void) => {
     const touch = (node: number, i: number) => { if (node >= 0) visit(find(node), i); };
@@ -184,8 +182,8 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
     for (let b = 0; b < B; b++) {
       if (!inState[b]) continue;
       st.set(inState[b]!);
-      for (const r of liveList[b]) touch(st[r], cfg.firstIdx[b]);
-      for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
+      for (const r of liveList[b]) touch(st[r], first[b]);
+      for (let i = first[b]; i <= last[b]; i++) {
         if (!reached[i]) continue;
         // EH observes the pre-state even when the normal result overwrites a register.
         const hs = handlerOfIdx[i];
@@ -197,10 +195,10 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
           if (e.dm & WIDE && e.d + 1 < R_) st[e.d + 1] = defNode[i];
         }
       }
-      for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
+      for (const successor of succ[b]) for (const r of liveList[successor]) touch(st[r], last[b]);
     }
   };
-  return { pcToIdx: cfg.pcToIdx, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
+  return { pcToIdx: prepared.indexAt, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -341,9 +339,9 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
       else if (op === 0xfc || op === 0xfd) params = dex.protoParamTypes(dex.callSiteProto(b));
       else params = dex.protoParamTypes(dex.method(b).proto);
     } catch { return E(x.regs.flatMap((r) => [r, N32])); }
-    let k = 0;
-    if (isInstanceInvoke(op)) u.push(x.regs[k++], R);
-    for (const t of params) { const m = valueKind(t); if (x.regs[k] === undefined) break; u.push(x.regs[k], m); k += m & WIDE ? 2 : 1; }
+    const first = isInstanceInvoke(op) ? 1 : 0, regs = argRegisters(x, params, first);
+    if (first) u.push(x.regs[0], R);
+    for (let i = 0; i < regs.length && regs[i] !== undefined; i++) u.push(regs[i], valueKind(params[i]));
     return E(u);
   }
   if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }

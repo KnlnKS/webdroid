@@ -3,9 +3,9 @@
 // initialization never goes back and a null check stays true until its web is redefined, so a fact survives until its web is written.
 // A reference that field accesses cast to a struct type more than once keeps the cast in a local of that type (the "shadow"), so a later
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
-import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { R as KR } from "./infer.ts";
-import { isFieldAccess, isInstanceInvoke } from "./opinfo.ts";
+import { isFieldAccess, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { failed } from "./linkage.ts";
 import { STRING } from "./strings.ts";
 import type { MC } from "./method.ts";
@@ -61,7 +61,7 @@ export class MethodFacts {
   /** applies the effect of `ins` to `f`, once it has been emitted */
   step(ins: Ins, f: Facts): void {
     const mc = this.mc, reg = checkedReg(ins);
-    if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && this.isStringInit(ins))) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
+    if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && mc.binding(ins)?.k === "string")) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
     const d = mc.typing.def(ins.pc);
     for (const c of this.initedBy(ins)) f.inited.add(c);
     const shadow = this.shadowKey(ins);
@@ -74,12 +74,12 @@ export class MethodFacts {
   }
 
   private analyze(): Facts[] {
-    const mc = this.mc, flow = mc.flow, n = flow.starts.length, entry: (Facts | undefined)[] = new Array(n);
+    const mc = this.mc, { instructions, blockAt, first, last, succ } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
     const start = newFacts();
     if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
     entry[0] = start;
     const handlers = new Set<number>();
-    for (const pc of mc.prepared.handlerPcs) handlers.add(flow.blockAt[pc]);
+    for (const pc of mc.prepared.handlerPcs) handlers.add(blockAt[pc]);
     for (const h of handlers) entry[h] = newFacts();
     // blocks whose entry facts changed since they were last stepped
     const dirty = new Uint8Array(n).fill(1);
@@ -93,23 +93,19 @@ export class MethodFacts {
     while (changed) {
       changed = false;
       for (let b = 0; b < n; b++) {
-        const inf = entry[b], inss = mc.blockIns[b];
-        if (!dirty[b] || !inf || !inss) continue;
+        const inf = entry[b];
+        if (!dirty[b] || !inf) continue;
         dirty[b] = 0;
         const out = cloneFacts(inf);
-        for (const ins of inss) this.step(ins, out);
-        const last = inss[inss.length - 1], fall = last.pc + last.len;
-        const targets = branchTargets(mc.item, last);
-        // a null test (if-eqz, if-nez) refines the facts along its two edges
-        const test = last.op === 0x38 || last.op === 0x39 ? mc.typing.use(last.pc, last.a) : -1;
-        const nonNullEdge = (taken: boolean) => (last.op === 0x39) === taken;
-        const edge = (t: number, taken: boolean) => {
-          let o = out;
-          if (test >= 0 && mc.typing.kind[test] === KR && nonNullEdge(taken) && !out.nonNull.has(test)) { o = cloneFacts(out); o.nonNull.add(test); }
-          push(flow.blockAt[t], o);
-        };
-        for (const t of targets) edge(t, true);
-        if (!endsBlock(last.op) && flow.blockAt[fall] >= 0) edge(fall, false);
+        for (let i = first[b]; i <= last[b]; i++) this.step(instructions[i], out);
+        // a null test (if-eqz, if-nez) refines the facts along its two edges, unless both reach one block
+        const test = instructions[last[b]], op = test.op, w = op === 0x38 || op === 0x39 ? mc.typing.use(test.pc, test.a) : -1;
+        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = blockAt[test.pc + test.len];
+        if (taken < 0 || taken === fall) { for (const s of succ[b]) push(s, out); continue; }
+        const refined = cloneFacts(out);
+        refined.nonNull.add(w);
+        push(taken, op === 0x39 ? refined : out);
+        if (fall >= 0) push(fall, op === 0x39 ? out : refined);
       }
     }
     return entry.map((e) => e ?? newFacts());
@@ -125,19 +121,15 @@ export class MethodFacts {
   private ensureTarget(ins: Ins): string | undefined {
     const mc = this.mc;
     if (mc.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) { const name = mc.dex.typeName(ins.b); return name === STRING ? undefined : name; }
+    if (ins.op === 0x22) { const name = mc.types.typeName(ins.b); return name === STRING ? undefined : name; }
     if (ins.op <= 0x6d) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
   }
-  private isStringInit(ins: Ins): boolean {
-    const { decl, name } = this.mc.invoke(ins);
-    return name === "<init>" && decl === STRING;
-  }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {
     const op = ins.op;
-    if (op === 0x22) return this.mc.dex.typeName(ins.b) !== STRING; // new-instance
+    if (op === 0x22) return this.mc.types.typeName(ins.b) !== STRING; // new-instance
     // const-string, const-string/jumbo, const-class, new-array, move-exception
     if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
     // move-object, move-object/from16, move-object/16, check-cast

@@ -5,7 +5,7 @@ import { dirname, relative, resolve } from "node:path";
 // compiler <- link <- host: the compiler sees the linker only through types (j2w.ts LinkEnv); the compiler and the linker run in a page, a worker
 // and node, so only host/ may reach the runtime, the natives and the services; and only src/jvm/tier.ts, by a dynamic import, may reach src/wasm,
 // so a page loads the tier while the rest of its code starts.
-const SHARED_FRONT_END = new Set(["abi.ts", "dex.ts", "opcodes.ts", "prepared.ts", "structure.ts"]);
+const SHARED_FRONT_END = new Set(["abi.ts", "dex.ts", "opcodes.ts", "prepared.ts"]);
 
 test("src/wasm keeps its layers", () => {
   const root = resolve(import.meta.dirname, "..", "src");

@@ -3,7 +3,7 @@ import { T } from "./wasmbin.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import type { Kind, MethodInfo } from "./program.ts";
 import type { Compiler, FnTrace } from "./j2w.ts";
-import { oomMessage } from "../../jvm/abi.ts";
+import { dotName as dotted, oomMessage } from "../../jvm/abi.ts";
 import { prettyType } from "./linkage.ts";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
@@ -72,7 +72,6 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
   iarity: { cls: L + "IllegalArgumentException", params: ["I", "I"] },           // Method.invoke: parameters expected, arguments given
 };
 
-const dotted = (n: string) => n.replace(/\//g, ".");
 /** a class name as java.lang.Class.getTypeName prints it */
 const pretty = (n: string): string => prettyType(n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n};`);
 /** The message ART gives the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */

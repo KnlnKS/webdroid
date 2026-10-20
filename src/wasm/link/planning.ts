@@ -1,12 +1,12 @@
 // What a unit is made of: the methods a first call compiles beside the one asked for (`batch`), and the callees and guarded implementations a hot
 // method's second-tier unit takes in (`group`), chosen by how often the first tier saw them run.
 import { ACC, type MethodInfo } from "../compiler/program.ts";
-import type { CallPlan } from "../compiler/j2w.ts";
+import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
-import { symbolicOverride } from "../compiler/linkage.ts";
+import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
 import { HOT_BUDGET } from "../compiler/exc.ts";
-import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared.ts";
-import { insnLen } from "../../jvm/opcodes.ts";
+import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { World } from "./world.ts";
 
@@ -33,8 +33,8 @@ export class Planner {
       for (const ins of this.entryCalls(c)) {
         if (out.length >= BATCH) break;
         if (this.w.needsSymbolicSite(c, ins)) continue;
-        const mr = c.dex.method(ins.b), t = this.w.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
-        if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
+        const t = invokeSite(this.w.prog, c, ins.b, invokeKind(ins.op)).target;
+        if (t === "clone" || failed(t) || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
         if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.install(at) && ts.done) continue;
         out.push(t);
@@ -47,7 +47,7 @@ export class Planner {
     let r = this.leaves.get(m);
     if (r === undefined) {
       const code = m.codeOff ? m.dex.code(m.codeOff) : undefined;
-      this.leaves.set(m, r = !!code && this.inlinable(m) && !decodeInstructions(code.insns).some((ins) => branchTargets(code, ins).some((t) => t <= ins.pc)));
+      this.leaves.set(m, r = !!code && this.inlinable(m) && !cyclic(prepareMethod(code)));
     }
     return r;
   }
@@ -90,12 +90,12 @@ export class Planner {
   planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [], types = this.w.prog.typesOf(m.dex);
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
-        const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
+        const name = ins.op !== 0xfa && ins.op !== 0xfb && instructionClass(m, ins);
         if (name) references.add(name);
-        if (ins.op === 0x22) allocations.add(m.dex.typeName(ins.b));
-        if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
+        if (ins.op === 0x22) allocations.add(types.typeName(ins.b));
+        if (!isInvoke(ins.op) || ins.op >= 0xfa) continue;
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
@@ -116,16 +116,17 @@ export class Planner {
     }
     return entry;
   }
-  /** `m`'s calls: the method each one reaches when that is known (a static or direct call, or a virtual call with one implementation) and a virtual call's implementations */
+  /** `m`'s calls as the compiler binds them (MC.binding): the method each one reaches when that is known (a call bound statically, or a virtual call with one
+   *  implementation) and a virtual call's implementations. A call that does not link, or copies an array, calls no method. */
   *calls(m: MethodInfo): Generator<{ t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
-    const dex = m.dex;
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (this.w.needsSymbolicSite(m, ins)) continue;
-      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = ins.name.replace("/range", "");
-      if (decl[0] === "[" || kind === "invoke-super") continue;
-      const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.w.cha.targets(decl, mr.name, desc);
-      yield { t: targets ? targets.length === 1 ? targets[0] : undefined : this.w.prog.resolve(decl, mr.name, desc), targets, decl, name: mr.name, desc };
+      const kind = invokeKind(ins.op), { decl, name, desc, target } = invokeSite(this.w.prog, m, ins.b, kind);
+      if (target === "clone" || failed(target)) continue;
+      if (staticallyBound(this.w, kind, decl, target)) { yield { t: target, decl, name, desc }; continue; }
+      const targets = this.w.cha.targets(decl, name, desc);
+      yield { t: targets.length === 1 ? targets[0] : undefined, targets, decl, name, desc };
     }
   }
   /** Direct callees followed by guarded implementations, preserving their planning order; `plan` gets the small implementations, among the allocated classes', each virtual call tests for first. */

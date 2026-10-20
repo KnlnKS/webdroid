@@ -1,20 +1,22 @@
 import { failed, symbolicOverride } from "./linkage.ts";
 import type { DexFile } from "../../jvm/dex.ts";
-import { ACC, classDefIdx, declaredMethod, mkey, supertypes, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { ACC, mkey, type JClass, type MethodInfo, type Program } from "./program.ts";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
-class Index {
+export class Index {
+  private prog: Program;
   readonly subs = new Map<string, string[]>();                 // direct subtypes (subclasses and implementors)
   private classes: JClass[] = [];
   /** the classes by dex and type id; classes no dex defines (stubs, host and proxy classes) under null */
   private byType?: Map<DexFile | null, Map<number, JClass>>;
   /** each list with the number of classes it was scanned over: an app's classes keep arriving */
   private implementors = new Map<string, { names: string[]; of: number }>();
+  constructor(prog: Program) { this.prog = prog; }
   add(c: JClass): void {
     this.classes.push(c);
     if (this.byType) this.note(c);
-    for (const s of supertypes(c)) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
+    for (const s of c.supertypes()) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
   }
   declaring(key: string): Iterable<string> {
     let found = this.implementors.get(key);
@@ -22,7 +24,7 @@ class Index {
     return found.names;
   }
   private note(c: JClass): void {
-    const i = classDefIdx(c), dex = i < 0 ? null : c.dex!;
+    const i = c.defIdx, dex = i < 0 ? null : c.dex!;
     let m = this.byType!.get(dex);
     if (!m) this.byType!.set(dex, m = new Map());
     m.set(dex ? dex.classDef2Type(i) : m.size, c);
@@ -33,15 +35,15 @@ class Index {
     const name = key.slice(0, key.indexOf("("));
     for (const [dex, classes] of this.byType) {
       if (!dex) {
-        for (const c of classes.values()) { const m = declaredMethod(c, key); if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name; }
+        for (const c of classes.values()) { const m = c.method(key); if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name; }
         continue;
       }
-      const n = dex.findString(name);
+      const n = dex.findString(name), types = this.prog.typesOf(dex);
       if (n < 0) continue;
       for (const i of dex.methodsNamed(n)) {
         const c = classes.get(dex.method(i).cls);
-        if (!c || dex.methodKey(i) !== key) continue;
-        const m = dex.declaredAt(classDefIdx(c), i);
+        if (!c || types.methodKey(i) !== key) continue;
+        const m = dex.declaredAt(c.defIdx, i);
         if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
       }
     }
@@ -69,7 +71,7 @@ export class Cha {
   }
   /** indexes the process's classes again, after their supertypes resolved differently */
   reindex(): void {
-    this.own = new Index(); this.memo.clear();
+    this.own = new Index(this.prog); this.memo.clear();
     for (const c of this.prog.own()) if (this.joined(c)) this.own.add(c);
   }
   defer(dexes: DexFile[]): void { for (const d of dexes) this.deferred.add(d); }
@@ -87,7 +89,7 @@ export class Cha {
       if (!c || seen.has(n)) return;
       seen.add(n);
       if (!this.joined(c)) found.push(n);
-      for (const s of supertypes(c)) up(s);
+      for (const s of c.supertypes()) up(s);
     };
     up(name);
     if (!found.length) return undefined;
@@ -104,7 +106,7 @@ export class Cha {
       if (stale.has(n)) return;
       stale.add(n);
       const c = this.prog.get(n);
-      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) up(p);
+      if (c) for (const p of c.supertypes()) up(p);
     };
     const down = (n: string): void => { if (below.has(n)) return; below.add(n); up(n); for (const sub of this.subsOf(n)) down(sub); };
     for (const n of names) this.own.add(this.prog.get(n)!);
@@ -151,7 +153,7 @@ export class Cha {
       found.clear();
       if (packageMethod) return [];
       for (const cls of this.declaring(key)) {
-        const m = declaredMethod(this.prog.get(cls), key)!;
+        const m = this.prog.get(cls)?.method(key)!;
         const reaches = this.reaches(decl, m);
         if (reaches === "conflict") { memo.set(key, out = []); return out; }
         if (reaches && found.add(m).size >= 2) break;
@@ -183,7 +185,7 @@ export class Cha {
         }
       }
       // a class that implements the method itself decides it for every subclass: none of them runs m
-      const own = c && !c.isInterface ? declaredMethod(c, key) : undefined;
+      const own = c && !c.isInterface ? c.method(key) : undefined;
       if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
       stack.push(this.subsOf(n));
     }
@@ -193,7 +195,6 @@ export class Cha {
 const WALK = 64;
 
 const sharedIndex = (p: Program): Index => {
-  let x = p.shared.get("cha") as Index | undefined;
-  if (!x) { p.shared.set("cha", x = new Index()); for (const c of p.own()) x.add(c); }
-  return x;
+  if (!p.cha) { p.cha = new Index(p); for (const c of p.own()) p.cha.add(c); }
+  return p.cha;
 };

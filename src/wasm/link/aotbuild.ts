@@ -3,7 +3,7 @@
 import { Compiler, NeedsNumber, type FnTrace } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
 import { uleb } from "../compiler/wasmbin.ts";
-import { methodCount, type JClass, type MethodInfo } from "../compiler/program.ts";
+import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";
 import { VERSION, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
 import type { Touched, World } from "./world.ts";
@@ -11,7 +11,7 @@ import type { Touched, World } from "./world.ts";
 // the estimated bytes of a method with code in a code module (by its dex code units) and of a class in a data module, measured over the platform build
 const C_BYTES_PER_METHOD = 150, C_BYTES_PER_UNIT = 14, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;
 export const codeBytes = (m: MethodInfo): number => (m.codeOff ? C_BYTES_PER_METHOD + C_BYTES_PER_UNIT * m.dex.code(m.codeOff).insns.length : 0);
-export const dataBytes = (jc: JClass | undefined): number => D_BYTES_PER_CLASS + (jc ? methodCount(jc) * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD : 0);
+export const dataBytes = (jc: JClass | undefined): number => D_BYTES_PER_CLASS + (jc ? jc.methodCount * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD : 0);
 
 /** the time V8 took to judge modules */
 export const validation = { ms: 0 };
@@ -98,7 +98,7 @@ export function synthModules(w: World, emit: (module: number, bytes: Uint8Array)
     const end = Math.min(at + SYNTH_GROUP, all.length);
     let group = all.slice(at, end);
     for (;;) {
-      const cx = new Compiler(w), [built, touched] = w.touched(() => cx.buildSynthetics(group)), bad = invalidFunction(built.bytes, cx);
+      const cx = new Compiler(w), [built, touched] = w.touched(() => cx.buildSynthetics(group.map(({ name, slot, d }) => ({ name, slot, params: d.params, ret: d.ret, body: (c) => d.body(cx, c) })))), bad = invalidFunction(built.bytes, cx);
       if (!bad) {
         if (built.kept.length) {
           const header: SHeader = { ...unitHeader(w, cx, touched), names: built.kept };

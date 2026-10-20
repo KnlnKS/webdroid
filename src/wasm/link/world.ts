@@ -6,7 +6,7 @@
 //    calls the runtime's linker (runtime.ts), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 import { symbolicInstruction } from "../compiler/sites.ts";
-import { type Program, declaredMethod, methodCount, methodKinds, type Loader, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { type Program, methodKinds, type Loader, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
@@ -196,7 +196,7 @@ export class World {
     for (const c of this.prog.all()) {
       if (!c.dex || !accept(c.dex)) continue;
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
-      this.slots.addBlock(c.name, methodCount(c) + 1); n++;
+      this.slots.addBlock(c.name, c.methodCount + 1); n++;
     }
     return n;
   }
@@ -228,7 +228,7 @@ export class World {
   private madeUp = new Map<string, Intrinsic>();
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
-    if (declaredMethod(c, "<clinit>()V") || c.def?.staticValuesOff || hasSignatureConstraints(this, n)) return true;
+    if (c.method("<clinit>()V") || c.def?.staticValuesOff || hasSignatureConstraints(this, n)) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
   /** the init word of the class with id `id` (0 before its module is built) */

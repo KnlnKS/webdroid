@@ -6,7 +6,7 @@
 // UndeclaredThrowableException.
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
-import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program.ts";
+import { ACC, PlainClass, type MethodInfo, type Loader } from "../compiler/program.ts";
 import { BOX } from "../compiler/primitives.ts";
 import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
@@ -53,14 +53,13 @@ export interface ProxyDefinition {
 }
 
 export function defineProxy(w: World, definition: ProxyDefinition, loader: Loader = definition.loader === "boot" ? w.prog.boot : w.prog.loaderAt(definition.loader)): void {
-  const jc: JClass = { name: definition.name, dex: null, def: null, sup: PROXY, flags: ACC.PUBLIC | ACC.FINAL | PROXY_FLAG,
-    isInterface: false, fields: [], methods: [], byKey: new Map(), ifaces: definition.ifaces };
+  const jc = new PlainClass(definition.name, PROXY, definition.ifaces, ACC.PUBLIC | ACC.FINAL | PROXY_FLAG);
   const bodies = new Map<MethodInfo, Intrinsic>();
   const add = (name: string, desc: string, flags: number, body: Intrinsic) => {
     const { params, ret } = parseMethodDesc(desc);
     const m: MethodInfo = { cls: jc.name, name, desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: name + desc,
       isStatic: false, isCtor: name === "<init>", params, ret, index: jc.methods.length };
-    jc.methods.push(m); jc.byKey.set(m.key, m); bodies.set(m, body);
+    jc.add(m); bodies.set(m, body);
   };
   add("<init>", `(L${HANDLER};)V`, ACC.PUBLIC, (cx, _m, c) => {
     c.lget(0).lget(1); cx.callMethod(c, cx.prog.resolve(PROXY, "<init>", `(L${HANDLER};)V`)!);

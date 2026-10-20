@@ -3,14 +3,15 @@
 // and unbox or cast its answer.
 import { T } from "./wasmbin.ts";
 import { ACC, javaName, kindOf, type FieldInfo, type MethodInfo, type Program, descOf, typeName } from "./program.ts";
-import { isWide, descToName, parseMethodDesc } from "../../jvm/abi.ts";
+import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import { BOX, box, unbox } from "./primitives.ts";
 import type { Code } from "./code.ts";
 import type { Compiler } from "./j2w.ts";
 import type { MC } from "./method.ts";
-import type { PreparedInstruction as Ins } from "../../jvm/prepared.ts";
+import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "./linkage.ts";
 import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
+import { Invoke } from "../../jvm/opcodes.ts";
 import { mid } from "./ids.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
 
@@ -48,15 +49,15 @@ export function emitTypeConstant(mc: MC, index: number): void {
   if (emitTypeValue(mc.cx, mc.code, mc.dex, index)) mc.set("L");
 }
 export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number): boolean {
-  const p = dex.proto(index);
-  return emitType(cx, c, dex.type(p.ret), p.params.map(t => dex.type(t)));
+  const p = dex.proto(index), types = cx.prog.typesOf(dex);
+  return emitType(cx, c, types.type(p.ret), p.params.map(t => types.type(t)));
 }
 
 /** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
 export function emitHandleConstant(mc: MC, index: number): void {
   if (emitHandleValue(mc.cx, mc.code, mc.m, index)) mc.set("L");
 }
-type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: string };
+type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: Invoke };
 type HandleFailure = LinkFailure | { errorClass: string; message: string };
 
 /** Shared by executed resolution and emission so member failures precede signature loading. */
@@ -72,12 +73,12 @@ export function resolveHandleMember(prog: Program, referrer: MethodInfo, index: 
     if ((h.type === MethodHandleType.StaticPut || h.type === MethodHandleType.InstancePut) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
     return { field: f };
   }
-  const mr = dex.method(h.idx), cls = dex.typeName(mr.cls), desc = dex.methodDesc(h.idx);
-  let invoke = h.type === MethodHandleType.InvokeStatic ? "invoke-static" : h.type === MethodHandleType.InvokeInterface ? "invoke-interface" : h.type === MethodHandleType.InvokeConstructor ? "invoke-direct" : "invoke-virtual";
+  const mr = dex.method(h.idx), types = prog.typesOf(dex), cls = types.typeName(mr.cls), desc = types.methodDesc(h.idx);
+  let invoke: Invoke = h.type === MethodHandleType.InvokeStatic ? Invoke.Static : h.type === MethodHandleType.InvokeInterface ? Invoke.Interface : h.type === MethodHandleType.InvokeConstructor ? Invoke.Direct : Invoke.Virtual;
   if (h.type === MethodHandleType.InvokeDirect) {
-    const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
+    const target = resolveInvoke(prog, Invoke.Direct, cls, mr.name, desc, referrer.cls);
     if (failed(target)) return target;
-    invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
+    invoke = target.flags & ACC.PRIVATE ? Invoke.Direct : Invoke.Super;
   }
   const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
   if (failed(m)) return m;
@@ -100,7 +101,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
     art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
   } else {
-    const { method: m, cls, invoke } = member, desc = dex.methodDesc(h.idx);
+    const { method: m, cls, invoke } = member, desc = prog.typesOf(dex).methodDesc(h.idx);
     const sig = parseMethodDesc(desc);
     if (h.type === MethodHandleType.InvokeConstructor) {
       if (!emitType(cx, c, sig.ret, sig.params, false)) return false;
@@ -110,8 +111,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
       c.lget(lookup); cx.constClass(c, cls); c.lget(type);
       cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); return true;
     }
-    kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
-      : invoke === "invoke-direct" ? K.INVOKE_DIRECT : invoke === "invoke-super" ? K.INVOKE_SUPER : K.INVOKE_VIRTUAL;
+    kind = [K.INVOKE_VIRTUAL, K.INVOKE_SUPER, K.INVOKE_DIRECT, K.INVOKE_STATIC, K.INVOKE_INTERFACE][invoke];
     art = BigInt(cx.idOf(m.cls)) << 16n | BigInt(prog.require(m.cls).methods.indexOf(m));
     ret = sig.ret; params = [...m.isStatic ? [] : [descOf(cls)], ...sig.params];
   }
@@ -125,7 +125,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
 export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: string): void {
   const c = mc.code, handle = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
-  emitBoxedInvoke(mc, ins, ins.c, 1, () => c.lget(handle), (accessMode ? accessMode + "@" : "") + mc.dex.protoDesc(ins.c), accessMode ? InvokeMode.VarHandle : exact ? InvokeMode.Exact : InvokeMode.Invoke);
+  emitBoxedInvoke(mc, ins, ins.c, 1, () => c.lget(handle), (accessMode ? accessMode + "@" : "") + mc.types.protoDesc(ins.c), accessMode ? InvokeMode.VarHandle : exact ? InvokeMode.Exact : InvokeMode.Invoke);
 }
 /** invoke-custom: the site's arguments, boxed, for the target of the CallSite its own bootstrap links (callsites.ts) */
 export function emitCustom(mc: MC, ins: Ins): void {
@@ -134,13 +134,13 @@ export function emitCustom(mc: MC, ins: Ins): void {
 /** a dispatcher import invoked with the arguments of `proto` from register `firstReg` boxed into an
  *  Object[], its Object result dropped, unboxed or cast to the proto's return type */
 function emitBoxedInvoke(mc: MC, ins: Ins, proto: number, firstReg: number, handle: () => void, site: string, mode: InvokeMode): void {
-  const { cx, code: c } = mc, { params, ret } = mc.dex.protoTypes(proto), arr = c.newLocal(T.anyref);
+  const { cx, code: c } = mc, { params, ret } = mc.types.protoTypes(proto), arr = c.newLocal(T.anyref);
   cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
-  for (let i = 0, ri = firstReg; i < params.length; ri += isWide(params[i++]) ? 2 : 1) {
+  argRegisters(ins, params, firstReg).forEach((r, i) => {
     const p = params[i];
     c.lget(arr); cx.arrayData(c).i32(i);
-    mc.get(kindOf(p), ins.regs[ri]); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
-  }
+    mc.get(kindOf(p), r); if (BOX[p]) box(cx, c, p); c.arraySet(cx.tData.ref);
+  });
   emitInvokeImport(cx, c, handle, () => c.lget(arr), site, mode);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }

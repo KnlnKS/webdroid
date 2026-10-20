@@ -8,7 +8,7 @@ import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { Program, ACC, javaName, type JClass } from "../../src/wasm/compiler/program.ts";
+import { Program, ACC, PlainClass, javaName } from "../../src/wasm/compiler/program.ts";
 import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/exc.ts";
 import { mid } from "../../src/wasm/compiler/ids.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
@@ -183,18 +183,18 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
   };
   const key = await symbolicShared();
   const handedData: WeakRef<object>[] = [], handingCompilers: WeakRef<object>[] = [];
-  const buildUnit = Compiler.prototype.buildUnit;
-  Compiler.prototype.buildUnit = function (...args: Parameters<typeof buildUnit>) {
-    const built = buildUnit.apply(this, args);
-    const method = w.prog.require(key).byKey.get("symbolic()I")!, analysis = this.methodAnalyses.get(method);
-    if (analysis) { handingCompilers.push(new WeakRef(this)); handedData.push(new WeakRef(analysis.prepared), new WeakRef(analysis.typing)); }
-    return built;
+  const analysisOf = Compiler.prototype.analysis;
+  Compiler.prototype.analysis = function (m, last) {
+    const analysis = analysisOf.call(this, m, last);
+    // the symbolic sites of the method are declared from its analysis
+    if (!last && m === w.prog.require(key).byKey.get("symbolic()I")) { handingCompilers.push(new WeakRef(this)); handedData.push(new WeakRef(analysis.prepared), new WeakRef(analysis.typing)); }
+    return analysis;
   };
   let call: ReturnType<typeof w.entryAsync>;
   try {
     call = w.entryAsync(key, "symbolic", "()I");
     if (await call() !== 42) fail("symbolic direct entry failed");
-  } finally { Compiler.prototype.buildUnit = buildUnit; }
+  } finally { Compiler.prototype.analysis = analysisOf; }
   const resolutions = w.symbolic.symbolicResolutions, stubModules = w.symbolic.symbolicStubModules;
   for (let i = 0; i < 3; i++) if (await call() !== 42) fail("cached symbolic operation failed");
   if (w.symbolic.symbolicResolutions !== resolutions) fail("resolved symbolic site entered the loader bridge again");
@@ -227,7 +227,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const strand = w.sched.strand();
     try { await waitingHelper(strand); } catch (error) { checkMissing(error); asyncFailed = true; } finally { strand.end(); }
     if (!syncFailed || !asyncFailed || w.assumptions.absent.get(later)?.size !== 2) fail("helper dependencies lack invalidation slots");
-    w.addClass({ name: later, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, new Map());
+    w.addClass(new PlainClass(later, "java/lang/Object", [], ACC.PUBLIC), new Map());
     const resumed = w.sched.strand();
     try {
       if (helper() !== 42 || await waitingHelper(resumed) !== 42) fail("retained helper did not recover after class arrival");
@@ -247,9 +247,8 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     console.log("helper accounting: throwable and field reader record units and bytes; warm calls unchanged");
     {
       const stubs: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [];
-      const emit = Compiler.prototype.buildSynthetic, group = Compiler.prototype.buildSyntheticGroup;
-      Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
-      Compiler.prototype.buildSyntheticGroup = function (...args: Parameters<typeof group>) { compilers.push(new WeakRef(this)); return group.apply(this, args); };
+      const emit = Compiler.prototype.buildSynthetics;
+      Compiler.prototype.buildSynthetics = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
       const before = { ...w.stats.phase };
       try {
         const bindings = w.symbolic.symbolicImports(Array.from({ length: 32 }, (_, i) => [`memory:${i}`, key, method.index, ins.pc, [], "I"]));
@@ -260,7 +259,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
         }
         if (w.stats.phase.prepare !== before.prepare || w.stats.phase.infer !== before.infer) fail("symbolic operation reanalyzed its method");
       } finally {
-        Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
+        Compiler.prototype.buildSynthetics = emit;
       }
       const collect = (globalThis as typeof globalThis & { gc: () => void }).gc;
       check("symbolic lifetime probe compilers (shared operations are not rebuilt)", compilers.length, 1);
@@ -323,12 +322,12 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
   const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
   const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
   const type = cls.dex!.proto(cls.dex!.method(self.methodIdx).proto).ret;
-  if (cls.dex!.type(type) !== "LShared;" || peer.desc !== "LShared;") fail("fixture did not warm the parent resolution");
+  if (p.typesOf(cls.dex!).type(type) !== "LShared;" || peer.desc !== "LShared;") fail("fixture did not warm the parent resolution");
   const epoch = cache.epoch;
   cache.namespaces.initiateClass(child, "Shared", key);
   const sub = p.definedBy(child, "Sub")!;
   if (!p.isSubclass(sub, key) || p.isSubclass(sub, "Shared")) fail("initiated superclass identity retained stale subtype relationships");
-  if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) fail("initiating identity retained stale DEX/member caches");
+  if (p.lookup(child, "Shared") !== key || p.typesOf(cls.dex!).type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) fail("initiating identity retained stale DEX/member caches");
   const implementors = () => [...p.own()].filter(c => p.isSubclass(c.name, "NamespaceFace")).map(c => c.name).join();
   const prior = implementors();
   cache.namespaces.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
@@ -377,13 +376,13 @@ for (const asynchronous of [false, true]) {
   if (childSelf.ret !== `L${visible};` || childPeer.desc !== childSelf.ret || childClass.byKey.get(childSelf.key) !== childSelf) {
     fail(`dependent loader caches: self=${childSelf.ret}, peer=${childPeer.desc}, visible=${visible}`);
   }
-  if (result !== 21 || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || appDexes[0].type(retIndex) !== self.ret) {
+  if (result !== 21 || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || p.typesOf(appDexes[0]).type(retIndex) !== self.ret) {
     fail(`${asynchronous ? "deferred" : "synchronous"} library graph: result=${result}, visible=${visible}, self=${self.ret}, peer=${peer.desc}`);
   }
   const hostedSpec = { name: childClass.name, sup: childClass.sup, ifaces: [], methods: ["toString()Ljava/lang/String;"], fields: [], ctor: class {} };
   layered.addHostClass(hostedSpec);
   if (p.loaderOf(childClass.name + HOSTED) !== child || p.lookup(p.boot, childClass.name + HOSTED)) fail("hosted custom class lost its defining loader");
-  const iface: JClass = { name: `fixture/HostedInterface@${child.id}`, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC | ACC.INTERFACE | ACC.ABSTRACT, isInterface: true, fields: [], methods: [], byKey: new Map() };
+  const iface = new PlainClass(`fixture/HostedInterface@${child.id}`, "java/lang/Object", [], ACC.PUBLIC | ACC.INTERFACE | ACC.ABSTRACT);
   layered.addClass(iface, new Map(), child);
   const shell = layered.hosts.javaClass({ ...hostedSpec, name: iface.name, methods: [] });
   if (p.loaderOf(shell) !== child || p.lookup(p.boot, shell)) fail("hosted interface shell lost its defining loader");
@@ -391,13 +390,13 @@ for (const asynchronous of [false, true]) {
 }
 {
   const base = new Program([]), custom = base.newLoader(base.boot, null);
-  const synthetic = (name: string): JClass => ({ name, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() });
+  const synthetic = (name: string) => new PlainClass(name, "java/lang/Object", [], ACC.PUBLIC);
   base.addClass(synthetic("fixture/BaseApp"), base.root);
   base.addClass(synthetic("fixture/BaseBoot@0"), base.boot);
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
   const peer = synthetic("fixture/Peer");
   base.addClass(peer, base.root);
-  const appClass = base.require("fixture/BaseApp"), childClass = base.require(`fixture/BaseCustom@${custom.id}`);
+  const appClass = base.require("fixture/BaseApp") as PlainClass, childClass = base.require(`fixture/BaseCustom@${custom.id}`);
   if (!canAccess(base, peer.name, appClass, 0) || canAccess(base, childClass.name, appClass, 0)
     || !canAccess(base, childClass.name, appClass, ACC.PUBLIC)) fail("runtime package access lost defining-loader identity");
   appClass.flags = 0;
@@ -471,7 +470,7 @@ for (const asynchronous of [false, true]) {
     for (const mode of [0, 1]) {
       const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;
       const loader = definingLoader(resolver, object), owner = `fixture/NativeOwner@${loader.id}`;
-      resolver.prog.addClass({ name: owner, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, loader);
+      resolver.prog.addClass(new PlainClass(owner, "java/lang/Object", [], ACC.PUBLIC), loader);
       const cpu = new Cpu(mainThread, "loader-jni"); cpu.nativeClass = { name: owner };
       const getEnv = ldp(ldp(javaVM.addr) + 6 * PTR);
       if (await cpu.call(getEnv, [javaVM.addr, environment, 0x10006])) fail("JNI fixture GetEnv failed");
