@@ -205,6 +205,20 @@ export const vfs = {
     this.onWrite(from, "delete"); this.onWrite(to, "create");
     return true;
   },
+  /** directory `from` and everything under it, moved to `to` with their times and attributes */
+  renameDir(from: string, to: string) {
+    from = this.norm(from); to = this.norm(to);
+    const prefix = from + "/", dest = (p: string) => to + p.slice(from.length);
+    for (const m of [this.files, this.lazyFiles]) for (const k of [...m.keys()]) if (k.startsWith(prefix)) this.rename(k, dest(k));
+    this.dirs.add(from);
+    for (const d of [...this.dirs]) if (d === from || d.startsWith(prefix)) {
+      const moved = dest(d), attributes = this.attributes(d, true), mtime = this.mtimes.get(d);
+      this.dirs.delete(d); this.metadata.delete(d); this.mtimes.delete(d);
+      this.dirs.add(moved); this.metadata.set(moved, attributes);
+      if (mtime !== undefined) this.mtimes.set(moved, mtime);
+      this.onWrite(d, "delete"); this.onWrite(moved, "create");
+    }
+  },
   mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.attributes(path,true); this.mtimes.set(path, Date.now()); this.onWrite(path, "create"); } },
   rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.metadata.delete(path); this.onWrite(path, "delete"); } return removed; },
   list(p: string): string[] {

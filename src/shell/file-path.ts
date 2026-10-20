@@ -63,7 +63,7 @@ export const changeOpenFile = (path: string | null, change: AttributeChange, uid
 // The path operations on this realm's own files, each answering -errno or 0
 const pathType = (p: string): number => vfs.isDir(p) ? S_IFDIR : isFifo(p) ? S_IFIFO : S_IFREG;
 /** the stat of a file this realm holds, of `size` bytes unless it is a directory */
-export function localStat(path: string, type: number, size: number, mtime: number, file: VfsFile | null = vfs.opened(path)): FileStat {
+function localStat(path: string, type: number, size: number, mtime: number, file: VfsFile | null = vfs.opened(path)): FileStat {
   const { mode, uid, gid } = file?.attributes ?? vfs.attributes(path, type === S_IFDIR);
   return { mode: type | mode, size: type === S_IFDIR ? 4096 : size, mtime, uid, gid };
 }
@@ -86,22 +86,13 @@ export function renamePath(fromPath: string, toPath: string): number {
   if (from === to) return vfs.exists(from) ? 0 : -E.NOENT;
   if (!vfs.isDir(parent)) return -(vfs.exists(parent) ? E.NOTDIR : E.NOENT);
   if (vfs.isDir(from)) {
-    if (to === from || to.startsWith(from + "/")) return -E.INVAL;
+    if (to.startsWith(from + "/")) return -E.INVAL;
     if (vfs.exists(to)) {
       if (!vfs.isDir(to)) return -E.NOTDIR;
       if (vfs.list(to).length) return -E.NOTEMPTY;
       vfs.rmdir(to);
     }
-    const prefix = from + "/";
-    for (const m of [vfs.files, vfs.lazyFiles]) {
-      for (const k of [...m.keys()]) if (k.startsWith(prefix)) vfs.rename(k, to + k.slice(from.length));
-    }
-    for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) {
-      const dest = to + d.slice(from.length), attributes = vfs.attributes(d,true);
-      vfs.dirs.delete(d); vfs.dirs.add(dest);vfs.metadata.delete(d);vfs.metadata.set(dest,attributes);
-    }
-    vfs.dirs.add(to);
-    vfs.onWrite(from); vfs.onWrite(to);
+    vfs.renameDir(from, to);
     return 0;
   }
   const source = vfs.source(from);

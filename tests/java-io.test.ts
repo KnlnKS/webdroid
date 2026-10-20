@@ -740,10 +740,12 @@ describe("rename", () => {
     test("Java and native renames carry directory entries", async () => {
       vfs.write("/data/t/old/sub/x", new Uint8Array([4]));
       vfs.mkdir("/data/t/old/empty");
+      const made = vfs.mtime("/data/t/old/empty");
       expect(await vcall(await newFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", await newFile("/data/t/new"))).toBe(1);
       expect(vfs.exists("/data/t/old")).toBe(false);
       expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
       expect(vfs.isDir("/data/t/new/empty")).toBe(true);
+      expect(vfs.mtime("/data/t/new/empty")).toBe(made);
       expect(renamePath("/data/t/new", "/data/t/new/inner")).toBe(-E.INVAL);
     });
   });

@@ -4,16 +4,16 @@
 
 import { mem, wrote, anchor } from "./mem.ts";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
-import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, S_IFDIR, S_IFREG } from "./abi.ts";
+import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
 import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "./kernel.ts";
 import { format, scan, scanSink } from "./printf.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { localStat } from "../shell/file-path.ts";
+import { filePaths } from "../shell/file-path.ts";
 import { FS_SYSCALLS, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
   modifiedTime, makePipe, pread, pwrite, listProcess } from "./fs.ts";
-import { openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
+import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
@@ -141,29 +141,36 @@ interface FtsWalk {
 const ftsWalks = new Map<number, FtsWalk>();
 const FTS = { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36, namelen: 40, ino: 44, dev: 48, nlink: 52, level: 56, info: 58, flags: 60, instr: 62, statp: 64, name: 68 };
 
-function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number): number {
+/** fts_info: a directory before and after its children, one it could not list, a regular file, anything else, and a path stat failed on */
+const FTS_D = 1, FTS_DNR = 4, FTS_DP = 6, FTS_F = 8, FTS_DEFAULT = 3, FTS_NS = 10;
+function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number, stat: FileStat | null, errno: number): number {
   const name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
   const pathlen = utf8(path).length, namelen = utf8(name).length;
   const entry = mem.malloc(FTS.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(KLAYOUT.STAT_SIZE);
   walk.allocations.push(entry, pathp, statp);
   mem.memset(entry, 0, FTS.name + namelen + 1);
   stp(entry + FTS.parent, parent); stp(entry + FTS.accpath, pathp); stp(entry + FTS.path, pathp);
-  mem.st32(entry + FTS.pathlen, pathlen); mem.st32(entry + FTS.namelen, namelen);
+  mem.st32(entry + FTS.errno, errno); mem.st32(entry + FTS.pathlen, pathlen); mem.st32(entry + FTS.namelen, namelen);
   mem.st32(entry + FTS.ino, inoOf(path)); mem.st32(entry + FTS.dev, 1); mem.st32(entry + FTS.nlink, 1);
   mem.st16(entry + FTS.level, level); mem.st16(entry + FTS.info, info); stp(entry + FTS.statp, statp);
-  fillStat(statp, path, localStat(path, info === 1 || info === 6 ? S_IFDIR : S_IFREG, vfs.stat(path)?.size ?? 4096, Date.now()));
+  if (stat) fillStat(statp, path, stat); else mem.memset(statp, 0, KLAYOUT.STAT_SIZE);
   mem.putCstr(entry + FTS.name, name);
   return entry;
 }
 
-function ftsTree(walk: FtsWalk, path: string, level: number, parent: number): FtsNode {
-  const exists = vfs.exists(path), dir = vfs.isDir(path), info = !exists ? 10 : dir ? 1 : 8;
-  const pre = ftsEntry(walk, path, level, parent, info);
-  const post = dir ? ftsEntry(walk, path, level, parent, 6) : 0;
-  const node: FtsNode = { pre, post, children: [], first: 0, end: 0 };
+/** the tree under `path` as its owning realm stats and lists it; an unlistable directory's
+ *  postorder entry is FTS_DNR, as fts_read answers when fts_build fails */
+async function ftsTree(walk: FtsWalk, path: string, level: number, parent: number): Promise<FtsNode> {
+  const { errno, value: stat } = await filePaths(path).fileStat(path);
+  const type = stat ? stat.mode & S_IFMT : 0;
+  const pre = ftsEntry(walk, path, level, parent, !stat ? FTS_NS : type === S_IFDIR ? FTS_D : type === S_IFREG ? FTS_F : FTS_DEFAULT, stat, errno);
+  const node: FtsNode = { pre, post: 0, children: [], first: 0, end: 0 };
   walk.nodes.set(pre, node);
-  if (post) walk.nodes.set(post, node);
-  if (dir) for (const name of vfs.list(path)) node.children.push(ftsTree(walk, vfs.norm(path + "/" + name), level + 1, pre));
+  if (type !== S_IFDIR) return node;
+  const list = await filePaths(path).fileList(path);
+  node.post = ftsEntry(walk, path, level, parent, list.value ? FTS_DP : FTS_DNR, stat, list.errno);
+  walk.nodes.set(node.post, node);
+  for (const name of list.value ?? []) node.children.push(await ftsTree(walk, vfs.norm(path + "/" + name), level + 1, pre));
   return node;
 }
 
@@ -185,7 +192,7 @@ async function ftsOpen(cpu: Cpu, argv: number, options: number, compar: number):
   if (!argv || options & ~0xff) { fail(cpu, E.INVAL); return 0; }
   const handle = mem.malloc(4), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
   const roots: FtsNode[] = [];
-  for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
+  for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(await ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
   if (!roots.length) { closeFts(handle); fail(cpu, E.INVAL); return 0; }
   const cell = mem.malloc(2 * PTR); walk.allocations.push(cell);
   for (const root of roots) { await sortFts(cpu, root, compar, cell); flattenFts(walk, root); }
