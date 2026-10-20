@@ -13,7 +13,6 @@
 // so its first match in ICU's search order uses the sentinel exactly when the flag was set.
 
 import { rt, driven, type Gen } from "../runtime.ts";
-import { javaClassSets } from "../regex-sets.ts";
 import { newObj } from "./jentry.ts";
 import { handle, deref, release } from "../../android/handles.ts";
 
@@ -78,45 +77,28 @@ function stripComments(source: string): string {
   }
   return out;
 }
-/** each capturing group of a JS source in order, with its name when it has one */
-function captures(source: string): (string | null)[] {
-  const out: (string | null)[] = [];
-  let inClass = false;
-  for (let i = 0; i < source.length; i++) {
-    const c = source[i];
-    if (c === "\\") { i++; continue; }
-    if (inClass) { if (c === "]") inClass = false; continue; }
-    if (c === "[") { inClass = true; continue; }
-    if (c !== "(") continue;
-    if (source[i + 1] !== "?") out.push(null);
-    else if (source[i + 2] === "<" && !/[=!]/.test(source[i + 3] ?? "")) out.push(/^\(\?<([^>]+)>/.exec(source.slice(i))![1]);
-  }
-  return out;
+/** what a first pass over the Java source learns, which the rewrite depends on: its groups and the JS capture of each, the flags
+ *  embedded groups set (applied pattern-wide: JS cannot scope them), whether a class nests or intersects, which only JS's `v`
+ *  syntax writes (every class is then written in it), and whether the pattern starts at the search position (`\G`) */
+interface Shape {
+  names: (string | null)[]; js: number[];
+  multiline: boolean; dotall: boolean; unix: boolean; icase: boolean; sets: boolean; sticky: boolean; anchored: boolean;
 }
-
-/** what a first pass over the Java source learns: its groups, and flags set by embedded groups
- *  (applied pattern-wide, as javaToJs folds them) */
-interface Shape { names: (string | null)[]; multiline: boolean; dotall: boolean; unix: boolean; anchored: boolean }
 const Mode = { Main: 0, Hit: 1, Req: 2, Plain: 3 } as const;
 type Mode = (typeof Mode)[keyof typeof Mode];
 interface Ctx extends Shape {
   src: string; i: number; mode: Mode; s: string; look: number;
   depth: number; first: boolean; anchorDepth: number; closedBelow: number;
+  /** the JS captures written so far, the JS capture of each Java group, and the atomic groups written */
+  captures: number; capture: number[]; atomics: number;
 }
 const LT = "\\n-\\r\\x85\\u2028\\u2029";
 /** ICU's \h: tab and the space separators */
 const HSPACE = "\\t \\xA0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000";
+/** ICU's \X, an extended grapheme cluster as far as JS's properties spell one: CR LF, a control, or a regional indicator pair, an
+ *  emoji joiner sequence or any other character, extended by marks and joiners (Hangul jamo sequences and prepended marks break apart) */
+const GRAPHEME = "(?:\\r\\n|[\\p{Cc}\\p{Zl}\\p{Zp}]|(?:\\p{RI}\\p{RI}|\\p{ExtPict}(?:[\\p{Gr_Ext}\\p{EMod}]*\\u200D\\p{ExtPict})*|[^\\p{Cc}\\p{Zl}\\p{Zp}])[\\p{Gr_Ext}\\p{EMod}\\u200D\\p{Mc}]*)";
 
-function classEnd(src: string, i: number): number {
-  let depth = 0;
-  for (; i < src.length; i++) {
-    const c = src[i];
-    if (c === "\\") i++;
-    else if (c === "[") depth++;
-    else if (c === "]" && --depth === 0) return i + 1;
-  }
-  return i;
-}
 function quantifier(c: Ctx): string {
   const m = /^(?:[*+?]|\{\d+(?:,\d*)?\})[?+]?/.exec(c.src.slice(c.i, c.i + 24));
   if (!m) return "";
@@ -127,7 +109,7 @@ function quantifier(c: Ctx): string {
  *  sentinel where ICU sets hitEnd/requireEnd and then match anything; Plain treats the sentinel
  *  as the end of input without flag events */
 function translate(src: string, shape: Shape, mode: Mode, s = ""): { out: string; groups: (string | null)[]; c: Ctx } {
-  const c: Ctx = { ...shape, src, i: 0, mode, s, look: 0, depth: 0, first: true, anchorDepth: -1, closedBelow: Infinity };
+  const c: Ctx = { ...shape, src, i: 0, mode, s, look: 0, depth: 0, first: true, anchorDepth: -1, closedBelow: Infinity, captures: 0, capture: [], atomics: 0 };
   let out = "";
   const groups: (string | null)[] = [];
   // unbalanced `)` stays for the RegExp compiler to reject
@@ -140,11 +122,22 @@ function seq(c: Ctx, names: (string | null)[]): string {
     if (c.src[c.i] === "|") {
       c.i++; out += "|";
       if (c.anchorDepth >= 0 && c.depth <= c.anchorDepth && c.depth < c.closedBelow) c.anchored = false;
+      if (c.sticky && c.depth === 0) throw new SyntaxError("\\G that starts one alternative only is unsupported");
       continue;
     }
-    out += unit(c, names) + quantifier(c);
+    const groups = names.length, atom = unit(c, names), q = quantifier(c);
+    // a possessive quantifier is the greedy one, atomic
+    out += q.length > 1 && q.endsWith("+") ? atomic(c, atom + q.slice(0, -1), groups) : atom + q;
   }
   return out;
+}
+/** `body` as an atomic group: a lookahead captures its first match and a backreference consumes that, so nothing backtracks into it */
+function atomic(c: Ctx, body: string, groups: number): string {
+  // its capture precedes those of the groups in the body
+  for (let g = groups; g < c.capture.length; g++) c.capture[g]++;
+  c.captures++;
+  const id = `__wdA${c.atomics++}`;
+  return `(?:(?=(?<${id}>${body}))\\k<${id}>)`;
 }
 const END = (c: Ctx) => c.mode === Mode.Main ? "(?![\\s\\S])" : `(?=${c.s})`;
 /** past the sentinel, which ends the derived patterns' text */
@@ -176,7 +169,7 @@ function dollar(c: Ctx, multiline: boolean, unix: boolean): string {
   return c.mode === Mode.Plain ? `(?:${end}|${beforeLine})` : `(?:${s}|${PAST}|${beforeLine})`;
 }
 function caret(c: Ctx, multiline: boolean): string {
-  // javaToJs folds an embedded (?m) into the JS flags, so a multi-line pattern spells out its start
+  // the JS flags never hold m: a multi-line start is spelled out with ICU's line terminators
   if (!multiline) return assertion(c, "^");
   const nl = c.unix ? "\\n" : LT;
   // ICU's multi-line `^` does not match at the end of input, except in UNIX_LINES mode
@@ -188,7 +181,7 @@ function unit(c: Ctx, names: (string | null)[]): string {
   const first = c.first;
   if (ch !== "(") c.first = false;
   if (ch === "(") return group(c, names);
-  if (ch === "[") { c.i = classEnd(src, i); return consume(c, src.slice(i, c.i)); }
+  if (ch === "[") return consume(c, klass(c));
   if (ch === ".") { c.i++; return consume(c, c.dotall ? "." : c.unix ? "[^\\n]" : `[^${LT}]`); }
   if (ch === "^") {
     c.i++;
@@ -197,9 +190,12 @@ function unit(c: Ctx, names: (string | null)[]): string {
   }
   if (ch === "$") { c.i++; return dollar(c, c.multiline, c.unix); }
   if (ch !== "\\") {
+    // a quantifier with nothing to repeat, and braces that are not one
+    if ("*+?{}".includes(ch)) throw new SyntaxError("Dangling meta character '" + ch + "'");
     const n = src.codePointAt(i)! > 0xffff ? 2 : 1;
     c.i += n;
-    return consume(c, src.slice(i, i + n));
+    // ICU reads a `]` outside a class as itself
+    return consume(c, ch === "]" ? "\\]" : src.slice(i, i + n));
   }
   const e = src[i + 1] ?? "";
   c.i += 2;
@@ -208,12 +204,18 @@ function unit(c: Ctx, names: (string | null)[]): string {
     case "z": return c.mode === Mode.Hit || c.mode === Mode.Req ? `(?:${c.s}|${PAST})` : END(c);
     case "Z": return dollar(c, false, false);
     case "b": case "B": return c.mode === Mode.Hit ? `(?:${c.s}|${PAST}|\\${e})` : assertion(c, "\\" + e);
-    case "G": return "\\G";
+    case "G":
+      // where the search starts: a pattern that starts with it matches only there
+      if (i !== 0) throw new SyntaxError("\\G past the start of a pattern is unsupported");
+      c.sticky = true;
+      return "";
     case "h": return consume(c, `[${HSPACE}]`);
     case "H": return consume(c, `[^${HSPACE}]`);
     case "v": return consume(c, `[${LT}]`);
     case "V": return consume(c, `[^${LT}]`);
     case "R": return consume(c, `(?:\\r\\n|[${LT}])`);
+    case "X": return consume(c, GRAPHEME);
+    case "p": case "P": return consume(c, property(c, e === "P", false));
     case "Q": {
       const end = src.indexOf("\\E", c.i), stop = end < 0 ? src.length : end;
       const lit = src.slice(c.i, stop);
@@ -229,24 +231,119 @@ function unit(c: Ctx, names: (string | null)[]): string {
       c.i += m[0].length;
       return backref(c, m[1]);
     }
-    case "p": case "P": case "x": case "N":
-      if (src[c.i] === "{") c.i = src.indexOf("}", c.i) + 1 || src.length;
-      else c.i += e === "x" ? 2 : e === "N" ? 0 : 1;
-      break;
-    case "u": c.i += 4; break;
-    case "c": c.i++; break;
-    case "0": { let n = 0; while (n < 3 && /[0-7]/.test(src[c.i] ?? "")) { c.i++; n++; } break; }
-    default:
-      if (e >= "1" && e <= "9") {
-        let n = +e;
-        while (/\d/.test(src[c.i] ?? "") && n * 10 + +src[c.i] <= c.names.length) n = n * 10 + +src[c.i++];
-        return backref(c, n);
-      }
   }
-  return consume(c, src.slice(i, c.i));
+  if (e >= "1" && e <= "9") {
+    let n = +e;
+    while (/\d/.test(src[c.i] ?? "") && n * 10 + +src[c.i] <= c.names.length) n = n * 10 + +src[c.i++];
+    return backref(c, n);
+  }
+  // the class escapes \d \s \w and their complements are JS's; other letters JS rejects, as ICU does
+  return consume(c, charEscape(c, e) ?? "\\" + e);
+}
+/** a literal character, as JS text that is valid in and out of classes in either syntax */
+const literal = (ch: string) => "^$\\.*+?()[]{}|/".includes(ch) ? "\\" + ch : ch < "\x80" ? "\\x" + ch.charCodeAt(0).toString(16).padStart(2, "0") : ch;
+/** the character Java's `\<e>` names, as JS text valid anywhere; null when that is not a character escape */
+function charEscape(c: Ctx, e: string): string | null {
+  const src = c.src;
+  switch (e) {
+    case "t": case "n": case "r": case "f": return "\\" + e;
+    case "a": return "\\x07";
+    case "e": return "\\x1B";
+    case "x": {
+      // ICU's \xh and \xhh, and \x{h...}
+      const m = /^(?:\{([0-9a-fA-F]+)\}|[0-9a-fA-F]{1,2})/.exec(src.slice(c.i, c.i + 10));
+      if (!m) throw new SyntaxError("Illegal hexadecimal escape sequence");
+      c.i += m[0].length;
+      return `\\u{${m[1] ?? m[0]}}`;
+    }
+    case "u": c.i += 4; return "\\u" + src.slice(c.i - 4, c.i);
+    case "0": {
+      let n = 0, k = 0;
+      for (; k < 3 && /[0-7]/.test(src[c.i] ?? "") && n * 8 + +src[c.i] <= 0o377; k++) n = n * 8 + +src[c.i++];
+      if (!k) throw new SyntaxError("Illegal octal escape sequence");
+      return `\\u{${n.toString(16)}}`;
+    }
+    // ICU reads a \c that ends the pattern as those two characters
+    case "c": return c.i < src.length ? `\\u{${(src.charCodeAt(c.i++) ^ 64).toString(16)}}` : "\\\\c";
+  }
+  return e === "" || /[A-Za-z0-9]/.test(e) ? null : literal(e);
+}
+/** class characters JS needs escaped in `u` syntax and in `v` syntax */
+const U_CLASS = "\\]^-", V_CLASS = "()[]{}/-\\|&!#%,:;<=>@`~$*+.?^";
+/** the Java class at `c.i`, as JS */
+function klass(c: Ctx): string {
+  const src = c.src;
+  const negate = src[++c.i] === "^" ? (c.i++, "^") : "";
+  // the operands of && (only a nested class unites with them in JS), each a union
+  const parts = [""];
+  for (let first = true; ; first = false) {
+    const ch = src[c.i];
+    if (ch === undefined) throw new SyntaxError("Unclosed character class");
+    // a `]` that opens a class is a member
+    if (ch === "]" && !first) { c.i++; break; }
+    if (ch === "[") { c.sets = true; parts[parts.length - 1] += klass(c); continue; }
+    if (ch === "&" && src[c.i + 1] === "&") { c.sets = true; c.i += 2; parts.push(""); continue; }
+    const [atom, single] = classAtom(c);
+    let item = atom;
+    if (single &&src[c.i] === "-" && c.i + 1 < src.length && src[c.i + 1] !== "]" && src[c.i + 1] !== "[") {
+      c.i++;
+      const [end, bounds] = classAtom(c);
+      if (!bounds) throw new SyntaxError("Illegal character range");
+      item += "-" + end;
+    }
+    parts[parts.length - 1] += item;
+  }
+  return `[${negate}${parts.length === 1 ? parts[0] : parts.map((p) => `[${p}]`).join("&&")}]`;
+}
+/** a class member: its JS text, and whether it is one character, which can bound a range */
+function classAtom(c: Ctx): [string, boolean] {
+  const src = c.src, ch = src[c.i];
+  if (ch !== "\\") {
+    const n = src.codePointAt(c.i)! > 0xffff ? 2 : 1;
+    c.i += n;
+    return [(c.sets ? V_CLASS : U_CLASS).includes(ch) ? "\\" + ch : src.slice(c.i - n, c.i), true];
+  }
+  const e = src[c.i + 1] ?? "";
+  c.i += 2;
+  switch (e) {
+    case "Q": {
+      const end = src.indexOf("\\E", c.i), stop = end < 0 ? src.length : end;
+      let out = "";
+      for (const ch of src.slice(c.i, stop)) out += literal(ch);
+      c.i = end < 0 ? stop : stop + 2;
+      return [out, false];
+    }
+    case "p": case "P": return [property(c, e === "P", true), false];
+    case "h": return [HSPACE, false];
+    case "v": return [LT, false];
+    case "H": case "V": c.sets = true; return [`[^${e === "H" ? HSPACE : LT}]`, false];
+    case "d": case "D": case "s": case "S": case "w": case "W": case "b": return ["\\" + e, false];
+  }
+  const lit = charEscape(c, e);
+  return lit === null ? ["\\" + e, false] : [lit, true];
+}
+/** `\p{name}` or `\pL` at `c.i`: a JS property escape, or the ranges ICU's name stands for, as a class or as class members */
+function property(c: Ctx, negated: boolean, inClass: boolean): string {
+  const src = c.src;
+  let name = src[c.i++] ?? "";
+  if (name === "{") {
+    const close = src.indexOf("}", c.i);
+    if (close < 0) throw new SyntaxError("Unclosed property name");
+    name = src.slice(c.i, close);
+    c.i = close + 1;
+  }
+  const ranges = POSIX[name.replace(/^I[sn]/, "")] ?? blockRange(name);
+  // ICU reads `Is` as introducing a category or a binary property
+  if (ranges === undefined) return `\\${negated ? "P" : "p"}{${name.startsWith("Is") ? name.slice(2) : name}}`;
+  if (!inClass) return `[${negated ? "^" : ""}${ranges}]`;
+  if (!negated) return ranges;
+  // a complement within a class is a nested class
+  c.sets = true;
+  return `[^${ranges}]`;
 }
 function backref(c: Ctx, ref: string | number): string {
-  if (c.mode === Mode.Main) return typeof ref === "number" ? `\\${ref}` : `\\k<${ref}>`;
+  // a digit after the reference would extend it
+  if (c.mode === Mode.Main) return typeof ref === "number" ? `(?:\\${c.js[ref - 1] ?? ref})` : `\\k<${ref}>`;
   const r = `\\k<${typeof ref === "number" ? c.names[ref - 1] ?? `__wdG${ref}` : ref}>`;
   return c.mode === Mode.Hit ? `(?:${r}|${c.s}|${PAST})` : c.mode === Mode.Req ? `(?:${r}|${PAST})` : r;
 }
@@ -254,17 +351,25 @@ function group(c: Ctx, names: (string | null)[]): string {
   const src = c.src, open = /^\((?:\?(?:<([A-Za-z][A-Za-z0-9]*)>|([=!:>]|<[=!])|([a-zA-Z]*(?:-[a-zA-Z]*)?)([:)])))?/.exec(src.slice(c.i, c.i + 64))!;
   const [text, name, kind, flags, flagEnd] = open;
   c.i += text.length;
+  let modifiers = "";
   if (flags !== undefined) {
-    const on = flags.split("-")[0];
+    const [on, off = ""] = flags.split("-");
     if (on.includes("m")) c.multiline = true;
     if (on.includes("s")) c.dotall = true;
     if (on.includes("d")) c.unix = true;
-    if (flagEnd === ")") return text;
+    if (flagEnd === ")") {
+      if (on.includes("i")) c.icase = true;
+      else if (off.includes("i") && c.icase) throw new SyntaxError("(?-i) in a case-insensitive pattern is unsupported");
+      return "";
+    }
+    // the translation spells out the other flags; JS scopes case-insensitivity itself
+    modifiers = (on.includes("i") ? "i" : "") + (off.includes("i") ? "-i" : "");
   }
   const look = kind === "=" || kind === "!";
   if (look || kind === "<=" || kind === "<!") c.first = false;
   const capturing = !kind && flags === undefined;
   const index = capturing ? names.push(name ?? null) : 0;
+  if (capturing) c.capture[index - 1] = ++c.captures;
   c.depth++;
   const inner = (mode: Mode) => {
     const saved = c.mode;
@@ -287,130 +392,65 @@ function group(c: Ctx, names: (string | null)[]): string {
     const body = inner(c.mode === Mode.Main ? Mode.Main : Mode.Plain);
     out = assertion(c, `(?${kind}${body})`);
   } else {
-    const body = inner(c.mode);
+    const groups = names.length, body = inner(c.mode);
     if (look) out = `(?${kind}${body})`;
-    else if (!capturing) out = `${text}${body})`;
+    else if (kind === ">") out = atomic(c, body, groups);
+    else if (!capturing) out = `(?${modifiers}:${body})`;
     else if (c.mode === Mode.Main) out = `${text}${body})`;
     else if (c.mode === Mode.Plain) out = `(?:${body})`;
     else out = `(?<${name ?? `__wdG${index}`}>${body})`;
   }
-  if (src[c.i] === ")") c.i++;
+  if (src[c.i] !== ")") throw new SyntaxError("Unclosed group");
+  c.i++;
   if (--c.depth < c.closedBelow && c.anchorDepth >= 0) c.closedBelow = c.depth + 1;
   return out;
 }
 
 const POSIX: Record<string, string> = {
   Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
-  Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
+  Punct: "!-\\/:-@\\[-`\\{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
   javaLowerCase: "\\p{Ll}", javaUpperCase: "\\p{Lu}", javaWhitespace: "\\s", javaLetter: "\\p{L}", javaDigit: "\\p{Nd}", javaLetterOrDigit: "\\p{L}\\p{Nd}",
+  javaJavaIdentifierStart: "\\p{L}\\p{Nl}\\p{Sc}\\p{Pc}", javaJavaIdentifierPart: "\\p{L}\\p{Nl}\\p{Sc}\\p{Pc}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Cf}\\x00-\\x08\\x0E-\\x1B\\x7F-\\x9F",
+  all: "\\u{0}-\\u{10ffff}",
 };
-/**
- * Translated syntax that JS RegExp still rejects, rewritten in place: embedded flag groups
- * `(?imsx)` (folded into the flags — Java scopes them from that point on, JS cannot),
- * possessive quantifiers (made greedy), the POSIX/java.lang.Character classes `\p{Alpha}` and
- * atomic groups. Returns the JS source plus extra flags.
- */
-function javaToJs(src: string): [string, string] {
-  let extra = "";
-  let out = src.replace(/\(\?([a-zA-Z]+)(?:-[a-zA-Z]+)?\)/g, (_m, on: string) => {
-    for (const c of on) if ("ims".includes(c) && !extra.includes(c)) extra += c;
-    return "";
-  });
-  out = out.replace(/([*+?]|\{\d+(?:,\d*)?\})\+/g, "$1");
-  // Java's \x{h...} is JS's \u{h...}
-  out = out.replace(/(?<!\\)((?:\\\\)*)\\x\{([0-9a-fA-F]+)\}/g, "$1\\u{$2}");
-  out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
-    const cls = POSIX[name];
-    return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
-  });
-  if (out.includes("(?>")) out = atomicGroups(out);
-  return [out, extra];
-}
-function atomicGroups(src: string): string {
-  // A lookahead fixes the chosen alternative before its backreference consumes it.
-  // Synthetic captures would shift Java group numbers, so leave those patterns unsupported.
-  let escaped = false, inClass = false, depth = 0, atomic = 0, captures = false;
-  const opens: number[] = [];
-  const pairs = new Map<number, number>();
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === "\\") { escaped = true; continue; }
-    if (c === "[") { inClass = true; continue; }
-    if (c === "]" && inClass) { inClass = false; continue; }
-    if (inClass) continue;
-    if (c === "(") {
-      if (src.startsWith("(?>", i)) atomic++;
-      else if (src[i + 1] !== "?" || (src.startsWith("(?<", i) && !/[=!]/.test(src[i + 3] ?? ""))) captures = true;
-      opens.push(i); depth++;
-    } else if (c === ")") {
-      if (depth) pairs.set(opens.pop()!, i);
-      depth--;
-    }
+/** ICU's Unicode blocks (Android 15's, Unicode 15.1), which JS has no property for: the first code point of each block, or of a gap
+ *  between blocks, with every name ICU knows the block by, matched loosely (lower case, without spaces, hyphens and underscores) */
+const BLOCKS = "0 ascii basiclatin,80 latin1sup latin1supplement latin1,100 latinexta latinextendeda,180 latinextb latinextendedb,250 ipaext ipaextensions,2b0 modifierletters spacingmodifierletters,300 diacriticals combiningdiacriticalmarks,370 greek greekandcoptic,400 cyrillic,500 cyrillicsup cyrillicsupplement cyrillicsupplementary,530 armenian,590 hebrew,600 arabic,700 syriac,750 arabicsup arabicsupplement,780 thaana,7c0 nko,800 samaritan,840 mandaic,860 syriacsup syriacsupplement,870 arabicextb arabicextendedb,8a0 arabicexta arabicextendeda,900 devanagari,980 bengali,a00 gurmukhi,a80 gujarati,b00 oriya,b80 tamil,c00 telugu,c80 kannada,d00 malayalam,d80 sinhala,e00 thai,e80 lao,f00 tibetan,1000 myanmar,10a0 georgian,1100 jamo hanguljamo,1200 ethiopic,1380 ethiopicsup ethiopicsupplement,13a0 cherokee,1400 ucas unifiedcanadianaboriginalsyllabics canadiansyllabics,1680 ogham,16a0 runic,1700 tagalog,1720 hanunoo,1740 buhid,1760 tagbanwa,1780 khmer,1800 mongolian,18b0 ucasext unifiedcanadianaboriginalsyllabicsextended,1900 limbu,1950 taile,1980 newtailue,19e0 khmersymbols,1a00 buginese,1a20 taitham,1ab0 diacriticalsext combiningdiacriticalmarksextended,1b00 balinese,1b80 sundanese,1bc0 batak,1c00 lepcha,1c50 olchiki,1c80 cyrillicextc cyrillicextendedc,1c90 georgianext georgianextended,1cc0 sundanesesup sundanesesupplement,1cd0 vedicext vedicextensions,1d00 phoneticext phoneticextensions,1d80 phoneticextsup phoneticextensionssupplement,1dc0 diacriticalssup combiningdiacriticalmarkssupplement,1e00 latinextadditional latinextendedadditional,1f00 greekext greekextended,2000 punctuation generalpunctuation,2070 superandsub superscriptsandsubscripts,20a0 currencysymbols,20d0 diacriticalsforsymbols combiningdiacriticalmarksforsymbols combiningmarksforsymbols,2100 letterlikesymbols,2150 numberforms,2190 arrows,2200 mathoperators mathematicaloperators,2300 misctechnical miscellaneoustechnical,2400 controlpictures,2440 ocr opticalcharacterrecognition,2460 enclosedalphanum enclosedalphanumerics,2500 boxdrawing,2580 blockelements,25a0 geometricshapes,2600 miscsymbols miscellaneoussymbols,2700 dingbats,27c0 miscmathsymbolsa miscellaneousmathematicalsymbolsa,27f0 suparrowsa supplementalarrowsa,2800 braille braillepatterns,2900 suparrowsb supplementalarrowsb,2980 miscmathsymbolsb miscellaneousmathematicalsymbolsb,2a00 supmathoperators supplementalmathematicaloperators,2b00 miscarrows miscellaneoussymbolsandarrows,2c00 glagolitic,2c60 latinextc latinextendedc,2c80 coptic,2d00 georgiansup georgiansupplement,2d30 tifinagh,2d80 ethiopicext ethiopicextended,2de0 cyrillicexta cyrillicextendeda,2e00 suppunctuation supplementalpunctuation,2e80 cjkradicalssup cjkradicalssupplement,2f00 kangxi kangxiradicals,2fe0,2ff0 idc ideographicdescriptioncharacters,3000 cjksymbols cjksymbolsandpunctuation,3040 hiragana,30a0 katakana,3100 bopomofo,3130 compatjamo hangulcompatibilityjamo,3190 kanbun,31a0 bopomofoext bopomofoextended,31c0 cjkstrokes,31f0 katakanaext katakanaphoneticextensions,3200 enclosedcjk enclosedcjklettersandmonths,3300 cjkcompat cjkcompatibility,3400 cjkexta cjkunifiedideographsextensiona,4dc0 yijing yijinghexagramsymbols,4e00 cjk cjkunifiedideographs,a000 yisyllables,a490 yiradicals,a4d0 lisu,a500 vai,a640 cyrillicextb cyrillicextendedb,a6a0 bamum,a700 modifiertoneletters,a720 latinextd latinextendedd,a800 sylotinagri,a830 indicnumberforms commonindicnumberforms,a840 phagspa,a880 saurashtra,a8e0 devanagariext devanagariextended,a900 kayahli,a930 rejang,a960 jamoexta hanguljamoextendeda,a980 javanese,a9e0 myanmarextb myanmarextendedb,aa00 cham,aa60 myanmarexta myanmarextendeda,aa80 taiviet,aae0 meeteimayekext meeteimayekextensions,ab00 ethiopicexta ethiopicextendeda,ab30 latinexte latinextendede,ab70 cherokeesup cherokeesupplement,abc0 meeteimayek,ac00 hangul hangulsyllables,d7b0 jamoextb hanguljamoextendedb,d800 highsurrogates,db80 highpusurrogates highprivateusesurrogates,dc00 lowsurrogates,e000 pua privateusearea privateuse,f900 cjkcompatideographs cjkcompatibilityideographs,fb00 alphabeticpf alphabeticpresentationforms,fb50 arabicpfa arabicpresentationformsa,fe00 vs variationselectors,fe10 verticalforms,fe20 halfmarks combininghalfmarks,fe30 cjkcompatforms cjkcompatibilityforms,fe50 smallforms smallformvariants,fe70 arabicpfb arabicpresentationformsb,ff00 halfandfullforms halfwidthandfullwidthforms,fff0 specials,10000 linearbsyllabary,10080 linearbideograms,10100 aegeannumbers,10140 ancientgreeknumbers,10190 ancientsymbols,101d0 phaistos phaistosdisc,10200,10280 lycian,102a0 carian,102e0 copticepactnumbers,10300 olditalic,10330 gothic,10350 oldpermic,10380 ugaritic,103a0 oldpersian,103e0,10400 deseret,10450 shavian,10480 osmanya,104b0 osage,10500 elbasan,10530 caucasianalbanian,10570 vithkuqi,105c0,10600 lineara,10780 latinextf latinextendedf,107c0,10800 cypriotsyllabary,10840 imperialaramaic,10860 palmyrene,10880 nabataean,108b0,108e0 hatran,10900 phoenician,10920 lydian,10940,10980 meroitichieroglyphs,109a0 meroiticcursive,10a00 kharoshthi,10a60 oldsoutharabian,10a80 oldnortharabian,10aa0,10ac0 manichaean,10b00 avestan,10b40 inscriptionalparthian,10b60 inscriptionalpahlavi,10b80 psalterpahlavi,10bb0,10c00 oldturkic,10c50,10c80 oldhungarian,10d00 hanifirohingya,10d40,10e60 rumi ruminumeralsymbols,10e80 yezidi,10ec0 arabicextc arabicextendedc,10f00 oldsogdian,10f30 sogdian,10f70 olduyghur,10fb0 chorasmian,10fe0 elymaic,11000 brahmi,11080 kaithi,110d0 sorasompeng,11100 chakma,11150 mahajani,11180 sharada,111e0 sinhalaarchaicnumbers,11200 khojki,11250,11280 multani,112b0 khudawadi,11300 grantha,11380,11400 newa,11480 tirhuta,114e0,11580 siddham,11600 modi,11660 mongoliansup mongoliansupplement,11680 takri,116d0,11700 ahom,11750,11800 dogra,11850,118a0 warangciti,11900 divesakuru,11960,119a0 nandinagari,11a00 zanabazarsquare,11a50 soyombo,11ab0 ucasexta unifiedcanadianaboriginalsyllabicsextendeda,11ac0 paucinhau,11b00 devanagariexta devanagariextendeda,11b60,11c00 bhaiksuki,11c70 marchen,11cc0,11d00 masaramgondi,11d60 gunjalagondi,11db0,11ee0 makasar,11f00 kawi,11f60,11fb0 lisusup lisusupplement,11fc0 tamilsup tamilsupplement,12000 cuneiform,12400 cuneiformnumbers cuneiformnumbersandpunctuation,12480 earlydynasticcuneiform,12550,12f90 cyprominoan,13000 egyptianhieroglyphs,13430 egyptianhieroglyphformatcontrols,13460,14400 anatolianhieroglyphs,14680,16800 bamumsup bamumsupplement,16a40 mro,16a70 tangsa,16ad0 bassavah,16b00 pahawhhmong,16b90,16e40 medefaidrin,16ea0,16f00 miao,16fa0,16fe0 ideographicsymbols ideographicsymbolsandpunctuation,17000 tangut,18800 tangutcomponents,18b00 khitansmallscript,18d00 tangutsup tangutsupplement,18d80,1aff0 kanaextb kanaextendedb,1b000 kanasup kanasupplement,1b100 kanaexta kanaextendeda,1b130 smallkanaext smallkanaextension,1b170 nushu,1b300,1bc00 duployan,1bca0 shorthandformatcontrols,1bcb0,1cf00 znamennymusic znamennymusicalnotation,1cfd0,1d000 byzantinemusic byzantinemusicalsymbols,1d100 music musicalsymbols,1d200 ancientgreekmusic ancientgreekmusicalnotation,1d250,1d2c0 kaktoviknumerals,1d2e0 mayannumerals,1d300 taixuanjing taixuanjingsymbols,1d360 countingrod countingrodnumerals,1d380,1d400 mathalphanum mathematicalalphanumericsymbols,1d800 suttonsignwriting,1dab0,1df00 latinextg latinextendedg,1e000 glagoliticsup glagoliticsupplement,1e030 cyrillicextd cyrillicextendedd,1e090,1e100 nyiakengpuachuehmong,1e150,1e290 toto,1e2c0 wancho,1e300,1e4d0 nagmundari,1e500,1e7e0 ethiopicextb ethiopicextendedb,1e800 mendekikakui,1e8e0,1e900 adlam,1e960,1ec70 indicsiyaqnumbers,1ecc0,1ed00 ottomansiyaqnumbers,1ed50,1ee00 arabicmath arabicmathematicalalphabeticsymbols,1ef00,1f000 mahjong mahjongtiles,1f030 domino dominotiles,1f0a0 playingcards,1f100 enclosedalphanumsup enclosedalphanumericsupplement,1f200 enclosedideographicsup enclosedideographicsupplement,1f300 miscpictographs miscellaneoussymbolsandpictographs,1f600 emoticons,1f650 ornamentaldingbats,1f680 transportandmap transportandmapsymbols,1f700 alchemical alchemicalsymbols,1f780 geometricshapesext geometricshapesextended,1f800 suparrowsc supplementalarrowsc,1f900 supsymbolsandpictographs supplementalsymbolsandpictographs,1fa00 chesssymbols,1fa70 symbolsandpictographsexta symbolsandpictographsextendeda,1fb00 symbolsforlegacycomputing,1fc00,20000 cjkextb cjkunifiedideographsextensionb,2a6e0,2a700 cjkextc cjkunifiedideographsextensionc,2b740 cjkextd cjkunifiedideographsextensiond,2b820 cjkexte cjkunifiedideographsextensione,2ceb0 cjkextf cjkunifiedideographsextensionf,2ebf0 cjkexti cjkunifiedideographsextensioni,2ee60,2f800 cjkcompatideographssup cjkcompatibilityideographssupplement,2fa20,30000 cjkextg cjkunifiedideographsextensiong,31350 cjkexth cjkunifiedideographsextensionh,323b0,e0000 tags,e0080,e0100 vssup variationselectorssupplement,e01f0,f0000 suppuaa supplementaryprivateuseareaa,100000 suppuab supplementaryprivateuseareab";
+let blocks: Map<string, string> | undefined;
+/** the code point range of the block `\p{InX}`, `\p{Block=X}` or `\p{blk=X}` names */
+function blockRange(name: string): string | undefined {
+  const m = /^(?:In|(?:Block|blk)=)(.+)/.exec(name);
+  if (!m) return undefined;
+  if (!blocks) {
+    blocks = new Map();
+    const entries = BLOCKS.split(",");
+    entries.forEach((entry, k) => {
+      const [start, ...names] = entry.split(" "), end = k + 1 < entries.length ? parseInt(entries[k + 1], 16) - 1 : 0x10ffff;
+      for (const n of names) blocks!.set(n, `\\u{${start}}-\\u{${end.toString(16)}}`);
+    });
   }
-  if (!atomic) return src;
-  if (captures) throw new SyntaxError("Atomic group with capturing groups is unsupported");
-  let n = 0;
-  const rewrite = (start: number, end: number): string => {
-    let result = "";
-    for (let i = start; i < end; i++) {
-      const close = pairs.get(i);
-      if (close === undefined) { result += src[i]; continue; }
-      const body = rewrite(i + (src.startsWith("(?>", i) ? 3 : 1), close);
-      if (src.startsWith("(?>", i)) {
-        const name = `__wdAtomic${n++}`;
-        result += `(?:(?=(?<${name}>${body}))\\k<${name}>)`;
-      } else result += `(${body})`;
-      i = close;
-    }
-    return result;
-  };
-  return rewrite(0, src.length);
+  return blocks.get(m[1].toLowerCase().replace(/[\s_-]/g, ""));
 }
-const regexMemo = new Map<string, RegExp>();
-/** translated source + JS flags → RegExp, memoised. Callers that use sticky/global flags must
- *  set lastIndex before every exec. */
-function javaRegex(source: string, flags: string): RegExp {
-  const key = flags + "/" + source;
-  let re = regexMemo.get(key);
-  if (!re) {
-    if (regexMemo.size > 4096) regexMemo.clear();
-    try { re = new RegExp(source, flags); }
-    catch {
-      const [js, extra] = javaToJs(source);
-      let f = flags;
-      for (const c of extra) if (!f.includes(c)) f += c;
-      try { re = new RegExp(js, f); }
-      catch {
-        try { re = new RegExp(javaClassSets(js), f.replace(/[uv]/g, "") + "v"); }
-        catch { re = new RegExp(js, f.replace("u", "")); }
-      }
-    }
-    regexMemo.set(key, re);
-  }
-  return re;
-}
-
+const compiled = new Map<string, CompiledPattern>();
+/** Pattern.compile(source, flags), cached: apps compile one pattern again and again (String.split compiles one each call). Its
+ *  RegExps are shared, so a caller of one with sticky or global flags sets lastIndex before every exec. */
 function compilePattern(source: string, flags: number): CompiledPattern {
+  const key = flags + "/" + source, known = compiled.get(key);
+  if (known) return known;
   const java = flags & COMMENTS ? stripComments(source) : source;
-  // a first pass finds the groups and the embedded flags that the rewrite depends on
-  const scan = translate(java, { names: [], multiline: !!(flags & MULTILINE), dotall: !!(flags & DOTALL), unix: !!(flags & UNIX_LINES), anchored: true }, Mode.Main);
-  const shape: Shape = { names: scan.groups, multiline: scan.c.multiline, dotall: scan.c.dotall, unix: scan.c.unix, anchored: true };
+  const first = translate(java, { names: [], js: [], multiline: !!(flags & MULTILINE), dotall: !!(flags & DOTALL), unix: !!(flags & UNIX_LINES),
+    icase: !!(flags & CASE_INSENSITIVE), sets: false, sticky: false, anchored: true }, Mode.Main), scan = first.c;
+  const shape: Shape = { names: first.groups, js: scan.capture, multiline: scan.multiline, dotall: scan.dotall, unix: scan.unix, icase: scan.icase, sets: scan.sets, sticky: scan.sticky, anchored: true };
   const main = translate(java, shape, Mode.Main);
   shape.anchored = main.c.anchorDepth >= 0 && main.c.anchored;
-  let f = "ud";
-  if (flags & CASE_INSENSITIVE) f += "i";
-  if (shape.dotall) f += "s";
-  let re: RegExp;
-  try { re = javaRegex(main.out, f + "g"); } catch { re = javaRegex(main.out.replace(/\(\?<(?![=!])/g, "(?:<"), f.replace("u", "") + "g"); }
-  const plain = re.flags.replace(/[gy]/g, "");
-  const groups: number[] = [], names = new Map<string, number>();
-  captures(re.source).forEach((name, i) => {
-    if (name?.startsWith("__wdAtomic")) return;
-    groups.push(i + 1);
-    if (name) names.set(name, groups.length);
-  });
-  return { source: java, re, groups, names, shape, sticky: new RegExp(re.source, plain + "y"), whole: new RegExp(`(?:${re.source})(?![\\s\\S])`, plain + "y") };
+  const f = (shape.sets ? "vd" : "ud") + (shape.icase ? "i" : "") + (shape.dotall ? "s" : "");
+  const re = new RegExp(main.out, f + (shape.sticky ? "gy" : "g"));
+  const names = new Map<string, number>();
+  main.groups.forEach((name, g) => { if (name) names.set(name, g + 1); });
+  const p = { source: java, re, groups: main.c.capture, names, shape, sticky: new RegExp(re.source, f + "y"), whole: new RegExp(`(?:${re.source})(?![\\s\\S])`, f + "y") };
+  if (compiled.size >= 4096) compiled.clear();
+  compiled.set(key, p);
+  return p;
 }
 
 const SENTINELS = ["\uffff", "\ufffe", "\ufdd0"];
@@ -418,11 +458,13 @@ function derived(p: CompiledPattern, s: string): [Derived, Derived] | null {
   const cache = p.derived ??= new Map();
   let d = cache.get(s);
   if (d !== undefined) return d;
+  // the flags of a pattern bound to where the search starts are not derived
+  if (p.shape.sticky) return null;
   const escaped = `\\u${s.charCodeAt(0).toString(16)}`;
   try {
     const f = p.re.flags.replace(/[gdy]/g, "");
     d = [Mode.Hit, Mode.Req].map((mode) => {
-      const re = javaRegex(translate(p.source, p.shape, mode, escaped).out, f + "g");
+      const re = new RegExp(translate(p.source, p.shape, mode, escaped).out, f + "g");
       const flags = re.flags.replace("g", "");
       return { find: re, sticky: new RegExp(re.source, flags + "y"), whole: new RegExp(`(?:${re.source})(?:(?=${escaped})|${PAST})`, flags + "y") };
     }) as [Derived, Derived];
@@ -606,7 +648,7 @@ function stringPattern(source: string): StringPattern | Promise<never> {
     let c: CompiledPattern;
     try { c = compilePattern(source, 0); } catch (e) { return rt.drive(syntaxError(e, source)) as Promise<never>; }
     const flags = c.re.flags.replace(/[dgy]/g, "");
-    p = { all: new RegExp(c.re.source, flags + "g"), whole: new RegExp(c.whole.source, flags + "y"), groups: c.groups, names: c.names };
+    p = { all: new RegExp(c.re.source, flags + (c.shape.sticky ? "gy" : "g")), whole: new RegExp(c.whole.source, flags + "y"), groups: c.groups, names: c.names };
     if (stringPatterns.size >= 1024) stringPatterns.clear();
     stringPatterns.set(source, p);
   }
@@ -661,6 +703,8 @@ export function stringReplace(s: string, source: string, replacement: string, al
   const p = stringPattern(source);
   if (p instanceof Promise) return p;
   const re = all ? p.all : p.first ??= new RegExp(p.all.source, p.all.flags.replace("g", ""));
+  // a sticky one starts where the last left it
+  re.lastIndex = 0;
   if (replacement.indexOf("$") < 0 && replacement.indexOf("\\") < 0) return s.replace(re, replacement);
   // Matcher reads the replacement only for a match, so a malformed one fails only then
   let parts: (string | number)[] | null = null, error: unknown;
