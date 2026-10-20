@@ -12,12 +12,18 @@ import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
 import { rt } from "../jvm/runtime.ts";
+import { permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
 import { serveCalls } from "./process-port.ts";
-import { permissionDenied, unawaited, type BrokerCalls, type ProcessBroker } from "./processes.ts";
+import type { ProcessBroker } from "./processes.ts";
+
+type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };
+/** `calls`, each failing once process `pid` is dead */
+const live = <T extends object>(broker: ProcessBroker, pid: number, calls: T): T => Object.fromEntries(Object.entries(calls as Methods).map(([name, call]) =>
+  [name, typeof call !== "function" ? live(broker, pid, call) : (...args: never[]) => { broker.entry(pid); return call.apply(calls, args); }])) as T;
 
 /** Process `pid`'s command port; every call fails once the process is dead. */
 export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: MessagePort; close(): void } {
@@ -37,15 +43,12 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     if (privileged || ownedBy(pkg, caller.uid) || !write && publicRead) return;
     throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
   };
-  const webStorage = canonicalWebStorage(caller.pkg);
   const preferences = canonicalPreferenceCommands(broker.preferences, authorizePreference);
   const authorizePath = (path: string): number => {
     broker.entry(pid);
     const owner = packageOfPath(path);
     return owner?.private && !sameUidOrSystem(caller.uid, packages.get(owner.pkg)?.uid) ? 13 : 0;
   };
-  const paths = canonicalFilePaths(authorizePath, caller.uid);
-  const descriptors = broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid);
   const starts = (cls: string) => {
     const owner = packages.get(caller.pkg), node = owner?.components.service.get(cls);
     if (!node || owner!.process(node) !== caller.process)
@@ -53,50 +56,83 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     return broker.serviceStarts(pid);
   };
   const watches = new Map<number, () => void>();
-  const ui = Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
-    (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi;
-  const calls: BrokerCalls = {
-    ...ui,
-    processAlive: async target => target === 0 || broker.alive(target),
-    processSignal: async (target, signal) => broker.signal(pid, target, signal),
-    processWatch: async (target, token) => {
-      watches.get(token)?.(); watches.delete(token);
-      if (target === 0) return;
-      watches.set(token, broker.watch(target, () => {
-        watches.delete(token);
-        if (broker.alive(pid)) unawaited(broker.request(broker.entry(pid), endpoint => endpoint.processDied(token)));
-      }));
+  const calls: Answers<BrokerCalls> = {
+    process: {
+      processAlive: target => target === 0 || broker.alive(target),
+      processSignal: (target, signal) => broker.signal(pid, target, signal),
+      processWatch: (target, token) => {
+        watches.get(token)?.(); watches.delete(token);
+        if (target === 0) return;
+        watches.set(token, broker.watch(target, () => {
+          watches.delete(token);
+          if (broker.alive(pid)) unawaited(broker.request(broker.entry(pid), endpoint => endpoint.processDied(token)));
+        }));
+      },
+      processUnwatch: token => { watches.get(token)?.(); watches.delete(token); },
     },
-    processUnwatch: async token => { watches.get(token)?.(); watches.delete(token); },
-    serviceCreated: async (cls, intent) => starts(cls).created(cls, intent),
-    serviceDestroyed: async cls => starts(cls).destroyed(cls),
-    serviceStart: async (cls, intent) => starts(cls).start(cls, intent),
-    serviceDeliver: async cls => starts(cls).deliver(cls),
-    serviceRequested: async cls => starts(cls).requested(cls),
-    serviceStop: async cls => starts(cls).stop(cls),
-    serviceStopSelf: async (cls, id) => starts(cls).stopSelf(cls, id),
-    serviceDone: async (cls, id, result) => starts(cls).done(cls, id, result),
-    serviceForeground: async (cls, on) => starts(cls).foreground(cls, on),
-    serviceConnected: async (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
+    starts: {
+      created: (cls, intent) => starts(cls).created(cls, intent),
+      destroyed: cls => starts(cls).destroyed(cls),
+      start: (cls, intent) => starts(cls).start(cls, intent),
+      deliver: cls => starts(cls).deliver(cls),
+      requested: cls => starts(cls).requested(cls),
+      stop: cls => starts(cls).stop(cls),
+      stopSelf: (cls, id) => starts(cls).stopSelf(cls, id),
+      done: (cls, id, result) => starts(cls).done(cls, id, result),
+      foreground: (cls, on) => starts(cls).foreground(cls, on),
+    },
     // Intent.filterEquals and replaceExtras are Android framework operations on serialized
     // Intents; the canonical Java owner keeps extras parcelled instead of borrowing a VM.
-    pendingCreate: (pkg, kind, code, flags, intent, intents) => broker.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
-    pendingCancel: async id => broker.cancelPending(pid, id),
-    pendingSend: async (id, fill) => broker.intents.send(id, fill),
-    pendingOperation: async id => broker.takePending(pid, id),
-    pendingKind: async id => broker.intents.get(id)?.kind ?? null,
-    pendingFlags: async id => broker.intents.get(id)?.flags ?? 0,
-    pendingCreator: async id => {
-      const operation = broker.intents.get(id);
-      return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+    pending: {
+      create: (pkg, kind, code, flags, intent, intents) => broker.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
+      cancel: id => broker.cancelPending(pid, id),
+      send: (id, fill) => broker.intents.send(id, fill),
+      operation: id => broker.takePending(pid, id),
+      kind: id => broker.intents.get(id)?.kind ?? null,
+      flags: id => broker.intents.get(id)?.flags ?? 0,
+      creator: id => {
+        const operation = broker.intents.get(id);
+        return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+      },
     },
+    files: {
+      ...canonicalFilePaths(authorizePath, caller.uid),
+      filePrepare: async pkg => {
+        if (!ownedBy(pkg, caller.uid)) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
+        await broker.files.prepare(pkg);
+        broker.entry(pid);
+        await createAppData(pkg);
+      },
+    },
+    descriptors: broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid),
+    webStorage: canonicalWebStorage(caller.pkg),
+    prefs: { ...preferences, preferenceFiles: pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); } },
+    permissions,
+    settings: {
+      get: (table, name) => broker.settings.get(table, name),
+      entries: table => broker.settings.entries(table),
+      put: (table, name, value) => broker.settings.put(table, name, value),
+      ssaidKey: () => broker.settings.ssaidKey(),
+    },
+    // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
+    // would hold the launching main job while that same process is asked to pause.
+    activity: {
+      launch: (pkg, process, component, intent, request, callingClass) => {
+        unawaited(broker.activities.launch(pid, pkg, process, component, intent, request, callingClass));
+      },
+      finish: (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
+      presentation: translucent => broker.activities.presentation(pid, translucent),
+    },
+    ui: Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
+      (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
+    serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
     systemService: async name => {
       if (!SYSTEM_SERVICES.includes(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
       const handle = await asSystem(() => ownedSystemService(name));
       broker.entry(pid);
       return handle;
     },
-    systemProvider: async authority => {
+    systemProvider: authority => {
       const provider = systemProviders.get(authority);
       return provider?.systemRealm ? asSystem(async () => exportBinder(await provider.binder())) : null;
     },
@@ -111,26 +147,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
         } finally { await broker.discardDescriptors(PROCESS_PID, received, false); }
       }, true);
     },
-    filePrepare: async pkg => {
-      if (!ownedBy(pkg, caller.uid)) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
-      await broker.files.prepare(pkg);
-      broker.entry(pid);
-      await createAppData(pkg);
-    },
-    fileSetAttributes: async (path, change) => paths.fileSetAttributes(path, change),
-    fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
-    fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
-    fileRename: async (from, to) => paths.fileRename(from, to), fileRemove: async (path, directory) => paths.fileRemove(path, directory),
-    fileCreate: async path => paths.fileCreate(path), fileFifo: async path => paths.fileFifo(path),
-    fileDescriptor: request => descriptors.fileDescriptor(request),
-    webRenderer: async origin => webStorage.webRenderer(origin),
-    webStorage: async (op, origin) => webStorage.webStorage(op, origin),
-    preferenceRead: async (name, key) => preferences.preferenceRead(name, key),
-    preferenceKeys: async name => preferences.preferenceKeys(name),
-    preferenceChange: async (name, changes) => preferences.preferenceChange(name, changes),
-    preferenceFiles: async pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); },
-    permissionCheck: async (pkg, names) => permissions.permissionCheck(pkg, names),
-    permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
     ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {
       if (!broker.alive(pid)) return false;
       unawaited(broker.request(broker.entry(pid), endpoint => endpoint.cookiesChanged()));
@@ -157,29 +173,14 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       const canonical = recordRemoteExit({ ...record, pid, uid: caller.uid, pkg: caller.pkg, process: caller.process });
       broker.fail(pid, `Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`, deathOf(canonical), canonical);
     },
-    // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
-    // would hold the launching main job while that same process is asked to pause.
-    activityLaunch: async (pkg, process, component, intent, request, callingClass) => {
-      unawaited(broker.activities.launch(pid, pkg, process, component, intent, request, callingClass));
-    },
-    activityFinish: async (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
-    activityPresentation: async translucent => broker.activities.presentation(pid, translucent),
-    displayOrientation: async landscape => broker.activities.orientation(pid, landscape),
-    settingsGet: async (table, name) => broker.settings.get(table, name),
-    settingsEntries: async table => broker.settings.entries(table),
-    settingsPut: async (table, name, value) => broker.settings.put(table, name, value),
-    settingsSsaid: async () => broker.settings.ssaidKey(),
+    displayOrientation: landscape => broker.activities.orientation(pid, landscape),
     sqlite: request => (caller.session.sqlite ??= createSQLiteSession()).call(request),
     transact: request => broker.transact(pid, request),
     service: (pkg, process, request) => broker.service(pid, pkg, process, request),
     contentProvider: (pkg, process, authority) => broker.contentProvider(pid, pkg, process, authority),
     broadcast: (data, manifest, permissions, ordered, initial) => broker.broadcast(pid, data, manifest, permissions, ordered, initial),
   };
-  const live = Object.fromEntries(Object.entries(calls).map(([name, call]) => [name, (...args: never[]) => {
-    broker.entry(pid);
-    return (call as (...args: never[]) => unknown)(...args);
-  }])) as BrokerCalls;
-  const stop = serveCalls(port1, live, () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, {
+  const stop = serveCalls(port1, live(broker, pid, calls), () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, {
     // a reply its caller never receives gives back the descriptor rights it carried
     transact: reply => broker.discardDescriptors(pid, reply.data, false),
   });

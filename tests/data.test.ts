@@ -19,7 +19,7 @@ import { decodeIntent } from "../src/android/intentipc.ts";
 import { useFocusedUid } from "../src/android/clipboard.ts";
 import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
 import { notificationTransport } from "../src/android/notification.ts";
-import type { BrokerCalls } from "../src/shell/processes.ts";
+import type { BrokerCalls } from "../src/shell/broker-contract.ts";
 import { cookieManager, cookieTransport } from "../src/android/cookies.ts";
 import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions.ts";
 import { PreferenceStore, preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, getPrefs, type PreferenceCalls } from "../src/android/sharedprefs.ts";
@@ -155,7 +155,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousPaths = filePathTransport.calls,
     previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
-  type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
+  type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
   const waiting = new Promise<void>(resolve=>entered=resolve), blocked = new Promise<void>(resolve=>release=resolve);
@@ -164,13 +164,13 @@ test("Worker activity commands retain local results across reentrant replies and
   const received: unknown[] = [], results: unknown[] = [];
   const intent = await newIntent("org.webdroid.test.LAUNCH");
   const stop = serveCalls<Calls>(port1, {
-    activityLaunch: async (pkg,process,component,data,id,callingClass) => {
+    activity: { launch: async (pkg,process,component,data,id,callingClass) => {
       request=id; launches++;
       if(launches>1) throw new Error("launch denied");
       const copied = await decodeIntent(data);
       received.push(pkg,process,component,callingClass,copied===intent,await vcall(copied,"getAction","()Ljava/lang/String;"));
       entered(); await blocked;
-    }, activityFinish:async()=>{},activityPresentation:async()=>{},
+    }, finish:async()=>{},presentation:async()=>{} },
     exitRecords:async()=>{readEntered();await readBlocked;return [{pid:71,uid:owner.uid,pkg:owner.pkg,process:owner.pkg,reason:2,status:9,importance:400,timestamp:1,description:null,state:null,tombstone:null,dialog:false}];},
   });
   attachProcessBrokerPort(port2);

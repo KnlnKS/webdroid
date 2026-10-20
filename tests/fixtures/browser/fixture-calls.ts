@@ -1,5 +1,6 @@
 // What the browser fixtures' page side (process-bootstrap.ts) and their Workers (process-worker-fixture.ts) share.
-import type { BrokerCalls, ProcessEndpoint } from "../../../src/shell/processes.ts";
+import type { ProcessEndpoint } from "../../../src/shell/broker-contract.ts";
+import type { MethodTree } from "../../../src/shell/process-port.ts";
 
 /** a process endpoint that answers as an idle process does, but for `overrides` */
 export const stubEndpoint = (overrides: Partial<ProcessEndpoint> = {}): ProcessEndpoint => ({
@@ -14,5 +15,5 @@ export const fixtureUrl = (role: string): string => `${location.origin}/process-
 export const fixtureWorker = (role: string): Worker => new Worker(fixtureUrl(role), { type: "module" });
 
 /** how a fixture Worker reaches the broker: its port and the methods the Worker's proxy names */
-export type BrokerInit = { broker: MessagePort; methods: readonly (keyof BrokerCalls)[] };
+export type BrokerInit = { broker: MessagePort; methods: MethodTree };
 export type PointerCalls = { pointer(owner: number, action: number, x: number, y: number): Promise<void>; release(): Promise<void>; samples(): Promise<number[][]> };

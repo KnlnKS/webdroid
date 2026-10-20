@@ -9,7 +9,7 @@ import { existingAotProfile } from "../../../src/shell/aot-profile.ts";
 import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
 import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
-import type { BrokerCalls } from "../../../src/shell/processes.ts";
+import type { BrokerCalls } from "../../../src/shell/broker-contract.ts";
 import type { ImeView } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
@@ -23,7 +23,7 @@ function originatingHostFailure(): never { throw new TypeError("undefined.hasTra
 const roles: Record<string, () => (data: never) => void> = {
   /** a process whose services step through the broker calls endpointOwnership checks */
   endpoint: () => ({ port, ...init }: BrokerInit & { port: MessagePort }) => {
-    const broker = brokerCalls(init), life = remoteProcessLife(() => broker, error => { throw error; });
+    const broker = brokerCalls(init), life = remoteProcessLife(() => broker.process, error => { throw error; });
     let removed = false, notices = 0, fd = -1, received = -1, deaths = 0;
     // The port binds the caller's identity; the one this request names must not count.
     const forged = { caller: { pid: 9999, uid: 9999 } };
@@ -35,27 +35,27 @@ const roles: Record<string, () => (data: never) => void> = {
     const steps: Record<number, (intent: ParcelData) => Promise<BinderHandle>> = {
       42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: notices }),
       43: async () => {
-        fd = (await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
-        const foreign = await broker.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
-        await broker.fileDescriptor({ kind: "write", fd, bytes: Uint8Array.of(55), offset: 0 });
+        fd = (await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
+        const foreign = await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
+        await broker.descriptors.fileDescriptor({ kind: "write", fd, bytes: Uint8Array.of(55), offset: 0 });
         return { pid: fd, id: foreign };
       },
       44: async () => {
-        const reply = await broker.fileDescriptor({ kind: "read", fd, length: 1, offset: 0 }) as Uint8Array;
+        const reply = await broker.descriptors.fileDescriptor({ kind: "read", fd, length: 1, offset: 0 }) as Uint8Array;
         return { pid: reply[0] ?? -1, id: reply.length };
       },
       45: async () => {
-        const stage = await broker.fileDescriptor({ kind: "stage", fd });
+        const stage = await broker.descriptors.fileDescriptor({ kind: "stage", fd });
         received = descriptor(await broker.transact({ handle: { pid: 8001, id: 1 }, code: 3, flags: 0,
           data: { bytes: new Uint8Array(0), objects: [[0, { descriptor: stage }]] } }));
-        const read = await broker.fileDescriptor({ kind: "read", fd: received, length: 1 }) as Uint8Array;
-        const position = await broker.fileDescriptor({ kind: "seek", fd, offset: 0, whence: 1 });
-        await broker.fileDescriptor({ kind: "close", fd });
+        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1 }) as Uint8Array;
+        const position = await broker.descriptors.fileDescriptor({ kind: "seek", fd, offset: 0, whence: 1 });
+        await broker.descriptors.fileDescriptor({ kind: "close", fd });
         return { pid: read[0], id: position };
       },
       46: async () => {
-        const read = await broker.fileDescriptor({ kind: "read", fd: received, length: 1, offset: 0 }) as Uint8Array;
-        await broker.fileDescriptor({ kind: "close", fd: received });
+        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1, offset: 0 }) as Uint8Array;
+        await broker.descriptors.fileDescriptor({ kind: "close", fd: received });
         return { pid: read[0], id: read.length };
       },
       47: async () => {
@@ -80,14 +80,14 @@ const roles: Record<string, () => (data: never) => void> = {
   },
   /** a process relaying the page's broker calls */
   client: () => {
-    let broker: Record<string, (...args: unknown[]) => Promise<unknown>>;
+    let broker: unknown;
     return (data: BrokerInit | { id: number; method: string; args: unknown[] }) => {
       if ("broker" in data) {
-        broker = brokerCalls(data) as unknown as typeof broker;
+        broker = brokerCalls(data);
         return post({ ready: true });
       }
       const { id, method, args } = data;
-      void (async () => broker[method](...args))().then(value => post({ id, value }), (error: Error) => post({ id, error: error.message }));
+      void (async () => (method.split(".").reduce((methods, name) => (methods as Record<string, unknown>)[name], broker) as (...args: unknown[]) => unknown)(...args))().then(value => post({ id, value }), (error: Error) => post({ id, error: error.message }));
     };
   },
   /** a process booted from the page's bootstrap, on a guest clock the page drives when it sends one */

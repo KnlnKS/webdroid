@@ -35,7 +35,7 @@ export function bootSystemOwner(): Promise<void> {
     await onMain(() => rt.drive(loadSystemFontMap()));
     await onMain(initDeviceLocales);
     await onMain(applyDeviceConfiguration);
-    const endpoint = connectProcess();
+    const endpoint = connectProcess(broker);
     await onMain(() => scall("android/app/ActivityThread", "systemMain", "()Landroid/app/ActivityThread;"));
     broker.ready(PROCESS_PID, endpoint);
   })();

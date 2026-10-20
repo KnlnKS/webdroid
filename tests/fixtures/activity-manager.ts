@@ -23,8 +23,8 @@ let creationGate: { entered: () => void; wait: Promise<void> } | undefined;
 const starts = serviceTransport.starts(), ports = new MessageChannel();
 const stopStarts = serveCalls(ports.port1,Object.fromEntries(Object.entries(starts).map(([name,method]) =>
   [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); if (name === "created" && creationGate) { creationGate.entered(); await creationGate.wait; } return (method as (...args:unknown[])=>unknown)(...args); }])));
-const remoteStarts = callProxy(ports.port2,Object.keys(starts));
-serviceTransport.starts = () => remoteStarts.endpoint as unknown as typeof starts;
+const remoteStarts = callProxy<typeof starts>(ports.port2,Object.keys(starts) as (keyof typeof starts)[]);
+serviceTransport.starts = () => remoteStarts.endpoint;
 
 
 const PKG = "org.webdroid.test.am", SERVICE = PKG + ".Svc";

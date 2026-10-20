@@ -9,7 +9,8 @@ import { BrowserLocation } from "../src/shell/geolocation.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { mkUri, uriText, type JUri } from "../src/android/net.ts";
 import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
-import { remoteSettings, type SettingsCalls } from "../src/shell/settings.ts";
+import type { SettingsAccess } from "../src/shell/settings.ts";
+import type { Calls } from "../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { systemProvider } from "../src/android/systemproviders.ts";
 import { bootApp, packageRecord, thrown } from "./java.ts";
@@ -46,14 +47,14 @@ describe("settings-provider", () => {
     const store = settingsStore(), channel = new MessageChannel(), key = "webdroid_async_setting";
     let release!: () => void, began!: () => void;
     const gate = new Promise<void>(resolve => release = resolve), entered = new Promise<void>(resolve => began = resolve);
-    const stop = serveCalls<SettingsCalls>(channel.port1, {
-      settingsGet: async (table, name) => store.get(table, name),
-      settingsEntries: async table => store.entries(table),
-      settingsSsaid: async () => store.ssaidKey(),
-      settingsPut: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
+    const stop = serveCalls<Calls<SettingsAccess>>(channel.port1, {
+      get: async (table, name) => store.get(table, name),
+      entries: async table => store.entries(table),
+      ssaidKey: async () => store.ssaidKey(),
+      put: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
     });
-    const client = callProxy<SettingsCalls>(channel.port2, ["settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"]);
-    useSettingsAccess(remoteSettings(() => client.endpoint));
+    const client = callProxy<Calls<SettingsAccess>>(channel.port2, ["get", "entries", "put", "ssaidKey"]);
+    useSettingsAccess(client.endpoint);
     setProcessIdentity(4321, 1000);
     try {
       const pending = scall(GLOBAL, "putString", `(${CR}${S}${S})Z`, cr, key, "shared");

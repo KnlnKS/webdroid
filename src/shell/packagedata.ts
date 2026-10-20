@@ -2,7 +2,8 @@
 // per-package state ActivityManager and PackageManager reset beside it (clearApplicationUserData);
 // removing the package (uninstall, the shell's reset) clears it, then also takes its install state
 // and what the system keeps for it while it is installed.
-import type { processBroker, Receiver } from "./processes.ts";
+import type { Receiver } from "./broker-contract.ts";
+import type { processBroker } from "./processes.ts";
 import type { ParcelData } from "../android/binder.ts";
 import { webData } from "../android/webstorage.ts";
 import { keystoreData } from "../android/keystore.ts";

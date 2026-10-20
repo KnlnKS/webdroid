@@ -14,7 +14,8 @@ import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { javaOpenFd } from "../src/native/fs.ts";
 import { javaReadFd, openFd } from "../src/native/fd.ts";
-import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
+import { ProcessBroker } from "../src/shell/processes.ts";
+import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { bootApp, packageRecord } from "./java.ts";
@@ -208,7 +209,7 @@ test("foreground broker retains transferred rights after sender death and reject
   const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(source));
   let recipient: JObj | undefined;
   try {
-    descriptorTransport.calls = () => client.endpoint;
+    descriptorTransport.calls = () => client.endpoint.descriptors;
     descriptorTransport.local = broker.descriptorRights(7701);
     notificationTransport.foreground = client.endpoint.notificationForeground;
     grantPermissions(["android.permission.POST_NOTIFICATIONS"]);

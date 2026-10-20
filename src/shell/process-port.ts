@@ -1,7 +1,12 @@
 import { note, Ev } from "../timeline.ts";
-import type { ProcessEndpoint } from "./processes.ts";
+import type { ProcessEndpoint } from "./broker-contract.ts";
 
 type Contract = Record<string, (...args: never[]) => unknown>;
+/** a contract's method names by domain, "" naming its own: a domain's are called as `domain.method` */
+export type MethodTree = { readonly [domain: string]: readonly string[] };
+/** each method of `methods` by the name it is called by, in the order a timeline indexes calls */
+export const qualified = (methods: MethodTree): string[] =>
+  Object.entries(methods).flatMap(([domain, names]) => domain ? names.map((name) => `${domain}.${name}`) : names);
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
   | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
@@ -40,16 +45,25 @@ export function closePort(port: MessagePort, error?: ProcessFailure): void {
 }
 
 /** per method, what acts on a call's result */
-type ByResult<C extends Contract, R> = { [K in keyof C]?: (value: Awaited<ReturnType<C[K]>>) => R };
+type ByResult<C, R> = { [K in keyof C]?: C[K] extends (...args: never[]) => infer V ? (value: Awaited<V>) => R : never };
 /** per method, what acts on a call's arguments */
-type ByArgs<C extends Contract, R> = { [K in keyof C]?: (...args: Parameters<C[K]>) => R };
+type ByArgs<C, R> = { [K in keyof C]?: C[K] extends (...args: infer A) => unknown ? (...args: A) => R : never };
 const NONE: Transferable[] = [];
-/** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
- *  this endpoint while the request that caused it is suspended. `undelivered` releases a result that never reached its caller;
- *  `transfer` names what a result gives away. A proxy may call over the same port (duplex). */
-export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
+/** One process's endpoint, whose object members are domains of methods. Calls are dispatched independently: a Binder
+ *  callback may reenter this endpoint while the request that caused it is suspended. `undelivered` releases a result that
+ *  never reached its caller; `transfer` names what a result gives away. A proxy may call over the same port (duplex). */
+export function serveCalls<C extends object>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
   undelivered: ByResult<C, unknown> = {}, transfer: ByResult<C, Transferable[]> = {}): () => void {
-  const allowed = new Set(Object.keys(endpoint)), index = new Map(Object.keys(endpoint).map((name, i) => [name, i]));
+  // by the name each is called by, a method's object and its timeline index
+  const served = new Map<string, { self: Record<string, unknown>; name: string; at: number }>();
+  const serve = (self: Record<string, unknown>, prefix: string) => {
+    for (const name of Object.keys(self)) {
+      const value = self[name];
+      if (!prefix && value !== null && typeof value === "object") serve(value as Record<string, unknown>, name + ".");
+      else served.set(prefix + name, { self, name, at: served.size });
+    }
+  };
+  serve(endpoint as Record<string, unknown>, "");
   let closed = false;
   const close = (error?: ProcessFailure) => {
     if (closed) return;
@@ -62,16 +76,16 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
     if (data.kind === "close") { close(); return; }
     if (data.kind !== "call" && data.kind !== "notify") return;
     try {
-      if (!allowed.has(data.method) || !Array.isArray(data.args)) throw new Error("Unknown process endpoint method");
-      const invoke = endpoint[data.method] as (...args: unknown[]) => unknown, at = index.get(data.method)!;
+      const method = served.get(data.method);
+      if (!method || !Array.isArray(data.args)) throw new Error("Unknown process endpoint method");
       // a notification has no caller waiting on it: only calls are timed
       const call = data.kind === "call";
-      if (call) note(Ev.Serve, at);
-      const value = await invoke.apply(endpoint, data.args);
+      if (call) note(Ev.Serve, method.at);
+      const value = await (method.self[method.name] as (...args: unknown[]) => unknown).apply(method.self, data.args);
       if (!call) return;
-      note(Ev.Served, at);
-      const release = undelivered[data.method] as ((value: unknown) => unknown) | undefined;
-      const given = transfer[data.method] as ((value: unknown) => Transferable[]) | undefined;
+      note(Ev.Served, method.at);
+      const release = (undelivered as Record<string, ((value: unknown) => unknown) | undefined>)[data.method];
+      const given = (transfer as Record<string, ((value: unknown) => Transferable[]) | undefined>)[data.method];
       if (closed) await release?.(value);
       else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? NONE); }
       catch (error) { await release?.(value); throw error; }
@@ -84,14 +98,13 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
   return close;
 }
 
-/** The broker's proxy. The caller supplies its own VM's exception constructor; `transfer` names what a call's
- *  arguments give away. */
-export function callProxy<C extends Contract>(port: MessagePort, names: readonly (keyof C & string)[],
+/** The proxy of an endpoint with the methods `names` lists, or with each domain of methods a tree lists. The caller supplies
+ *  its own VM's exception constructor; `transfer` names what a call's arguments give away. */
+export function callProxy<C extends object>(port: MessagePort, names: readonly (keyof C & string)[] | MethodTree,
   notifications: readonly (keyof C & string)[] = [], makeError: (error: ProcessFailure) => unknown = processError,
   onClose: (error: ProcessFailure) => void = () => {}, transfer: ByArgs<C, Transferable[]> = {}): { endpoint: C; close(): void } {
   let closed = false, nextId = 1;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void; method: number }>();
-  const index = new Map(names.map((name, i) => [name as string, i]));
   const finish = (error = closedFailure) => {
     if (closed) return;
     closed = true;
@@ -111,12 +124,12 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     else request.reject(makeError(data.error));
   });
   port.start();
-  const given = (method: string, args: unknown[]) => (transfer[method] as ((...args: unknown[]) => Transferable[]) | undefined)?.(...args) ?? NONE;
-  const call = (method: string, args: unknown[]): Promise<unknown> => {
+  const given = (method: string, args: unknown[]) =>
+    (transfer as Record<string, ((...args: unknown[]) => Transferable[]) | undefined>)[method]?.(...args) ?? NONE;
+  const call = (method: string, at: number, args: unknown[]): Promise<unknown> => {
     if (closed) return Promise.reject(makeError(closedFailure));
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      const at = index.get(method) ?? -1;
       pending.set(id, { resolve, reject, method: at });
       note(Ev.Call, at);
       try { port.postMessage({ kind: "call", id, method, args } satisfies Message, given(method, args)); }
@@ -124,12 +137,18 @@ export function callProxy<C extends Contract>(port: MessagePort, names: readonly
     });
   };
   const notify = new Set<string>(notifications);
-  const endpoint = Object.fromEntries(names.map(method => [method, (...args: unknown[]) => {
-    if (!notify.has(method)) return call(method, args);
+  const proxy = (method: string, at: number) => !notify.has(method) ? (...args: unknown[]) => call(method, at, args) : (...args: unknown[]) => {
     if (closed) throw makeError(closedFailure);
     port.postMessage({ kind: "notify", id: 0, method, args } satisfies Message, given(method, args));
-  }])) as unknown as C;
-  return { close, endpoint };
+  };
+  // each domain's methods are made once, into one object
+  const endpoint: Record<string, unknown> = {}, tree = (Array.isArray(names) ? { "": names } : names) as MethodTree;
+  let at = 0;
+  for (const domain of Object.keys(tree)) {
+    const methods: Record<string, unknown> = domain ? endpoint[domain] = {} : endpoint;
+    for (const name of tree[domain]) methods[name] = proxy(domain ? `${domain}.${name}` : name, at++);
+  }
+  return { close, endpoint: endpoint as C };
 }
 
 /** `endpoint` served and `names` called over one port, so that messages keep one order both ways; either

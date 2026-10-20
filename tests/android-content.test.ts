@@ -24,7 +24,8 @@ import { mkComponentName, newIntent } from "../src/android/intent.ts";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc.ts";
 import { uptimeMillis } from "../src/guest-clock.ts";
 import { createProcessEndpoint } from "../src/shell/process-endpoint.ts";
-import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes.ts";
+import { ProcessBroker } from "../src/shell/processes.ts";
+import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
@@ -342,33 +343,33 @@ describe("pending-intents", () => {
       owner.components.service.set(cls,{name:"service",attrs:[
         {name:"name",str:cls,ns:"",resId:0,type:TV.STRING,data:0},
         {name:"process",str:PKG+":owner",ns:"",resId:0,type:TV.STRING,data:0}],children:[]});
-      expect(await sibling.serviceCreated(cls,data).catch(error=>error.javaClass)).toBe("java/lang/SecurityException");
-      await creator.serviceCreated(cls,data);
-      expect(await creator.serviceRequested(cls)).toBe(false);
+      expect(await sibling.starts.created(cls,data).catch(error=>error.javaClass)).toBe("java/lang/SecurityException");
+      await creator.starts.created(cls,data);
+      expect(await creator.starts.requested(cls)).toBe(false);
       const queued = await encoded("service");
-      const start = await creator.serviceStart(cls,queued);
+      const start = await creator.starts.start(cls,queued);
       queued.bytes.fill(0);
-      expect(await creator.serviceRequested(cls)).toBe(true);
-      const delivered = await creator.serviceDeliver(cls);
+      expect(await creator.starts.requested(cls)).toBe(true);
+      const delivered = await creator.starts.deliver(cls);
       expect(delivered.map(item=>item.id)).toEqual([start]);
       expect(await vcall(await decodeIntent(delivered[0].intent!),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("service");
-      expect(await creator.serviceStopSelf(cls,start+1)).toBe(false);
-      expect(await creator.serviceDone(cls,start,2)).toBe(true);
-      expect(await creator.serviceStop(cls)).toBe(true);
-      await creator.serviceForeground(cls,true);
-      await creator.serviceDestroyed(cls);
+      expect(await creator.starts.stopSelf(cls,start+1)).toBe(false);
+      expect(await creator.starts.done(cls,start,2)).toBe(true);
+      expect(await creator.starts.stop(cls)).toBe(true);
+      await creator.starts.foreground(cls,true);
+      await creator.starts.destroyed(cls);
 
-      const id = (await creator.pendingCreate(PKG,"activity",7,0,data))!;
-      const denied = await other.pendingCreate(PKG,"activity",8,0,data).catch(error => error.javaClass);
+      const id = (await creator.pending.create(PKG,"activity",7,0,data))!;
+      const denied = await other.pending.create(PKG,"activity",8,0,data).catch(error => error.javaClass);
       expect(denied).toBe("java/lang/SecurityException");
-      expect(await creator.pendingCreator(id)).toEqual({pkg:PKG,uid:owner.uid});
-      expect(await sibling.pendingCreate(PKG,"activity",7,0x8000000,await encoded("updated"))).toBe(id);
-      const operation = (await sibling.pendingOperation(id))!;
+      expect(await creator.pending.creator(id)).toEqual({pkg:PKG,uid:owner.uid});
+      expect(await sibling.pending.create(PKG,"activity",7,0x8000000,await encoded("updated"))).toBe(id);
+      const operation = (await sibling.pending.operation(id))!;
       expect(operation.process).toBe(PKG + ":owner");
       expect(await vcall(await decodeIntent(operation.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
       operation.intent.bytes.fill(0);
       expect(await vcall(await decodeIntent(broker.intents.get(id)!.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
-      expect(await other.pendingCancel(id).catch(error => error.javaClass)).toBe("java/lang/SecurityException");
+      expect(await other.pending.cancel(id).catch(error => error.javaClass)).toBe("java/lang/SecurityException");
       // An alarm is system_server's: its creator's death does not cancel its operation.
       let receiveAlarm!: (request: unknown) => void;
       const delivery = new Promise(resolve => receiveAlarm = resolve);
@@ -378,13 +379,13 @@ describe("pending-intents", () => {
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
-      expect(await sibling.pendingKind(id)).toBe("activity");
+      expect(await sibling.pending.kind(id)).toBe("activity");
       broker.alarms.cancel(id);
-      await sibling.pendingCancel(id);
-      expect(await sibling.pendingCreator(id)).toBeNull();
-      const single = (await sibling.pendingCreate(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
-      expect((await sibling.pendingOperation(single))!.kind).toBe("broadcast");
-      expect(await sibling.pendingOperation(single)).toBeNull();
+      await sibling.pending.cancel(id);
+      expect(await sibling.pending.creator(id)).toBeNull();
+      const single = (await sibling.pending.create(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
+      expect((await sibling.pending.operation(single))!.kind).toBe("broadcast");
+      expect(await sibling.pending.operation(single)).toBeNull();
     } finally {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
@@ -399,8 +400,7 @@ describe("pending-intents", () => {
     let release!: () => void, entered!: () => void;
     const waiting = new Promise<void>(resolve => { entered = resolve; });
     const acknowledgment = new Promise<void>(resolve => { release = resolve; });
-    Object.assign(pendingTransport, { create: records.pendingCreate, send: records.pendingSend, operation: records.pendingOperation, kind: records.pendingKind,
-      flags: records.pendingFlags, creator: records.pendingCreator, cancel: async (id: number) => { entered(); await acknowledgment; await records.pendingCancel(id); } } satisfies PendingAccess);
+    Object.assign(pendingTransport, { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } satisfies PendingAccess);
     useAlarmScheduler(broker.alarms);
     try {
       const path = "/data/data/test/pending-fd.bin";

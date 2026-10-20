@@ -11,20 +11,6 @@ export type SettingsAccess = {
   put(table: SettingsTable, name: string, value: string | null): boolean | Promise<boolean>;
   ssaidKey(): string | Promise<string>;
 };
-export type SettingsCalls = {
-  settingsGet(table: SettingsTable, name: string): Promise<string | null>;
-  settingsEntries(table: SettingsTable): Promise<[string, string][]>;
-  settingsPut(table: SettingsTable, name: string, value: string | null): Promise<boolean>;
-  settingsSsaid(): Promise<string>;
-};
-export function remoteSettings(calls: () => SettingsCalls): SettingsAccess {
-  return {
-    get: (table, name) => calls().settingsGet(table, name),
-    entries: table => calls().settingsEntries(table),
-    put: (table, name, value) => calls().settingsPut(table, name, value),
-    ssaidKey: () => calls().settingsSsaid(),
-  };
-}
 type Written = Partial<Record<SettingsTable, Record<string, string | null>>>;
 const KEY = "wd:settings";
 

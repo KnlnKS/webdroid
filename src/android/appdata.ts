@@ -4,7 +4,7 @@
 // package, has the data's owners clear or remove it (shell/packagedata.ts) and sends them.
 import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime.ts";
 import { scall, vcall, newObj, after } from "../jvm/natives/jentry.ts";
-import { callingIdentity, type ParcelData, binderEscape } from "./binder.ts";
+import { callingIdentity, notConnected, type ParcelData, binderEscape } from "./binder.ts";
 import { encodeIntent } from "./intentipc.ts";
 import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent.ts";
 import { longVersionCode, queryReceivers } from "./pm.ts";
@@ -12,7 +12,7 @@ import { packages } from "./packages.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { sendIntent } from "./pendingintent.ts";
 import type { PackageDataChange } from "../shell/packagedata.ts";
-import type { Receiver } from "../shell/processes.ts";
+import type { Receiver } from "../shell/broker-contract.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 
 const S = "Ljava/lang/String;";
@@ -27,14 +27,9 @@ function* packageBroadcast$(action: string, pkg: string, uid: number, flags: str
   const targets = (yield* awaited(queryReceivers(intent))).filter((r) => r.owner.pkg !== pkg).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
   return { data: yield* awaited(encodeIntent(intent)), targets };
 }
-/** a process Worker's route to the broker, which runs the change as system_server does */
-export const packageDataTransport = { change: null as ((pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string) => Promise<boolean>) | null };
-/** whether the change ran: with a `prompt`, only once the user agreed to it */
-async function change(pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string): Promise<boolean> {
-  if (packageDataTransport.change) return packageDataTransport.change(pkg, how, broadcasts, prompt);
-  const { processBroker } = await import("../shell/processes.ts");
-  return processBroker().changePackageData(pkg, how, broadcasts, prompt);
-}
+/** a process's route to the broker, which runs the change as system_server does: whether it ran, with
+ *  a `prompt` only once the user agreed to it */
+export const packageDataTransport: { change: (pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string) => Promise<boolean> } = { change: notConnected };
 
 /** clearApplicationUserData of an installed package, `fromApp` when it clears its own: its processes
  *  are killed and its data cleared, then ACTION_PACKAGE_DATA_CLEARED goes out and `observer` hears
@@ -42,7 +37,7 @@ async function change(pkg: string, how: PackageDataChange, broadcasts: Broadcast
 export const clearUserData = driven(function* (pkg: string, fromApp: boolean, keepState: boolean, observer: JObj | null): Gen<{ done: Promise<boolean> }> {
   const record = packages.get(pkg);
   const cleared = record && (yield* packageBroadcast$("android.intent.action.PACKAGE_DATA_CLEARED", pkg, record.uid));
-  const done = !cleared ? Promise.resolve(false) : change(pkg, { kind: "clear", fromApp, keepState }, [cleared])
+  const done = !cleared ? Promise.resolve(false) : packageDataTransport.change(pkg, { kind: "clear", fromApp, keepState }, [cleared])
     .then(() => true, (error) => { console.error("[clear data]", pkg, error); return false; });
   void done.then((ok) => { if (observer) detached(() => vcall(observer, "onRemoveCompleted", `(${S}Z)V`, pkg, ok ? 1 : 0), binderEscape()); });
   return { done };
@@ -58,7 +53,7 @@ export const deletePackage = driven(function* (pkg: string, prompt?: string): Ge
   const flags = ["android.intent.extra.DATA_REMOVED", "android.intent.extra.REMOVED_FOR_ALL_USERS"];
   const broadcasts = [yield* packageBroadcast$("android.intent.action.PACKAGE_REMOVED", pkg, record.uid, flags),
     yield* packageBroadcast$("android.intent.action.PACKAGE_FULLY_REMOVED", pkg, record.uid, flags)];
-  return (yield* awaited(change(pkg, { kind: "remove" }, broadcasts, prompt))) ? DELETE_SUCCEEDED : DELETE_FAILED_ABORTED;
+  return (yield* awaited(packageDataTransport.change(pkg, { kind: "remove" }, broadcasts, prompt))) ? DELETE_SUCCEEDED : DELETE_FAILED_ABORTED;
 });
 
 const DELETE_PACKAGES = "android.permission.DELETE_PACKAGES";
