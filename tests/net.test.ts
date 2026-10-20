@@ -8,6 +8,7 @@ import { startMainLooper } from "../src/android/mainloop.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { serve } from "../scripts/serve.ts";
+import { nextHop, type ProxyRequest } from "../src/shell/webpage/redirect.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(startMainLooper);
@@ -152,6 +153,25 @@ describe("http-stream", () => {
       expect(await vcall(await open("https://example.test/start?q={x}"), "getResponseCode", "()I")).toBe(200);
       expect(seen).toEqual([null, "hop=1"]);
     }, await newObj("java/net/CookieManager"));
+  });
+});
+
+describe("proxy-redirect", () => {
+  const answer = (status: number, location?: string) => new Response(null, { headers: { "x-wd-status": String(status), ...location ? { location } : {} } });
+  const hop = (method: string, headers: Record<string, string> = {}) => ({ url: "https://a.example/dir/page", method, headers: new Headers(headers),
+    body: method === "POST" ? Uint8Array.of(1) : undefined });
+  const shape = (next: ProxyRequest | null) => next && { url: next.url, method: next.method, headers: Object.fromEntries(next.headers), body: next.body };
+  test("a proxy answer's redirect is the next request as fetch makes it", () => {
+    const auth = { "x-wd-authorization": "Bearer t", "x-wd-content-type": "text/plain" };
+    // 303 and a POST's 301/302 turn into a GET without the body; 307/308 keep both
+    expect(shape(nextHop(answer(303, "/other"), hop("POST", auth)))).toEqual({ url: "https://a.example/other", method: "GET", headers: { "x-wd-authorization": "Bearer t" }, body: undefined });
+    expect(shape(nextHop(answer(302, "next"), hop("PUT", auth)))?.method).toBe("PUT");
+    expect(shape(nextHop(answer(301, "next"), hop("POST")))).toMatchObject({ url: "https://a.example/dir/next", method: "GET", body: undefined });
+    expect(shape(nextHop(answer(307, "next"), hop("POST")))).toMatchObject({ method: "POST", body: Uint8Array.of(1) });
+    // another origin never sees the credentials
+    expect(shape(nextHop(answer(308, "https://b.example/"), hop("GET", auth)))?.headers).toEqual({ "x-wd-content-type": "text/plain" });
+    // no redirect: another status, or none to follow
+    expect([nextHop(answer(200, "/x"), hop("GET")), nextHop(answer(304, "/x"), hop("GET")), nextHop(answer(302), hop("GET"))]).toEqual([null, null, null]);
   });
 });
 

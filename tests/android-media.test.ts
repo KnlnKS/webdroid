@@ -11,7 +11,7 @@ import { onMain } from "../src/android/mainloop.ts";
 import { mkAssetFd } from "../src/android/resnative.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec.ts";
-import { NativeFormat } from "../src/android/media-format.ts";
+import { NativeFormat, annexB } from "../src/android/media-format.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(startMainLooper);
@@ -193,5 +193,11 @@ describe("media-codec-bitstreams", () => {
     // AV1: a temporal delimiter then a frame header OBU; a frame OBU of an inter frame; one without a size; none
     expect([u(0x12, 0x00, 0x1a, 0x01, 0x10), u(0x12, 0x00, 0x32, 0x02, 0x30, 0x00), u(0x32, 0x01, 0x00), u()].map((data) => read("video/av01", data)[0]))
       .toEqual([true, false, true, false]);
+  });
+  test("an MP4-framed access unit's NAL units as Annex B, and lengths that frame none", () => {
+    // a 4-byte length (an SPS and an empty unit) and a 2-byte one; a length past the end, a forbidden bit set
+    expect(annexB(u(0, 0, 0, 2, 0x67, 0x64, 0, 0, 0, 0, 0, 0, 0, 1, 0x65))).toEqual(u(0, 0, 0, 1, 0x67, 0x64, 0, 0, 0, 1, 0x65));
+    expect(annexB(u(0, 1, 0x41, 0, 2, 0x68, 0xee), 2)).toEqual(u(0, 0, 0, 1, 0x41, 0, 0, 0, 1, 0x68, 0xee));
+    expect([annexB(u(0, 0, 0, 3, 0x65)), annexB(u(0, 0, 0, 1, 0xe5)), annexB(u(0, 0, 1))]).toEqual([null, null, null]);
   });
 });
