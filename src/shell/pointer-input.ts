@@ -1,10 +1,10 @@
 // One page-owned canvas's pointer/wheel stream. Java dispatch stays behind the injected boundary.
-import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_UP, queuePointer, type PointerSample,
+  type TouchPointer } from "./pointer-queue.ts";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number; edgeSlop: number; minScalingSpan: number };
 /** a MotionEvent's action and pointers to the display */
 export type PointerDispatch = (action: number, pointers: TouchPointer[]) => Promise<void>;
-const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
 /** InputReader's MAX_POINTERS: a touchscreen reports no more */
 const MAX_POINTERS = 16;
 /** the key of the second finger a modifier-held press mirrors; browser pointerIds are never negative */

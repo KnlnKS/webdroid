@@ -12,6 +12,9 @@ import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts"
 import { javaConfiguration } from "../resources.ts";
 import { deviceConfiguration, systemResource } from "../resnative.ts";
 import { edges } from "../graphics.ts";
+import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
+import { SOURCE_KEYBOARD } from "../keyevent.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, type TouchPointer } from "../../shell/pointer-queue.ts";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
@@ -280,7 +283,6 @@ function touchedWindow(x: number, y: number): WindowState | null {
   }
   return null;
 }
-const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
 /** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not shown */
 export function windowZOf(client: JObj): number {
   const ws = windows.get(client);
@@ -291,24 +293,28 @@ export function windowZOf(client: JObj): number {
 /** InputDispatcher's thread, on which host input becomes events */
 const inputDispatcher = Object.assign(new JThread(), { jname: "InputDispatcher" });
 const onInputThread = async <T>(work: Gen<T>): Promise<T> => callOn(inputDispatcher, () => rt.drive(work));
-/** a key from the virtual keyboard (device -1) to the focused window: DOWN, then UP */
+/** a key from the virtual keyboard to the focused window: DOWN, then UP */
 export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(function* (): Gen<void> {
   const ws = focused;
   if (!ws?.channel) return;
   const down = BigInt(Math.floor(uptimeMillis()));
   for (const action of [ACTION_DOWN, ACTION_UP]) {
     const now = action === ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
-    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, -1, 0, 0x8, SOURCE_KEYBOARD);
+    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, 0x8, SOURCE_KEYBOARD);
     yield publish(ws.channel, event);
   }
 }());
 const PP = "android/view/MotionEvent$PointerProperties", PC = "android/view/MotionEvent$PointerCoords", TOOL_TYPE_FINGER = 1;
 let pointerFields: Record<"id" | "toolType" | "x" | "y" | "pressure" | "size", string> | null = null;
+type Pointers = { props: Record<string, number>[]; coords: Record<string, number>[] };
+/** the PointerProperties and PointerCoords obtain copies, kept for the next event: an event built
+ *  while another waits makes its own */
+let spare: Pointers | null = null;
 /** a touchscreen event with `pointers` at display coordinates, built as InputDispatcher delivers one:
  *  every pointer down, a finger each, in id order. The window touched at DOWN gets the whole
  *  gesture (a split touch across windows is not modeled), in its own coordinates. Resolves whether
  *  it handled the event. */
-export const dispatchTouch = (action: number, pointers: readonly { id: number; x: number; y: number }[], downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
+export const dispatchTouch = (action: number, pointers: readonly TouchPointer[], downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
   const masked = action & 0xff;
   if (masked === ACTION_DOWN) touchTarget = touchedWindow(pointers[0].x, pointers[0].y);
   const ws = touchTarget;
@@ -316,17 +322,22 @@ export const dispatchTouch = (action: number, pointers: readonly { id: number; x
   if (!ws?.channel) return false;
   const f = pointerFields ??= { id: declaredField(PP, "id"), toolType: declaredField(PP, "toolType"), x: declaredField(PC, "x"),
     y: declaredField(PC, "y"), pressure: declaredField(PC, "pressure"), size: declaredField(PC, "size") };
-  // fresh ones each event: another dispatch can run while this one waits on a construction
-  const props: JObj[] = [], coords: JObj[] = [];
-  for (const { id, x, y } of pointers) {
+  const pool: Pointers = spare ?? { props: jarray([], `L${PP};`), coords: jarray([], `L${PC};`) };
+  spare = null;
+  while (pool.props.length < pointers.length) {
     const pp: Record<string, number> = yield newObj(PP), pc: Record<string, number> = yield newObj(PC);
-    pp[f.id] = id; pp[f.toolType] = TOOL_TYPE_FINGER;
+    pp[f.toolType] = TOOL_TYPE_FINGER;
     // obtain(JJIFFI)'s pressure and size, which a single-pointer dispatch delivered before
-    pc[f.x] = Math.fround(x); pc[f.y] = Math.fround(y); pc[f.pressure] = 1; pc[f.size] = 1;
-    props.push(pp as unknown as JObj); coords.push(pc as unknown as JObj);
+    pc[f.pressure] = 1; pc[f.size] = 1;
+    pool.props.push(pp); pool.coords.push(pc);
   }
-  const event = yield scall("android/view/MotionEvent", "obtain", `(JJII[L${PP};[L${PC};IIFFIIII)Landroid/view/MotionEvent;`,
-    downTime, eventTime, action, pointers.length, jarray(props, `L${PP};`), jarray(coords, `L${PC};`), 0, 0, 1, 1, 0, 0, SOURCE_TOUCHSCREEN, 0);
+  for (let i = 0; i < pointers.length; i++) {
+    const { id, x, y } = pointers[i], pc = pool.coords[i];
+    pool.props[i][f.id] = id; pc[f.x] = Math.fround(x); pc[f.y] = Math.fround(y);
+  }
+  const event = yield scall("android/view/MotionEvent", "obtain", `(JJII[L${PP};[L${PC};IIFFIIII)Landroid/view/MotionEvent;`, downTime, eventTime,
+    action, pointers.length, pool.props, pool.coords, 0, 0, touchPrecision(device.width), touchPrecision(device.height), TOUCHSCREEN, 0, TOUCH_SOURCE, 0);
+  spare = pool;
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
   return yield* awaited(publish(ws.channel, event));
 }());
