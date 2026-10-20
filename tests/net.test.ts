@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "vite-plus/test";
 import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
-import { dialName, syntheticAddress } from "../src/shell/relay.ts";
+import { dialName, syntheticAddress } from "../src/native/net-address.ts";
 import { scall, mountApexData, thrown } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
 import { vfs } from "../src/shell/vfs.ts";

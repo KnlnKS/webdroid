@@ -1,7 +1,8 @@
 // AF_INET and AF_INET6: a TCP connection to another host is a relay connection; TCP to a listener
 // in this process and UDP between this process's sockets stay in the process.
 
-import { DatagramRelay, Relay, syntheticHost } from "../../shell/relay.ts";
+import { DatagramRelay, Relay } from "../../shell/relay.ts";
+import { syntheticHost } from "../net-address.ts";
 import { E, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../abi.ts";
 import { sameBytes } from "../../jvm/abi.ts";
 import {

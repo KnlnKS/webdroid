@@ -1,5 +1,4 @@
 // Address parsing, host resolution and interfaces shared by sockets, libcore and netd.
-import { syntheticAddress, syntheticHost, nameExists } from "../shell/relay.ts";
 import { sameBytes } from "../jvm/abi.ts";
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
@@ -124,4 +123,43 @@ export function guestEndpoint(url: string): Endpoint | null {
   const address = host.startsWith("[") || host.startsWith("ip6-") ? V6_LOOPBACK
     : host === "localhost" || host === "0.0.0.0" ? V4_LOOPBACK : parseIpv4(host)!;
   return { address, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80) };
+}
+
+// A name resolves to a stable address in 198.18.0.0/15 (RFC 2544's benchmarking block, unrouted)
+// shared by Java's InetAddress and the native resolver: whichever side later dials the address,
+// the relay is given the name it stands for. A numeric literal is itself.
+const syntheticByHost = new Map<string, Ipv4>();
+const hostBySynthetic = new Map<number, string>();
+let nextSynthetic = 1;
+export function syntheticAddress(host: string): Ipv4 {
+  const numeric = parseIpv4(host);
+  if (numeric) return numeric;
+  const found = syntheticByHost.get(host);
+  if (found) return found;
+  const id = nextSynthetic++ & 0xffff;
+  const bytes: Ipv4 = [198, 18, id >>> 8, id & 255];
+  syntheticByHost.set(host, bytes);
+  hostBySynthetic.set(ipv4Key(bytes), host);
+  return bytes;
+}
+export const syntheticHost = (bytes: ArrayLike<number>): string | null => hostBySynthetic.get(ipv4Key(bytes)) ?? null;
+export const pageOrigin = () => typeof location === "undefined" ? "http://localhost" : `${location.protocol}//${location.host}`;
+/** Whether `host` exists in DNS, asked of the dev server once per name: true, false for NXDOMAIN, or
+ *  null when nothing could be asked (no server, a transport error), which callers treat as unknown
+ *  rather than absent. A numeric literal exists. */
+const knownNames = new Map<string, Promise<boolean | null>>();
+export function nameExists(host: string): Promise<boolean | null> | boolean {
+  if (parseIpv4(host) || host === "localhost") return true;
+  let pending = knownNames.get(host);
+  if (!pending) {
+    pending = typeof location === "undefined" ? Promise.resolve(null) : fetch(`${pageOrigin()}/dns?host=${encodeURIComponent(host)}`).then(
+      (r) => r.status === 200 ? true : r.status === 404 ? false : null, () => null);
+    knownNames.set(host, pending);
+  }
+  return pending;
+}
+/** the name to dial for `host`: a synthetic literal stands for the name it was allotted to */
+export function dialName(host: string): string {
+  const numeric = parseIpv4(host);
+  return (numeric && syntheticHost(numeric)) || host;
 }
