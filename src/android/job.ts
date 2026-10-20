@@ -34,7 +34,7 @@ function* jobSpec(info: JObj, namespace: string | null): Gen<JobSpec> {
   };
 }
 
-type JobRun = { service: JObj | null; params: JObj | null; unbind: () => unknown; executing: Set<number> };
+type JobRun = { service: JObj | null; params: JObj | null; unbind: () => unknown; unlink: () => unknown; executing: Set<number> };
 type ScheduledJob = { uid: number; spec: JobSpec; timer: GuestTimer | null; run: JobRun | null; work: JObj[]; nextWork: number };
 type Namespaces = Map<string | null, Map<number, ScheduledJob>>;
 /** each uid's jobs, by namespace and id */
@@ -65,6 +65,7 @@ function armJob(job: ScheduledJob, delay: number): void {
 function* finishJob(job: ScheduledJob, run: JobRun, reschedule: boolean): Gen<void> {
   if (job.run !== run) return;
   job.run = null;
+  yield run.unlink();
   yield run.unbind();
   if (!pending(job)) return;
   if (job.spec.interval !== null) armJob(job, Math.max(900000, Number(job.spec.interval)));
@@ -79,7 +80,7 @@ function* startJob(job: ScheduledJob): Gen<void> {
     armJob(job, 30000); return;
   }
   const callback: JJobCallback = yield newObj("webdroid/JobCallback");
-  const run: JobRun = { service: null, params: null, unbind: () => {}, executing: new Set() };
+  const run: JobRun = { service: null, params: null, unbind: () => {}, unlink: () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
     const { binder, unbind } = yield* awaited(bindAsSystem(p.service, "job:" + p.id + ":" + nextBinding++));
@@ -87,6 +88,7 @@ function* startJob(job: ScheduledJob): Gen<void> {
     if (!pending(job)) { job.run = null; yield unbind(); return; }
     // JobServiceContext.onServiceDisconnected: the run ends, to be retried
     yield vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", callback, 0);
+    run.unlink = () => vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", callback, 0);
     run.service = yield scall("android/app/job/IJobService$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/app/job/IJobService;", binder);
     run.params = yield newObj("android/app/job/JobParameters", PARAMS, callback, p.namespace, p.id, p.extras, p.transientExtras,
       null, 0, 0, 0, 0, null, null, null);
