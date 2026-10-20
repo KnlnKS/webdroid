@@ -63,6 +63,10 @@ export function kernelResult(cpu: Cpu | null, value: number | Promise<number>): 
 /** MAP_FAILED, pointer-wide, with errno set */
 const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }
+/** each thread's nice value, which setpriority(PRIO_PROCESS) sets (init allows every app any, RLIMIT_NICE 40) */
+const niceness = new Map<number, number>();
+const niceOf = (cpu: Cpu, who: number): number => niceness.get(who || cpu.osTid) ?? 0;
+function setNice(cpu: Cpu, who: number, nice: number): number { nice = Math.min(19, Math.max(-20, nice)); niceness.set(who || cpu.osTid, nice); return nice; }
 
 const randomWord = new Uint32Array(1);
 /** getRandomValues fills at most 64 KiB a call, and no shared view (guest memory): such a
@@ -260,7 +264,10 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   getppid: () => 1,
   // the process leads its own group, as /proc/self/stat says; no other process is visible
   getpgid: (cpu, a) => { const pid = a.i(); return pid === 0 || pid === cpu.pid ? cpu.pid : fail(cpu, E.SRCH); },
-  setpriority: () => 0, getpriority: () => 0,
+  // PRIO_PROCESS names a thread; a process group's or user's nice stays 0
+  setpriority: (cpu, a) => { const which = a.i(), who = a.i(), nice = a.i(); if (which < 0 || which > 2) return fail(cpu, E.INVAL); if (!which) setNice(cpu, who, nice); return 0; },
+  // the kernel's answer is 20 - nice, which bionic's wrapper turns back into the nice value
+  getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? fail(cpu, E.INVAL) : 20 - (which ? 0 : niceOf(cpu, who)); },
   uname: (_c, a) => {
     const p = a.p();
     const u = uname(PTR === 8), f = [u.sysname, u.nodename, u.release, u.version, u.machine, u.domainname];
@@ -391,7 +398,8 @@ export function libcInit(): void {
     gettid: (cpu) => cpu.osTid,
     getpgrp: (cpu) => cpu.pid,
     bsd_signal: () => 0,
-    nice: () => 0,
+    getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? fail(cpu, E.INVAL) : which ? 0 : niceOf(cpu, who); },
+    nice: (cpu, a) => setNice(cpu, 0, niceOf(cpu, 0) + a.i()),
     sysconf: (_c, a) => sysconf(a.i()),
     getpagesize: () => 4096,
     android_get_device_api_level: () => device.sdk,
