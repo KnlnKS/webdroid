@@ -2,7 +2,7 @@
 
 import { rt } from "../runtime.ts";
 import { charsToString, utf8 } from "../abi.ts";
-import { encodeString } from "../charset.ts";
+import { decodeString, encodeString } from "../charset.ts";
 import { once } from "../suspend.ts";
 import { csText } from "./jchars.ts";
 import { stringMatches, stringReplace, stringSplit } from "./jregex.ts";
@@ -136,12 +136,67 @@ sm("getBytes(II[BI)V", function (begin: number, end: number, dst: Int8Array, off
   if (offset < 0 || offset + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   for (let i = begin; i < end; i++) dst[offset + i - begin] = this.charCodeAt(i);
 });
+
+// ---------- String's constructors, by "<init>" key: what a compiled String factory falls back to (compiler/strings.ts), and JNI's NewObject
+/** String's checkBoundsOffCount over a byte array: the offset */
+function byteRange(bytes: Int8Array, off: number, count: number): number {
+  if (off < 0 || count < 0 || off > bytes.length - count)
+    throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
+  return off;
+}
+/** new String(char[], int, int), the constructor readers and parsers call per token */
+function charRange(chars: Uint16Array | null, off: number, len: number): string {
+  if (!chars) return rt.npe();
+  if (off < 0 || len < 0 || off > chars.length - len) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
+  return charsToString(chars, off, len);
+}
+/** the deprecated String(byte[] ascii, int hibyte, ...): each char is hibyte over a byte */
+function hibyteRange(bytes: Int8Array | null, high: number, off: number, n: number): string {
+  if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", "ascii");
+  byteRange(bytes, off, n);
+  const chars = new Uint16Array(n), hi = high << 8;
+  for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
+  return charsToString(chars, 0, n);
+}
+const utf8Range = (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", byteRange(bytes, off, n), n);
+/** a builder's text: StringBuilder and StringBuffer run from bytecode */
+const builderText = (sb: unknown) => csText(sb ?? rt.npe());
+const constructors: Record<string, (...a: any[]) => unknown> = {
+  "()V": () => "",
+  "(Ljava/lang/String;)V": (s: string) => s,
+  "(Ljava/lang/StringBuilder;)V": builderText,
+  "(Ljava/lang/StringBuffer;)V": builderText,
+  "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
+  "([CII)V": charRange,
+  // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
+  "([BB)V": (bytes: Int8Array, coder: number) => {
+    const n = coder ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
+    if (coder) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
+    else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
+    return charsToString(chars, 0, n);
+  },
+  "([BI)V": (bytes: Int8Array, high: number) => hibyteRange(bytes, high, 0, bytes?.length),
+  "([BIII)V": hibyteRange,
+  "([B)V": (bytes: Int8Array) => decodeString(bytes, "UTF-8"),
+  "([BII)V": utf8Range,
+  "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
+  "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
+  "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
+  "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
+  // code points, not chars: each element is a whole Unicode scalar
+  "([III)V": (cp: Int32Array, off: number, n: number) => {
+    let out = "";
+    for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
+    return out;
+  },
+};
+for (const desc in constructors) sm("<init>" + desc, constructors[desc]);
 // ART's string allocations, which String's constructors become
 rt.registerJnis("java/lang/StringFactory", {
-  "newStringFromBytes([BIII)Ljava/lang/String;": (b: Int8Array, high: number, off: number, n: number) => rt.newStr["([BIII)V"](b, high, off, n),
-  "newStringFromChars(II[C)Ljava/lang/String;": (off: number, n: number, chars: Uint16Array) => rt.strChars(chars, off, n),
+  "newStringFromBytes([BIII)Ljava/lang/String;": hibyteRange,
+  "newStringFromChars(II[C)Ljava/lang/String;": (off: number, n: number, chars: Uint16Array) => charRange(chars, off, n),
   "newStringFromString(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => s ?? rt.npe(),
-  "newStringFromUtf8Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => rt.newStr["([BII)V"](b, off, n),
+  "newStringFromUtf8Bytes([BII)Ljava/lang/String;": utf8Range,
   "newStringFromUtf16Bytes([BII)Ljava/lang/String;": (b: Int8Array, off: number, n: number) => {
     const chars = new Uint16Array(n);
     for (let i = 0; i < n; i++) chars[i] = (b[off + 2 * i] & 255) | ((b[off + 2 * i + 1] & 255) << 8);

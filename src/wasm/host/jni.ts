@@ -2,6 +2,7 @@
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime.ts";
 import { PRIMS } from "../../jvm/abi.ts";
+import { stringMethods } from "../../jvm/natives/jstring.ts";
 import { newInstance, refOf, type Bridge } from "./bridge.ts";
 import { idOfClass } from "../link/classes.ts";
 
@@ -118,11 +119,14 @@ export function wasmJni(w: World): JniVm {
     },
     construct(c, sig, args) {
       if (c.name === STRING) {
-        // a String is built by the production constructor table out of host values, then made a Java String
-        const make = (rt.newStr as Record<string, (...a: unknown[]) => string>)[sig];
+        // a String is built by String's host constructors out of host values, then made a Java String
+        const make = stringMethods.get("<init>" + sig);
         if (!make) return noSuchMethod("<init>", sig);
         const mark = bridge.begin();
-        try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(mark); }
+        try {
+          const made = make.apply("", args.map((a) => bridge.toHost(a))) as string | Promise<string>;
+          return made instanceof Promise ? made.then((s) => w.javaString(s)) : w.javaString(made);
+        } finally { bridge.end(mark); }
       }
       // GetMethodID finds a superclass's constructor too (ART's FindClassMethod); NewObject runs it on a new `c`
       const ctor = prog.resolve(c.name, "<init>", view(c, sig));

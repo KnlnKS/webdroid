@@ -1,10 +1,9 @@
 // The registry host code shares with the Wasm tier: the native specs and JNI functions the natives modules register, what Java reaches that
-// nothing implements, the class path's resources, and the conversions natives make (strings, thrown JS errors).
+// nothing implements, the class path's resources, and the throwables natives make of thrown JS errors.
 
 import { Strand } from "./suspend.ts";
 import { never, processExited } from "../process-exit.ts";
-import { decodeString } from "./charset.ts";
-import { charsToString, dotName, oomMessage } from "./abi.ts";
+import { dotName, oomMessage } from "./abi.ts";
 import { isBytecode, isStageD } from "./provenance.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
@@ -239,56 +238,6 @@ export class Runtime {
   }
 
   npe(): never { throw this.mkThrowable("java/lang/NullPointerException", null); }
-  /** new String(char[], int, int), the constructor readers and parsers call per token */
-  strChars(chars: Uint16Array | null, off: number, len: number): string {
-    if (!chars) this.npe();
-    if (off < 0 || len < 0 || off > chars.length - len) throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${len}, length ${chars.length}`);
-    return charsToString(chars, off, len);
-  }
-  /** String's constructors by descriptor: what the compiler emits for String.<init>, and JNI's NewObject */
-  readonly newStr = {
-    "()V": () => "",
-    "(Ljava/lang/String;)V": (s: string) => s,
-    "(Ljava/lang/StringBuilder;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
-    "(Ljava/lang/StringBuffer;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
-    "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
-    "([CII)V": (chars: Uint16Array, off: number, n: number) => this.strChars(chars, off, n),
-    // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
-    "([BB)V": (bytes: Int8Array, coder: number) => {
-      const n = coder ? bytes.length >> 1 : bytes.length, chars = new Uint16Array(n);
-      if (coder) for (let i = 0; i < n; i++) chars[i] = (bytes[2 * i] & 255) | ((bytes[2 * i + 1] & 255) << 8);
-      else for (let i = 0; i < n; i++) chars[i] = bytes[i] & 255;
-      return charsToString(chars, 0, n);
-    },
-    "([BI)V": (bytes: Int8Array, high: number) => this.hibyteStr(bytes, high, 0, bytes?.length),
-    "([BIII)V": (bytes: Int8Array, high: number, off: number, n: number) => this.hibyteStr(bytes, high, off, n),
-    "([B)V": (bytes: Int8Array) => decodeString(bytes, "UTF-8"),
-    "([BII)V": (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", this.byteRange(bytes, off, n), n),
-    "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
-    "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
-    "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
-    "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, this.byteRange(bytes, off, n), n),
-    // code points, not chars: each element is a whole Unicode scalar
-    "([III)V": (cp: Int32Array, off: number, n: number) => {
-      let out = "";
-      for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
-      return out;
-    },
-  } satisfies Record<string, (...args: never[]) => string>;
-  /** the deprecated String(byte[] ascii, int hibyte, ...): each char is hibyte over a byte */
-  private hibyteStr(bytes: Int8Array | null, high: number, off: number, n: number): string {
-    if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
-    this.byteRange(bytes, off, n);
-    const chars = new Uint16Array(n), hi = high << 8;
-    for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
-    return charsToString(chars, 0, n);
-  }
-  /** String's checkBoundsOffCount over a byte array: the offset */
-  private byteRange(bytes: Int8Array, off: number, count: number): number {
-    if (off < 0 || count < 0 || off > bytes.length - count)
-      throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
-    return off;
-  }
 }
 
 export const rt = new Runtime();

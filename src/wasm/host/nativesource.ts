@@ -21,7 +21,6 @@ export const hostSpec = (spec: NativeSpec): HostSpec => ({
 export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {
-    if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
     if (cls === "java/lang/String") { const f = stringMethods.get(key) as HostFn | undefined; if (f || hasBody) return f; }
     if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return () => {};
     const own = lookup(cls, key, isStatic);
