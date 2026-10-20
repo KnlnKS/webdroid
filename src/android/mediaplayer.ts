@@ -6,7 +6,7 @@ import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { fdInt } from "../jvm/natives/jio.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface.ts";
-import { newAudioSessionId, setSounding } from "./audio-output.ts";
+import { newAudioSessionId } from "./audio-output.ts";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
 import { guestEndpoint } from "../native/net-address.ts";
 import { deviceFetch } from "../shell/devicefetch.ts";
@@ -27,7 +27,7 @@ export interface MediaElement {
   preload: string; loop: boolean; volume: number; src: string; playbackRate: number; preservesPitch: boolean; currentTime: number;
   readonly paused: boolean; readonly duration: number; readonly videoWidth: number; readonly videoHeight: number;
   readonly readyState: number; readonly error: { readonly code: number } | null;
-  onplay: Handler; onpause: Handler; onended: Handler; onerror: Handler; onloadedmetadata: Handler; onseeked: Handler;
+  onended: Handler; onerror: Handler; onloadedmetadata: Handler; onseeked: Handler;
   play(): Promise<void>; pause(): void; load(): void;
   /** `show` gets the next frame the element presents */
   nextFrame(show: (frame: VideoFrame) => void): void;
@@ -68,7 +68,7 @@ class Player {
   }
   unload(): void {
     const el = this.media;
-    if (el) { el.pause(); setSounding(el, false); if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src); }
+    if (el) { el.pause(); if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src); }
     this.media = null; this.rendering = false; this.prepared?.(1); this.prepared = null;
   }
   load(src: string | Promise<string>): void {
@@ -80,8 +80,6 @@ class Player {
     this.applyRate(el);
     this.seeks = 0;
     const live = (f: () => void) => () => { if (this.media === el) f(); };
-    el.onplay = live(() => setSounding(el, true));
-    el.onpause = () => setSounding(el, false);
     el.onended = live(() => { if (!el.loop) { this.state = COMPLETE; this.post(MEDIA_PLAYBACK_COMPLETE); } });
     // MEDIA_ERROR_UNKNOWN with MEDIA_ERROR_UNSUPPORTED or _IO, as a decoder or source failure reports
     el.onerror = live(() => {

@@ -6,7 +6,7 @@ import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, n
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
 import { exitProcess, processExited } from "../process-exit.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
+import { PROCESS_PID, PROCESS_UID, SYSTEM_SERVER_PID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd, FdScope, detachFdScope } from "../native/fs.ts";
 import { processRights } from "../native/process-fd.ts";
 import type { DescriptorRights } from "../shell/file-descriptors.ts";
@@ -39,6 +39,20 @@ export const binderTransport: {
   alive: () => false,
   watch: () => () => {},
 };
+const callerDeaths = new Map<number, Set<(pid: number) => void>>();
+/** `died(pid)` once process `pid` dies, until the returned function is called, as a hosted service's
+ *  death recipient on its caller's binder drops what it kept for the caller; one watch serves each process */
+export function onCallerDeath(pid: number, died: (pid: number) => void): () => void {
+  if (pid === PROCESS_PID) return () => {};
+  const recipients = callerDeaths.get(pid) ?? new Set<(pid: number) => void>();
+  if (!callerDeaths.has(pid)) {
+    callerDeaths.set(pid, recipients);
+    const notify = () => { callerDeaths.delete(pid); for (const f of recipients) f(pid); };
+    void Promise.resolve(binderTransport.watch(pid, notify)).catch(notify);
+  }
+  recipients.add(died);
+  return () => { recipients.delete(died); };
+}
 
 /** BinderProxyNativeData: the remote binder a proxy stands for and the deaths it reports */
 type ProxyData = { handle: BinderHandle; deaths: Map<unknown, () => void> };
@@ -440,8 +454,15 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
   const sent = yield* awaited(exportParcel(data, processRights));
+  const request = { handle: target, code, data: sent, flags, system: ipc().system };
+  // system_server outlives its callers, so the driver's queueing is all a oneway call to it can report;
+  // one carrying no rights reaches it in order without the caller waiting
+  if (flags & FLAG_ONEWAY && target.pid === SYSTEM_SERVER_PID && !sent.objects.length) {
+    binderTransport.transact(request).catch(logUncaught);
+    return 1;
+  }
   try {
-    const result = yield* awaited(binderTransport.transact({ handle: target, code, data:sent, flags, system: ipc().system }));
+    const result = yield* awaited(binderTransport.transact(request));
     if (reply) yield fillParcel(reply, result.data, processRights);
     else yield* awaited(releaseRights(result.data, processRights, false));
     return result.handled;
@@ -515,6 +536,8 @@ class JServiceManager extends JObj { binder: JObj | null = null; }
 /** a hosted service's binder, made when first asked for */
 let remoteServices = new Set<string>();
 let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
+/** the services an app process reaches in system_server: their state is the device's */
+export const SYSTEM_SERVICES: readonly string[] = ["notification", "mount", "audio", "media_session", "media_router"];
 export function useSystemServiceAccess(names: readonly string[], lookup?: (name: string) => Promise<BinderHandle | null>): void {
   if (names.length && !lookup) throw new Error("System service lookup is required");
   remoteServices = new Set(names);

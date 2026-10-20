@@ -47,6 +47,22 @@ describe("audio-attributes", () => {
     expect(changes).toEqual([["music", -3], ["music", 1], ["music", -1]]);
   });
 
+  test("music is active while a media player the audio service tracks is started", async () => {
+    const audio = await hostedService("audio");
+    const attrs = await vcall(await newObj("android/media/AudioAttributes$Builder"), "build", "()Landroid/media/AudioAttributes;");
+    const track = async (type: number) => vcall(audio, "trackPlayer", "(Landroid/media/PlayerBase$PlayerIdCard;)I",
+      await newObj("android/media/PlayerBase$PlayerIdCard", "(ILandroid/media/AudioAttributes;Landroid/media/IPlayer;I)V", type, attrs, null, 0));
+    const event = (piid: number, state: number) => vcall(audio, "playerEvent", "(III)V", piid, state, 0);
+    const active = () => vcall(audio, "isMusicActive", "(Z)Z", 0);
+    const player = await track(2), pool = await track(3);
+    await event(pool, 2);
+    expect(await active()).toBe(0);
+    await event(player, 2);
+    expect(await active()).toBe(1);
+    await event(player, 3);
+    expect(await active()).toBe(0);
+  });
+
 });
 
 describe("media-codec-capabilities", () => {

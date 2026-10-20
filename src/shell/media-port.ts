@@ -83,10 +83,10 @@ export function sendMedia(port: MessagePort): { audio: AudioOut; createElement: 
     getChannelData(channel: number) { return this.channels[channel]; }
   }
   const elements = new Map<number, WeakRef<Element>>(), plays = new Map<number, ReturnType<typeof Promise.withResolvers<void>>>();
-  const handled = new Set(["play", "pause", "ended", "error", "loadedmetadata", "seeked"]);
+  const handled = new Set(["ended", "error", "loadedmetadata", "seeked"]);
   class Element implements MediaElement {
     readonly id = next++;
-    onplay: Handler = null; onpause: Handler = null; onended: Handler = null; onerror: Handler = null; onloadedmetadata: Handler = null; onseeked: Handler = null;
+    onended: Handler = null; onerror: Handler = null; onloadedmetadata: Handler = null; onseeked: Handler = null;
     shown: Shown = { paused: true, time: 0, at: 0, rate: 1, duration: NaN, videoWidth: 0, videoHeight: 0, readyState: 0, error: 0, seen: 0 };
     /** the commands sent when this proxy last changed its own state: older page state is stale */
     wrote = 0;
@@ -139,7 +139,7 @@ export function sendMedia(port: MessagePort): { audio: AudioOut; createElement: 
       shows.forEach((show, i) => show(i === shows.length - 1 ? data.frame : data.frame.clone()));
     } else if (el) {
       if (data.state.seen >= el.wrote) el.shown = data.state;
-      if (handled.has(data.event)) el[`on${data.event}` as "onplay"]?.(new Event(data.event));
+      if (handled.has(data.event)) el[`on${data.event}` as "onended"]?.(new Event(data.event));
     }
   }
   port.onmessage = ({ data }: MessageEvent<Reply | Media>) => {

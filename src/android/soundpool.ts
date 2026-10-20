@@ -4,12 +4,12 @@ import { rt, type JObj } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { fdInt } from "../jvm/natives/jio.ts";
 import { readFully } from "../shell/lazyfile.ts";
-import { audioContext, setSounding, type AudioData, type AudioGain, type AudioSource } from "./audio-output.ts";
+import { audioContext, type AudioData, type AudioGain, type AudioSource } from "./audio-output.ts";
 import { fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
 
 type Stream = { src: AudioSource; gain: AudioGain; prio: number; rate: number; volume: number };
 /** Web Audio sources cannot pause; a zero playback rate holds the position instead */
-function setRate(s: Stream, rate: number): void { s.src.playbackRate.value = rate; setSounding(s, rate !== 0); }
+function setRate(s: Stream, rate: number): void { s.src.playbackRate.value = rate; }
 class Pool {
   readonly owner: JObj; readonly maxStreams: number;
   constructor(owner: JObj, maxStreams: number) { this.owner = owner; this.maxStreams = maxStreams; }
@@ -34,11 +34,10 @@ class Pool {
   }
   stop(sid: number) {
     const s = this.streams.get(sid);
-    if (s) { s.src.stop(); this.ended(sid, s); }
+    if (s) { s.src.stop(); this.streams.delete(sid); }
   }
-  ended(sid: number, s: Stream) { this.streams.delete(sid); setSounding(s, false); }
   each(sid: number, f: (s: Stream) => void) { const s = this.streams.get(sid); if (s) f(s); }
-  release() { for (const [sid, s] of this.streams) { s.src.stop(); this.ended(sid, s); } this.sounds.clear(); }
+  release() { for (const s of this.streams.values()) s.src.stop(); this.streams.clear(); this.sounds.clear(); }
 }
 const pools = nativePeer<Pool>(null, "SoundPool released", (p) => p.release());
 const P = pools.on;
@@ -69,7 +68,7 @@ rt.registerJnis("android/media/SoundPool", {
     gain.gain.value = p.muted ? 0 : volume;
     src.connect(gain); gain.connect(actx.destination);
     const sid = p.nextStream++, s: Stream = { src, gain, prio, rate, volume };
-    src.onended = () => p.ended(sid, s);
+    src.onended = () => p.streams.delete(sid);
     setRate(s, rate);
     src.start();
     // loop = n > 0 means n + 1 plays: keep looping and schedule the end (at the starting rate)

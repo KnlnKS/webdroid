@@ -9,7 +9,7 @@ import { useAccountStore, useAccountAccess, accountsChanged } from "../android/a
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
 import { alarmTransport } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
-import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
+import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder.ts";
 import { PROCESS_PID, processTransport } from "../android/os.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
@@ -102,7 +102,7 @@ function connectCommandTransports(): void {
 /** the stores and system services a Worker reaches through the broker, which system_server's realm holds */
 function connectRemoteStores(): void {
   webStorageTransport.calls = brokerCalls;
-  useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
+  useSystemServiceAccess(SYSTEM_SERVICES, name => brokerCalls().systemService(name));
   systemProviderTransport.lookup = authority => brokerCalls().systemProvider(authority);
   notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
   useSettingsAccess(remoteSettings(brokerCalls));

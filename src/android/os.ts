@@ -61,7 +61,9 @@ rt.registerJnis("android/os/SystemClock", {
   "currentThreadTimeMicro()J": () => BigInt(Math.floor(performance.now() * 1e3)),
   "currentTimeMicro()J": () => BigInt(Math.floor(wallMillis() * 1e3)),
 });
-export let PROCESS_PID = 1000, PROCESS_UID = 10001;
+/** system_server's pid: the page realm's process, which outlives every other */
+export const SYSTEM_SERVER_PID = 1000;
+export let PROCESS_PID = SYSTEM_SERVER_PID, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
 /** set while the zygote initializes what every app inherits: it runs as root */
 let zygoteRunning = false;

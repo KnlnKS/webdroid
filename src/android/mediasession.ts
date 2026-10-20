@@ -4,14 +4,14 @@
 import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { lambda } from "../jvm/natives/jlambda.ts";
-import { hostStub, newStub, oneway } from "./binder.ts";
+import { callingIdentity, hostStub, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio.ts";
 
 const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
 const PS = MS + "PlaybackState", PI = MS + "MediaController$PlaybackInfo", AA = "Landroid/media/AudioAttributes;";
 const PLAYBACK_TYPE_LOCAL = 1, PLAYBACK_TYPE_REMOTE = 2, VOLUME_CONTROL_ABSOLUTE = 2;
 type Record = {
-  pkg: string; tag: string; info: JObj | null; cb: JObj; pid: number; uid: number;
+  pkg: string; tag: string; info: JObj | null; cb: JObj; unwatch: () => void;
   controller: JObj; callbacks: Set<JObj>; destroyed: boolean;
   flags: bigint; launch: JObj | null; metadata: JObj | null; duration: bigint; playback: JObj | null;
   queue: JObj | null; queueTitle: unknown; extras: JObj | null; ratingType: number;
@@ -24,6 +24,8 @@ type JRecordBinder = InstanceType<ReturnType<typeof recordBinder>>;
 const push = (r: Record, name: string, desc: string, ...args: unknown[]) => {
   for (const cb of r.callbacks) oneway(cb, name, desc, ...args);
 };
+/** the session's end, by its owner or with its owner's process */
+const end = (r: Record) => { r.destroyed = true; r.unwatch(); r.callbacks.clear(); };
 const queueSlice = (queue: JObj | null) => queue && newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", queue);
 
 const playbackInfo = driven(function* playbackInfo$(r: Record): Gen {
@@ -64,9 +66,8 @@ rt.register({ name: "webdroid/MediaSessionRecord", ctor: recordBinder(), sup: MS
   ...noops("setActive(Z)V", "setMediaButtonReceiver(Landroid/app/PendingIntent;)V", "setMediaButtonBroadcastReceiver(Landroid/content/ComponentName;)V"),
   "destroySession()V": R((r) => {
     if (r.destroyed) return;
-    r.destroyed = true;
     push(r, "onSessionDestroyed", "()V");
-    r.callbacks.clear();
+    end(r);
   }),
   [`sendEvent(${S}${B})V`]: R((r, event: string, extras: JObj | null) => push(r, "onEvent", `(${S}${B})V`, event, extras)),
   [`setMetadata(Landroid/media/MediaMetadata;J${S})V`]: R((r, metadata: JObj | null, duration: bigint) => {
@@ -91,9 +92,10 @@ rt.register({ name: "webdroid/MediaSessionRecord", ctor: recordBinder(), sup: MS
   "setCurrentVolume(I)V": R((r, volume: number) => { if (r.remote) { r.remote.current = volume; return volumeChanged(r); } }),
 } });
 
-/** a controller call relayed to the session's callback, the caller's identity before its arguments */
+/** a controller call relayed to the session's callback, the controller's identity before its arguments */
 const relay = (r: Record, callback: string, rest: string, pkg: string, ...a: unknown[]) => {
-  if (!r.destroyed) oneway(r.cb, callback, `(${S}II${rest})V`, pkg, r.pid, r.uid, ...a);
+  const { pid, uid } = callingIdentity();
+  if (!r.destroyed) oneway(r.cb, callback, `(${S}II${rest})V`, pkg, pid, uid, ...a);
 };
 const TRANSPORT: [string, string, string][] = [
   ["play", "onPlay", ""], ["pause", "onPause", ""], ["stop", "onStop", ""], ["next", "onNext", ""], ["previous", "onPrevious", ""],
@@ -136,12 +138,15 @@ rt.register({ name: "webdroid/MediaSessionController", ctor: recordBinder(), sup
 const noMediaControl = () => { throw rt.mkThrowable("java/lang/SecurityException", "Missing permission to control media."); };
 rt.register({ name: "webdroid/MediaSessionService", ctor: class extends JObj {}, sup: MS + "ISessionManager$Stub", methods: {
   [`createSession(${S}L${MS}ISessionCallback;${S}${B}I)L${MS}ISession;`]: driven(function* createSession$(pkg: string, cb: JObj, tag: string, info: JObj | null): Gen {
+    const { pid } = callingIdentity();
     const binder = (yield* awaited(newStub("webdroid/MediaSessionRecord"))) as JRecordBinder, controller = (yield* awaited(newStub("webdroid/MediaSessionController"))) as JRecordBinder;
-    binder.r = controller.r = {
-      pkg, tag, info, cb, pid: yield scall("android/os/Process", "myPid", "()I"), uid: yield scall("android/os/Process", "myUid", "()I"),
+    const r: Record = binder.r = controller.r = {
+      pkg, tag, info, cb, unwatch: () => {},
       controller, callbacks: new Set(), destroyed: false, flags: 0n, launch: null, metadata: null, duration: -1n, playback: null,
       queue: null, queueTitle: null, extras: null, ratingType: 0, attributes: null, remote: null,
     };
+    // MediaSessionService destroys a session whose process died; its controllers there went with it
+    r.unwatch = onCallerDeath(pid, () => end(r));
     return binder;
   }),
   "getSessions(Landroid/content/ComponentName;I)Ljava/util/List;": noMediaControl,
