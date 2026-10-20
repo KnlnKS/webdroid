@@ -1,6 +1,7 @@
 import { rt } from "../jvm/runtime.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
 import { NativeShader, fillWithShader } from "./graphics.ts";
-import type { Affine } from "./matrix.ts";
+import { localMatrix, type Affine } from "./matrix.ts";
 import type { Ctx2D } from "./recording.ts";
 import { device } from "../shell/config.ts";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
@@ -237,3 +238,19 @@ class NativeRuntimeShader extends NativeShader {
   override get atReplay(): boolean { return true; }
   override pattern(ctx: Ctx2D): CanvasPattern { return this.draw(ctx); }
 }
+const shaderBuilder = (h: bigint) => deref<RuntimeShaderBuilder>(h);
+rt.registerJnis("android/graphics/RuntimeShader", {
+  "nativeGetFinalizer()J": () => FINALIZER,
+  "nativeCreateBuilder(Ljava/lang/String;)J": (source: string) => handle(new RuntimeShaderBuilder(source)),
+  "nativeCreateShader(JJ)J": (b: bigint, m: bigint) => handle(shaderBuilder(b).shader(localMatrix(m))),
+  "nativeUpdateUniforms(JLjava/lang/String;FFFFI)V": (b: bigint, name: string, x: number, y: number, z: number, w: number, n: number) =>
+    shaderBuilder(b).set(name, [x, y, z, w].slice(0, n)),
+  "nativeUpdateUniforms(JLjava/lang/String;IIIII)V": (b: bigint, name: string, x: number, y: number, z: number, w: number, n: number) =>
+    shaderBuilder(b).set(name, [x, y, z, w].slice(0, n), false, true),
+  "nativeUpdateUniforms(JLjava/lang/String;[FZ)V": (b: bigint, name: string, values: Float32Array, isColor: number) =>
+    shaderBuilder(b).set(name, values, !!isColor),
+  "nativeUpdateShader(JLjava/lang/String;J)V": (b: bigint, name: string, shader: bigint) =>
+    shaderBuilder(b).setChild(name, shader ? deref<NativeShader>(shader) : null),
+  "nativeUpdateUniforms(JLjava/lang/String;[I)V": (b: bigint, name: string, values: Int32Array) =>
+    shaderBuilder(b).set(name, values, false, true),
+});

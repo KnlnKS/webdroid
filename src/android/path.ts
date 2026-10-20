@@ -5,12 +5,12 @@
 // into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
 // which is what iteration, measurement, bounds and every non-native Path2D build read.
 
-import { rt, peerField } from "../jvm/runtime.ts";
-import { deref, handle, release } from "./handles.ts";
-import { type Mat, mapPoint, snap } from "./matrix.ts";
+import { rt, noops, peerField } from "../jvm/runtime.ts";
+import { deref, handle, ownedHandle, release, FINALIZER } from "./handles.ts";
+import { type Mat, mapPoint, matrixAt, snap } from "./matrix.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { type PathCommands, pathOp as skiaPathOp } from "./skia.ts";
-import type { Box } from "./graphics.ts";
+import { setEdges, type Box } from "./graphics.ts";
 
 type PathOp = [string, ...number[]];
 type Verb = number[];
@@ -896,10 +896,111 @@ export class VerbIterator {
   }
 }
 
+// ── the natives of Path, PathMeasure and PathIterator
+rt.registerJnis("android/graphics/Path", {
+  "nInit()J": () => handle(new NativePath()),
+  // a null source is an empty path
+  "nInit(J)J": (h: bigint) => { const p = new NativePath(); if (h) p.set(pathAt(h)); return handle(p); },
+  "nGetFinalizer()J": () => FINALIZER,
+  "nReset(J)V": (h: bigint) => pathAt(h).reset(),
+  "nRewind(J)V": (h: bigint) => pathAt(h).reset(),
+  "nSet(JJ)V": (h: bigint, s: bigint) => pathAt(h).set(pathAt(s)),
+  "nIsEmpty(J)Z": (h: bigint) => (pathAt(h).ops.length ? 0 : 1),
+  "nGetGenerationID(J)I": (h: bigint) => pathAt(h).generation(),
+  "nGetFillType(J)I": (h: bigint) => pathAt(h).fillType(),
+  "nSetFillType(JI)V": (h: bigint, ft: number) => pathAt(h).setFillType(ft),
+
+  "nMoveTo(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).moveTo(x, y),
+  "nLineTo(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).lineTo(x, y),
+  "nQuadTo(JFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number) => pathAt(h).quadTo(x1, y1, x2, y2),
+  "nCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => pathAt(h).cubicTo(a, b, c, d, e, f),
+  "nConicTo(JFFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number, w: number) => pathAt(h).conicTo(x1, y1, x2, y2, w),
+  // relative to the last point, which a close returns to the contour's start
+  "nRMoveTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = pathAt(h); p.moveTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRLineTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = pathAt(h); p.lineTo(p.pen.x + dx, p.pen.y + dy); },
+  "nRQuadTo(JFFFF)V": (h: bigint, a: number, b: number, c: number, d: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.quadTo(x + a, y + b, x + c, y + d);
+  },
+  "nRCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.cubicTo(x + a, y + b, x + c, y + d, x + e, y + f);
+  },
+  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, w: number) => {
+    const p = pathAt(h), { x, y } = p.pen;
+    p.conicTo(x + a, y + b, x + c, y + d, w);
+  },
+  "nClose(J)V": (h: bigint) => pathAt(h).close(),
+  "nSetLastPoint(JFF)V": (h: bigint, x: number, y: number) => pathAt(h).setLastPoint(x, y),
+
+  "nAddRect(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => pathAt(h).addRect(l, t, r, b, d),
+  "nAddOval(JFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, d: number) => pathAt(h).addOval(l, t, r, b, d),
+  "nAddCircle(JFFFI)V": (h: bigint, x: number, y: number, r: number, d: number) => pathAt(h).addCircle(x, y, r, d),
+  "nAddArc(JFFFFFF)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number) => pathAt(h).addArc(l, t, r, b, start, sweep),
+  "nArcTo(JFFFFFFZ)V": (h: bigint, l: number, t: number, r: number, b: number, start: number, sweep: number, force: number) =>
+    pathAt(h).arcTo(l, t, r, b, start, sweep, !!force),
+  // SkPath::addRoundRect ignores a negative radius
+  "nAddRoundRect(JFFFFFFI)V": (h: bigint, l: number, t: number, r: number, b: number, rx: number, ry: number, d: number) => {
+    if (rx >= 0 && ry >= 0) pathAt(h).addRoundRect(l, t, r, b, [rx, ry, rx, ry, rx, ry, rx, ry], d);
+  },
+  "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array, d: number) => pathAt(h).addRoundRect(l, t, r, b, radii, d),
+  "nAddPath(JJ)V": (h: bigint, o: bigint) => pathAt(h).append(pathAt(o)),
+  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => pathAt(h).append(pathAt(o), undefined, dx, dy),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => pathAt(h).append(pathAt(o), matrixAt(mat)),
+
+  "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => pathAt(h).offset(dx, dy),
+  "nTransform(JJ)V": (h: bigint, mat: bigint) => pathAt(h).transform(matrixAt(mat)),
+  // a null destination transforms in place
+  "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
+    const d = dst ? pathAt(dst) : pathAt(h);
+    d.set(pathAt(h));
+    d.transform(matrixAt(mat));
+  },
+  "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: object) => setEdges(r, pathAt(h).bounds()),
+  "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: object) => {
+    const b = pathAt(h).isRect();
+    if (b) setEdges(r, b);
+    return +!!b;
+  },
+  "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(pathAt(h)) ? 1 : 0),
+  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(pathAt(dst), pathAt(a), pathAt(b), op), (done) => +done),
+  "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (pathAt(a).isInterpolatable(pathAt(b)) ? 1 : 0),
+  "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => (pathAt(a).interpolate(pathAt(b), t, pathAt(out)) ? 1 : 0),
+  "nApproximate(JF)[F": (h: bigint, error: number) => approximate(pathAt(h), error),
+  ...noops("nIncReserve(JI)V"),
+});
+
+// PathMeasure frees its native state from finalize(), which never runs here
+const measure = (h: bigint) => deref<PathMeasure>(h);
+rt.registerJnis("android/graphics/PathMeasure", {
+  "native_create(JZ)J": (p: bigint, forceClosed: number) => {
+    const m = new PathMeasure();
+    m.setPath(p ? pathAt(p) : undefined, !!forceClosed);
+    return ownedHandle(m);
+  },
+  "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? pathAt(p) : undefined, !!forceClosed),
+  "native_getLength(J)F": (h: bigint) => measure(h).length(),
+  "native_getPosTan(JF[F[F)Z": (h: bigint, d: number, pos: Float32Array | null, tan: Float32Array | null) => (measure(h).getPosTan(d, pos, tan) ? 1 : 0),
+  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrixAt(m), flags) ? 1 : 0),
+  "native_getSegment(JFFJZ)Z": (h: bigint, start: number, stop: number, dst: bigint, moveTo: number) =>
+    (measure(h).getSegment(start, stop, pathAt(dst), !!moveTo) ? 1 : 0),
+  "native_isClosed(J)Z": (h: bigint) => (measure(h).isClosed() ? 1 : 0),
+  "native_nextContour(J)Z": (h: bigint) => (measure(h).nextContour() ? 1 : 0),
+  "native_destroy(J)V": release,
+});
+
+// nNext writes into the non-movable float[8] whose address is its handle (VMRuntime.addressOf)
+const iter = (h: bigint) => deref<VerbIterator>(h);
+rt.registerJnis("android/graphics/PathIterator", {
+  "nCreate(J)J": (p: bigint) => handle(new VerbIterator(pathAt(p))),
+  "nGetFinalizer()J": () => FINALIZER,
+  "nPeek(J)I": (h: bigint) => iter(h).peek(),
+  "nNext(JJ)I": (h: bigint, pts: bigint) => iter(h).next(deref<Float32Array>(pts), 0),
+});
+
 // ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
 // point arrays, as PathIterator does. Arcs come out as cubics rather than conics, so the
 // conic-evaluation mode and tolerance have nothing to convert and Conic never appears.
-const iter = (h: bigint) => deref<VerbIterator>(h);
 rt.registerJnis("androidx/graphics/path/PathIteratorPreApi34Impl", {
   "createInternalPathIterator(Landroid/graphics/Path;IF)J": (p: object) => handle(new VerbIterator(nativePathOf(p))),
   "destroyInternalPathIterator(J)V": release,

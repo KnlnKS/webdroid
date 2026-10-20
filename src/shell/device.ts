@@ -2,7 +2,7 @@
 // the hosted system services; SurfaceFlinger (surfaceflinger.ts) composes the display.
 
 import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex.ts";
-import { rt } from "../jvm/runtime.ts";
+import { rt, type Gen } from "../jvm/runtime.ts";
 import { appLaunched, beginAppCode, loadAppCode, loadDex, tierReady } from "../jvm/tier.ts";
 import { vfs, apkPath } from "./vfs.ts";
 import { inflateTree } from "../jvm/natives/jzip.ts";
@@ -10,7 +10,6 @@ import type { Install } from "./install.ts";
 import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jvmruntime.ts";
 import { Arsc } from "../android/arsc.ts";
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
-import { zygoteInit } from "../android/delegates.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
@@ -21,11 +20,13 @@ import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../a
 import { registerApk, registerSplit } from "../android/assetmanager.ts";
 import { setManifest } from "../android/pm.ts";
 import { getPrefs } from "../android/sharedprefs.ts";
-import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os.ts";
+import { PROCESS_PID, asZygote, setProcessIdentity, setProcessName } from "../android/os.ts";
 import { packageUid, packages, usesSdk } from "../android/packages.ts";
-import { onMain, postMain } from "../android/mainloop.ts";
+import { onMain, postMain, startMainLooper } from "../android/mainloop.ts";
+import { preloadFonts } from "../android/fonts.ts";
+import { preloadPaint } from "../android/paint.ts";
 import { readAheadFonts } from "../android/cssfonts.ts";
-import { after, mainThread } from "../jvm/natives/jentry.ts";
+import { after, callOn, initClass, mainThread, scall } from "../jvm/natives/jentry.ts";
 import { deliverVsync } from "../android/vsync.ts";
 import { mark, perf } from "../perf.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -111,6 +112,29 @@ function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: s
 /** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
+/** What the zygote sets up in a forked process before app code runs: libcore's MIME table is
+ *  framework.jar's, System.out and System.err reach logcat, RuntimeInit.commonInit's uncaught
+ *  exception handlers (LoggingHandler, KillApplicationHandler), time zone, logging, HTTP user
+ *  agent and socket tagger are set, the JCA providers are installed and warmed, Typeface is
+ *  initialized and the hyphenators registered; the device's languages are set and the text paint
+ *  classes, whose constructors read them, initialized. The font map is bindApplication's. */
+const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
+  // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
+  yield asZygote(() => initClass("java/lang/System"));
+  // ZygoteInit.main: DDMS handlers and libcore's MimeMap over framework.jar's mime.types
+  yield scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
+  yield scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
+  // ZygoteInit.zygoteInit, in the forked process
+  yield scall("com/android/internal/os/RuntimeInit", "commonInit", "()V");
+  // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
+  yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
+  yield* preloadFonts();
+  yield scall("com/android/internal/os/ZygoteInit", "preloadTextResources", "()V");
+  yield initDeviceLocales();
+  yield preloadPaint();
+  // ActivityThread.main, once the process is forked
+  yield startMainLooper();
+}())))();
 let zygote: Promise<void> | null = null;
 /** What a device's zygote holds before it forks an app: the framework package and the boot class
  *  path indexed. It needs no app, so a page starts it while the app downloads. `host` settles host properties Java reads from zygoteInit on, such as the display rate. */

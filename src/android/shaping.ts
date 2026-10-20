@@ -15,12 +15,12 @@ import { isLead, isTrail } from "../jvm/natives/jstring.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts.ts";
 import { cssFace } from "./cssfonts.ts";
-import { type NativePaint, paintAt } from "./paint.ts";
+import { type NativePaint, paintAt, setFontMetrics } from "./paint.ts";
 import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz.ts";
 import type { Ctx2D } from "./recording.ts";
 import { END_REPLACE_WITH_HYPHEN, startHyphenString, endHyphenString } from "./hyphenator.ts";
 import type { NativePath } from "./path.ts";
-import { emptyBox, type Box } from "./graphics.ts";
+import { emptyBox, setEdges, type Box } from "./graphics.ts";
 import { variedAdvances } from "./sfnt.ts";
 
 export const f32 = Math.fround;
@@ -303,7 +303,7 @@ function glyphBox(hb: HarfBuzz, f: Font, glyph: number, p: NativePaint, size: nu
 /** Font_getGlyphBounds: SkFont::getWidths of one glyph at the paint's size, scale and skew. The
  *  bounds are rounded out to pixels, as FreeType's are for an unhinted glyph (the device's hinted
  *  outlines can differ by a pixel at small sizes). */
-export function glyphBounds(font: NativeFont, glyph: number, p: NativePaint): [advance: number, bounds: Box] | Promise<[number, Box]> {
+function glyphBounds(font: NativeFont, glyph: number, p: NativePaint): [advance: number, bounds: Box] | Promise<[number, Box]> {
   return shaped((hb) => {
     const f = hbFont(hb, font), box = glyphBox(hb, f, glyph, p, p.textSize);
     const advance = skiaAdvance(ftAdvances.get(f), f, glyph, hb.advance(f, glyph)) * (p.textSize / f.units) * p.textScaleX;
@@ -445,4 +445,16 @@ rt.registerJnis("android/graphics/text/PositionedGlyphs", {
   "nGetFakeItalic(JI)Z": (h: bigint, i: number) => +!!(layoutOf(h).fonts[i].fakery & FAKE_ITALIC),
   "nGetWeightOverride(JI)F": (h: bigint, i: number) => layoutOf(h).fonts[i].weight,
   "nGetItalicOverride(JI)F": (h: bigint, i: number) => layoutOf(h).fonts[i].italic,
+});
+// the Font natives that measure at a paint's size; fonts.ts registers the rest
+rt.registerJnis("android/graphics/fonts/Font", {
+  // SkFont::getMetrics over this face
+  "nGetFontMetrics(JJLandroid/graphics/Paint$FontMetrics;)F": (h: bigint, p: bigint, fm: object | null) => {
+    const m = fontOf(h).faceMetrics!, size = paintAt(p).textSize;
+    const ascent = f32(-m.ascent * size), descent = f32(m.descent * size), leading = f32(m.leading * size);
+    if (fm) setFontMetrics(fm, false, f32(-m.top * size), ascent, descent, f32(m.bottom * size), leading);
+    return f32(descent - ascent + leading);
+  },
+  "nGetGlyphBounds(JIJLandroid/graphics/RectF;)F": (h: bigint, glyph: number, p: bigint, rect: object | null) =>
+    after(glyphBounds(fontOf(h), glyph, paintAt(p)), ([advance, box]) => { if (rect) setEdges(rect, box); return advance; }),
 });

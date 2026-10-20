@@ -135,6 +135,9 @@ rt.claimHandle = (owner: object, h: bigint) => {
 /** A finalizer is a function pointer the class hands to NativeAllocationRegistry, which only
  *  ever passes it back to us. One shared handle to the release function is enough. */
 export const FINALIZER = handle((h: bigint) => release(h));
+// libcore's NativeAllocationRegistry runs as its bytecode; the Cleaner it registers for each
+// allocation frees it through the class's free function
+rt.registerJnis("libcore/util/NativeAllocationRegistry", { "applyFreeFunction(JJ)V": (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); } });
 
 // RefBase natives opt in with the reference already acquired by their JNI creator.
 // Other handle kinds retain their existing ownership/finalizer contracts.

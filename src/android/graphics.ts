@@ -2,9 +2,10 @@
 
 import { rt, declaredField } from "../jvm/runtime.ts";
 import { classNameOf } from "../jvm/natives/jentry.ts";
-import type { NativeBitmap } from "./bitmap.ts";
+import { type NativeBitmap, colorLongAt } from "./bitmap.ts";
+import { handle, deref, FINALIZER } from "./handles.ts";
 import { isRecording, transformOf, type Ctx2D } from "./recording.ts";
-import { localBounds, type Affine } from "./matrix.ts";
+import { localBounds, localMatrix, type Affine } from "./matrix.ts";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -264,3 +265,77 @@ export function matrixColor(k: Float32Array, color: number): number {
   return ((clamp(k[15] * r + k[16] * g + k[17] * b + k[18] * a + k[19]) << 24) | (clamp(k[0] * r + k[1] * g + k[2] * b + k[3] * a + k[4]) << 16)
     | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
+
+// Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
+const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);
+rt.registerJnis("android/graphics/Color", {
+  "nativeRGBToHSV(III[F)V": (r: number, g: number, b: number, hsv: Float32Array) => {
+    const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+    let h = 0, s = 0;
+    if (delta) {
+      s = f(delta / max);
+      h = f(r === max ? (g - b) / delta : g === max ? 2 + f((b - r) / delta) : 4 + f((r - g) / delta));
+      h = f(h * 60);
+      if (h < 0) h = f(h + 360);
+    }
+    hsv[0] = h; hsv[1] = s; hsv[2] = f(max / 255);
+  },
+  "nativeHSVToColor(I[F)I": (a: number, hsv: Float32Array) => {
+    const s = Math.min(Math.max(hsv[1], 0), 1), v = Math.min(Math.max(hsv[2], 0), 1), vb = round(f(v * 255));
+    if (Math.abs(s) <= 1 / 4096) return (a << 24 | vb << 16 | vb << 8 | vb) | 0;
+    const hx = hsv[0] < 0 || hsv[0] >= 360 ? 0 : f(hsv[0] / 60), w = Math.floor(hx), fr = f(hx - w);
+    const p = round(f(f(f(1 - s) * v) * 255)), q = round(f(f(f(1 - f(s * fr)) * v) * 255)), t = round(f(f(f(1 - f(s * f(1 - fr))) * v) * 255));
+    const [r, g, b] = [[vb, t, p], [q, vb, p], [p, vb, t], [p, q, vb], [t, p, vb]][w] ?? [vb, p, q];
+    return (a << 24 | r << 16 | g << 8 | b) | 0;
+  },
+});
+
+// ── ColorFilter and Shader: the native instances a native paint draws with ───────────────────
+// Lighting and ColorMatrix filters change theirs in place; a shader's is fixed, and Shader makes
+// a new one when its Java side changes. `m` is the local matrix's handle, 0 for identity.
+const colorFilter = (h: bigint) => deref<NativeColorFilter>(h);
+const blendFilter = (color: number, mode: number) => handle(new NativeColorFilter(null, color, BLEND_MODES[mode]));
+/** SkColorFilters::Lighting: each RGB channel scaled by `mul`'s and offset by `add`'s */
+const setMul = (k: Float32Array, mul: number) => { k[0] = (mul >>> 16 & 255) / 255; k[6] = (mul >>> 8 & 255) / 255; k[12] = (mul & 255) / 255; };
+const setAdd = (k: Float32Array, add: number) => { k[4] = add >>> 16 & 255; k[9] = add >>> 8 & 255; k[14] = add & 255; };
+rt.registerJnis("android/graphics/ColorFilter", { "nativeGetFinalizer()J": () => FINALIZER });
+rt.registerJnis("android/graphics/PorterDuffColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+rt.registerJnis("android/graphics/BlendModeColorFilter", { "native_CreateBlendModeFilter(II)J": blendFilter });
+rt.registerJnis("android/graphics/LightingColorFilter", {
+  "native_CreateLightingFilter(II)J": (mul: number, add: number) => {
+    const k = new Float32Array(20);
+    k[18] = 1; setMul(k, mul); setAdd(k, add);
+    return handle(new NativeColorFilter(k));
+  },
+  "native_SetLightingFilterMul(JI)V": (h: bigint, mul: number) => setMul(colorFilter(h).matrix!, mul),
+  "native_SetLightingFilterAdd(JI)V": (h: bigint, add: number) => setAdd(colorFilter(h).matrix!, add),
+});
+rt.registerJnis("android/graphics/ColorMatrixColorFilter", {
+  "nativeColorMatrixFilter([F)J": (k: Float32Array) => handle(new NativeColorFilter(k.slice(0, 20))),
+  "nativeSetColorMatrix(J[F)V": (h: bigint, k: Float32Array) => colorFilter(h).matrix!.set(k.subarray(0, 20)),
+});
+
+// Gradients clamp: Canvas2D has no REPEAT, MIRROR or DECAL gradient, so the tile mode is not used.
+rt.registerJnis("android/graphics/Shader", { "nativeGetFinalizer()J": () => FINALIZER });
+/** a gradient's ColorLongs, which Shader requires to share the space handle `cs` names, as sRGB ARGB */
+const stopColors = (colors: BigInt64Array, cs: bigint) => Int32Array.from(colors, (c) => colorLongAt(c, cs));
+rt.registerJnis("android/graphics/LinearGradient", {
+  "nativeCreate(JFFFF[J[FIJ)J": (m: bigint, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createLinearGradient(x0, y0, x1, y1), stopColors(colors, cs), positions)),
+});
+rt.registerJnis("android/graphics/RadialGradient", {
+  "nativeCreate(JFFFFFF[J[FIJ)J": (m: bigint, fx: number, fy: number, fr: number, x: number, y: number, r: number, colors: BigInt64Array, positions: Float32Array | null, _tile: number, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createRadialGradient(fx, fy, fr, x, y, r), stopColors(colors, cs), positions)),
+});
+rt.registerJnis("android/graphics/SweepGradient", {
+  "nativeCreate(JFF[J[FJ)J": (m: bigint, cx: number, cy: number, colors: BigInt64Array, positions: Float32Array | null, cs: bigint) =>
+    handle(gradient(localMatrix(m), scratch2d().createConicGradient(0, cx, cy), stopColors(colors, cs), positions)),
+});
+rt.registerJnis("android/graphics/BitmapShader", {
+  "nativeCreate(JJIIIZZJ)J": (m: bigint, b: bigint, tileX: number, tileY: number) =>
+    handle(new NativeBitmapShader(localMatrix(m), deref<NativeBitmap>(b), tileX, tileY)),
+});
+rt.registerJnis("android/graphics/ComposeShader", {
+  "nativeCreate(JJJI)J": (m: bigint, dst: bigint, src: bigint, mode: number) =>
+    handle(composeShader(localMatrix(m), deref<NativeShader>(dst), deref<NativeShader>(src), mode)),
+});

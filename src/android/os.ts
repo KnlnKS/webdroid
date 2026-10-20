@@ -11,7 +11,9 @@ import { exitProcess, never } from "../process-exit.ts";
 import { device } from "../shell/config.ts";
 import { androidGroupId } from "./identity.ts";
 import { uuidFromString } from "../jvm/natives/jvalues.ts";
-import { vcall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
+import { vcall, scall, curThread, mainThread, type JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry.ts";
+import { handle, deref } from "./handles.ts";
+import { hasProperty, propertyValue } from "../shell/properties.ts";
 import { type JThrowable, logUncaught } from "../jvm/natives/jthrowable.ts";
 import { checkFromIndexSize } from "../jvm/natives/jlang.ts";
 import { E, ERRSTR, strerror } from "../native/abi.ts";
@@ -146,6 +148,31 @@ rt.registerJnis("dalvik/system/VMDebug", {
   "getAllocCount(I)I": () => 0,
   "getRuntimeStatInternal(I)Ljava/lang/String;": () => "0",
   "getRuntimeStatsInternal()[Ljava/lang/String;": () => jarray(RUNTIME_STATS.map(() => "0"), "Ljava/lang/String;"),
+});
+// android.os.SystemProperties: an app process may not set properties, and a change report runs
+// the registered callbacks, as the property service's own notification does
+/** android_os_SystemProperties.cpp's readers: an absent or unparsable value is the default */
+const propInt = (v: string | null, def: number) => v !== null && /^-?\d+$/.test(v.trim()) ? Number(BigInt.asIntN(32, BigInt(v.trim()))) : def;
+const propLong = (v: string | null, def: bigint) => v !== null && /^-?\d+$/.test(v.trim()) ? BigInt.asIntN(64, BigInt(v.trim())) : def;
+const propBool = (v: string | null, def: number) => v === null ? def : /^(1|y|yes|on|true)$/.test(v) ? 1 : /^(0|n|no|off|false)$/.test(v) ? 0 : def;
+/** a property handle (SystemProperties.find) names a property the device has */
+const propAt = (h: bigint) => propertyValue(deref<{ key: string }>(h).key);
+rt.registerJnis("android/os/SystemProperties", {
+  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (key: string, def: string | null) => propertyValue(key) ?? def ?? "",
+  "native_get_boolean(Ljava/lang/String;Z)Z": (key: string, def: number) => propBool(propertyValue(key), def),
+  "native_get_int(Ljava/lang/String;I)I": (key: string, def: number) => propInt(propertyValue(key), def),
+  "native_get_long(Ljava/lang/String;J)J": (key: string, def: bigint) => propLong(propertyValue(key), def),
+  "native_find(Ljava/lang/String;)J": (key: string) => hasProperty(key) ? handle({ key }) : 0n,
+  "native_get(J)Ljava/lang/String;": (h: bigint) => propAt(h) ?? "",
+  "native_get_boolean(JZ)Z": (h: bigint, def: number) => propBool(propAt(h), def),
+  "native_get_int(JI)I": (h: bigint, def: number) => propInt(propAt(h), def),
+  "native_get_long(JJ)J": (h: bigint, def: bigint) => propLong(propAt(h), def),
+  "native_set(Ljava/lang/String;Ljava/lang/String;)V": () => {
+    throw rt.mkThrowable("java/lang/RuntimeException", "failed to set system property (check logcat for reason)");
+  },
+  "native_add_change_callback()V": () => {},
+  // reached only from SystemProperties itself, which is therefore initialized
+  "native_report_sysprop_change()V": () => scall("android/os/SystemProperties", "callChangeCallbacks", "()V"),
 });
 // ParcelFileDescriptor runs from AOSP bytecode over libcore's descriptors. Bytes with no file of
 // this process behind them (an asset, a picked document, another process's descriptor) get one here.

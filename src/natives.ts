@@ -48,8 +48,10 @@ import "./android/vectordrawable.ts";
 import "./android/rtanimator.ts";
 import "./android/animation.ts";
 import "./android/rendereffect.ts";
+import "./android/runtime-shader.ts";
 import "./android/fonts.ts";
 import "./android/path.ts";
+import "./android/region.ts";
 import "./android/text.ts";
 import "./android/resnative.ts";
 import "./android/motionevent.ts";
@@ -95,9 +97,6 @@ import "./android/documents.ts";
 import "./android/mediastore.ts";
 import "./android/provider.ts";
 import "./android/notification.ts";
-// last of the android modules: the delegates read the classes the ones above define, and
-// they register JNI implementations rather than native classes, so nothing shadows anything
-import "./android/delegates.ts";
 import "./android/services.ts";
 import "./android/display.ts";
 import "./android/inputdevices.ts";

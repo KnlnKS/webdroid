@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording.ts";
+import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { newObj, scall } from "../jvm/natives/jentry.ts";
@@ -726,3 +726,51 @@ rt.registerJnis("android/graphics/DrawFilter", { "nativeDestructor(J)V": release
 const emptyCtx = () => new OffscreenCanvas(1, 1).getContext("2d")!;
 /** SkiaCanvas over a bitmap's raster, or over none */
 export const bitmapCanvas = (b: NativeBitmap | null): NativeCanvas => b ? NativeCanvas.over(b.context(), b.w, b.h, b) : NativeCanvas.over(emptyCtx(), 0, 0);
+
+// ── android.graphics.Picture: a recorded display list ──────────────────────────────────
+// The recording canvas records as a RenderNode's does, and drawing the picture replays it into
+// the target canvas inside a save/restore, as SkRecordDraw does. SkPicture's serialized form
+// (createFromStream, writeToStream) is not implemented.
+class NativePicture {
+  w = 0; h = 0;
+  ops: DisplayList | null = null;
+  /** while recording: what the PictureCanvas (which owns its handle) records into */
+  recorder: Recorder | null = null;
+  /** SkPictureRecorder::finishRecordingAsPicture: the list is the picture's, and the canvas records no more of it */
+  endRecording() {
+    if (!this.recorder) return;
+    this.ops = this.recorder.take();
+    this.recorder = null;
+  }
+}
+const picture = (h: bigint) => deref<NativePicture>(h);
+rt.registerJnis("android/graphics/Picture", {
+  // a copy of a picture still recording holds what was recorded so far
+  "nativeConstructor(J)J": (src: bigint) => {
+    const p = new NativePicture();
+    if (src) { const s = picture(src); p.w = s.w; p.h = s.h; p.ops = s.recorder ? s.recorder.ops.slice() : s.ops; }
+    return ownedHandle(p);
+  },
+  "nativeDestructor(J)V": (h: bigint) => { picture(h).endRecording(); release(h); },
+  "nativeBeginRecording(JII)J": (h: bigint, w: number, ht: number) => {
+    const p = picture(h);
+    p.endRecording();
+    p.w = w; p.h = ht; p.ops = null;
+    p.recorder = new Recorder();
+    return handle(NativeCanvas.over(p.recorder.ctx, w, ht));
+  },
+  "nativeEndRecording(J)V": (h: bigint) => picture(h).endRecording(),
+  "nativeGetWidth(J)I": (h: bigint) => picture(h).w,
+  "nativeGetHeight(J)I": (h: bigint) => picture(h).h,
+  "nativeDraw(JJ)V": (c: bigint, h: bigint) => {
+    const p = picture(h), cv = drawingCanvas(c);
+    p.endRecording();
+    const ops = p.ops;
+    if (!ops) return;
+    // into a recording canvas the replay is deferred to where that recording is drawn
+    replayFor(cv, () => recordOrRun(cv.ctx, (ctx) => {
+      ctx.save();
+      try { replay(ctx, ops); } finally { ctx.restore(); }
+    }));
+  },
+});

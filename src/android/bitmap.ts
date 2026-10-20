@@ -34,7 +34,7 @@ let generation = 0;
 const nextGeneration = () => (generation = (generation + 1) | 0) || (generation = 1);
 
 export type RGBA = Uint8ClampedArray<ArrayBuffer>;
-/** a ColorSpace.Rgb's native instance (delegates.ts): skcms' a..g and the D50 matrix, column-major */
+/** a ColorSpace.Rgb's native instance: skcms' a..g and the D50 matrix, column-major */
 interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
 export class NativeBitmap {
@@ -325,6 +325,11 @@ function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
 /** a ColorLong in the colour space a ColorSpace.Rgb.Native handle names (0 for sRGB), as sRGB ARGB:
  *  the decoder for every native that receives a ColorLong (Paint, Canvas, gradients, Bitmap) */
 export const colorLongAt = (color: bigint, cs: bigint) => colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null);
+// skcms' transfer function (g, a, b, c, d, e, f) and a D50 XYZ matrix; the 2D context draws in sRGB
+rt.registerJnis("android/graphics/ColorSpace$Rgb$Native", {
+  "nativeCreate(FFFFFFF[F)J": (...args: [...number[], Float32Array]) => handle({ transfer: args.slice(0, 7), xyz: Float32Array.from(args[7] as Float32Array) }),
+  "nativeGetNativeFinalizer()J": () => FINALIZER,
+});
 const COLOR_SPACE = "android/graphics/ColorSpace";
 export const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
 /** GraphicsJNI::getColorSpace: a named space where the pixels' space is one, else the match or an "Unknown" Rgb */

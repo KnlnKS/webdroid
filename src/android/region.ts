@@ -3,10 +3,11 @@
 // (touching spans merged, vertically adjacent bands with the same spans merged, no empty band),
 // so iteration, equality, toString and the boundary path all see the rectangles a device does.
 
-import { peerField } from "../jvm/runtime.ts";
-import { deref } from "./handles.ts";
-import { type NativePath, type Sink, walkPath } from "./path.ts";
-import type { Box } from "./graphics.ts";
+import { rt, peerField } from "../jvm/runtime.ts";
+import { after, vcall } from "../jvm/natives/jentry.ts";
+import { deref, ownedHandle, release } from "./handles.ts";
+import { type NativePath, type Sink, pathAt, walkPath } from "./path.ts";
+import { edges, emptyBox, setEdges, type Box } from "./graphics.ts";
 
 /** rows [top, bottom) covered by the spans [xs[0], xs[1]), [xs[2], xs[3]), ... */
 interface Band { top: number; bottom: number; xs: readonly number[] }
@@ -444,3 +445,73 @@ function scan(path: NativePath, clip: Box): Band[] {
 const mNativeRegion = peerField<bigint>("android/graphics/Region", "mNativeRegion");
 /** the area behind a Java Region */
 export const nativeRegionOf = (r: object): NativeRegion => deref<NativeRegion>(mNativeRegion(r));
+
+// ── android.graphics.Region and RegionIterator ─────────────────────────────────────────
+// Both free their native state from finalize(), which never runs here.
+const region = (h: bigint) => deref<NativeRegion>(h);
+const scratch = new NativeRegion();
+rt.registerJnis("android/graphics/Region", {
+  "nativeConstructor()J": () => ownedHandle(new NativeRegion()),
+  "nativeDestructor(J)V": release,
+  "nativeSetRegion(JJ)V": (h: bigint, src: bigint) => { region(h).set(region(src)); },
+  "nativeSetRect(JIIII)Z": (h: bigint, l: number, t: number, r: number, b: number) => +region(h).setRect(l, t, r, b),
+  "nativeSetPath(JJJ)Z": (h: bigint, p: bigint, clip: bigint) => +region(h).setPath(pathAt(p), region(clip)),
+  "nativeGetBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
+    const b = region(h).bounds();
+    setEdges(r, b ?? emptyBox);
+    return +!!b;
+  },
+  "nativeGetBoundaryPath(JJ)Z": (h: bigint, p: bigint) => +region(h).boundaryPath(pathAt(p)),
+  "nativeOp(JIIIII)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => {
+    scratch.setRect(l, t, r, b);
+    return +region(h).op(region(h), scratch, op);
+  },
+  "nativeOp(JLandroid/graphics/Rect;JI)Z": (h: bigint, rect: object, other: bigint, op: number) => {
+    const r = edges(rect);
+    scratch.setRect(r.left, r.top, r.right, r.bottom);
+    return +region(h).op(scratch, region(other), op);
+  },
+  "nativeOp(JJJI)Z": (h: bigint, a: bigint, b: bigint, op: number) => +region(h).op(region(a), region(b), op),
+  // the rects as one int vector, which is Parcel's int-array form
+  "nativeWriteToParcel(JLandroid/os/Parcel;)Z": (h: bigint, parcel: object | null) =>
+    parcel ? after(vcall(parcel, "writeIntArray", "([I)V", Int32Array.from(region(h).rects())), () => 1) : 0,
+  "nativeCreateFromParcel(Landroid/os/Parcel;)J": (parcel: object | null) => parcel ? after(vcall(parcel, "createIntArray", "()[I"), (rects: Int32Array | null) => {
+    if (rects && rects.length % 4) return 0n;
+    const r = new NativeRegion();
+    if (rects) r.setRects(rects);
+    return ownedHandle(r);
+  }) : 0n,
+  "nativeEquals(JJ)Z": (a: bigint, b: bigint) => +region(a).equals(region(b)),
+  "nativeToString(J)Ljava/lang/String;": (h: bigint) => region(h).toString(),
+  "isEmpty()Z": function (this: object) { return +nativeRegionOf(this).isEmpty(); },
+  "isRect()Z": function (this: object) { return +nativeRegionOf(this).isRect(); },
+  "isComplex()Z": function (this: object) { return +nativeRegionOf(this).isComplex(); },
+  "contains(II)Z": function (this: object, x: number, y: number) { return +nativeRegionOf(this).contains(x, y); },
+  "quickContains(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickContains(l, t, r, b); },
+  "quickReject(IIII)Z": function (this: object, l: number, t: number, r: number, b: number) { return +nativeRegionOf(this).quickReject(l, t, r, b); },
+  "quickReject(Landroid/graphics/Region;)Z": function (this: object, o: object) {
+    const b = nativeRegionOf(o).bounds();
+    return +(!b || nativeRegionOf(this).quickReject(b.left, b.top, b.right, b.bottom));
+  },
+  "translate(IILandroid/graphics/Region;)V": function (this: object, dx: number, dy: number, dst: object | null) {
+    const r = nativeRegionOf(this);
+    r.translate(dx, dy, dst ? nativeRegionOf(dst) : r);
+  },
+  // hwui's scale_rgn: each rect's edges scaled and rounded half away from zero, then unioned
+  "scale(FLandroid/graphics/Region;)V": function (this: object, s: number, dst: object | null) {
+    const r = nativeRegionOf(this), round = (v: number) => Math.sign(v) * Math.round(Math.abs(v));
+    (dst ? nativeRegionOf(dst) : r).setRects(r.rects().map((v) => round(Math.fround(v * s))));
+  },
+});
+// the iterator walks its own copy of the region, as hwui's RgnIterPair does
+rt.registerJnis("android/graphics/RegionIterator", {
+  "nativeConstructor(J)J": (h: bigint) => ownedHandle({ rects: region(h).rects(), at: 0 }),
+  "nativeDestructor(J)V": release,
+  "nativeNext(JLandroid/graphics/Rect;)Z": (h: bigint, r: object) => {
+    const it = deref<{ rects: number[]; at: number }>(h), { rects } = it;
+    if (it.at >= rects.length) return 0;
+    setEdges(r, { left: rects[it.at], top: rects[it.at + 1], right: rects[it.at + 2], bottom: rects[it.at + 3] });
+    it.at += 4;
+    return 1;
+  },
+});
