@@ -6,11 +6,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prepare } from "../conform/prepare.ts";
-import { hash, parseLines, type Outcome } from "../conform/results.ts";
+import { arrayProviderFailures, classSetupFailures, hash, parseLines, type Outcome } from "../conform/results.ts";
 import { SUITES } from "../conform/suites.ts";
 import { cli } from "../args.ts";
 import { nodeCommand, run } from "../node.ts";
-import { arrayProviderFailures, classSetupFailures } from "./conform-coverage.ts";
 import { checker } from "./tools.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
