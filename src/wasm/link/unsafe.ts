@@ -240,7 +240,6 @@ for (const [t, names] of [["I", ["compareAndSetInt", "compareAndSwapInt"]], ["J"
   for (const n of names) def(`${n}(Ljava/lang/Object;J${d}${d})Z`, (cx, c) => emitCas(cx, c, t));
 }
 for (const f of ["fullFence", "loadFence", "storeFence"]) def(`${f}()V`, () => {});
-def("addressSize()I", (cx, c) => { c.i32(8); });
 def("pageSize()I", (cx, c) => { c.i32(4096); });
 def("getArrayBaseOffsetForComponentType(Ljava/lang/Class;)I", (cx, c) => { c.i32(ARRAY_BASE); });
 def("getArrayIndexScaleForComponentType(Ljava/lang/Class;)I", (cx, c) => { cx.info(c, UInfo.ComponentScale, () => { c.lget(0); idOfClass(cx, c); }); });

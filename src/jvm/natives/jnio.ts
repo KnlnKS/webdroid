@@ -10,7 +10,7 @@ import { syncShared } from "../../native/mappings.ts";
 import { jarray } from "../abi.ts";
 import { handle, deref, release } from "../../android/handles.ts";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset.ts";
-import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
+import { isExternal, pagesIn, externalBytes, guestAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
 import { BytesFile, type FileSource } from "../../shell/lazyfile.ts";
 export { isExternal };
 
@@ -34,7 +34,6 @@ export const setLimit = (b: JBuffer, l: number): void => { (b as Fields)[fields(
 export const isBuffer = (o: unknown): o is JBuffer => !!o && typeof o === "object" && !!iof(o, "java/nio/Buffer");
 /** Buffer.address: a direct buffer's memory, 0 for a heap buffer */
 export const addressOf = (b: JBuffer): bigint => (b as Fields)[fields().address];
-setBufferAddress(addressOf);
 
 /** where a buffer class keeps its elements: a heap buffer's array and offset, a view's buffer and byte offset */
 interface Layout { hb?: string; offset?: string; bb?: string; byteOffset?: string }

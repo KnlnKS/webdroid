@@ -1,11 +1,13 @@
 // libcore.io.Memory's natives (libcore_io_Memory.cpp), and the i18n module's copy of the class
 // that reads tzdata: raw access to guest memory, which is little-endian as the host is, so a
 // `swap` reverses each element's bytes. Addresses from EXTERNAL up are outside guest memory: the
-// pages of immutable files (Region).
+// pages of immutable files (Region). Unsafe's raw accessors (junsafe.ts) are these loads and stores.
 import { mem } from "../../native/mem.ts";
 import { E } from "../../native/abi.ts";
-import { rt, waits } from "../runtime.ts";
+import { rt, waits, type JObj } from "../runtime.ts";
+import { PRIMS } from "../abi.ts";
 import { after } from "./jentry.ts";
+import { addressOf } from "./jnio.ts";
 import { readFully, type FileSource } from "../../shell/lazyfile.ts";
 import { mapLease } from "../../native/mappings.ts";
 import type { RemoteDescriptor } from "../../native/process-fd.ts";
@@ -199,8 +201,6 @@ const pokeArray = (address: bigint, array: Elements | null, offset: number, coun
   // a set within one buffer copies as memmove does, so a guest-memory array needs no copy first
   if (count) return writeAt(address, swap ? swapped(source, array!.BYTES_PER_ELEMENT) : source);
 };
-let bufferAddress: ((buffer: object) => bigint) | null = null;
-export function setBufferAddress(read: (buffer: object) => bigint): void { bufferAddress = read; }
 /** n bytes of a primitive array from byte `at` */
 function arrayBytes(o: ArrayBufferView | null, at: number, n: number): Uint8Array {
   if (o === null) return rt.npe();
@@ -208,22 +208,31 @@ function arrayBytes(o: ArrayBufferView | null, at: number, n: number): Uint8Arra
 }
 /** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
 const objectBytes = (o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> =>
-  o === null || ArrayBuffer.isView(o) ? arrayBytes(o, at, n) : memoryAt(bufferAddress!(o) + BigInt(at), n);
-export const externalRead = <T>(address: bigint, width: number, get: Get<T>): T | Promise<T> => regionAt(address).read(offsetIn(address), width, get);
-/** junsafe's store at an external address */
-export const externalWrite = <T>(address: bigint, _width: number, _value: T, _put: (view: DataView, at: number, value: T) => void): never => readOnly(address);
-const I8: Get<number> = (v, i) => v.getInt8(i), I16: Get<number> = (v, i) => v.getInt16(i, true);
-const I32: Get<number> = (v, i) => v.getInt32(i, true), I64: Get<bigint> = (v, i) => v.getBigInt64(i, true);
+  o === null || ArrayBuffer.isView(o) ? arrayBytes(o, at, n) : memoryAt(addressOf(o as JObj) + BigInt(at), n);
+/** each primitive's load and store in guest memory, and its read from an external mapping's page */
+const ACCESS: Record<string, { ld(p: number): any; st(p: number, v: any): void; get: Get<any> }> = {
+  Z: { ld: (p) => mem.ld8s(p) ? 1 : 0, st: (p, v) => mem.st8(p, v ? 1 : 0), get: (v, i) => v.getUint8(i) ? 1 : 0 },
+  B: { ld: (p) => mem.ld8s(p), st: (p, v) => mem.st8(p, v), get: (v, i) => v.getInt8(i) },
+  S: { ld: (p) => mem.ld16s(p), st: (p, v) => mem.st16(p, v), get: (v, i) => v.getInt16(i, true) },
+  C: { ld: (p) => mem.ld16u(p), st: (p, v) => mem.st16(p, v), get: (v, i) => v.getUint16(i, true) },
+  I: { ld: (p) => mem.ld32(p), st: (p, v) => mem.st32(p, v), get: (v, i) => v.getInt32(i, true) },
+  J: { ld: (p) => mem.ld64(p), st: (p, v) => mem.st64(p, v), get: (v, i) => v.getBigInt64(i, true) },
+  F: { ld: (p) => mem.ldf32(p), st: (p, v) => mem.stf32(p, v), get: (v, i) => v.getFloat32(i, true) },
+  D: { ld: (p) => mem.ldf64(p), st: (p, v) => mem.stf64(p, v), get: (v, i) => v.getFloat64(i, true) },
+};
+/** a load of primitive `d` at a native address, which waits for an external mapping's page */
+export const peek = (d: string) => {
+  const k = ACCESS[d], width = PRIMS[d].size;
+  return waits((a: bigint) => isExternal(a) ? regionAt(a).read(offsetIn(a), width, k.get) : k.ld(physical(a)));
+};
+/** a store of primitive `d` at a native address */
+export const poke = (d: string) => { const k = ACCESS[d]; return (a: bigint, v: unknown) => isExternal(a) ? readOnly(a) : k.st(physical(a), v); };
 
 const natives: Record<string, (...args: never[]) => unknown> = {
-  "peekByte(J)B": waits((address: bigint) => isExternal(address) ? externalRead(address, 1, I8) : mem.ld8s(physical(address))),
-  "pokeByte(JB)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st8(physical(address), value),
-  "peekShortNative(J)S": waits((address: bigint) => isExternal(address) ? externalRead(address, 2, I16) : mem.ld16s(physical(address))),
-  "pokeShortNative(JS)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st16(physical(address), value),
-  "peekIntNative(J)I": waits((address: bigint) => isExternal(address) ? externalRead(address, 4, I32) : mem.ld32(physical(address))),
-  "pokeIntNative(JI)V": (address: bigint, value: number) => isExternal(address) ? readOnly(address) : mem.st32(physical(address), value),
-  "peekLongNative(J)J": waits((address: bigint) => isExternal(address) ? externalRead(address, 8, I64) : mem.ld64(physical(address))),
-  "pokeLongNative(JJ)V": (address: bigint, value: bigint) => isExternal(address) ? readOnly(address) : mem.st64(physical(address), value),
+  "peekByte(J)B": peek("B"), "pokeByte(JB)V": poke("B"),
+  "peekShortNative(J)S": peek("S"), "pokeShortNative(JS)V": poke("S"),
+  "peekIntNative(J)I": peek("I"), "pokeIntNative(JI)V": poke("I"),
+  "peekLongNative(J)J": peek("J"), "pokeLongNative(JJ)V": poke("J"),
   "peekByteArray(J[BII)V": peekArray,
   "pokeByteArray(J[BII)V": pokeArray,
 };
@@ -231,8 +240,6 @@ for (const [t, sig] of [["Char", "C"], ["Short", "S"], ["Int", "I"], ["Long", "J
   natives[`peek${t}Array(J[${sig}IIZ)V`] = peekArray;
   natives[`poke${t}Array(J[${sig}IIZ)V`] = pokeArray;
 }
-// MappedByteBuffer.load touches each page through Unsafe
-rt.registerJni("jdk/internal/misc/Unsafe", "getByte(J)B", natives["peekByte(J)B"]);
 for (const [sig, fn] of Object.entries(natives)) {
   rt.registerJni("libcore/io/Memory", sig, fn);
   rt.registerJni("com/android/i18n/timezone/internal/Memory", sig, fn);
@@ -242,7 +249,7 @@ rt.registerJni("libcore/io/Memory", "memmove(Ljava/lang/Object;ILjava/lang/Objec
   waits((dst: Elements | object | null, dstOffset: number, src: Elements | object | null, srcOffset: number, count: bigint) => {
     const n = Number(count);
     return after(objectBytes(src,srcOffset,n),from => {
-      if (dst !== null && !ArrayBuffer.isView(dst)) return writeAt(bufferAddress!(dst) + BigInt(dstOffset),from);
+      if (dst !== null && !ArrayBuffer.isView(dst)) return writeAt(addressOf(dst as JObj) + BigInt(dstOffset),from);
       const to = arrayBytes(dst as Elements | null,dstOffset,n);
       to.set(from);
     });
