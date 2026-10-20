@@ -215,3 +215,18 @@ export function prepareMethod(code: CodeItem): PreparedMethod {
   });
   return { instructions, indexAt, blockAt, start, first, last, succ, hsucc, handlerPcs: [...all], handlers };
 }
+/** whether a method's branches close a cycle */
+export function cyclic({ succ }: PreparedMethod): boolean {
+  const state = new Uint8Array(succ.length), stack: number[] = [], at: number[] = [];
+  for (let root = 0; root < succ.length; root++) {
+    if (state[root]) continue;
+    state[root] = 1; stack.push(root); at.push(0);
+    while (stack.length) {
+      const top = stack.length - 1, b = stack[top], s = succ[b][at[top]++];
+      if (s === undefined) { state[b] = 2; stack.pop(); at.pop(); }
+      else if (state[s] === 1) return true;
+      else if (!state[s]) { state[s] = 1; stack.push(s); at.push(0); }
+    }
+  }
+  return false;
+}

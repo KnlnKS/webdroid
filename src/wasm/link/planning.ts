@@ -5,7 +5,7 @@ import type { CallPlan } from "../compiler/j2w.ts";
 import { mid } from "../compiler/ids.ts";
 import { symbolicOverride } from "../compiler/linkage.ts";
 import { HOT_BUDGET } from "../compiler/exc.ts";
-import { branchTargets, decodeInstruction, decodeInstructions, type PreparedInstruction } from "../../jvm/prepared.ts";
+import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { World } from "./world.ts";
@@ -47,7 +47,7 @@ export class Planner {
     let r = this.leaves.get(m);
     if (r === undefined) {
       const code = m.codeOff ? m.dex.code(m.codeOff) : undefined;
-      this.leaves.set(m, r = !!code && this.inlinable(m) && !decodeInstructions(code.insns).some((ins) => branchTargets(code, ins).some((t) => t <= ins.pc)));
+      this.leaves.set(m, r = !!code && this.inlinable(m) && !cyclic(prepareMethod(code)));
     }
     return r;
   }

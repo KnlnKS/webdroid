@@ -6,7 +6,7 @@ import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts
 import type { Compiler } from "./j2w.ts";
 import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
-import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
@@ -269,37 +269,39 @@ export class MC {
    *  them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that are
    *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
   private planDepth(): boolean {
-    if (this.prepared.instructions.some(ins => this.deferredSite(ins))) return true;
-    const calls = this.prepared.instructions.filter((i) => isInvoke(i.op));
-    if (!calls.length) return false;
+    const { instructions, first, last } = this.prepared;
+    if (instructions.some(ins => this.deferredSite(ins))) return true;
+    if (!instructions.some((i) => isInvoke(i.op))) return false;
     if (this.tries) return true;
-    const open: string[] = [], cold: string[] = [], thrown = new Set<number>(), { instructions, first, last } = this.prepared;
-    for (let b = 0; b < first.length; b++) if (instructions[last[b]].op === 0x27) for (let i = first[b]; i <= last[b]; i++) thrown.add(instructions[i].pc);
+    const open: string[] = [], cold: string[] = [];
+    // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue; an irreducible cycle crosses regions
+    let looped = false;
     const bounded = (m: MethodInfo) => { const w = this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
-    for (const ins of calls) {
-      if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
-      const b = this.binding(ins), key = String(ins.pc);
-      if (!b) continue;
-      if (b.k === "virtual") {
-        // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
-        const guards = this.guards(ins, b);
-        for (const g of guards) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
-        if (guards.length) { cold.push(key + ":f"); continue; }
+    for (let blk = 0; blk < first.length; blk++) {
+      const thrown = instructions[last[blk]].op === 0x27, opened = open.length;
+      for (let i = first[blk]; i <= last[blk]; i++) {
+        const ins = instructions[i];
+        if (!isInvoke(ins.op)) continue;
+        if (ins.op >= 0xfa) return true; // invoke-polymorphic, invoke-custom
+        const b = this.binding(ins), key = String(ins.pc);
+        if (!b) continue;
+        if (b.k === "virtual") {
+          // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
+          const guards = this.guards(ins, b);
+          for (const g of guards) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
+          if (guards.length) { cold.push(key + ":f"); continue; }
+        }
+        // a check calls its method for a null argument, which the method rejects
+        const body = b.k === "fixed" ? b.body : undefined;
+        if (body?.k === "check") { cold.push(key); continue; }
+        const callee = b.k !== "fixed" ? undefined : body ? this.innerCall(body) : b.m;
+        if (callee === null) continue;
+        // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
+        if (!callee || !bounded(callee)) (thrown ? cold : open).push(key);
       }
-      // a check calls its method for a null argument, which the method rejects
-      const body = b.k === "fixed" ? b.body : undefined;
-      if (body?.k === "check") { cold.push(key); continue; }
-      const callee = b.k !== "fixed" ? undefined : body ? this.innerCall(body) : b.m;
-      if (callee === null) continue;
-      // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
-      if (!callee || !bounded(callee)) (thrown.has(ins.pc) ? cold : open).push(key);
+      if (open.length > opened && (this.flow.loopOf[blk] >= 0 || this.flow.regions.length > 1)) looped = true;
     }
-    // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
-    if (open.length) {
-      const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
-      if (open.some((k) => { const pc = parseInt(k); return loops.some(([from, to]) => pc >= from && pc <= to); })) return true;
-    }
-    if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
+    if (looped || this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
     this.sites = new Set([...open, ...cold]);
     this.boundable = open.length === 0;
     return false;
