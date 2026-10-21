@@ -8,9 +8,8 @@
 //    inherits from a superclass in a class of their own that the class resolves them in. The class keeps its members, so ids and slots stay put.
 //  - The host object is made when a native first needs it (host/bridge.ts): a Java object that Java code allocated, as a bytecode subclass does,
 //    gets its host object at its first host call, which is its constructor.
-import { ACC, PlainClass, type JClass, type Loader, type MethodInfo, type Program } from "../compiler/program.ts";
+import { ACC, PlainClass, codelessMethod, type JClass, type Loader, type MethodInfo, type Program } from "../compiler/program.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
-import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HOSTED, type HostSpec } from "./hostapi.ts";
 import type { World } from "./world.ts";
 
@@ -18,8 +17,8 @@ const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell", CLINIT
 
 /** the method `key` ("name(desc)ret", with "static " for a static one) as a native of class `cls` */
 function native(cls: string, key: string, index: number): MethodInfo {
-  const isStatic = key.startsWith(STATIC), k = isStatic ? key.slice(STATIC.length) : key, at = k.indexOf("("), name = k.slice(0, at), desc = k.slice(at), p = parseMethodDesc(desc);
-  return { cls, name, desc, flags: ACC.PUBLIC | ACC.NATIVE | (isStatic ? ACC.STATIC : 0), dex: null!, methodIdx: -1, codeOff: 0, key: k, isStatic, isCtor: name === "<init>", params: p.params, ret: p.ret, index };
+  const isStatic = key.startsWith(STATIC), k = isStatic ? key.slice(STATIC.length) : key, at = k.indexOf("(");
+  return codelessMethod(cls, k.slice(0, at), k.slice(at), ACC.PUBLIC | ACC.NATIVE | (isStatic ? ACC.STATIC : 0), index);
 }
 /** whether `spec` takes the place of methods of its dex class `jc` (overlay), rather than standing for an interface with a class of natives (javaClass) */
 const overlays = (jc: JClass, spec: HostSpec): boolean => !jc.isInterface || !!spec.statics;

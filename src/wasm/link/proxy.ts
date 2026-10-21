@@ -6,9 +6,9 @@
 // UndeclaredThrowableException.
 import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
-import { ACC, PlainClass, type MethodInfo, type Loader } from "../compiler/program.ts";
+import { ACC, PlainClass, codelessMethod, type MethodInfo, type Loader } from "../compiler/program.ts";
 import { BOX } from "../compiler/primitives.ts";
-import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
+import { descToName } from "../../jvm/abi.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { Code } from "../compiler/code.ts";
 import type { World } from "./world.ts";
@@ -56,9 +56,7 @@ export function defineProxy(w: World, definition: ProxyDefinition, loader: Loade
   const jc = new PlainClass(definition.name, PROXY, definition.ifaces, ACC.PUBLIC | ACC.FINAL | PROXY_FLAG);
   const bodies = new Map<MethodInfo, Intrinsic>();
   const add = (name: string, desc: string, flags: number, body: Intrinsic) => {
-    const { params, ret } = parseMethodDesc(desc);
-    const m: MethodInfo = { cls: jc.name, name, desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: name + desc,
-      isStatic: false, isCtor: name === "<init>", params, ret, index: jc.methods.length };
+    const m = codelessMethod(jc.name, name, desc, flags, jc.methods.length);
     jc.add(m); bodies.set(m, body);
   };
   add("<init>", `(L${HANDLER};)V`, ACC.PUBLIC, (cx, _m, c) => {

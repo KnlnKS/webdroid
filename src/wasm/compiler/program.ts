@@ -82,6 +82,11 @@ export class PlainClass implements JClass {
   declaresStaticOf(): boolean { return true; }
 }
 export const mkey = (name: string, desc: string) => name + desc;
+/** a method no dex defines (an extern, a host class's native, a proxy class's): it has no code, so nothing reads its dex */
+export function codelessMethod(cls: string, name: string, desc: string, flags: number, index: number): MethodInfo {
+  const { params, ret } = parseMethodDesc(desc);
+  return { cls, name, desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: !!(flags & ACC.STATIC), isCtor: name === "<init>", params, ret, index };
+}
 /** a method's identity across the program, the key of intrinsics and native bindings: "cls.name+descriptor" */
 export const mid = (m: MethodInfo) => m.cls + "." + m.key;
 /** the method `id` names (class names have no dots) */
@@ -286,9 +291,7 @@ export class Program extends LoaderGraph {
     for (const key of keys) {
       const [, cls, name, desc] = /^(.*)\.(\w+)(\(.*)$/.exec(key)!;
       if (this.get(cls)?.dex) continue;
-      const p = parseMethodDesc(desc);
-      const c = this.get(cls) ?? this.stub(cls, "java/lang/Object");
-      const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret, index: c.methods.length };
+      const c = this.get(cls) ?? this.stub(cls, "java/lang/Object"), m = codelessMethod(cls, name, desc, ACC.PUBLIC | ACC.STATIC, c.methods.length);
       c.methods.push(m); c.byKey.set(m.key, m);
     }
     this.forget();
