@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
+//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--force]
 // Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
@@ -14,8 +14,8 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
-import type { CHeader } from "../../src/wasm/link/aot.ts";
-import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
+import { aotFile } from "../../src/wasm/link/aot.ts";
+import { AotBuilder, codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
@@ -25,14 +25,13 @@ const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xm
 const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024, maxHot = +flag("--max-hot", "1024") * 1024;
 const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
-const appPath = flag("--app", "");
 const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`))].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -92,13 +91,10 @@ function withSupers(names: string[]): string[] {
   return out;
 }
 const dexes = PLATFORM_PATHS.map(loadDexes);
-// an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
-const appDexes = appPath ? loadDexes(appPath) : [];
-const platform = new Program(dexes.flat()); platform.addExterns(externs);
-const prog = appDexes.length ? new Program(appDexes, platform) : platform;
+const prog = new Program(dexes.flat()); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
-const aot = w.aot!;
+const w = world(prog, { natives, build: true });
+const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set(dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat()) });
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
 /** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the estimates (link/aotbuild.ts) need re-measuring */
@@ -114,14 +110,11 @@ const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
   const methods = blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
-  let made: ReturnType<typeof codeModule>;
-  try { made = codeModule(w, methods, { strict: true, validate }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
-  const { cx, built: { bytes, traces }, header: unit } = made;
+  let made: ReturnType<typeof codeFile>;
+  try { made = codeFile(w, blocks, methods, { strict: true, validate, platformData: true }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
+  const { file, header, bytes } = made, plain = packModule(header, bytes);
   nMethods += methods.length;
-  const header: CHeader = { ...unit, classes: blocks, mods: [...cx.deps.keys()],
-    absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
-  const plain = packModule(header, bytes), file = packModule(header, bytes, { w, traces });
-  writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
+  writeFileSync(join(out, aotFile("c", k)), file); sized(aotFile("c", k), file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
 });
 aot.cGroupOf = aot.cGroupOf.map((g) => (empty.has(g) ? -1 : g));
@@ -133,7 +126,7 @@ dGroups.forEach((blocks, k) => {
   const { bytes, header } = dataModule(w, blocks.map((b) => w.slots.blockClass[b])), bad = rejects(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
   const file = packModule(header, bytes);
-  writeFileSync(join(out, `d${k}.wasm`), file); sized(`d${k}.wasm`, file.length);
+  writeFileSync(join(out, aotFile("d", k)), file); sized(aotFile("d", k), file.length);
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module, and the runtime functions the modules name, which a World would
@@ -142,7 +135,7 @@ const extraNames = () => w.numbers.tail.flatMap((t) => (typeof t === "string" ? 
 let extras: number, extra: ReturnType<typeof dataModule>, synths: string[][], nSynths: number, yBytes: number;
 do {
   yBytes = 0;
-  synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
+  synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, aotFile("y", k)), bytes); yBytes += bytes.length; });
   nSynths = w.slots.synths().length;
   const names = extraNames();
   extras = names.length;
@@ -150,7 +143,7 @@ do {
 } while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
 if (rejects(extra.bytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ ...extra.header, classes: [] }, extra.bytes);
-writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;
+writeFileSync(join(out, aotFile("d", aot.dKeys.length)), xfile); dBytes += xfile.length;
 const t2 = performance.now();
 
 const index = aot.finish(synths);
@@ -160,7 +153,7 @@ writeFileSync(join(out, "apps.json"), "[]");
 writeFileSync(join(out, "prefix.json"), "null");
 writeFileSync(join(out, "warm.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
-console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
-console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${validation.ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
+console.log(`${w.slots.seeded} classes of ${jars.length} jars (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
+console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${validation.ms.toFixed(0)} ms` : ""}; ${index.numbering.selectors.length} selectors, ${index.numbering.gaps.length} gaps, ${index.numbering.tail.length} extra slots, ${index.numbering.names.length} extra ids`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();

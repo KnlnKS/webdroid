@@ -20,8 +20,6 @@ export function hasHierarchy(cls: JClass | undefined, sup: string | null, ifaces
 export interface UpgradeJob {
   /** the number its unit's function names carry */
   unit: number;
-  /** A refresh may replace only this live hot-unit generation in the source World. */
-  refresh?: number;
   /** first-tier code of methods already linked, merged into one module (Tiering.mergeJob) */
   merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */

@@ -18,6 +18,8 @@ export class SlotTable {
   readonly blockClass: string[] = [];
   /** the blocks of classes a replayed numbering (World.adopt) gave slots before their modules were made */
   readonly preassigned = new Map<string, number>();
+  /** the platform classes, which have the first blocks in id order (World.seedPlatform) */
+  seeded = 0;
   private readonly synth = new Map<string, number>();
   /** the runtime functions whose stub or code is in their slot */
   private readonly stubbed = new Set<number>();
@@ -35,6 +37,11 @@ export class SlotTable {
     const base = this.reserve(size);
     this.blockBase.push(base); this.blockSize.push(size); this.blockClass.push(name);
     return base;
+  }
+  /** the slots of class `name` if they are numbered, though it may not be linked yet: a platform class's, or those a replayed numbering gave it */
+  baseOf(name: string): number | undefined {
+    const id = this.w.numbers.ids.get(name);
+    return id !== undefined && id <= this.seeded ? this.blockBase[id - 1] : this.preassigned.get(name);
   }
   /** a class's block, numbered as the next reservation */
   numberBlock(name: string, size: number): number { this.w.numbers.reserve([name, size]); return this.addBlock(name, size); }

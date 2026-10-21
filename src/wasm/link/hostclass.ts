@@ -31,7 +31,7 @@ function hostTakes(jc: JClass, spec: HostSpec, whole: boolean): MethodInfo[] {
   return out;
 }
 /** what defining `specs` takes from the code of `prog`'s classes: the methods whose code the host replaces, and the instance methods (name+descriptor) each spec's
- *  class implements, which its objects run even where the class inherits them, since overlay gives it their natives (AotRuntime.hostDispatch) */
+ *  class implements, which its objects run even where the class inherits them, since overlay gives it their natives (HostClasses.mayReach) */
 export function hostTakeover(prog: Program, specs: readonly HostSpec[], whole?: (name: string) => boolean): { taken: MethodInfo[]; implemented: [string, string[]][] } {
   const taken: MethodInfo[] = [], implemented: [string, string[]][] = [];
   for (const spec of specs) {
@@ -40,6 +40,12 @@ export function hostTakeover(prog: Program, specs: readonly HostSpec[], whole?: 
     if (keys.length) implemented.push([spec.name, keys]);
   }
   return { taken, implemented };
+}
+/** the keys of each value of `entries`, by value */
+function invert(entries: Iterable<[string, string[]]>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [k, vs] of entries) for (const v of vs) (out.get(v) ?? out.set(v, []).get(v)!).push(k);
+  return out;
 }
 export class HostClasses {
   private w: World;
@@ -51,7 +57,30 @@ export class HostClasses {
   private hosts = new WeakMap<object, object>();
   private shells = new WeakMap<object, object>();
   private settling = false;
+  /** what the host takes from compiled code, which only a build knows whole (a split bundle registers some specs late): the spec classes that implement each
+   *  instance method (hostTakeover), and the slots of the methods whose code the host replaces */
+  private takeover?: { keys: Map<string, string[]>; slots: Set<number> };
   constructor(w: World) { this.w = w; }
+
+  /** takes what a build says the host takes: the instance methods of each spec class (hostTakeover's `implemented`) and the slots of the methods it replaces */
+  adoptTakeover(implemented: Iterable<[string, string[]]>, slots: Iterable<number>): void { this.takeover = { keys: invert(implemented), slots: new Set(slots) }; }
+  /** the takeover as a build's index records it */
+  takeoverRecord(): { hostKeys: [string, string[]][]; overridden: number[] } {
+    return { hostKeys: [...invert(this.takeover?.keys ?? [])], overridden: [...this.takeover?.slots ?? []].sort((x, y) => x - y) };
+  }
+  /** the host implements `m`: a build's code for it is not to be used */
+  take(m: MethodInfo): void { const base = this.w.slots.baseOf(m.cls); if (base !== undefined) this.takeover?.slots.add(base + m.index); }
+  /** the slots whose build code the host took over */
+  taken(): ReadonlySet<number> { return this.takeover?.slots ?? new Set(); }
+  /** whether the host may take the code of `m`, as it may any without a build */
+  takes(m: MethodInfo): boolean { return !this.takeover || this.takeover.slots.has(this.w.slotOf(m)); }
+  /** whether a call of `t` through `decl` may reach a host spec's native: a spec of a class related to `decl` below `t`'s implements it, or one of a class this
+   *  World does not have, which may be any; without a build, any call may */
+  mayReach(decl: string, t: MethodInfo): boolean {
+    if (!this.takeover) return true;
+    const prog = this.w.prog;
+    return !!this.takeover.keys.get(t.key)?.some((s) => !prog.get(s) || prog.isSubclass(s, t.cls) && (prog.isSubclass(s, decl) || prog.isSubclass(decl, s)));
+  }
 
   add(spec: HostSpec): void {
     this.byCtor.set(spec.ctor, spec); this.pending.set(spec.name, spec); this.specs.set(spec.name, spec);
@@ -127,7 +156,11 @@ export class HostClasses {
       bodies.set(m, (cx, _m, c) => { const init = cx.prog.resolve(sup, "<init>", "()V"); if (init) { c.lget(0); cx.callMethod(c, init); } });
     }
     const owner = loader ?? (this.w.prog.loaderOf(spec.name).id ? this.w.prog.loaderOf(spec.name) : this.w.prog.boot);
-    this.w.addClass(jc, bodies, owner);
+    this.addClass(jc, bodies, owner);
+  }
+  /** adds class `jc` of natives: a compile worker settling on the same dexes makes it from the same specs, but not one made later (for a host object, javaClass) */
+  private addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader?: Loader): void {
+    this.w.defineClass(jc, bodies, loader, this.settling ? undefined : (s) => s.retire(`class ${jc.name} was added without a dex`));
   }
 
   /** the natives of `spec` take the place of the methods of the dex class `jc` they name, in a class of this World's Program that stands for it: the platform's own classes, which
@@ -154,10 +187,10 @@ export class HostClasses {
       hosted.methods.push(m); over.byKey.set(m.key, m);
       if (!m.isStatic) virtual.push(m.key);
     }
-    this.w.addClass(over, bodies);
+    this.addClass(over, bodies);
     if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.classModules.repairLinked(); }
-    for (const m of taken) this.w.aot?.override(m);
-    if (hosted.methods.length) this.w.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
+    for (const m of taken) this.take(m);
+    if (hosted.methods.length) this.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
   }
 
   /** the spec that implements class `cls` or its nearest superclass */

@@ -13,6 +13,7 @@ import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { MInfo } from "../compiler/info.ts";
+import { PerWorld } from "./perworld.ts";
 
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
@@ -25,19 +26,26 @@ const annotationsOf = (w: World, jc: JClass | undefined) => jc?.def && w.prog.ty
 const visible = (set: EncAnnotation[] | undefined) => (set ?? []).filter((a) => a.visibility === RUNTIME);
 const present = (set: EncAnnotation[] | undefined, type: string) => visible(set).some((a) => a.type === type);
 
-/** the executables of a class the host last counted for `ExecAt` */
-let listed: number[] = [];
+/** the declared executables of each class an array of them was made for (execArray), by class id * 4 + which (1: constructors, 2: public only): making the
+ *  array's elements may list another class's */
+const executables = new PerWorld(() => new Map<number, number[]>());
+function listed(w: World, cid: number, which: number): number[] {
+  const byClass = executables.get(w), key = cid * 4 + which;
+  let list = byClass.get(key);
+  if (!list) {
+    const ctor = which & 1, publicOnly = which & 2, out: number[] = [];
+    w.prog.get(w.nameOf(cid))?.methods.forEach((m, i) => { if ((m.name === "<init>") === !!ctor && m.name !== "<clinit>" && (!publicOnly || m.flags & ACC.PUBLIC)) out.push(i); });
+    byClass.set(key, list = out);
+  }
+  return list;
+}
 
 export function hostMembers(w: World, kind: number, a: number, b: number): number {
   const cls = (id: number) => w.prog.get(w.nameOf(id));
   switch (kind as MInfo) {
-    case MInfo.ExecCount: {
-      const ctor = b & 1, publicOnly = b & 2;
-      listed = [];
-      cls(a)?.methods.forEach((m, i) => { if ((m.name === "<init>") === !!ctor && m.name !== "<clinit>" && (!publicOnly || m.flags & ACC.PUBLIC)) listed.push(i); });
-      return listed.length;
-    }
-    case MInfo.ExecAt: return listed[b];
+    case MInfo.ExecCount: return listed(w, a, b).length;
+    // b: the index << 2 | which
+    case MInfo.ExecAt: return listed(w, a, b & 3)[b >>> 2];
     case MInfo.ClassAnn: return +present(annotationsOf(w, cls(a))?.cls, w.nameOf(b));
     case MInfo.ExecAnn: { const m = methodAt(w, b); return +present(annotationsOf(w, w.prog.get(m.cls))?.methods.get(m.methodIdx), w.nameOf(a)); }
     case MInfo.FieldAnn: {
@@ -92,12 +100,13 @@ export function hostText(w: World, kind: number, a: number): string {
 // execArray(cid, ctor?, publicOnly?): the Method[] or Constructor[] of the declared methods or constructors of class cid
 for (const [name, array, ctor] of [["methodArray", METHOD_ARRAY, 0], ["ctorArray", CTOR_ARRAY, 1]] as const) {
   rt(name, ["I", "I"], "L", (cx, c) => {
-    const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref);
-    cx.info(c, MInfo.ExecCount, () => c.lget(0), () => c.lget(1).i32(1).raw(OP.i32_shl).i32(ctor).raw(OP.i32_or)); c.lset(n);
+    const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref), which = c.newLocal(T.i32);
+    c.lget(1).i32(1).raw(OP.i32_shl).i32(ctor).raw(OP.i32_or).lset(which);
+    cx.info(c, MInfo.ExecCount, () => c.lget(0), () => c.lget(which)); c.lset(n);
     cx.emitNewArray(c, array, () => c.lget(n)); c.lset(arr);
     c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
     c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i);
-    c.lget(0); cx.info(c, MInfo.ExecAt, () => c.lget(0), () => c.lget(i)); c.i32(ctor); cx.callRt(c, "mkExec");
+    c.lget(0); cx.info(c, MInfo.ExecAt, () => c.lget(0), () => c.lget(i).i32(2).raw(OP.i32_shl).lget(which).raw(OP.i32_or)); c.i32(ctor); cx.callRt(c, "mkExec");
     c.arraySet(cx.tData.ref).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
     c.lget(arr);
   });

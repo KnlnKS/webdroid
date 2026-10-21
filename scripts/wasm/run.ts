@@ -33,7 +33,6 @@ const SUITES: Record<string, Suite> = {
   conform: { doc: "the scripts/conform suites against their baselines: conform <suite|quick> [class] [--update]" },
   fwtest: { doc: "the framework delegates of scripts/fwtest/ over a World" },
   g1: { tool: true, doc: "the jbench workloads timed in node and headless Chrome" },
-  g1startup: { tool: true, doc: "the startup list of a build made with the G1 dex as its app" },
   g1app: { tool: true, doc: "the build an app launch saves for the G1 dex, for `g1 --installed`" },
   g1art: { tool: true, doc: "the jbench workloads timed by app_process on the reference device, against a `g1 --json` report (--ref)" },
   "boot-probe": { tool: true, doc: "a headless Chrome page starts a process on the platform build (needs `pnpm aot`): modules loaded and missed, synchronous requests, compile time" },

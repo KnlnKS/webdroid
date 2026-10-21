@@ -12,8 +12,6 @@ import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
-import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { compileModule } from "../../src/wasm/link/module.ts";
 import { UnitCompiler } from "../../src/wasm/link/unit.ts";
 import { buildApp, buildPart, mergeApp } from "../../src/wasm/link/apps.ts";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
@@ -54,20 +52,6 @@ const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(ne
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => attachHostClasses(world(dexes, opts));
 
-// A combined image links the app's default namespace as the Program resolves it.
-{
-  const dexes = loadDexes(join(out, "classes.dex"));
-  const image = world(dexes, { aot: undefined, compileOnly: true, build: { dexes: new Set([...platformDexes, ...dexes]), appDexes: new Set(dexes), dGroup: name => name, cGroup: name => name } });
-  check("combined image retains platform boot ownership", image.prog.loaderOf("java/lang/Object") === image.prog.boot, true);
-  check("combined image retains app root ownership", image.prog.loaderOf("Pst") === image.prog.root, true);
-  const cx = new Compiler(image), bytes = cx.buildUnit([image.prog.resolve("Pst", "chain", "()I")!]).bytes;
-  compileModule(bytes);
-  check("combined image app code links its default namespace statically", cx.symbolicImports.size, 0);
-  const boot = new Compiler(image);
-  boot.buildUnit([image.prog.resolve("java/lang/Object", "hashCode", "()I")!]);
-  check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
-}
-
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
@@ -106,7 +90,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
   const producer = world(app, { compileOnly: true });
-  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.platformData(n));
   if (name) {
     const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], synths: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
@@ -347,6 +331,16 @@ if (saved) {
   check("its modules were loaded", loaded.length > 0, true);
   check("it compiled fewer methods on demand", w.stats.methods < plain.stats.methods, true);
   console.log(`  with the app build: ${w.stats.methods} methods compiled on demand against ${plain.stats.methods}, ${loaded.length} app module(s), ${w.stats.units} units`);
+  // Once the app's loader resolves through Java, app build code linked as the Program resolved is undone, also in slots nothing has asked for yet.
+  {
+    const dyn = world(app, { app: { index, store } });
+    answers(dyn);
+    const unasked = dyn.slots.blockBase.flatMap((base, b) => Array.from({ length: dyn.slots.methodsIn(b) }, (_, i) => base + i)).find((s) => !dyn.slots.peek(s) && dyn.aot!.fromAppBuild(s));
+    check("the app build installed a slot nothing asked for", unasked !== undefined, true);
+    const code = dyn.table.get(unasked!);
+    dyn.namespaces.dynamicRoot();
+    check("a dynamic root undoes it", dyn.table.get(unasked!) !== code, true);
+  }
   // A later override must be honoured without losing sound code from the saved build.
   const later = world(app, { app: { index, store } });
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
@@ -364,6 +358,9 @@ if (saved) {
   // what does not match is not used
   check("other dex files find no build", world(late, { app: { index, store } }).appAttached, false);
   check("a changed base finds none", world(app, { app: { index: { ...index, base: { ...index.base, names: index.base.names + 1 } }, store } }).appAttached, false);
+  // a prefix that does not lead to the base is taken back
+  const unbased = world(app, { app: { index: { ...index, prefix: { ...index.prefix, names: [...index.prefix.names, "Unbased"] } }, store } });
+  check("a prefix that misses the base is not kept", [unbased.appAttached, sameMarks(unbased.numbers.marks(), unbased.aot!.platformMarks)].join(), "false,true");
   check("a changed format finds none", world(app, { app: { index: { ...index, version: index.version + 1 }, store } }).appAttached, false);
   const stale = world(app);
   stale.entry("Pst", "chain", "()I")();

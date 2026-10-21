@@ -1,10 +1,9 @@
 // An app compiled ahead on top of the platform build (aot.ts `extend`): the code of the methods it is likely to run, in code modules a<k>.wasm of the classes' groups, and the
 // numbering that code relies on. A World at the platform build's state that has the app's dexes takes it as it takes the platform's own modules, and compiles the rest on demand.
 // The build may be made by shards, Worlds that each number the same seed (seedApp) and then compile their share of the modules with their numbering frozen.
-import { mid } from "../compiler/ids.ts";
-import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
+import { codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
 import { synthOf } from "./synths.ts";
-import { APP_VERSION, type AotRuntime, type AppIndex, type CHeader, type Demand } from "./aot.ts";
+import { aotFile, APP_VERSION, type AotRuntime, type AppIndex, type Demand } from "./aot.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import { LinkIds, type Marks, type Numbering } from "./numbers.ts";
@@ -94,7 +93,7 @@ function planApp(w: World, methods: MethodInfo[], demand: Demand, shards: number
   const dNames = [...new Set([...demand.classes, ...seeded])].filter((name) => {
     const jc = w.prog.get(name);
     // The platform also owns data for uncompiled classes reserved in its tail; an array class the app's code names is the app's
-    return (jc?.dex || name[0] === "[") && aot.reservedBase(name) === undefined;
+    return (jc?.dex || name[0] === "[") && !aot.platformData(name);
   });
   // each group goes to the shard with the least work so far, the first starting with the data modules
   const load = Array.from({ length: shards }, (_, i) => (i ? 0 : dNames.length * D_COST_PER_CLASS)), shardOf: number[] = [];
@@ -111,12 +110,8 @@ function compileShard(w: World, plan: AppPlan, shard: number, frozen: boolean): 
   const files: AppBuild["files"] = [], cOf: AppIndex["cOf"] = [], patches: AppIndex["patches"] = [];
   const compile = () => plan.groups.forEach(({ methods: group, over }, module) => {
     if (plan.shardOf[module] !== shard) return;
-    const { built, header: unit, skipped } = codeModule(w, group);
     const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.slots.blockOf(w.link(c).slotBase));
-    const wanted = new Set(group);
-    const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
-    const header: CHeader = { ...unit, classes, mods: [], absent };
-    files.push([`a${module}.wasm`, packModule(header, built.bytes, { w, traces: built.traces })]);
+    files.push([aotFile("a", module), codeFile(w, classes, group).file]);
     if (over < 0) for (const b of classes) cOf.push([b, module]); else patches.push([module, over]);
   });
   if (frozen) w.numbers.frozen(compile); else compile();
@@ -134,7 +129,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
     // a module V8 rejects leaves its classes to the on-demand builder
     if (invalidFunction(bytes)) return;
     for (const b of header.classes) dOf.push([b, dModules]);
-    files.push([`e${dModules++}.wasm`, packModule(header, bytes)]);
+    files.push([aotFile("e", dModules++), packModule(header, bytes)]);
   };
   // the classes a code module names are all linked when it is loaded, so their modules are wanted as soon as it is
   for (const name of plan.dNames) {
@@ -145,7 +140,7 @@ function buildLead(w: World, plan: AppPlan, demand: Demand, part: ShardPart): Le
   flush();
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
   for (const name of demand.synths) { const d = synthOf(w, name); if (d) w.synthSlot(name, d); }
-  const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
+  const synths = synthModules(w, (k, bytes) => files.push([aotFile("s", k), bytes]));
   const { aot, prefix, base } = plan;
   return { ...part, links: w.numbers.links.since(base.links), index: { version: APP_VERSION, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount,
     numbering: w.numbers.since(base), modules: plan.groups.length, synths, dOf, dModules, demand, libraries: aot.rootLibraries() } };

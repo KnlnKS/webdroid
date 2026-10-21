@@ -1,5 +1,5 @@
 // The kinds of host.info(kind, a, b), the host's answers about classes and members that compiled code asks for. The kinds of each
-// answering module start at their own hundred, which hostInfo (link/classes.ts) dispatches on.
+// answering module start at their own hundred, which host.info (link/hostimports.ts) dispatches on.
 /** classes: class and field metadata, and the slots of their synthetic functions (link/classes.ts) */
 export const Info = { Flags: 0, Primitive: 1, Super: 2, Component: 3, NIfaces: 4, Iface: 5, Inner: 6, NameLen: 7, NameChar: 8, NFields: 9, FieldNameLen: 10, FieldNameChar: 11, FieldType: 12, FieldFlags: 13, AllocSlot: 14, CloneSlot: 15, ArraySlot: 16, ArrayOf: 17, EnsureSlot: 18, FieldDesc: 19, CanAccess: 20, HasClinit: 21, FieldOffset: 22 } as const;
 export type Info = (typeof Info)[keyof typeof Info];

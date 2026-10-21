@@ -4,7 +4,7 @@
 // the next find it too. A compile worker for the launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only
 // while it has numbered what it had when the app's dexes arrived, as when the build was made (the zygote's numbering).
 import type { World, WorldOptions } from "../link/world.ts";
-import type { Demand } from "../link/aot.ts";
+import { libraryLoaders, parseAotFile, type Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
@@ -16,7 +16,7 @@ import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./com
 import type { WarmAnswer, WarmRequest } from "./warm-worker.ts";
 import type { BuildRoots, CompileRequest, CompileResponse, Containers } from "./compile-serve.ts";
 import { mergeApp } from "../link/apps.ts";
-import type { Loader, LoaderId, LoaderSnapshot, MethodInfo } from "../compiler/program.ts";
+import type { LoaderId, LoaderSnapshot, MethodInfo } from "../compiler/program.ts";
 
 export interface AppCodeRequest {
   /** the app's dex files */
@@ -140,7 +140,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   // the app is shown: a background process's whole build is CPU taken from the launch it serves
   const warmAll = !!saved && !record.ran(saved.index.id);
   if (found && req.warm && (req.shown || !warmAll)) void persisted.then(() => {
-    const modules = [...found.files].filter(([name]) => /^a\d+\.wasm$/.test(name)).map(([name, bytes]): [WebAssembly.Module, Uint8Array] => [found.saved.get(name)!, bytes]);
+    const modules = [...found.files].filter(([name]) => parseAotFile(name)?.kind === "a").map(([name, bytes]): [WebAssembly.Module, Uint8Array] => [found.saved.get(name)!, bytes]);
     // the transfer detaches the files' bytes
     found.files.clear();
     req.warm!({ modules, all: warmAll }, [...new Set(modules.map(([, bytes]) => bytes.buffer))]);
@@ -206,7 +206,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function rebuild(world: World): Promise<Built> {
     // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
-    const ran = !saved ? [] : world.tiers.ranBuildSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
+    const ran = !saved || !world.aot ? [] : world.aot.ranSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
     const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], synths: [...merged.synths] }, hostClasses, rootLibraries(world));
     const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);
@@ -224,8 +224,10 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   /** keeps the platform modules this launch loaded and the build code it ran for the next one */
   function recordLaunch(world: World): void {
-    const ran = world.tiers.ranBuildSlots();
-    if (world.aot) record.add([...world.aot.loaded, ...world.aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
+    const aot = world.aot;
+    if (!aot) return;
+    const ran = aot.ranSlots();
+    record.add([...aot.loaded, ...aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
@@ -255,19 +257,10 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
 
 type RootLibraries = { loaders: LoaderSnapshot; scopes: [LoaderId, Containers][] };
 /** the loaders of the libraries the app's loader searches, and theirs */
-function libraryLoaders(prog: World["prog"]): Set<Loader> {
-  const closure = new Set<Loader>();
-  const add = (l: Loader) => {
-    if (l === prog.boot || closure.has(l)) return;
-    closure.add(l);
-    for (const library of [...l.before ?? [], ...l.after ?? []]) add(library);
-  };
-  for (const library of [...prog.root.before ?? [], ...prog.root.after ?? []]) add(library);
-  return closure;
-}
 /** The libraries the app's loader searches, which code built for it resolves through: the loader numbering, their graph and their dexes. */
 function rootLibraries(world: World): RootLibraries | undefined {
   const prog = world.prog, closure = libraryLoaders(prog);
+  closure.delete(prog.boot);
   if (!closure.size) return undefined;
   const groups = dexesByLoader(prog, (l) => closure.has(l));
   const ids = new Set<LoaderId>([0, ...[...closure].map(l => prog.loaderId(l))]), snapshot = prog.loaderSnapshot();

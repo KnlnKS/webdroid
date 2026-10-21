@@ -98,7 +98,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     useWorld(made); mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.aot?.ranSlots().platform ?? [] });
     return made;
   };
   if (typeof location === "undefined") {
@@ -187,7 +187,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
-      w.opts.compiler = made.compiler;
+      w.compiler = made.compiler;
       if (made.saved) w.attachApp(made.saved);
       mark(made.hit ? "appCodeSaved" : "appCode");
       made.start(w);

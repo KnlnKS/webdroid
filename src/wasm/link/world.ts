@@ -22,7 +22,7 @@ import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, type AotBuild, type AotStore, type AppIndex } from "./aot.ts";
+import { AotRuntime, type AotStore, type AppIndex } from "./aot.ts";
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
@@ -39,6 +39,7 @@ import { startRuntime, type Runtime } from "./runtime.ts";
 import { hostImports, type HostImports } from "./hostimports.ts";
 import { Assumptions } from "./assumptions.ts";
 import { Namespaces } from "./namespaces.ts";
+import { PerWorld } from "./perworld.ts";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -60,8 +61,8 @@ export interface WorldOptions {
   hostWhole?: (name: string) => boolean;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
-  /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
-  build?: AotBuild;
+  /** a World that makes that code (aotbuild.ts AotBuilder): classes, slots and selectors are numbered but nothing is instantiated */
+  build?: boolean;
   /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
   loop?: HostLoop;
   /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
@@ -89,6 +90,21 @@ export type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] 
 
 /** the classes (ids) and synthetic functions code names the table slots of */
 export interface Touched { touch: number[]; synth: string[] }
+/** what a World counts (host/stats.ts reports it) */
+export type WorldStats = {
+  /** compile time by phase (ms) */
+  phase: { prepare: number; flow: number; infer: number; facts: number; emit: number; encode: number; classBuild: number };
+  /** the platform build's modules: data and code modules loaded, code modules dead, files missed, and the time and bytes reading and loading them took */
+  aot: { d: number; c: number; dead: number; missed: number; readMs: number; ms: number; bytes: number };
+  /** classes linked on demand, units and the methods in them, and the classes' time (ms) */
+  classes: number; units: number; methods: number; classMs: number;
+  /** callers' stacks captured at bridges that suspended */
+  bridgeCallerCaptures: number;
+  /** modules compiled here (bytes, ms) and instantiated (count, ms), and the time compiling units took (ms) */
+  bytes: number; moduleMs: number; instances: number; instantiateMs: number; compileMs: number;
+  /** slots whose code was undone, second-tier units installed, first-tier methods merged, units retired and those collected since, methods compiled ahead */
+  invalidated: number; upgrades: number; merged: number; retired: number; collected: number; ahead: number;
+};
 export class World {
   opts: WorldOptions;
   /** whether code is instantiated and runs here: a build's World and a compile worker's only number and name what code links */
@@ -103,11 +119,15 @@ export class World {
   onUnresolved: (message: string, cls: string | undefined) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0 };
+  stats: WorldStats = {
+    phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 },
+    classes: 0, units: 0, methods: 0, classMs: 0, bridgeCallerCaptures: 0, bytes: 0, moduleMs: 0, instances: 0, instantiateMs: 0, compileMs: 0,
+    invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0,
+  };
   readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
-  readonly planner = new Planner(this);
   readonly tiers = new Tiering(this);
-  readonly ahead = new AheadCompiler(this);
+  readonly planner = new Planner(this, this.tiers);
+  readonly ahead = new AheadCompiler(this, this.tiers);
   readonly dispatch = new Dispatch(this);
   readonly classModules = new ClassModules(this);
   readonly stubs = new Stubs(this);
@@ -138,8 +158,10 @@ export class World {
   aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
-  /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
+  /** how many times the Program changed (World.changed): results a compile worker made before are not adopted */
   epoch = 0;
+  /** compiles second-tier units elsewhere (WorldOptions.compiler), from when the host has one */
+  compiler?: CompileService;
   private touching: Set<string> | null = null;
 
   constructor(prog: Program, opts: WorldOptions) {
@@ -152,17 +174,18 @@ export class World {
     this.rt = startRuntime(this);
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host = hostImports(this);
-    this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
+    this.compiler = opts.compiler;
+    this.aot = opts.aot && !opts.build ? AotRuntime.attach(this, opts.aot) : undefined;
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }
-  /** whether an app build is in use */
-  appAttached = false;
+  /** whether this World took an app build's numbering (AotRuntime.appAttached) */
+  get appAttached(): boolean { return !!this.aot?.appAttached; }
   /** uses `app`, an app build, if this World can (AotRuntime.extend): before the app's code first runs */
   attachApp(app: NonNullable<WorldOptions["app"]>): boolean {
     if (this.appAttached || !this.aot?.extend(app.index, app.store)) return false;
     this.base = this.numbers.marks();
-    return this.appAttached = true;
+    return true;
   }
 
   // ---------- numbering
@@ -198,7 +221,7 @@ export class World {
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
       this.slots.addBlock(c.name, c.methodCount + 1); n++;
     }
-    return n;
+    return this.slots.seeded = n;
   }
 
   // ---------- ids, selectors, vtable layout
@@ -279,21 +302,20 @@ export class World {
     this.touching?.add(name);
     let rt = this.classes.get(name);
     if (rt) return rt;
-    const late = this.cha.admit(name);
-    if (late) this.assumptions.joined(late);
+    this.assumptions.admit(name);
     const aot = this.aot?.linkClass(name);
     if (aot) { this.classes.set(name, aot); this.classModules.repair(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    let slotBase = this.aot?.reservedBase(name) ?? this.slots.preassigned.get(name);
-    slotBase ??= this.slots.numberBlock(name, methods.length + 1);
+    const slotBase = this.slots.baseOf(name) ?? this.slots.numberBlock(name, methods.length + 1);
     if (!this.instantiates) {
-      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: this.aot!.extraMod, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
+      // a class a build numbers after the platform's has its data in the build's module of them
+      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     this.classes.set(name, rt = this.classModules.lazy(name, id, slotBase, jc));
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
-    if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
+    if (jc?.dex && id > this.slots.seeded && !name.includes("@")) this.demand.classes.push(name);
     return rt;
   }
 
@@ -314,11 +336,9 @@ export class World {
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
     const added = this.prog.add(dexes, loader);
-    this.epoch++;
-    this.opts.compiler?.added(dexes, loader);
-    if (loader === this.prog.root || loader === this.prog.boot) this.assumptions.joined(this.cha.index(added));
-    else this.cha.defer(dexes);
-    this.loaded(added);
+    this.changed((s) => s.added(dexes, loader));
+    this.assumptions.added(added, loader === this.prog.root || loader === this.prog.boot ? undefined : dexes);
+    this.hosts.loaded();
     return added;
   }
   private claimers = new Map<string, boolean>();
@@ -342,28 +362,31 @@ export class World {
   /** whether the guest memory is shared, which a module that imports it must declare */
   get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
-  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.retire(`host class ${spec.name} was added`); }
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.compiler?.retire(`host class ${spec.name} was added`); }
   /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
-  private settlingHosts = false;
   readonly proxies = new Map<string, ProxyDefinition>();
-  /** adds a class that no dex defines, with the body of each of its methods */
+  /** adds a class that no dex defines, with the body of each of its methods: a proxy class (`proxy`), which a compile worker makes too, or one it cannot follow */
   addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root, proxy?: ProxyDefinition): void {
+    if (proxy) this.proxies.set(jc.name, proxy);
+    this.defineClass(jc, bodies, loader, (s) => proxy ? s.proxy(proxy) : s.retire(`class ${jc.name} was added without a dex`));
+  }
+  /** adds a class that no dex defines, with the body of each of its methods; `notice` tells the compile service, which otherwise makes it too (the classes of host
+   *  specs that dexes arriving let it define, hostclass.ts) */
+  defineClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root, notice?: (service: CompileService) => void): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
     this.prog.addClass(jc, loader);
-    this.epoch++;
-    // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
-    if (proxy) {
-      this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
-    } else if (!this.settlingHosts) this.opts.compiler?.retire(`class ${jc.name} was added without a dex`);
-    this.assumptions.joined(this.cha.index([jc.name]));
-    this.loaded([jc.name]);
+    this.changed(notice);
+    this.assumptions.added([jc.name]);
+    this.hosts.loaded();
   }
-  private loaded(added: string[]): void {
+  /** the Program changed: results a compile worker made before are not adopted (epoch), the compile service hears of it (`notice`), and what was worked out from
+   *  its classes is forgotten; where namespaces resolve them differently (`rebound`), what was worked out from their types too */
+  changed(notice?: (service: CompileService) => void, rebound = false): void {
+    this.epoch++;
+    if (notice && this.compiler) notice(this.compiler);
     this.planner.forgetImplementations();
-    this.assumptions.loaded(added);
-    this.settlingHosts = true;
-    try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
+    if (rebound) { this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
   }
 
   // ---------- calling in from JS, and exceptions
@@ -371,7 +394,6 @@ export class World {
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
     const { slot, ensure, params, ret } = this.entryCall(cls, name, desc), call = this.helpers.invoker(params, ret);
     return (...args) => this.sched.synchronous(() => {
-      this.tiers.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
       try { return this.hostString(call(slot, ensure, ...args.map((a) => this.javaValue(a)))); } catch (e) { throw this.boundary(e); } finally { this.rt.depth.value = depth; }

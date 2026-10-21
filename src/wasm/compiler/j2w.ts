@@ -101,7 +101,7 @@ const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
+export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "hosts" | "stats" | "link" | "claims" | "allocated" | "longLoops"
   | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
   | "needsSymbolicSite" | "guestShared" | "units">;
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
@@ -132,9 +132,9 @@ function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
 }
 /** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
  *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
-export function staticallyBound(w: Pick<LinkEnv, "prog" | "aot">, kind: Invoke, decl: string, target: MethodInfo): boolean {
+export function staticallyBound(w: Pick<LinkEnv, "prog" | "hosts">, kind: Invoke, decl: string, target: MethodInfo): boolean {
   if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
-  return !!w.aot && finalDispatch(w.prog, decl, target) && !w.aot.hostDispatch(decl, target);
+  return finalDispatch(w.prog, decl, target) && !w.hosts.mayReach(decl, target);
 }
 export class Compiler implements Base {
   w: LinkEnv;
@@ -363,8 +363,7 @@ export class Compiler implements Base {
   /** whether the Java method being compiled may hold code of `m`'s, which must be the method's own and not one the host may take: a World without a build knows
    *  none of them, and code without a Java method (a symbolic site, a synthetic body) has no slot to undo with `m` (dependsOn) */
   private mayHold(m: MethodInfo): boolean {
-    const a = this.w.aot;
-    return !!this.owner && !!a && !a.overriddenAt(this.w.slotOf(m));
+    return !!this.owner && !this.w.hosts.takes(m);
   }
   /** the method being compiled holds code of `m`'s, a direct call or its body run in place (inline.ts): undoing `m`'s code undoes the installed method it
    *  counts against (Assumptions.undoCode) */
