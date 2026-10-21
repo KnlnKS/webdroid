@@ -62,6 +62,19 @@ function findEntry(res: Resources, path: string, cookie = 0): { apk: Apk; source
   for (let i = apks.length - 1; i >= 0; i--) { const hit = pick(apks[i]); if (hit) return hit; }
   return null;
 }
+/** AssetManager2::Open: assets/`path` from the last apk holding it */
+export const assetEntry = (res: Resources, path: string): FileSource | null => findEntry(res, "assets/" + path)?.source ?? null;
+/** AssetManager2::OpenDir: the names directly under assets/`dir` in every apk, sorted, each true
+ *  for a regular file and false for a directory; a later apk's entry replaces an earlier one's */
+export function assetDir(res: Resources, dir: string): [name: string, regular: boolean][] {
+  const path = "assets/" + dir, prefix = path.endsWith("/") ? path : path + "/", names = new Map<string, boolean>();
+  for (const apk of apksOf(res)) for (const entry of [...Object.keys(apk.zip), ...apk.lazyEntries.keys()]) {
+    if (!entry.startsWith(prefix) || entry.length === prefix.length) continue;
+    const slash = entry.indexOf("/", prefix.length);
+    names.set(entry.slice(prefix.length, slash < 0 ? undefined : slash), slash < 0);
+  }
+  return [...names].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
 
 delegate("android/content/res/ApkAssets", {
   "nativeLoad(ILjava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J": (_format: number, path: string, flags: number) => loadApk(path, flags),
@@ -419,14 +432,8 @@ delegate("android/content/res/AssetManager", {
     c.pos = Math.max(0, Math.min(c.source.size, base + Number(off)));
     return BigInt(c.pos);
   },
-  "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) => {
-    const dir = "assets/" + (path ? path + "/" : "");
-    const names = new Set<string>();
-    for (const apk of apksOf(assets(h))) for (const k of [...Object.keys(apk.zip), ...apk.lazyEntries.keys()]) {
-      if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
-    }
-    return jarray([...names].sort(), "Ljava/lang/String;");
-  },
+  "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) =>
+    jarray(assetDir(assets(h), path).map(([name]) => name), "Ljava/lang/String;"),
 });
 
 interface Cursor { source: FileSource; pos: number }
