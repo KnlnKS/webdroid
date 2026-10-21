@@ -48,6 +48,16 @@ function libSource(name: string): { device?: string; read: () => Promise<Uint8Ar
   return device ? { device, read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
 
+/** reads started before the loadModule that takes them, by name */
+const prefetched = new Map<string, Promise<Uint8Array | null>>();
+/** start reading the images at these paths together, each taken by the loadModule that loads it */
+export function prefetchModules(paths: string[]): void {
+  for (const name of paths.map(basename)) {
+    const read = byName.has(name) ? undefined : libSource(name)?.read();
+    if (read) { read.catch(() => {}); prefetched.set(name, read); }
+  }
+}
+
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
  *  what an image whose machine code the tier cannot run yet can still be proved to do. */
 export async function loadModule(name: string, bytes?: Uint8Array, link = false, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
@@ -58,7 +68,9 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   if (p) return p;
   // driven: initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
   const q = Promise.resolve(rt.drive(function* (): Gen<Module> {
-    const source = bytes ? null : libSource(name), b: Uint8Array | null = bytes ?? (source ? yield source.read() : null);
+    const source = bytes ? null : libSource(name), early = prefetched.get(name);
+    prefetched.delete(name);
+    const b: Uint8Array | null = bytes ?? (source ? yield early ?? source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
     mod.path = source?.device;

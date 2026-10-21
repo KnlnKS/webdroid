@@ -7,7 +7,7 @@
 
 import { mem } from "./mem.ts";
 import { defineHost, hostLib, ldp, stp, SERVED, type HostFn } from "./host.ts";
-import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl.ts";
+import { interposed, linkerHooks, loadModule, prefetchModules, runInit, libdl as dl, modules } from "./dl.ts";
 import { setThreadHooks, type Cpu } from "./cpu.ts";
 import { setAbortMessage } from "./crash.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi.ts";
@@ -73,10 +73,10 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
     staticModules.push(mod);
   };
   const mods: Module[] = [];
+  // the libraries' reads overlap; they link in order
+  prefetchModules(BIONIC_LIBS);
   try {
-    for (const path of BIONIC_LIBS) {
-      mods.push(await loadModule(path.slice(path.lastIndexOf("/") + 1), undefined, true, cpu));
-    }
+    for (const path of BIONIC_LIBS) mods.push(await loadModule(path, undefined, true, cpu));
   } finally { linkerHooks.placeTls = null; }
   // the executable's libraries are its global group, which dlclose never unloads
   for (const mod of mods) mod.nodelete = true;
