@@ -32,13 +32,14 @@ import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
 import { PageHost, RendererFrame, Subframes, dropFrame, viewFrame, type FrameLoad } from "./webframes.ts";
 
 import type { FrameAnnouncement } from "../shell/web-surface.ts";
-import { domKeyOf } from "./input-codes.ts";
+import { KEY_ACTION_DOWN, domKeyOf, keyCodes } from "./input-codes.ts";
 
 /** the main frame's port once its page script listens, and the page's end */
 const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });
 /** whether a bridged page's renderer shares this thread, as its first interface call found */
 let sharedRenderer: boolean | undefined;
 const WV_S = "(Landroid/webkit/WebView;Ljava/lang/String;)V";
+const SPACE = keyCodes.get("SPACE")!;
 const MS_MODE = 0xc0000000, MS_EXACTLY = 0x40000000, MS_AT_MOST = 0x80000000 | 0, MEASURED_STATE_TOO_SMALL = 0x01000000;
 
 function weakPlacement(ref: WeakRef<WebViewChromium>) {
@@ -358,8 +359,8 @@ export class WebViewChromium extends JObj {
       if (yield vcall(self.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", self.view, event)) return superDispatch();
       const code: number = yield vcall(event, "getKeyCode", "()I"), key = domKeyOf.get(code);
       if (!key || !self.host.surface || !self.loaded) return superDispatch();
-      const type = (yield vcall(event, "getAction", "()I")) === 0 ? "keydown" : "keyup";
-      const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
+      const type = (yield vcall(event, "getAction", "()I")) === KEY_ACTION_DOWN ? "keydown" : "keyup";
+      const init = { key: key[0], code: code === SPACE ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
         repeat: (yield vcall(event, "getRepeatCount", "()I")) > 0 };
       const generation = self.gen;
       // Renderer handlers can call back into Java; never hold the main queue awaiting them.

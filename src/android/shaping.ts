@@ -227,6 +227,9 @@ function advanceOf(hb: HarfBuzz, run: ShapedRun, glyph: number, advance: number)
 // wholesale rather than evicted per entry.
 const PIECES_MAX = 20000;
 let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Piece>>>(), pieceCount = 0;
+/** the code units of the blocks of right-to-left scripts: outside them HarfBuzz guesses a run with no direction LTR, so a piece laid out LTR is the
+ *  piece measured */
+const RTL_BLOCKS = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff\ud802\ud803\ud83a\ud83b]/;
 /** LayoutCache::getOrCreate: the piece text[start, end) with hyphen edits at its ends, in its context
  *  text[ctxStart, ctxEnd), in `direction` (HarfBuzz's guess from its script when invalid) */
 export function pieceOf(style: ShapeStyle, text: string, start: number, end: number, startEdit = 0, endEdit = 0, ctxStart = start, ctxEnd = end,
@@ -236,6 +239,7 @@ export function pieceOf(style: ShapeStyle, text: string, start: number, end: num
   let byStyle = byTf.get(style.key);
   if (!byStyle) byTf.set(style.key, byStyle = new Map());
   const s = text.slice(ctxStart, ctxEnd);
+  if (direction === HB_DIRECTION_LTR && !RTL_BLOCKS.test(s)) direction = HB_DIRECTION_INVALID;
   const key = direction || startEdit || endEdit || ctxStart < start || ctxEnd > end ? `${direction} ${startEdit} ${endEdit} ${start - ctxStart} ${end - ctxStart}\0${s}` : s;
   let out = byStyle.get(key);
   if (out) return out;
