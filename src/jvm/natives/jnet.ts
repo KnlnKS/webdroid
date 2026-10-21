@@ -74,8 +74,11 @@ rt.register({
       return sslContext(protocol, provider);
     },
     "getProtocol()Ljava/lang/String;": function (this: JSSLContext) { return this.protocol; },
-    "createSSLEngine()Ljavax/net/ssl/SSLEngine;": () => rt.make("javax/net/ssl/SSLEngine"),
-    "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
+    // TLS is the relay's: there is no engine to wrap records, and no client certificate to present
+    "createSSLEngine()Ljavax/net/ssl/SSLEngine;": () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "SSLEngine: TLS is terminated at the relay"); },
+    "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": (keyManagers: unknown[] | null) => {
+      if (keyManagers?.length) throw rt.mkThrowable("java/security/KeyManagementException", "client certificates: TLS is terminated at the relay");
+    },
     "getProvider()Ljava/security/Provider;": function (this: JSSLContext) { return this.provider ?? scall("java/security/Security", "getProvider", "(Ljava/lang/String;)Ljava/security/Provider;", "AndroidOpenSSL"); },
     "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => rt.make("javax/net/ssl/SSLSocketFactory"),
   },
@@ -157,10 +160,6 @@ rt.register({
     "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
   },
 });
-rt.register({ name: "javax/net/ssl/SSLEngine", ctor: class extends JObj {}, methods: {
-  "getApplicationProtocol()Ljava/lang/String;": () => null,
-  "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
-} });
 class JSSLParameters extends JObj { protocols: string[] = []; }
 rt.register({
   name: "javax/net/ssl/SSLParameters", ctor: JSSLParameters,

@@ -344,7 +344,6 @@ describe("ssl-parameters", () => {
     const context = await scall("javax/net/ssl/SSLContext", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljavax/net/ssl/SSLContext;", "TLS", provider);
     expect(await vcall(context, "getProvider", "()Ljava/security/Provider;")).toBe(provider);
     expect(await vcall(context, "getProtocol", "()Ljava/lang/String;")).toBe("TLS");
-    const engine = await vcall(context, "createSSLEngine", "()Ljavax/net/ssl/SSLEngine;");
-    expect(await vcall(engine, "getApplicationProtocol", "()Ljava/lang/String;")).toBeNull();
+    expect(await thrown(() => vcall(context, "createSSLEngine", "()Ljavax/net/ssl/SSLEngine;"))).toMatch(/^java\/lang\/UnsupportedOperationException:/);
   });
 });
