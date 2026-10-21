@@ -114,7 +114,7 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 `audit` for reachable missing APIs and `fwscan`/`fwtest` for framework evidence. Native tools are
 `scripts/nrun.ts` and `scripts/ndbg.ts`.
 
-The browser exposes `wd` from `src/main.ts`; missing APIs are `wd.rt.missing`.
+The browser exposes `wd` from `src/shell/harness.ts`; missing APIs are `wd.rt.missing`.
 For suspected JIT faults, compare `?jit=0`, then narrow with `__wdJit` ranges or
 `core.jit_fallback(lo, hi)`. Combine reproduction, tier comparison and source inspection.
 A framework provenance cut uses

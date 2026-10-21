@@ -136,8 +136,7 @@ A service whose state is the device's (notification, mount, audio, media_session
 location, account, content, jobscheduler, shortcut: `SYSTEM_SERVICES` in `binder.ts`) is hosted once, in
 system_server, and app processes reach it by Binder through the broker; a service that holds the process's own
 state (activity, window, input_method) or answers from the device profile or a broker-owned store is hosted in
-each process. Each is hosted with `hostService` by the module that owns it; `services.ts` combines the AMS/ATMS
-tables, which live in an import cycle with `am.ts`/`atm.ts`. A Worker reaches the broker through the domains of
+each process. Each is hosted with `hostService` by the module that owns it. A Worker reaches the broker through the domains of
 `src/shell/broker-contract.ts` and never bundles `processes.ts`; a transport that is not connected throws
 RemoteException rather than answering from a local copy. Path operations and descriptors of another realm's files
 go through one `pathOwner()` (`src/shell/file-path.ts`).
