@@ -26,7 +26,6 @@ import { attrStr } from "../android/axml.ts";
 import { sqliteStore, type createSQLiteSession } from "../android/sqlite.ts";
 import { preferenceStore } from "../android/sharedprefs.ts";
 import { notificationStore } from "../android/notification.ts";
-import { PROCESS_PID } from "../android/os.ts";
 import { settingsStore } from "../android/settings.ts";
 import { awaited, rt } from "../jvm/runtime.ts";
 import type { WebCookies } from "./webcookies.ts";
@@ -41,6 +40,7 @@ import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-d
 import { serveProcess, processProxy, processError, closePort } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
 import { asBroker, forgetRemoved, permissionDenied, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { procIdentity } from "./procfs.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -185,7 +185,7 @@ export class ProcessBroker {
     return entry;
   }
   /** the page's own process, which serves its endpoint once its Java has booted */
-  registerSystemServer(): Entry { return this.register("android", "system_server", PROCESS_PID); }
+  registerSystemServer(): Entry { return this.register("android", "system_server", procIdentity.pid); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {

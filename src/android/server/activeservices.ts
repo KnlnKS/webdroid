@@ -10,7 +10,6 @@ import { newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
 import { parceledList, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
-import { PROCESS_PID, PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
@@ -19,6 +18,7 @@ import { startForegroundNotification, stopForegroundNotification } from "../noti
 import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./am.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
 import type { ServiceBinding, ServiceStartAccess } from "../../shell/servicerecords.ts";
+import { procIdentity } from "../../shell/procfs.ts";
 
 /** the services of another process, through the broker; `flags` are bindService's. A binding hears
  *  its service's binder through `connected`, which the broker sends again when the service restarts. */
@@ -67,7 +67,7 @@ const isLocal = (t: Target) => runsHere(t.pkg, t.process);
 /** retrieveServiceLocked's refusal of the calling package, or null */
 function* denial(t: Target, callingPackage: string): Gen<string | null> {
   const uid = getDeclared<number>(getDeclared(t.info, SI, "applicationInfo"), "android/content/pm/ApplicationInfo", "uid");
-  if (uid === PROCESS_UID) return null;
+  if (uid === procIdentity.uid) return null;
   if (!getDeclared(t.info, SI, "exported")) return "not exported from uid " + uid;
   const permission = getDeclared<string | null>(t.info, SI, "permission");
   return permission && (yield* awaited(checkPermission(permission, callingPackage))) !== 0 ? permission : null;
@@ -297,7 +297,7 @@ export const activeServiceMethods = {
         yield* bindLocal(t, bound, { id: conn, autoCreate: !!(bits & BIND_AUTO_CREATE), connected });
         return 1;
       }
-      const key = PROCESS_PID + ":" + nextKey++;
+      const key = procIdentity.pid + ":" + nextKey++;
       remoteBindings.set(key, { conn, connected, unbind: () => serviceTransport.unbind(remoteOwner(t), t.process, key) });
       // the binding answers later, on this thread
       detached(() => rt.drive(function* () {

@@ -1,7 +1,9 @@
 import { device } from "./config.ts";
 import { DEVICE_PROPERTIES, UNAME } from "./device-properties.ts";
 
-export const procIdentity = { pid: 1000, uid: 10001, name: "" };
+/** the process's identity: name is what the activity manager knows it by, argv0 its command line, which
+ *  Process.setArgV0 changes */
+export const procIdentity = { pid: 1000, uid: 10001, name: "", argv0: "" };
 /** uname(2): the reference kernel's, whose machine is what an arm64 kernel reports a 64-bit or a compat task */
 export const uname = (wide: boolean) => ({ ...UNAME, machine: wide ? "aarch64" : "armv8l" });
 /** bionic's passwd name for a uid: u<user>_a<app> for application ids, root and system by name, else the number. */
@@ -33,7 +35,7 @@ export function sysconf(name: number): number { return sysconfByName.get(name)?.
 /** the guest's memory as /proc reports it, which the native tier assigns: its resident size, the
  *  maps lines of its images and thread stacks, and the main thread's initial stack pointer */
 export const procMemory = { resident: (): number => 0, maps: (): string => "", startStack: (): number => 0 };
-const comm = () => (procIdentity.name || "app_process").slice(0, 15);
+const comm = () => (procIdentity.argv0 || "app_process").slice(0, 15);
 /** proc(5)'s stat line; CPU time is wall time since page load in USER_HZ (100) ticks */
 function statLine(id: number): string {
   const ticks = Math.floor(performance.now() / 10), bytes = procMemory.resident();
@@ -84,7 +86,7 @@ export function procText(path: string): string | null {
   const id = own[2] ? +own[2] : procIdentity.pid;
   switch (own[3]) {
     case "maps": case "smaps": return procMemory.maps();
-    case "cmdline": return procIdentity.name + "\0";
+    case "cmdline": return procIdentity.argv0 + "\0";
     case "comm": return taskComm(id) + "\n";
     case "stat": return statLine(id);
     case "statm": { const pages = Math.ceil(procMemory.resident() / 4096); return `${pages} ${pages} 0 0 0 ${pages} 0\n`; }

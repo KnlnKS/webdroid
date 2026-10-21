@@ -7,10 +7,10 @@ import { bootApp, packageRecord } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
 import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop.ts";
 import { BridgeCalls } from "../src/shell/bridgecalls.ts";
-import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os.ts";
+import { setProcessIdentity, setProcessName } from "../src/android/os.ts";
 import { UNAME } from "../src/shell/device-properties.ts";
 import { binderTransport, importBinder, onCallerDeath } from "../src/android/binder.ts";
-import { procList, procText, procWrite } from "../src/shell/procfs.ts";
+import { procIdentity, procList, procText, procWrite } from "../src/shell/procfs.ts";
 
 describe("bundle-parcel", () => {
   test("a Bundle read from a Parcel stays parcelled until read, and is rewritten byte for byte", async () => {
@@ -109,7 +109,7 @@ describe("looper", () => {
     // the thread has its tid once its Looper is prepared, which getLooper waits for
     const looper = await vcall(thread, "getLooper", "()Landroid/os/Looper;"), tid = await vcall(thread, "getThreadId", "()I");
     expect(tid).not.toBe(await scall("android/os/Process", "myTid", "()I"));
-    expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
+    expect(await scall("android/os/Process", "myTid", "()I")).toBe(procIdentity.pid);
     const comm = `/proc/self/task/${tid}/comm`;
     expect(procList("/proc/self/task")).toContain(String(tid));
     expect(procText(comm)).toBe("worker\n");

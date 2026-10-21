@@ -9,7 +9,6 @@ import { preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, useP
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandle } from "../src/android/binder.ts";
 import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
-import { PROCESS_PID } from "../src/android/os.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { javaOpenFd } from "../src/native/fs.ts";
@@ -20,6 +19,7 @@ import { descriptorTransport, processRights } from "../src/native/process-fd.ts"
 import { usePathOwner } from "../src/shell/file-path.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { bootApp, packageRecord } from "./java.ts";
+import { procIdentity } from "../src/shell/procfs.ts";
 
 const pkg = "org.webdroid.test.notify";
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
@@ -37,7 +37,7 @@ beforeAll(async () => {
   const stop = serveCalls(port1, { ...canonicalPreferenceCommands(owner, name => {
     if (name !== "android:notification-policy:" + pkg) throw new Error("foreign preference file");
   }), systemService: ownedSystemService,
-    foreground: (request: ForegroundNotificationRequest) => receiveForegroundNotification(pkg, {pid:PROCESS_PID,uid:packageUid(pkg)}, request),
+    foreground: (request: ForegroundNotificationRequest) => receiveForegroundNotification(pkg, {pid:procIdentity.pid,uid:packageUid(pkg)}, request),
   });
   const client = callProxy<Calls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "systemService", "foreground"]);
   usePreferenceAccess(client.endpoint);
@@ -140,7 +140,7 @@ test("stored notification descriptors share offsets and release on replacement, 
   const read = async (id: number) => {
     const sbns = await active();
     const sbn = (await Promise.all(sbns.map(async s => [await vcall(s, "getId", "()I"), s] as const))).find(([n]) => n === id)![1];
-    expect(await vcall(sbn, "getInitialPid", "()I")).toBe(PROCESS_PID);
+    expect(await vcall(sbn, "getInitialPid", "()I")).toBe(procIdentity.pid);
     const n = await vcall(sbn, "getNotification", `()${N}`);
     const extras = (n as Record<string, JObj>)[declaredField("android/app/Notification", "extras")];
     const copy = await vcall(extras, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");

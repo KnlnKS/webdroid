@@ -221,7 +221,7 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
     await vcall(service, "setPrimaryClip", `(Landroid/content/ClipData;${P})V`, source, ...caller);
     expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
     expect(await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller)).toBeNull();
-    focused = (await import("../src/android/os.ts")).PROCESS_UID;
+    focused = (await import("../src/shell/procfs.ts")).procIdentity.uid;
     expect(await vcall(service, "hasClipboardText", `(${P})Z`, ...caller)).toBe(1);
     const read = await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller);
     expect(await vcall(await vcall(read,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");

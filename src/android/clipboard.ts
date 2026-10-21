@@ -5,12 +5,12 @@ import { JObj, driven } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { asBinder, callingIdentity, hostService, onCallerDeath, oneway } from "./binder.ts";
 import { foreground } from "./server/atm.ts";
-import { PROCESS_UID } from "./os.ts";
 import { wallMillis } from "../guest-clock.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 /** the uid whose app has input focus (WindowManagerService.isUidFocused): system_server's realm asks
  *  the broker; a realm of its own has its app while one of its activities is resumed */
-let focusedUid = (): number | undefined => foreground() ? PROCESS_UID : undefined;
+let focusedUid = (): number | undefined => foreground() ? procIdentity.uid : undefined;
 /** the uid whose window has focus, `focused`'s answer from now on; the previous source is returned */
 export function useFocusedUid(focused: () => number | undefined): () => number | undefined { const was = focusedUid; focusedUid = focused; return was; }
 

@@ -8,13 +8,13 @@ import { once } from "../jvm/suspend.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import type { JLocale } from "../jvm/natives/jvalues.ts";
 import { newStub } from "./binder.ts";
-import { PROCESS_PID, PROCESS_UID } from "./os.ts";
 import { resolveService } from "./pm.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
 import type { JIntent, JComponentName } from "./intent.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 // the provider library's GeocoderParams: the request's locale and caller
-class JGeocoderParams extends JObj { locale: JLocale | null = null; pkg: string | null = null; uid = PROCESS_UID; }
+class JGeocoderParams extends JObj { locale: JLocale | null = null; pkg: string | null = null; uid = procIdentity.uid; }
 rt.register({
   name: "android/location/GeocoderParams", ctor: JGeocoderParams,
   methods: {
@@ -80,7 +80,7 @@ function* providerComponent(): Gen<JComponentName | null> {
 const bindProvider = () => once(driven(function* (): Gen<{ geocoder: JObj; unbind: () => unknown }> {
   const component = yield* providerComponent();
   if (!component) throw rt.mkThrowable("java/io/IOException", "Service not Available");
-  const { binder, unbind } = yield* awaited(bindAsSystem(component, "geocoder:" + PROCESS_PID));
+  const { binder, unbind } = yield* awaited(bindAsSystem(component, "geocoder:" + procIdentity.pid));
   return { geocoder: yield scall("android/location/provider/IGeocodeProvider$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/location/provider/IGeocodeProvider;", binder), unbind };
 }));
 let provider = bindProvider();

@@ -5,7 +5,7 @@ import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, n
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
 import { exitProcess, processExited } from "../process-exit.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { PROCESS_PID, PROCESS_UID, SYSTEM_SERVER_PID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
+import { SYSTEM_SERVER_PID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
 import { O_ACCMODE } from "../native/abi.ts";
 import { javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fd.ts";
 import { FdScope, detachFdScope } from "./fd-scope.ts";
@@ -14,6 +14,7 @@ import type { DescriptorRights } from "../shell/file-descriptors.ts";
 import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel.ts";
 import { jarray, i8, u8 } from "../jvm/abi.ts";
 import { handle, release, FINALIZER } from "./handles.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 const F_GETFL = 3, O_RDONLY = 0;
 /** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
@@ -44,7 +45,7 @@ const callerDeaths = new Map<number, Set<(pid: number) => void>>();
 /** `died(pid)` once process `pid` dies, until the returned function is called, as a hosted service's
  *  death recipient on its caller's binder drops what it kept for the caller; one watch serves each process */
 export function onCallerDeath(pid: number, died: (pid: number) => void): () => void {
-  if (pid === PROCESS_PID) return () => {};
+  if (pid === procIdentity.pid) return () => {};
   const recipients = callerDeaths.get(pid) ?? new Set<(pid: number) => void>();
   if (!callerDeaths.has(pid)) {
     callerDeaths.set(pid, recipients);
@@ -70,7 +71,7 @@ export function exportBinder(binder: unknown): BinderHandle | null {
   if (!iof(binder, "android/os/Binder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + classNameOf(binder));
   let id = localIds.get(binder as JObj);
   if (!id) { id = nextId++; localIds.set(binder as JObj, id); local.set(id, binder as JObj); }
-  return { pid: PROCESS_PID, id };
+  return { pid: procIdentity.pid, id };
 }
 /** javaObjectForIBinder's one proxy per remote binder */
 function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
@@ -83,7 +84,7 @@ function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
 }
 export function importBinder(h: BinderHandle | null): JObj | null | Promise<JObj> {
   if (!h) return null;
-  if (h.pid === PROCESS_PID) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
+  if (h.pid === procIdentity.pid) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
   return proxyFor(h.pid + ":" + h.id, h);
 }
 /** binders hosted here on system_server's behalf, the webdroid/ classes: its services and the binders they hand out */
@@ -105,7 +106,7 @@ function appView(o: unknown): unknown {
 }
 /** a binder as system_server reads it from an app's parcel: its own binder for a proxy to one */
 function systemView(o: unknown): unknown {
-  const h = o instanceof JObj ? proxyData.get(o)?.handle : undefined, binder = h?.pid === PROCESS_PID ? local.get(h.id) : undefined;
+  const h = o instanceof JObj ? proxyData.get(o)?.handle : undefined, binder = h?.pid === procIdentity.pid ? local.get(h.id) : undefined;
   return binder && isSystemBinder(binder) ? binder : o;
 }
 /** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
@@ -113,7 +114,7 @@ function systemView(o: unknown): unknown {
 export function systemToken(): JObj | Promise<JObj> {
   const id = nextId++;
   // a parcel written and read back here (an Intent's extras) imports the same token
-  return after(proxyFor("token:" + id, { pid: PROCESS_PID, id }), (proxy) => { local.set(id, proxy); return proxy; });
+  return after(proxyFor("token:" + id, { pid: procIdentity.pid, id }), (proxy) => { local.set(id, proxy); return proxy; });
 }
 /** the binder a writable descriptor's importer sends its final bytes back through */
 class JFileWriter extends JObj { fd = -1; }
@@ -245,7 +246,7 @@ export async function withParcelScope<T>(work: () => T | Promise<T>): Promise<T>
   try { return await work(); }
   finally { state.parcelScope = undefined; scope.close(); }
 }
-export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+export const callingIdentity = (): Caller => transactionCaller() ?? { pid: procIdentity.pid, uid: procIdentity.uid };
 const SIGABRT = 6;
 /** an exception escaping a stub's method, as JavaBBinder's report_exception takes it: logged,
  *  except that an Error is fatal (LOG_ALWAYS_FATAL aborts the process) */
@@ -254,7 +255,7 @@ function reportException(e: unknown, message: string): void {
   console.error(`[Binder] ${message}`);
   logUncaught(je);
   if (!iof(je, "java/lang/Error") || processExited()) return;
-  console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${PROCESS_PID}\nAbort message: '${message}'`);
+  console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${procIdentity.pid}\nAbort message: '${message}'`);
   exitProcess({ signal: SIGABRT });
 }
 const UNCAUGHT_REMOTE = "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)";
@@ -279,7 +280,7 @@ export const enforceCallingOrSelfPermission = driven(function* (permission: stri
 });
 const oneWay = new Map<number, Promise<unknown>>();
 /** a thread of this process's binder pool, which another process's calls into it run on */
-export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + PROCESS_PID });
+export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + procIdentity.pid });
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
 export async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
@@ -318,7 +319,7 @@ function* execTransact<T>(binder: JObj, code: number, flags: number, size: numbe
 /** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels, on a binder thread */
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
-  if (!binder || request.handle.pid !== PROCESS_PID) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
+  if (!binder || request.handle.pid !== procIdentity.pid) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
   const oneway = (request.flags & FLAG_ONEWAY) !== 0;
   const run = () => withCallingIdentity(caller, () => rt.drive(function* (): Gen<TransactionReply> {
     // an escaped exception leaves the caller UNKNOWN_TRANSACTION
@@ -352,7 +353,7 @@ rt.registerJnis("android/os/Binder", {
   },
   "restoreCallingIdentity(J)V": (token: bigint) => {
     const state = ipc(), caller = { pid: Number(token & 0x7fffffffn), uid: Number(BigInt.asIntN(32, token >> 32n)) };
-    state.caller = token === SELF_TOKEN || caller.pid === PROCESS_PID && caller.uid === PROCESS_UID ? undefined : caller;
+    state.caller = token === SELF_TOKEN || caller.pid === procIdentity.pid && caller.uid === procIdentity.uid ? undefined : caller;
     state.explicit = token !== SELF_TOKEN && !!(token & EXPLICIT);
   },
   // IPCThreadState's per-thread StrictMode policy, which a call carries to its binder thread
@@ -412,7 +413,7 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 } });
 
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
-const pidAlive = (pid: number) => pid === PROCESS_PID || binderTransport.alive(pid);
+const pidAlive = (pid: number) => pid === procIdentity.pid || binderTransport.alive(pid);
 const proxyAlive = function (this: JObj) { return after(pidAlive(proxyOf(this).handle.pid), alive => +alive); };
 /** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
  *  FAILED_TRANSACTION for the data parcel's size */
@@ -443,7 +444,7 @@ const copyParcel = driven(function* copyParcel(from: NativeParcel, to: NativePar
  *  waits where a device's would not. */
 const localTransact = driven(function* localTransact(binder: JObj, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
   const state = ipc(), { caller, explicit, policy, workSource } = state;
-  state.caller = state.system ? SYSTEM_CALLER : { pid: PROCESS_PID, uid: PROCESS_UID };
+  state.caller = state.system ? SYSTEM_CALLER : { pid: procIdentity.pid, uid: procIdentity.uid };
   try {
     return (yield* execTransact(binder, code, flags, data.size, (request) => copyParcel(data, request, systemView),
       reply && ((answer) => copyParcel(answer, reply, appView)))).handled;
@@ -452,7 +453,7 @@ const localTransact = driven(function* localTransact(binder: JObj, code: number,
 /** BpBinder::transact: the data parcel's bytes go whole; the reply is read from its start */
 const transact = driven(function* transact(target: BinderHandle, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
   checkBuffer(data, (flags & FLAG_ONEWAY) !== 0, data.size);
-  const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
+  const binder = target.pid === procIdentity.pid ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
   const sent = yield* awaited(exportParcel(data, processRights));
   const request = { handle: target, code, data: sent, flags, system: ipc().system };

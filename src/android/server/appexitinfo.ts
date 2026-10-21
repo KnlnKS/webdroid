@@ -4,13 +4,14 @@
 // will carry, and a crash within MIN_CRASH_INTERVAL of the process's last one repeats, which shows
 // the crash dialog (a first crash shows none).
 import { onProcessExit, type ExitStatus } from "../../process-exit.ts";
-import { PROCESS_PID, PROCESS_UID, processName } from "../os.ts";
+import { processName } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { foreground } from "./atm.ts";
 import { logLine } from "../../native/kernel.ts";
 import { persisted } from "../../shell/device-storage.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
+import { procIdentity } from "../../shell/procfs.ts";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
 export type ExitRecord = {
@@ -92,7 +93,7 @@ export function appCrashed(info: CrashInfo, native: boolean): void {
   fatalCrash ??= copyCrashInfo(info);
   if (noted) return;
   const process = processName(), now = wallMillis();
-  logLine(4, "am_crash", `[${PROCESS_PID},0,${process},${appFlags},${info.exceptionClassName ?? ""},${info.exceptionMessage ?? ""},${info.throwFileName ?? ""},${info.throwLineNumber},0]`);
+  logLine(4, "am_crash", `[${procIdentity.pid},0,${process},${appFlags},${info.exceptionClassName ?? ""},${info.exceptionMessage ?? ""},${info.throwFileName ?? ""},${info.throwLineNumber},0]`);
   // Settings' show_first_crash_dialog (and its developer option) would show one for a first crash
   // too; only the shell or adb could set them
   const dialog = crashedRecently(appHost?.pkg ?? process, process, now);
@@ -109,7 +110,7 @@ function recordExit(status: ExitStatus): void {
   if (status.signal !== undefined && status.tombstone) appCrashed({ exceptionClassName: "Native crash", exceptionMessage: SIGNAL_TEXT[status.signal] ?? `Signal ${status.signal}`, throwFileName: "unknown", throwLineNumber: 0 }, true);
   const reason = noted?.reason ?? (status.code !== undefined ? REASON_EXIT_SELF : REASON_SIGNALED);
   lastExit = {
-    pid: PROCESS_PID, uid: PROCESS_UID, process: processName(), pkg: appHost?.pkg ?? processName(), reason,
+    pid: procIdentity.pid, uid: procIdentity.uid, process: processName(), pkg: appHost?.pkg ?? processName(), reason,
     // a Java crash keeps no status; the others carry the exit code or the signal
     status: reason === REASON_CRASH ? 0 : status.code ?? status.signal,
     importance: processImportance(), timestamp: wallMillis(),

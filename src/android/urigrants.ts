@@ -2,12 +2,12 @@ import { hostService } from "./binder.ts";
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
 import { appHost } from "./apphost.ts";
 import { type JUri, mkUri, uriText, clipUris } from "./net.ts";
-import { PROCESS_UID } from "./os.ts";
 import { newObj, vcall, after } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { ownedBy } from "./packages.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { procIdentity } from "../shell/procfs.ts";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
@@ -66,7 +66,7 @@ export function checkUriPermission(u: string, uid: number, modes: number): numbe
   if (uid === 0) return 0;
   const requested = modes & 3;
   if (!requested) return -1;
-  if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
+  if (uid === procIdentity.uid && uriGrants.all().some((grant) =>
     grantedUri(u, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
   for (const pkg of transientUriGrants.keys()) {
     if (!ownedBy(pkg, uid)) continue;

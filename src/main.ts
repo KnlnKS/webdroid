@@ -1,6 +1,5 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import "./natives.ts";
-import { PROCESS_PID } from "./android/os.ts";
 import { vsyncScheduled } from "./android/vsync.ts";
 import { pendingTransitions } from "./android/server/atm.ts";
 import { mountSystemCertificates } from "./shell/cacerts.ts";
@@ -41,16 +40,17 @@ import { device } from "./shell/config.ts";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot.ts";
 import { hasFocusedWindow, hasTouchWindow } from "./android/server/wm.ts";
 import { systemInputLayer } from "./shell/system-input.ts";
+import { procIdentity } from "./shell/procfs.ts";
 
 const params = new URLSearchParams(location.search);
 
 const back = async () => {
   if (hasFocusedWindow()) { await pressBack(); return; }
-  const routed = processBroker().activities.back(PROCESS_PID);
+  const routed = processBroker().activities.back(procIdentity.pid);
   if (routed) await routed; else await pressBack();
 };
 const rotate = async (landscape: boolean) => {
-  const routed = processBroker().activities.rotate(PROCESS_PID, landscape);
+  const routed = processBroker().activities.rotate(procIdentity.pid, landscape);
   if (routed) await routed; else await rotateDevice(landscape);
 };
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });

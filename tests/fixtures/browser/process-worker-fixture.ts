@@ -198,7 +198,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
   // The broker keeps the report it was sent, not this realm's object.
   if (data.pid === 8201) { appCrashed(fatal, false); fatal.exceptionMessage = "changed local report"; }
   await serveWorkerEndpoint(endpoint);
-  const { PROCESS_PID, PROCESS_UID, PROCESS_NAME } = await import("../../../src/android/os.ts");
+  const { procIdentity } = await import("../../../src/shell/procfs.ts");
   const source = data.registry.find(record => record.pkg === data.pkg)!.source;
   if (!("port" in source)) throw new Error("expected lazy archive port");
   const archive = Array.from(await new RemoteFile(source).read(0, 1));
@@ -209,7 +209,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
   }, 10);
   const commands = { cookies: await broker.cookieHas() };
   post({ kind: "ready" } satisfies ProcessWorkerStatus);
-  post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [PROCESS_PID, PROCESS_UID, PROCESS_NAME], commands } });
+  post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
 }
 
 const handle = roles[new URLSearchParams(location.search).get("role")!]!();

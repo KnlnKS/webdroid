@@ -22,10 +22,10 @@ import { packages, ownedBy } from "./packages.ts";
 import { FileDescriptors } from "../shell/file-descriptors.ts";
 import { StoredParcel } from "../shell/stored-parcel.ts";
 import { processRights } from "../native/process-fd.ts";
-import { PROCESS_PID } from "./os.ts";
 import { appHost } from "./apphost.ts";
 import { coverTop, foreground } from "./server/atm.ts";
 import { permissionGranted, grantPrompted } from "./permissions.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const DEFAULT_CHANNEL = "miscellaneous", RANKER_GROUP = "ranker_group";
@@ -66,16 +66,16 @@ export class NotificationStore {
   bindDescriptors(kernel: FileDescriptors): void { this.kernel = kernel; }
   epoch(pkg: string): number { return this.epochs.get(pkg) ?? 0; }
   async capture(notification: JObj): Promise<StoredParcel> {
-    this.kernel.ensureReceiver(PROCESS_PID);
+    this.kernel.ensureReceiver(procIdentity.pid);
     const kernel = this.kernel;
-    const data = await parcelled(notification, kernel.rights(PROCESS_PID));
-    return StoredParcel.retain(kernel, PROCESS_PID, data);
+    const data = await parcelled(notification, kernel.rights(procIdentity.pid));
+    return StoredParcel.retain(kernel, procIdentity.pid, data);
   }
   readStored(data: StoredParcel): Promise<JObj> {
     const scope = brokerScope();
-    return data.readLocal(PROCESS_PID, (data, rights) => unparcelled(N, data, rights, scope));
+    return data.readLocal(procIdentity.pid, (data, rights) => unparcelled(N, data, rights, scope));
   }
-  decode(data: ParcelData): JObj | Promise<JObj> { return unparcelled(N, data, this.kernel.rights(PROCESS_PID), brokerScope()); }
+  decode(data: ParcelData): JObj | Promise<JObj> { return unparcelled(N, data, this.kernel.rights(procIdentity.pid), brokerScope()); }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */

@@ -6,7 +6,7 @@ import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from ".
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { hostedService } from "../binder.ts";
-import { PROCESS_PID, PROCESS_UID, processName, totalMemory, freeMemory } from "../os.ts";
+import { processName, totalMemory, freeMemory } from "../os.ts";
 import { jarray } from "../../jvm/abi.ts";
 import { appHost } from "../apphost.ts";
 import { configurations } from "./wm.ts";
@@ -23,6 +23,7 @@ import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
 import { clearUserData } from "../appdata.ts";
 import { COMPAT_CHANGES } from "../compat-changes.ts";
+import { procIdentity } from "../../shell/procfs.ts";
 
 /** ActivityManagerService.STOCK_PM_FLAGS, what its package queries ask for */
 export const STOCK_PM_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES);
@@ -64,7 +65,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, STOCK_PM_FLAGS, 0);
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
-  const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, APP_PROVIDER_FLAGS, null);
+  const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, procIdentity.uid, APP_PROVIDER_FLAGS, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
     slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : yield newArrayList());
   const { global } = yield* awaited(configurations());
@@ -130,7 +131,7 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
   if (!info) return null;
   const app = getDeclared<JObj>(info, COMPONENT_INFO, "applicationInfo"), process = getDeclared<string>(info, COMPONENT_INFO, "processName");
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
-  if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === processName()))
+  if (getDeclared(app, APP_INFO, "uid") === procIdentity.uid && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === processName()))
     return setDeclared(holder, HOLDER, { mLocal: 1 });
   const binder = yield* awaited(providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name));
   if (!binder) return null;
@@ -140,7 +141,7 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
 function fillProc(info: JObj): JObj {
   const pkg = appHost?.pkg ?? "";
-  return setDeclared(info, PROCESS_INFO, { processName: processName(), pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
+  return setDeclared(info, PROCESS_INFO, { processName: processName(), pid: procIdentity.pid, uid: procIdentity.uid, pkgList: jarray([pkg], "Ljava/lang/String;"),
     importance: processImportance() });
 }
 const checkPidPermission = (name: string, _pid: number, uid: number) => checkUidPermission(name, uid);

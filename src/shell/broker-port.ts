@@ -3,7 +3,6 @@
 import { SYSTEM_SERVICES, asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
-import { PROCESS_PID } from "../android/os.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
@@ -19,6 +18,7 @@ import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } fro
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
 import { serveCalls } from "./process-port.ts";
 import type { ProcessBroker } from "./processes.ts";
+import { procIdentity } from "./procfs.ts";
 
 type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };
 /** `calls`, each failing once process `pid` is dead */
@@ -140,11 +140,11 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       const sender = { pid, uid: caller.uid };
       if (request.kind === "stop" || !request.data) return receiveForegroundNotification(caller.pkg, sender, request);
       // the rights the notification did not take go back whether or not it was posted
-      await broker.withTransferred(pid, PROCESS_PID, request.data, async received => {
+      await broker.withTransferred(pid, procIdentity.pid, request.data, async received => {
         try {
           broker.entry(pid);
           await receiveForegroundNotification(caller.pkg, sender, { ...request, data: received });
-        } finally { await broker.discardDescriptors(PROCESS_PID, received, false); }
+        } finally { await broker.discardDescriptors(procIdentity.pid, received, false); }
       }, true);
     },
     ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {

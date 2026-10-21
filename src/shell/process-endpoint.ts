@@ -9,7 +9,7 @@ import { executePendingIntent, pendingTransport } from "../android/pendingintent
 import { useAlarmScheduler } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
-import { PROCESS_PID, processTransport } from "../android/os.ts";
+import { processTransport } from "../android/os.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
 import { after } from "../jvm/natives/jentry.ts";
@@ -37,6 +37,7 @@ import type { ProcessBroker } from "./processes.ts";
 import type { ServiceRequest } from "./servicerecords.ts";
 import { callProxy, closePort, processError, processFailure } from "./process-port.ts";
 import { note, Ev } from "../timeline.ts";
+import { procIdentity } from "./procfs.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const brokerCalls = (): BrokerCalls => calls!.endpoint;
@@ -140,10 +141,10 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */
 export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
-  onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
-  attachProcessBrokerPort(broker.brokerPort(PROCESS_PID), false);
-  broker.files.attach(PROCESS_PID, vfs);
-  descriptorTransport.local = broker.descriptorRights(PROCESS_PID);
+  onProcessExit((status) => broker.fail(procIdentity.pid, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
+  attachProcessBrokerPort(broker.brokerPort(procIdentity.pid), false);
+  broker.files.attach(procIdentity.pid, vfs);
+  descriptorTransport.local = broker.descriptorRights(procIdentity.pid);
   useNotificationStore(broker.notifications);
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
@@ -152,7 +153,7 @@ export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
   useGeolocation(broker.location);
   // system_server announces the stores' changes, and its watches of them end with it
   const stops = [useAccountStore(broker.accounts), useSettingsStore(broker.settings)];
-  if (broker.alive(PROCESS_PID)) for (const stop of stops) broker.watch(PROCESS_PID, stop);
+  if (broker.alive(procIdentity.pid)) for (const stop of stops) broker.watch(procIdentity.pid, stop);
   return createProcessEndpoint();
 }
 
