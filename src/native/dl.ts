@@ -4,7 +4,7 @@
 
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
 import { mem } from "./mem.ts";
-import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host.ts";
+import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, cstr, type HostFn } from "./host.ts";
 import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu.ts";
 import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
@@ -147,7 +147,6 @@ async function unload(root: Module, cpu: Cpu): Promise<void> {
     linkerHooks.unloading(m);
     modules.splice(modules.indexOf(m), 1);
     byName.delete(m.name);
-    nameStrs.delete(m);
     handles.forEach((h, i) => { if (h && "mod" in h && h.mod === m) handles[i] = null; });
     for (const at of tlsDescriptors.keys()) if (at >= m.base && at < m.end) tlsDescriptors.delete(at);
     if (m.tls) for (const c of cpus) c.releaseTls(m);
@@ -263,8 +262,8 @@ export const libdl: Record<string, HostFn> = {
     const m = moduleOf(addr);
     if (!m) return 0;
     const s = nearestSymbol(m, addr);
-    stp(info, nameStr(m)); stp(info + PTR, m.base);
-    stp(info + 2 * PTR, s ? mem.hostStr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
+    stp(info, cstr(modulePath(m))); stp(info + PTR, m.base);
+    stp(info + 2 * PTR, s ? cstr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
     return 1;
   },
   // dl_phdr_info: dlpi_addr, dlpi_name, dlpi_phdr, dlpi_phnum (u16), then the counters, all at
@@ -277,7 +276,7 @@ export const libdl: Record<string, HostFn> = {
     try {
       for (const m of [...modules]) {
         mem.memset(info, 0, size);
-        stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
+        stp(info, m.base); stp(info + PTR, cstr(modulePath(m))); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
         const r = await cpu.call(cb, [info, size, data]);
         if (r) return r;
       }
@@ -290,8 +289,6 @@ export const libdl: Record<string, HostFn> = {
 
 /** where an image lives: its device path, else the app's library directory for its ABI */
 export const modulePath = (m: Module): string => m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`;
-const nameStrs = new Map<Module, number>();
-function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(modulePath(m)))); return p; }
 
 export function resolveGlobalOrNull(sym: string, needed: readonly string[] = []): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
