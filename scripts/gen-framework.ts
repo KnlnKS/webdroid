@@ -3,6 +3,7 @@
 //   pnpm gen-framework            # pull from a connected device/emulator, then verify
 //   pnpm gen-framework --verify   # verify what is already in vendor/aosp
 //   pnpm gen-framework --charsets # record only the device's single-byte charsets
+//   pnpm gen-framework --blocks   # record only ICU's Unicode blocks, for java.util.regex
 //   pnpm gen-framework --input    # record only the device's key character maps and key sets
 //   pnpm gen-framework --settings # record only the device's settings tables
 //   pnpm gen-framework --properties # record only the device's platform properties
@@ -61,6 +62,7 @@ const writeBootClasspath = (jars: string[], bootJars: string[], data: Record<str
   `${jars.length} jars, ${Object.keys(data).length} files`);
 
 if (process.argv.includes("--charsets")) { await recordCharsets(); process.exit(0); }
+if (process.argv.includes("--blocks")) { await recordUnicodeBlocks(); process.exit(0); }
 if (process.argv.includes("--input")) { await recordInputDevices(); process.exit(0); }
 if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
 if (process.argv.includes("--properties")) { await recordProperties(); process.exit(0); }
@@ -121,6 +123,7 @@ if (!process.argv.includes("--verify")) {
   await recordCompatChanges();
   await recordOsConstants();
   await recordCharsets();
+  await recordUnicodeBlocks();
   await recordInputDevices();
   await recordProperties();
   writeBootClasspath(jars, bootJars, data, libraries);
@@ -226,6 +229,18 @@ async function recordCharsets() {
     "[name, aliases as aliases() iterates them, encoder replacement, the character each byte 0-255\n" +
     "decodes to, the bytes whose character does not encode back to them].",
     `export const SINGLE_BYTE_CHARSETS: [string, string[], number[], string, number[]][] = [\n${rows.join("\n")}\n];\n`, `${rows.length} charsets`);
+}
+
+/** ICU's Unicode blocks on the reference device, which JS has no property for */
+async function recordUnicodeBlocks() {
+  const rows = runDex("scripts/DumpUnicodeBlocks.java", { android: true }).split("\n").map((line) => {
+    const [start, ...names] = line.trim().split(" ");
+    return [start, ...new Set(names.map((n) => n.toLowerCase().replace(/[\s_-]/g, "")))].join(" ");
+  });
+  writeGenerated("src/jvm/natives/unicode-blocks.ts", ": ICU's Unicode blocks on the reference device, the first\n" +
+    "code point of each block or of a gap between blocks, with every name ICU knows the block by, matched loosely\n" +
+    "(lower case, without spaces, hyphens and underscores).",
+    `export const UNICODE_BLOCKS = ${JSON.stringify(rows.join(","))};\n`, `${rows.length} blocks and gaps`);
 }
 
 /** The device's settings tables as SettingsProvider holds them for an app (src/android/device-settings.ts).
