@@ -7,7 +7,7 @@
 import { rt, declaredField, waits, type JObj } from "../runtime.ts";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles.ts";
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "../../crypto/digest.ts";
-import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "../../crypto/ciphers.ts";
+import { aes, des, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "../../crypto/ciphers.ts";
 import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio.ts";
 import { memoryAt, region } from "./jmemory.ts";
 import { randomBytes } from "../../native/kernel.ts";
@@ -197,24 +197,10 @@ nc("get_EVP_CIPHER_CTX_final_used(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHE
 /** whole blocks (or any length for a stream mode) through the keyed primitive, in place */
 function transform(c: CipherCtx, data: Uint8Array) {
   const d = c.desc!;
-  if (d.mode === "stream") { c.rc4!.apply(data); return; }
-  const bc = c.bc!;
-  if (d.mode === "ctr") { c.used = ctr(bc, c.iv, data, c.stream, c.used); return; }
-  const n = d.block, iv = c.iv;
-  if (d.mode === "cbc" && bc.cbc) { bc.cbc(data, iv, c.encrypting); return; }
-  for (let off = 0; off < data.length; off += n) {
-    if (d.mode === "ecb") { c.encrypting ? bc.encrypt(data, off) : bc.decrypt(data, off); continue; }
-    if (c.encrypting) {
-      for (let i = 0; i < n; i++) data[off + i] ^= iv[i];
-      bc.encrypt(data, off);
-      iv.set(data.subarray(off, off + n));
-    } else {
-      const next = data.slice(off, off + n);
-      bc.decrypt(data, off);
-      for (let i = 0; i < n; i++) data[off + i] ^= iv[i];
-      iv.set(next);
-    }
-  }
+  if (d.mode === "stream") c.rc4!.apply(data);
+  else if (d.mode === "ctr") c.used = ctr(c.bc!, c.iv, data, c.stream, c.used);
+  else if (d.mode === "cbc") cbc(c.bc!, data, c.iv, c.encrypting);
+  else ecb(c.bc!, data, c.encrypting);
 }
 /** EVP_EncryptUpdate's buffering: whole blocks out, a partial block held */
 function blockUpdate(c: CipherCtx, input: Uint8Array): Uint8Array {
@@ -249,27 +235,15 @@ nc("EVP_CipherUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHER_CTX;[BI[BII
 });
 nc("EVP_CipherFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHER_CTX;[BI)I", (ref: JObj, out: Int8Array, outOff: number) => {
   const c = ptr<CipherCtx>(ref), n = c.desc?.block ?? 1;
-  let r: Uint8Array;
-  if (n === 1) r = new Uint8Array(0);
-  else if (c.encrypting) {
-    if (!c.padding) {
-      if (c.bufLen) throw sslError("javax/crypto/IllegalBlockSizeException", CIPHER, 106, "DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH");
-      r = new Uint8Array(0);
-    } else {
-      const pad = n - c.bufLen;
-      r = c.buf.slice(0, n);
-      r.fill(pad, c.bufLen);
-      transform(c, r);
+  let r: Uint8Array | null = new Uint8Array(0);
+  if (n > 1 && !c.padding && c.bufLen) throw sslError("javax/crypto/IllegalBlockSizeException", CIPHER, 106, "DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH");
+  if (n > 1 && c.padding) {
+    if (c.encrypting) transform(c, r = pkcs7Pad(c.buf.subarray(0, c.bufLen), n));
+    else {
+      if (c.bufLen || !c.finalUsed) throw sslError("javax/crypto/IllegalBlockSizeException", CIPHER, 124, "WRONG_FINAL_BLOCK_LENGTH");
+      if (!(r = pkcs7Unpad(c.last.subarray(0, n), n))) throw badDecrypt();
+      c.finalUsed = false;
     }
-  } else if (!c.padding) {
-    if (c.bufLen) throw sslError("javax/crypto/IllegalBlockSizeException", CIPHER, 106, "DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH");
-    r = new Uint8Array(0);
-  } else {
-    if (c.bufLen || !c.finalUsed) throw sslError("javax/crypto/IllegalBlockSizeException", CIPHER, 124, "WRONG_FINAL_BLOCK_LENGTH");
-    const last = c.last.subarray(0, n), pad = last[n - 1];
-    if (pad < 1 || pad > n || !last.subarray(n - pad).every((v) => v === pad)) throw badDecrypt();
-    r = last.slice(0, n - pad);
-    c.finalUsed = false;
   }
   region(out, outOff, r.length).set(r);
   c.bufLen = 0;

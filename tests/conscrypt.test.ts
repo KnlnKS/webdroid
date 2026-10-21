@@ -51,7 +51,7 @@ describe("conscrypt-natives", () => {
 
   test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
     const nc = await import("node:crypto");
-    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/crypto/ciphers.ts");
+    const { aes, ctr, cbc: cbcMode, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/crypto/ciphers.ts");
     const { DIGESTS, deferred } = await import("../src/crypto/digest.ts");
     const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/crypto/pkey.ts");
     const { modPow } = await import("../src/crypto/bigint.ts");
@@ -64,11 +64,11 @@ describe("conscrypt-natives", () => {
         const data = rnd(n), ecb = data.slice(), cbc = data.slice(), chain = iv.slice();
         for (let off = 0; off < n; off += 16) bc.encrypt(ecb, off);
         same(ecb, nc.createCipheriv(`aes-${bits}-ecb`, key, null).setAutoPadding(false).update(data));
-        bc.cbc!(cbc, chain, true);
+        cbcMode(bc, cbc, chain, true);
         same(cbc, nc.createCipheriv(`aes-${bits}-cbc`, key, iv).setAutoPadding(false).update(data));
         if (n) same(chain, cbc.subarray(n - 16));
         const back = cbc.slice();
-        bc.cbc!(back, iv.slice(), false);
+        cbcMode(bc, back, iv.slice(), false);
         same(back, data);
         for (let off = 0; off < n; off += 16) bc.decrypt(ecb, off);
         same(ecb, data);

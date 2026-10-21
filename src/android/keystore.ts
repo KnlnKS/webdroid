@@ -13,7 +13,7 @@ import { hostService } from "./binder.ts";
 import { PROCESS_UID } from "./os.ts";
 import { device } from "../shell/config.ts";
 import { DIGESTS, Hmac } from "../crypto/digest.ts";
-import { aes, ctr, AesGcm } from "../crypto/ciphers.ts";
+import { aes, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, AesGcm } from "../crypto/ciphers.ts";
 import {
   CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
   oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength,
@@ -229,21 +229,12 @@ function blockCipher(op: Op, data: Uint8Array): Uint8Array {
   }
   const bc = aes(key);
   if (mode === MODE.CTR) { const out = data.slice(); ctr(bc, op.nonce!.slice(), out, new Uint8Array(16), 16); return out; }
-  let buf = data;
-  if (enc && pad === PAD.PKCS7) { const n = 16 - (data.length % 16); buf = concat([data, new Uint8Array(n).fill(n)]); }
+  const buf = enc && pad === PAD.PKCS7 ? pkcs7Pad(data, 16) : data;
   if (buf.length % 16) throw ERR.INVALID_INPUT_LENGTH;
-  const out = buf.slice(), iv = op.nonce?.slice() ?? new Uint8Array(16);
-  for (let off = 0; off < out.length; off += 16) {
-    if (mode === MODE.ECB) { enc ? bc.encrypt(out, off) : bc.decrypt(out, off); continue; }
-    if (enc) { for (let i = 0; i < 16; i++) out[off + i] ^= iv[i]; bc.encrypt(out, off); iv.set(out.subarray(off, off + 16)); }
-    else { const next = out.slice(off, off + 16); bc.decrypt(out, off); for (let i = 0; i < 16; i++) out[off + i] ^= iv[i]; iv.set(next); }
-  }
-  if (!enc && pad === PAD.PKCS7) {
-    const n = out[out.length - 1];
-    if (!n || n > 16 || n > out.length || !out.subarray(out.length - n).every((b) => b === n)) throw ERR.INVALID_ARGUMENT;
-    return out.slice(0, out.length - n);
-  }
-  return out;
+  if (mode === MODE.ECB) ecb(bc, buf, enc); else cbc(bc, buf, op.nonce?.slice() ?? new Uint8Array(16), enc);
+  const m = enc || pad !== PAD.PKCS7 ? buf : pkcs7Unpad(buf, 16);
+  if (!m) throw ERR.INVALID_ARGUMENT;
+  return m;
 }
 function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
   const alg = num(op.e.params.map(decodeParam), TAG.ALGORITHM)!, ps = op.params, data = concat(op.input);
