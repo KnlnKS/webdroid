@@ -7,6 +7,7 @@
 // initialization waits, the fuel yield) and the Sched that answers `host.sync` and `host.block`.
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { Kind } from "../compiler/program.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
@@ -239,9 +240,13 @@ export class Sched {
     this.synchronousEntries++;
     try { return run(); } finally { this.synchronousEntries--; }
   }
+  /** `fn`, a Wasm export or a host import, as a plain call from the host into Java */
+  plain<A extends unknown[], R>(fn: (...a: A) => R): (...a: A) => R {
+    return (...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } };
+  }
   /** `fn` as the two imports a call site chooses between by whether it can wait: plain, and Suspending */
   importPair<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): [plain: (...a: A) => Promise<R> | R, wait: (...a: A) => R] {
-    return [(...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } }, this.suspending(fn)];
+    return [this.plain(fn), this.suspending(fn)];
   }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
@@ -276,7 +281,6 @@ export class Sched {
   private initWaiters = new Map<number, { go: () => void }[]>();
   private promised = new WeakMap<Function, Function>();
   private synchronousExports = new WeakMap<Function, Function>();
-  private fns = new Map<string, Function>();
 
   constructor(w: World, g: Globals, loop: HostLoop) {
     this.w = w; this.g = g; this.loop = loop;
@@ -354,7 +358,7 @@ export class Sched {
   }
   /** Host calls are plain; a strand entry unwraps the same export before WebAssembly.promising. */
   synchronousExport(raw: Function): Function {
-    const host = (...args: unknown[]) => { this.synchronousEntries++; try { return raw(...args); } finally { this.synchronousEntries--; } };
+    const host = this.plain(raw as (...a: unknown[]) => unknown);
     this.synchronousExports.set(host, raw);
     return host;
   }
@@ -382,7 +386,7 @@ export class Sched {
   sync(op: number, obj: object | null, a: number): number {
     const s = this.current();
     switch (op as Sync) {
-      case Sync.Try: return this.plain(this.monitors.tryEnter(obj!, s));
+      case Sync.Try: return this.tried(this.monitors.tryEnter(obj!, s));
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
       case Sync.Holds: return +this.monitors.holds(obj!, s);
@@ -414,7 +418,7 @@ export class Sched {
       case Sync.Ended: return +waitsEnded();
     }
   }
-  private plain(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }
+  private tried(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }
   /** the Thread.State ordinal of a Thread */
   private status(obj: object, started: boolean): number {
     const r = this.threads.get(obj);
@@ -459,35 +463,32 @@ export class Sched {
     queueMicrotask(() => void this.run(s, obj));
     return 0;
   }
-  private threadFn(name: string, build: () => Function): Function { let f = this.fns.get(name); if (!f) this.fns.set(name, f = build()); return f; }
   /** ART's thread start: `run`, then the thread's handler for an exception nothing caught, then `exit`, the peer cleared and the threads joined to it woken */
   private async run(s: Strand, obj: object): Promise<void> {
-    const w = this.w, virtual = (name: string, desc: string) => {
+    const w = this.w, call = (name: string, params: Kind[], body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]) => w.helpers.callFn(name, params, "V", body)(s, ...args);
+    const virtual = (name: string, desc: string, ...args: unknown[]) => {
       const m = w.prog.implFor(w.classNameOf(obj), name, desc)!;
-      return this.threadFn(`${m.cls}.${name}${desc}`, () => w.helpers.hostFn(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], "V", (cx, c) => {
-        c.lget(0); if (m.params.length) c.lget(1);
-        cx.callMethod(c, m);
-      }));
+      return call(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], (cx, c, arg) => { arg(0); if (m.params.length) arg(1); cx.callMethod(c, m); }, obj, ...args);
     };
-    try { await s.call(virtual("run", "()V"), obj); }
+    try { await virtual("run", "()V"); }
     catch (e) {
       const t = w.throwable(e);
       if (!t) console.error("[wasm thread]", e);
-      else try { await s.call(virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V"), obj, t); } catch { /* the handler's own failure ends the thread, as in ART */ }
+      else try { await virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V", t); } catch { /* the handler's own failure ends the thread, as in ART */ }
     } finally {
-      const exit = this.threadFn("exit", () => w.helpers.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
-      try { await s.call(exit, obj); } catch { /* a failing exit leaves the thread over all the same */ }
+      try { await call("thr:exit", ["L"], (cx, c, arg) => { arg(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }, obj); } catch { /* a failing exit leaves the thread over all the same */ }
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
       s.thread.alive = false; this.started.delete(s.thread);
-      const done = this.threadFn("finish", () => w.helpers.hostFn("thr:finish", ["L"], "V", (cx, c) => {
-        const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
-        c.lget(0); setPeer(cx, c, 0n);
-        c.lget(0).refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);
-        c.lget(l).call(cx.helper("menter"));
-        emitSync(cx, c, Sync.NotifyAll, () => c.lget(l)); c.drop();
-        c.lget(l).call(cx.helper("mexit"));
-      }));
-      try { await s.call(done, obj); } catch (e) { console.error("[wasm thread exit]", e); }
+      try {
+        await call("thr:finish", ["L"], (cx, c, arg) => {
+          const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
+          arg(0); setPeer(cx, c, 0n);
+          arg(0); c.refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);
+          c.lget(l).call(cx.helper("menter"));
+          emitSync(cx, c, Sync.NotifyAll, () => c.lget(l)); c.drop();
+          c.lget(l).call(cx.helper("mexit"));
+        }, obj);
+      } catch (e) { console.error("[wasm thread exit]", e); }
       s.end();
       this.hooks.ended(s.thread);
     }
