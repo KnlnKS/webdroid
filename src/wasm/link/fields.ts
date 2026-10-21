@@ -45,7 +45,7 @@ rt("fprep", ["L", "L", "I"], "I", (cx, c) => {
   c.lget(flags).i32(ACC.STATIC).raw(OP.i32_and).if_();
   cx.info(c, Info.EnsureSlot, () => c.lget(cid)); c.callIndirect(cx.sig([], "V"));
   c.else_();
-  c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(1); cx.nullCheck(c);
   c.lget(cid); cx.callRt(c, "classOf"); c.lget(1); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
   c.raw(OP.i32_eqz).if_().lget(cid).lget(1); cx.vtId(c); cx.callThrower(c, "recv"); c.end();
   c.end();

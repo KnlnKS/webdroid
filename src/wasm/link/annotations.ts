@@ -60,10 +60,10 @@ function make(w: World) {
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
   const box = (letter: string) => {
     const cls = PRIMS[letter].box;
-    return java("an:box:" + letter, [kindOf(letter)], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
+    return java("an:box:" + letter, [kindOf(letter)], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callNamed(c, cls, "valueOf", `(${letter})L${cls};`); });
   };
   const call = (cls: string, name: string, desc: string, params: Kind[], ret: "I" | "L" | "V") =>
-    java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
+    java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callNamed(c, cls, name, desc); });
   const enumConstant = (cls: string, name: string, desc: string) => java(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
   const construct = (cls: string, desc: string, params: Kind[]) =>
     java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => cx.construct(c, cx.prog.resolve(cls, "<init>", desc)!, () => params.forEach((_, i) => arg(i))));

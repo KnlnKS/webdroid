@@ -68,7 +68,7 @@ export class StructStrings {
   /** pushes the char array of the String in local `l` */
   charsOf(c: Code, l: number): Code { return c.lget(l).refCast(this.st).structGet(this.st, CHARS); }
   lenOf(c: Code, l: number): Code { return this.charsOf(c, l).arrayLen(); }
-  npe(c: Code, l: number): void { c.lget(l).refIsNull().if_(); this.cx.callThrower(c, "npe"); c.end(); }
+  npe(c: Code, l: number): void { c.lget(l); this.cx.nullCheck(c); }
 
   /** newChars(n) -> (ref $chars): a zeroed array of n chars, through the allocation budget */
   newChars(): number {
@@ -77,8 +77,7 @@ export class StructStrings {
   /** newCharsKnown(n) -> (ref $chars): as newChars for a length that is no larger than an array that exists, so it only counts the allocation */
   newCharsKnown(): number {
     return this.fn("newCharsKnown", [T.i32], [ref(this.chars)], (c) => {
-      const g = this.cx.global("rt", "alloc", T.i32, true);
-      c.gget(g).lget(0).i32(1).raw(OP.i32_shl).raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.cx.helper("allocSlow")).end();
+      this.cx.allocBytes(c, () => c.lget(0).i32(1).raw(OP.i32_shl));
       c.lget(0).arrayNewDefault(this.chars);
     });
   }

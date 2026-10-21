@@ -84,11 +84,10 @@ def("imtslow", (cx) => ({ params: [refNull(cx.tVT), T.i32], results: [T.i32], bo
 } }));
 // aput:<element kind>(array, index, value): the store of an array element out of line, for code that runs once (method.ts emitAput)
 for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) def("aput:" + k, (cx) => ({ params: [L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], results: [], body: (c) => {
-  const data = c.newLocal(ref(cx.tData[k]));
-  c.lget(0).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(data);
-  c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); cx.callThrower(c, "aioobe"); c.end();
-  if (k === "ref") cx.emitStoreCheck(c, 0, () => c.lget(2));
-  c.lget(data).lget(1).lget(2).arraySet(cx.tData[k]);
+  const data = c.newLocal(ref(cx.tData[k])), index = () => c.lget(1);
+  c.lget(0); cx.arrayData(c, k).lset(data);
+  cx.boundsCheck(c, index, () => c.lget(data).arrayLen());
+  cx.emitElementStore(c, k, 0, () => c.lget(data), index, () => c.lget(2));
 } }));
 // the header word: the monitor (thin lock owner and count, or an inflated monitor's index) in its low half, the identity hash in its high half
 def("hash", (cx) => ({ params: [L], results: [T.i32], body: (c) => {
@@ -123,11 +122,11 @@ for (const enter of [true, false]) def(enter ? "menter" : "mexit", (cx) => ({ pa
 } }));
 // newLen(len, shift): the length itself once it is a legal array length and the allocation fits the budget
 def("newLen", (cx) => ({ params: [T.i32, T.i32], results: [T.i32], body: (c) => {
-  const bytes = c.newLocal(T.i64), g = cx.global("rt", "alloc", T.i32, true);
+  const bytes = c.newLocal(T.i64);
   c.lget(0).i32(0).raw(OP.i32_lt_s).if_().lget(0); cx.callThrower(c, "nase"); c.end();
   c.lget(0).raw(OP.i64_extend_i32_u).lget(1).raw(OP.i64_extend_i32_u, OP.i64_shl).lset(bytes);
   c.lget(bytes).i64(BigInt(HEAP_LIMIT)).raw(OP.i64_gt_u).if_().lget(bytes); cx.callThrower(c, "oom"); c.end();
-  c.gget(g).lget(bytes).raw(OP.i32_wrap_i64, OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(cx.helper("allocSlow")).end();
+  cx.allocBytes(c, () => c.lget(bytes).raw(OP.i32_wrap_i64));
   c.lget(0);
 } }));
 // allocSlow(): the allocation window is used up; the host decides whether the heap really is full. Garbage that only a finalizer frees (a native handle

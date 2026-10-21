@@ -46,11 +46,9 @@ const UNARY_CODE: Around[] = [
   trunc(2), trunc(6), after(OP.f32_demote_f64),
   after(OP.i32_extend8_s), (c, x) => { x(); c.i32(0xffff).raw(OP.i32_and); }, after(OP.i32_extend16_s),
 ];
-/** the element storage, sign and value kind of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type */
-const ELEMS: { k: ElemKind; sign: "s" | "u" | ""; kind: Kind }[] = [
-  { k: "i32", sign: "", kind: "I" }, { k: "i64", sign: "", kind: "J" }, { k: "ref", sign: "", kind: "L" }, { k: "i8", sign: "u", kind: "I" },
-  { k: "i8", sign: "s", kind: "I" }, { k: "i16", sign: "u", kind: "I" }, { k: "i16", sign: "s", kind: "I" },
-];
+/** the element type of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type: its storage, the letter of its
+ *  descriptor (an int's stands for a float's, a long's for a double's) and its value kind */
+const ELEMS = [..."IJLZBCS"].map((letter) => ({ k: elemKindOf("[" + letter), letter, kind: kindOf(letter) }));
 /** the comparison of if-lt, if-ge, if-gt and if-le, and of their -z forms */
 const COMPARE = [OP.i32_lt_s, OP.i32_ge_s, OP.i32_gt_s, OP.i32_le_s];
 
@@ -409,9 +407,8 @@ export class MC {
   linkFail(f: LinkFailure) { this.cx.linkError(this.code, f); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
-    const c = this.code, cx = this.cx;
-    if (this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); return; }
-    this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
+    if (!this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); this.cx.nullCheck(this.code); }
+    this.get("L", reg);
   }
   /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
@@ -553,17 +550,11 @@ export class MC {
   }
   /** the local of each element kind that holds the data array of the array being accessed */
   private dloc(k: ElemKind): number { return this.scratchLocal(k, ref(this.cx.tData[k])); }
-  idxCheck(k: ElemKind, idxReg: number) {
-    const c = this.code, d = this.dloc(k);
-    this.get("I", idxReg); c.lget(d).arrayLen().raw(OP.i32_ge_u).if_();
-    this.get("I", idxReg); c.lget(d).arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
-  }
   emitAget(ins: Ins) {
-    const c = this.code, cx = this.cx, { k, sign, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k);
+    const c = this.code, cx = this.cx, { k, letter, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k), index = () => this.get("I", ins.c);
     this.nonNull(ins.b); cx.arrayData(c, k).lset(d);
-    this.idxCheck(k, ins.c);
-    c.lget(d); this.get("I", ins.c);
-    sign === "s" ? c.arrayGetS(cx.tData[k]) : sign === "u" ? c.arrayGetU(cx.tData[k]) : c.arrayGet(cx.tData[k]);
+    cx.boundsCheck(c, index, () => c.lget(d).arrayLen());
+    c.lget(d); index(); cx.emitElementLoad(c, letter);
     this.set(kind);
   }
   emitAput(ins: Ins) {
@@ -574,13 +565,11 @@ export class MC {
       c.call(cx.helper("aput:" + k));
       return;
     }
-    const d = this.dloc(k);
+    const d = this.dloc(k), index = () => this.get("I", ins.c);
     this.nonNull(ins.b); c.lset(this.tmpL);
     c.lget(this.tmpL); cx.arrayData(c, k).lset(d);
-    this.idxCheck(k, ins.c);
-    if (k === "ref") cx.emitStoreCheck(c, this.tmpL, () => this.get("L", ins.a));
-    c.lget(d); this.get("I", ins.c); this.get(kind, ins.a);
-    c.arraySet(cx.tData[k]);
+    cx.boundsCheck(c, index, () => c.lget(d).arrayLen());
+    cx.emitElementStore(c, k, this.tmpL, () => c.lget(d), index, () => this.get(kind, ins.a));
   }
   fieldOf(idx: number, isStatic: boolean) { return resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls); }
   /** the field an iget or iput names; String's representation has no fields to translate an access of */

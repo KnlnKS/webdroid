@@ -177,13 +177,12 @@ const slotOf = (cx: Compiler, c: Code, kind: UInfo, k: Kind): number => {
 const onArray = (c: Code) => c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_ge_s);
 
 function emitGet(cx: Compiler, c: Code, t: Ty): void {
-  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr, tData } = cx;
-  const signed = t === "B" || t === "S";
+  const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr } = cx;
   onArray(c).if_(cx.vtOf(k));
   const idx = index(c, t);
   c.lget(OBJ).refTest(tArr[ek]).if_(cx.vtOf(k));
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lget(idx);
-  if (ek === "i8" || ek === "i16") signed ? c.arrayGetS(tData[ek]) : c.arrayGetU(tData[ek]); else c.arrayGet(tData[ek]);
+  cx.emitElementLoad(c, t);
   c.else_();
   // an access of another width than the array's elements: the bytes of the elements, little-endian, as a ByteBuffer view reads them
   if (t === "L") { cx.gap(c, "Unsafe.getReference on this array"); c.unreachable(); }

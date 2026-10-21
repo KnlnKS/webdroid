@@ -106,7 +106,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
   // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
   if (!ctor && !m.isStatic) {
-    c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    c.lget(0); cx.nullCheck(c);
     if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {

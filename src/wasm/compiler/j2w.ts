@@ -480,7 +480,7 @@ export class Compiler implements Base {
     const local = c.newLocal(T.anyref);
     this.emitEnsure(c, cls); this.emitNew(c, cls); c.ltee(local);
     if (message !== undefined) this.str.literal(c, message);
-    this.callMethod(c, this.prog.resolve(cls, "<init>", message === undefined ? "()V" : "(Ljava/lang/String;)V")!); c.lget(local).throw_(this.tag);
+    this.callNamed(c, cls, "<init>", message === undefined ? "()V" : "(Ljava/lang/String;)V"); c.lget(local).throw_(this.tag);
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {
@@ -510,19 +510,42 @@ export class Compiler implements Base {
     obj(); value(); c.structSet(this.structFor(decl), this.fieldIndex(decl, f));
     if (this.w.claims(f)) { obj(); c.externConvertAny(); value(); c.call(this.imp.claim); }
   }
+  /** throws NullPointerException when the reference on the stack, which it takes, is null */
+  nullCheck(c: Code): void { c.refIsNull().if_(); this.callThrower(c, "npe"); c.end(); }
+  /** throws ArrayIndexOutOfBoundsException unless the index `index` pushes is below the length `length` pushes */
+  boundsCheck(c: Code, index: () => void, length: () => void): void {
+    index(); length(); c.raw(OP.i32_ge_u).if_(); index(); length(); this.callThrower(c, "aioobe"); c.end();
+  }
+  /** replaces an element array and an index on the stack with the element of an array of `letter`'s type (a descriptor's first letter), extended as Java's
+   *  byte, short, char and boolean are */
+  emitElementLoad(c: Code, letter: string): void {
+    const d = this.tData[elemKindOf("[" + letter)];
+    if (letter === "B" || letter === "S") c.arrayGetS(d); else if (letter === "Z" || letter === "C") c.arrayGetU(d); else c.arrayGet(d);
+  }
+  /** stores what `value` pushes at the index `index` pushes into the element array `data` pushes, of the array in local `arr`; a reference passes the store
+   *  check first */
+  emitElementStore(c: Code, ek: ElemKind, arr: number, data: () => void, index: () => void, value: () => void): void {
+    if (ek === "ref") this.emitStoreCheck(c, arr, value);
+    data(); index(); value(); c.arraySet(this.tData[ek]);
+  }
+  /** call the method of `cls` that `name` and `desc` resolve to */
+  callNamed(c: Code, cls: string, name: string, desc: string): void {
+    const m = this.prog.resolve(cls, name, desc);
+    if (!m) throw new Error(`${cls}.${name}${desc} does not resolve`);
+    this.callMethod(c, m);
+  }
 
   // ---------- allocation
-  private allocBytes(c: Code, add: () => void): void {
+  /** counts the bytes `add` pushes against the allocation window, and calls allocSlow once it is used up */
+  allocBytes(c: Code, add: () => void): void {
     const g = this.global("rt", "alloc", T.i32, true);
     c.gget(g); add(); c.raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
   }
   /** push the Class of `name` */
   constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
-  /** call the method of `cls` that `name` and `desc` resolve to */
-  callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
   /** the element array of the array object on the stack */
   arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
-  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+  /** the class id of the (anyref) object on the stack */
   vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
   /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
   emitStoreCheck(c: Code, arr: number, value: () => void): void {

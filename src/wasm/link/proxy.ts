@@ -62,7 +62,7 @@ export function defineProxy(w: World, definition: ProxyDefinition, loader: Loade
     jc.add(m); bodies.set(m, body);
   };
   add("<init>", `(L${HANDLER};)V`, ACC.PUBLIC, (cx, _m, c) => {
-    c.lget(0).lget(1); cx.callMethod(c, cx.prog.resolve(PROXY, "<init>", `(L${HANDLER};)V`)!);
+    c.lget(0).lget(1); cx.callNamed(c, PROXY, "<init>", `(L${HANDLER};)V`);
   });
   for (const { name, desc, method, exceptions } of definition.methods) add(name, desc, ACC.PUBLIC | ACC.FINAL, (cx, m, c) => proxyBody(cx, c, m, method, exceptions));
   w.addClass(jc, bodies, loader, definition);
@@ -75,13 +75,13 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
     cx.emitNewArray(c, OBJECT_ARRAY, () => c.i32(m.params.length)); c.lset(args);
     m.params.forEach((p, i) => {
       c.lget(args).refCast(wrapper).structGet(wrapper, 2).i32(i).lget(i + 1);
-      if (BOX[p]) { const [cls] = BOX[p]; cx.emitEnsure(c, cls); cx.callMethod(c, prog.resolve(cls, "valueOf", `(${p})L${cls};`)!); }
+      if (BOX[p]) { const [cls] = BOX[p]; cx.emitEnsure(c, cls); cx.callNamed(c, cls, "valueOf", `(${p})L${cls};`); }
       c.arraySet(cx.tData.ref);
     });
   } else c.anyNull().lset(args);
   c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
   c.lget(0).i32(method).tableGet(NM_TABLE).anyConvertExtern().lget(args);
-  cx.emitEnsure(c, PROXY); cx.callMethod(c, prog.resolve(PROXY, "invoke", `(L${PROXY};Ljava/lang/reflect/Method;${OBJECT_ARRAY})Ljava/lang/Object;`)!);
+  cx.emitEnsure(c, PROXY); cx.callNamed(c, PROXY, "invoke", `(L${PROXY};Ljava/lang/reflect/Method;${OBJECT_ARRAY})Ljava/lang/Object;`);
   c.br(2).end().unreachable().end();
   // an exception the handler raised: unchecked ones and those the method declares pass, others are wrapped
   const UTE = "java/lang/reflect/UndeclaredThrowableException", rethrow = () => { c.lget(e).throw_(cx.tag); };
@@ -90,7 +90,7 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
   const list = c.newLocal(refNull(cx.tData.ref)), i = c.newLocal(T.i32);
   c.i32(declared).tableGet(NM_TABLE).anyConvertExtern().refCast(wrapper).structGet(wrapper, 2).lset(list);
   c.block().loop().lget(i).lget(list).refAsNonNull().arrayLen().raw(OP.i32_ge_s).brIf(1);
-  c.lget(list).refAsNonNull().lget(i).arrayGet(cx.tData.ref); c.lget(e); cx.callMethod(c, prog.resolve(CLASS, "isInstance", "(Ljava/lang/Object;)Z")!);
+  c.lget(list).refAsNonNull().lget(i).arrayGet(cx.tData.ref); c.lget(e); cx.callNamed(c, CLASS, "isInstance", "(Ljava/lang/Object;)Z");
   c.if_(); rethrow(); c.end();
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
   cx.construct(c, prog.resolve(UTE, "<init>", "(Ljava/lang/Throwable;)V")!, () => c.lget(e)); c.throw_(cx.tag).end();
@@ -99,7 +99,7 @@ function proxyBody(cx: Compiler, c: Code, m: MethodInfo, method: number, declare
   if (m.ret === "V") return;
   if (BOX[m.ret]) {
     const [cls, unbox, desc] = BOX[m.ret];
-    c.lget(result).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-    c.lget(result); cx.emitCast(c, cls); cx.callMethod(c, prog.resolve(cls, unbox, desc)!);
+    c.lget(result); cx.nullCheck(c);
+    c.lget(result); cx.emitCast(c, cls); cx.callNamed(c, cls, unbox, desc);
   } else { c.lget(result); cx.emitCast(c, descToName(m.ret)); }
 }

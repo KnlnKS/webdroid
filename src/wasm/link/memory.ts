@@ -55,7 +55,7 @@ for (const [d, { title }] of Object.entries(PRIMS)) if (d !== "Z") for (const pe
   memoryIntrinsics.set(MEMORY + sig, (cx, m, c) => {
     const ARR = 1, INDEX = 2, COUNT = 3, SWAP = 4, len = c.newLocal(T.i32), tArr = cx.tArr[ek];
     guest(c, 0).if_();
-    c.lget(ARR).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    c.lget(ARR); cx.nullCheck(c);
     c.lget(ARR).refCast(tArr).structGet(tArr, 2).arrayLen().lset(len);
     // index < 0 || count < 0 || index > len - count
     c.lget(INDEX).i32(0).raw(OP.i32_lt_s).lget(COUNT).i32(0).raw(OP.i32_lt_s).raw(OP.i32_or).lget(INDEX).lget(len).lget(COUNT).raw(OP.i32_sub).raw(OP.i32_gt_s).raw(OP.i32_or)

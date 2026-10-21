@@ -21,7 +21,7 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(owner, cx.prog.resolveField(owner, name, desc)!));
     };
     const receiver = c.newLocal(T.anyref), bytes = c.newLocal(T.anyref), index = c.newLocal(T.i32), offset = c.newLocal(T.i32), length = c.newLocal(T.i32), address = c.newLocal(T.i64);
-    value(1); c.ltee(receiver).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    value(1); c.ltee(receiver); cx.nullCheck(c);
     value(2); unbox(cx, c, "I"); c.lset(index);
     if (array) { c.lget(receiver).ltee(bytes).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2).refAsNonNull().arrayLen(); c.lset(length); }
     else {
