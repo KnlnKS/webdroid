@@ -1,5 +1,5 @@
 // What the dev server (server.ts) and the deployed Worker (worker/index.ts) both answer; each host lends its
-// bridge sessions, its resolver and its upstream fetch.
+// bridge sessions, its resolver, its renderer origin and its upstream fetch.
 import { WEB_FRAME, WEB_PROXY_WORKER } from "./webinject.ts";
 import { forwardDnsMessage, proxyRequest, type ProxyOptions } from "./proxy.ts";
 
@@ -10,8 +10,11 @@ const DNS_NAME = /^[A-Za-z0-9.-]{1,253}$/;
 export interface ServeHost {
   /** bridge `id`'s session answering a renderer's /webview-call */
   bridge(request: Request, id: string): Response | Promise<Response>;
-  /** `name`'s IPv4 addresses as `{addresses}`, or 404 (ENOTFOUND, ENODATA) or 502 */
-  dnsLookup(name: string): Promise<Response>;
+  /** whether `name` has an address, as getaddrinfo finds one; null when the resolver cannot say */
+  nameExists(name: string): Promise<boolean | null>;
+  /** the WebView renderer origin, a "*" label standing for each partition (webrenderer.ts), for a
+   *  shell page at `url`; null when there is none */
+  webviewOrigin(url: URL): string | null;
   proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
 type Route = (request: Request) => Response | Promise<Response>;
@@ -24,6 +27,9 @@ export function ownPage(url: URL, header: (name: string) => string | null | unde
   return origin ? origin === url.origin : header("sec-fetch-site") === "same-origin";
 }
 const forbidden = () => new Response("forbidden", { status: 403 });
+/** what a renderer origin serves, which functions/[[path]].ts deploys there: its documents, its proxy worker, the bridge's calls and the proxy */
+const RENDERER_PATHS = new Set(["/webview", "/webview-worker.js", "/webview-call", "/proxy"]);
+export const rendererRoute = (url: URL): boolean => RENDERER_PATHS.has(url.pathname) || BRIDGE_ID.test(url.searchParams.get("__wd_bridge") ?? "");
 const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
 const bridgeCall = async (request: Request, host: ServeHost): Promise<Response> => {
   const id = new URL(request.url).searchParams.get("id") ?? "";
@@ -45,9 +51,18 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     // Whether a name resolves: the guest's resolvers answer a synthetic address for every name (the relay
     // dials by name), so this is how a name that does not exist fails as it would on a device, instead of
     // every connection to it being refused.
-    case "/dns": return request => {
+    case "/dns": return async request => {
       const name = new URL(request.url).searchParams.get("host") ?? "";
-      return DNS_NAME.test(name) ? host.dnsLookup(name) : new Response("bad name", { status: 400 });
+      if (!DNS_NAME.test(name)) return new Response("bad name", { status: 400 });
+      const exists = await host.nameExists(name);
+      return new Response(null, { status: exists ? 200 : exists === false ? 404 : 502 });
+    };
+    // a renderer on this origin would share the app's window and storage
+    case "/webview-origin": return request => {
+      const url = new URL(request.url), template = URL.parse(host.webviewOrigin(url) ?? "")?.origin;
+      const origin = template && URL.parse(template.replace("*", "x"))?.origin;
+      return origin && origin !== "null" && origin !== url.origin ? Response.json(template)
+        : new Response("Configure the WebView renderer origin on a separate site", { status: 503 });
     };
   }
 }
@@ -57,18 +72,6 @@ export function bridgeSocket(url: URL, header: (name: string) => string | null |
   const id = url.searchParams.get("id") ?? "";
   return BRIDGE_ID.test(id) && ownPage(url, header) ? id : null;
 }
-
-export type TcpTarget = { host: string; port: number; alpn: string[]; secure: boolean };
-/** the target a /tcp upgrade names, or why it is refused */
-export function tcpTarget(url: URL): TcpTarget | string {
-  const host = url.searchParams.get("host") ?? "", port = Number(url.searchParams.get("port")), alpn = url.searchParams.getAll("alpn");
-  if (!host || host.length > 253 || !Number.isInteger(port) || port < 1 || port > 65535) return "bad target";
-  if (alpn.length > 32 || alpn.some((p) => !p.length || new TextEncoder().encode(p).length > 255)) return "bad ALPN";
-  return { host, port, alpn, secure: url.searchParams.get("tls") === "1" };
-}
-/** the text frame that opens a relayed connection (relay.ts's TcpSocket) */
-export const tcpReady = (localFamily: string | undefined, localAddress: string | undefined, localPort: number | undefined, alpn: string): string =>
-  JSON.stringify({ type: "ready", localFamily, localAddress, localPort, alpn });
 
 /** the headers by which the browser inflates a microg .gz download, or null to serve the file as stored */
 export function gzipHeaders(url: URL): Record<string, string> | null {

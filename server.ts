@@ -19,7 +19,8 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, tcpTarget, type ServeHost } from "./src/shell/serve-routes.ts";
+import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
+import { tcpTarget } from "./src/shell/tcpwire.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
@@ -79,12 +80,6 @@ type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Re
 const ROUTES: [RegExp, Route][] = [
   // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
   [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache" })],
-  [/^\/webview-origin$/, (_, url) => {
-    if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
-    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
-    // a browser resolves every *.localhost name to this loopback server, each its own site
-    return Response.json(`${url.protocol}//*.localhost:${url.port}`);
-  }],
   ...Object.values(WORKER_SCRIPTS).map(({ url, entry }): [RegExp, Route] => [new RegExp(`^${url.replaceAll(".", "\\.")}$`), () => workerScript(entry)]),
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
   // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
@@ -117,9 +112,10 @@ const ROUTES: [RegExp, Route][] = [
 const webRelay = new WebRelay();
 const host: ServeHost = {
   bridge: (request, id) => webRelay.call(request, id),
-  dnsLookup: (name) => dns.lookup(name, { all: true }).then(
-    (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
-    (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 })),
+  nameExists: (name) => dns.lookup(name, { all: true }).then(() => true, (e: { code?: string }) => e.code === "ENOTFOUND" || e.code === "ENODATA" ? false : null),
+  // a browser resolves every *.localhost name to this loopback server, each its own site
+  webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
+    ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
   proxy: { target: proxyTarget, fetchEncoded },
 };
 export function devServer(): Plugin {
