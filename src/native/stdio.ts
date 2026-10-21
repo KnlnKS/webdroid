@@ -11,7 +11,7 @@ import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, in
 import { format, scan, scanSink } from "./printf.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { filePaths } from "../shell/file-path.ts";
-import { FS_SYSCALLS, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
+import { FS_SYSCALLS, fallocate, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
   modifiedTime, makePipe, pread, pwrite, listProcess } from "./fs.ts";
 import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
@@ -245,6 +245,9 @@ export function stdioInit(): void {
     mkdir: (_c, a) => mkdirProcess(a.str()),
     rmdir: (_c, a) => removeProcess(a.str(), true),
     ftruncate64: (_c, a) => javaTruncateFd(a.i(), Number(a.l())),
+    // a 32-bit off_t, where fallocate64's is the kernel's
+    fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = a.i(); return fallocate(fd, mode, off, a.i()); },
+    fallocate64: FS_SYSCALLS.fallocate,
     dup2: (_c, a) => javaDup2Fd(a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),

@@ -4,13 +4,15 @@
 // stack are its Cpu's; the frame a handler runs on is sigframe.ts's; what a fatal signal leaves
 // behind is crash.ts's.
 
-import { mem } from "./mem.ts";
+import { mem, anchor } from "./mem.ts";
 import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
-import { fail, wrapped } from "./kernel.ts";
+import { fail, readTimeout, wrapped } from "./kernel.ts";
 import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu.ts";
 import { tidOf } from "./pthread.ts";
 import { dieOfSignal } from "./crash.ts";
+import { writeSiginfo } from "./sigframe.ts";
+import { waitUntil } from "./poll.ts";
 
 export const SIGQUIT = 3, SIGILL = 4, SIGTRAP = 5, SIGABRT = 6, SIGBUS = 7, SIGFPE = 8, SIGKILL = 9, SIGSEGV = 11, SIGPIPE = 13;
 export const SIGSTKFLT = 16, SIGCHLD = 17, SIGCONT = 18, SIGSTOP = 19, SIGTSTP = 20, SIGTTIN = 21, SIGTTOU = 22, SIGURG = 23;
@@ -109,6 +111,28 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
   return 0;
 }
 
+/** sigtimedwait: the first signal of `set` pending or queued within `ms` (-1: forever), its siginfo
+ *  written to `info`; -EAGAIN when none comes */
+function sigtimedwait(cpu: Cpu, set: bigint, info: () => number, ms: number): number | Promise<number> {
+  const take = (): number => {
+    const taken = cpu.takePending((sig) => blocked(set, sig));
+    if (!taken) return 0;
+    const at = info();
+    if (at) writeSiginfo(at, taken.sig, taken.info);
+    return taken.sig;
+  };
+  let sig = take();
+  if (sig || ms === 0) return sig || -E.AGAIN;
+  // taken as it is queued, before the Cpu could deliver it to a handler
+  const subscribe = (wake: () => void) => { cpu.sigQueued = () => { if ((sig = take())) wake(); }; return () => { cpu.sigQueued = null; }; };
+  return waitUntil(subscribe, ms, undefined, true).then(() => sig || -E.AGAIN);
+}
+/** tgkill: a thread of this process by its kernel tid, ESRCH once it has run to its end */
+function signalTid(cpu: Cpu, pid: number, tid: number, sig: number): number {
+  const t = cpuByOsTid(tid);
+  return pid !== cpu.pid || !t || t.pid !== pid || t.finished ? -E.SRCH : signalThread(t, sig);
+}
+
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
 
@@ -118,8 +142,14 @@ export const killLog: string[] = [];
 export const SIGNAL_SYSCALLS: Record<string, HostFn> = {
   // the raw syscall's struct sigaction is the kernel's (handler, flags, restorer, mask), not bionic's
   rt_sigaction: (_c, a) => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true }),
-  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return -E.SRCH; return signalThread(t, sig); },
+  tgkill: (cpu, a) => signalTid(cpu, a.i(), a.i(), a.i()),
+  tkill: (cpu, a) => signalTid(cpu, cpu.pid, a.i(), a.i()),
+  // the info is not carried
+  rt_tgsigqueueinfo: (cpu, a) => signalTid(cpu, a.i(), a.i(), a.i()),
   kill: (cpu, a) => { a.i(); return signalThread(cpu, a.i()); },
+  // the kernel's sigset_t is 8 bytes on both ABIs
+  rt_sigprocmask: (cpu, a) => { const how = a.i(), set = a.p(), old = a.p(), e = a.u() === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? -e : 0; },
+  rt_sigtimedwait: (cpu, a) => { const set = mem.ld64(a.p()), info = anchor(a.p()); return sigtimedwait(cpu, set, info, readTimeout(a.p())); },
   sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(-E.INTR); }; }); },
   sigaltstack,
 };

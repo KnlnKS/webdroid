@@ -5,6 +5,10 @@ import { defineHost, lookupHost } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { kernelInit, rawSyscall } from "./syscall.ts";
 import { mem } from "./mem.ts";
+import { E } from "./abi.ts";
+import { fdFile, javaOpenFd } from "./fs.ts";
+import { javaCloseFd } from "./fd.ts";
+import { vfs } from "../shell/vfs.ts";
 import { kernel } from "./calls.testkit.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { device } from "../shell/config.ts";
@@ -81,13 +85,21 @@ test("ARM EABI memory fill takes the byte count before the value", async () => {
   } finally { mem.free(data); cpu.dispose(); }
 });
 
-test("raw ARM faccessat accepts its three kernel arguments", async () => {
+test("raw ARM32 calls take the kernel's arguments, a svc's fifth on in r4", async () => {
   setA64(false); kernelInit(); libcInit();
-  const cpu = new Cpu(new JThread(), "faccessat-test"), path = mem.malloc(16);
+  const cpu = new Cpu(new JThread(), "arm-syscall-test"), path = mem.malloc(16), code = mem.reserve(4096, 4096);
+  // push {r4, r5, r7, lr}; mov r4, #0x2000; mov r5, #0; movw r7, #352 (fallocate); svc #0; pop {r4, r5, r7, pc}
+  mem.u32.set([0xe92d40b0, 0xe3a04a02, 0xe3a05000, 0xe3007160, 0xef000000, 0xe8bd80b0], code >>> 2);
   mem.u8.set(new TextEncoder().encode("/dev/urandom\0"), path);
+  vfs.write("/fallocate-test", new Uint8Array(0));
+  const fd = javaOpenFd("/fallocate-test", 2);
   try {
     expect(await cpu.call(lookupHost("syscall", "libc.so")!, [334, -100, path, 0, 0x4000])).toBe(0);
-  } finally { mem.free(path); cpu.dispose(); }
+    expect(await cpu.call(code, [fd, 0, 0x1000, 0])).toBe(0);
+    expect(fdFile(fd)!.len).toBe(0x3000);
+    expect(await cpu.call(code, [fd, 1, 0, 0])).toBe(-E.NOTSUP);
+    expect(await cpu.call(syscall, [124])).toBe(-E.NOSYS);                                // adjtimex
+  } finally { javaCloseFd(fd); mem.free(path); cpu.dispose(); }
 });
 
 test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", async () => {

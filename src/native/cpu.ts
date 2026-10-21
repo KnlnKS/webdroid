@@ -18,6 +18,7 @@ import { never, processExited } from "../process-exit.ts";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals.ts";
 import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe.ts";
 import { dieOfSignal } from "./crash.ts";
+import { setKernelLayout } from "./kernel.ts";
 import { backtrace } from "./dl.ts";
 
 const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
@@ -93,6 +94,7 @@ export function setA64(on: boolean): void {
   // the pointer width is a property of the process, not of a thread: set it here, because the
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
+  setKernelLayout(on);
   for (const c of cpus) c.setAbi(on);
   core.invalidate_all();
 }
@@ -163,7 +165,6 @@ export class Cpu {
     this.base = core.cpu_alloc(this.tid, this.osTid, this.pid, A64 ? 1 : 0) >>> 0;
     if (!this.base) throw new NativeFault("[native] out of memory for thread state");
     this.views();
-    this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
     // the TLS block, errno, the pthread key table the core serves lookups from, then the
     // pthread_internal_t pthread_self() names (bionic's layout: tid at +0x10, the stack in
@@ -374,7 +375,9 @@ export class Cpu {
   exc: unknown = null;
   ret1 = 0;           // r1 (ARM32) or the high half of x0 at the return of the last call() (64-bit results)
   private retFp0 = 0; private retFp1 = 0;
-  args: ArgReader & { reset(cpu: Cpu): void };
+  args!: ArgReader & { reset(cpu: Cpu): void };
+  /** a system call's arguments, in registers alone */
+  private svcArgs!: ArgReader & { reset(cpu: Cpu): void };
   name: string;
   depth = 0;
   /** guest-visible thread exit (pthread_exit / thread function returned) */
@@ -703,29 +706,22 @@ export class Cpu {
       }
     }
   }
-  /** the syscalls the host owns, left by the core with their number: the signal mask here, the
-   *  rest through the kernel's table (syscall.ts), which libc's syscall(2) reaches too */
+  /** the syscalls the host owns, left by the core with their number, through the kernel's table
+   *  (syscall.ts), which libc's syscall(2) reaches too */
   private syscall(nr: number): void {
     const w = this.w;
     if (hostTrace.on) hostTrace.ring.push(`${this.name}:svc ${nr}(${[0, 1, 2, 3, 4, 5].map((i) => (BigInt(w[2 * i + 1] >>> 0) << 32n | BigInt(w[2 * i] >>> 0)).toString(16)).join(",")}) lr=${symbolizeHook(this.lr >>> 0)}`);
-    if (nr === (this.a64 ? 135 : 175)) {                                                  // rt_sigprocmask
-      const set = this.a64 ? this.xp(1) : w[2] >>> 0, old = this.a64 ? this.xp(2) : w[4] >>> 0;
-      const result = w[6] === 8 ? this.sigmask(w[0], set, old, 8) : 22;
-      w[0] = -result; w[1] = result ? -1 : 0;
-    } else {
-      if (!rawSyscall) this.fault(`syscall ${nr}`);
-      const a = this.args;
-      a.reset(this);
-      let ret: HostRet | Promise<HostRet>;
-      try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
-      // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
-      if (ret instanceof Promise) {
-        if (nr === 124) this.deferSignalsUntilResume(); // sched_yield completes before a pending signal is delivered
-        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
-        return;
-      }
-      this.syscallReturn(ret);
+    if (!rawSyscall) this.fault(`syscall ${nr}`);
+    const a = this.svcArgs;
+    a.reset(this);
+    let ret: HostRet | Promise<HostRet>;
+    try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
+    // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
+    if (ret instanceof Promise) {
+      this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
+      return;
     }
+    this.syscallReturn(ret);
   }
   /** a system call's access through a bad user pointer fails as copy_from_user does */
   private copyFault(e: unknown): HostRet {
@@ -734,9 +730,10 @@ export class Cpu {
   }
   /** the kernel's convention: the result in x0/r0, a failure as -errno */
   private syscallReturn(ret: HostRet): void {
-    const v = typeof ret === "number" || typeof ret === "bigint" ? ret : 0;
-    if (typeof v === "bigint") { this.w[0] = Number(v & 0xffffffffn) | 0; this.w[1] = Number((v >> 32n) & 0xffffffffn) | 0; }
-    else { this.w[0] = v | 0; this.w[1] = v < 0 ? -1 : 0; }
+    const w = this.w;
+    if (typeof ret === "number") { w[0] = ret; w[1] = ret < 0 ? -1 : 0; }
+    else if (typeof ret === "bigint") { w[0] = Number(ret & 0xffffffffn); w[1] = Number((ret >> 32n) & 0xffffffffn); }
+    else w[0] = w[1] = 0;
   }
   private trap(e: unknown): NativeFault {
     if (e instanceof NativeFault) {
@@ -767,7 +764,9 @@ export class Cpu {
     this.a64 = on;
     this.u32[OFF_A64 >> 2] = on ? 1 : 0;
     this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
-    if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
+    if (this.args && on === this.args instanceof Args64) return;
+    this.args = on ? new Args64(this) : new Args(this);
+    this.svcArgs = on ? this.args : new Args(this, 7);
   }
   /** register `i` in hex, a 64-bit one with a set high half as hi_lo */
   regHex(i: number): string {

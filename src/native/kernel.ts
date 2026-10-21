@@ -17,7 +17,7 @@ const KERNEL64: typeof KERNEL32 = {
   STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
 };
-/** the process ABI's kernel structs, chosen by kernelInit */
+/** the process ABI's kernel structs (setA64) */
 export let KLAYOUT = KERNEL32;
 export function setKernelLayout(wide: boolean): void { KLAYOUT = wide ? KERNEL64 : KERNEL32; }
 
@@ -43,6 +43,8 @@ export const asWrappers = (calls: Record<string, HostFn>): Record<string, HostFn
 export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? wallMillis() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return ldLong(p + KLAYOUT.TS_SEC) * 1000 + ldLong(p + KLAYOUT.TS_NSEC) / unit; }
+/** a relative timeout's timespec in milliseconds, -1 (forever) for none */
+export const readTimeout = (p: number): number => (p ? readTs(p) : -1);
 export function writeTs(p: number, ms: number, unit = 1e6): void {
   const seconds = Math.floor(ms / 1000);
   stLong(p + KLAYOUT.TS_SEC, seconds);

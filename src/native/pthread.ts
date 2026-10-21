@@ -274,7 +274,15 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
 export const PTHREAD_SYSCALLS: Record<string, HostFn> = {
   clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
   nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); return sleepMs(readTs(req)); },
-  sched_yield: () => yieldToLoop().then(() => 0),
+  // it completes before a pending signal is delivered
+  sched_yield: (cpu) => { cpu.deferSignalsUntilResume(); return yieldToLoop().then(() => 0); },
+  futex: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
+  clone: (cpu, a) => { const flags = a.u(), stack = a.va(), ptid = a.p(), tls = a.va(), ctid = a.p(); return cloneThread(cpu, flags, stack, ptid, tls, ctid); },
+  set_tid_address: (cpu, a) => { cpu.clearChildTid = a.va(); return cpu.osTid; },
+  // no process-shared robust mutexes to recover
+  set_robust_list: () => 0,
+  // this thread's end
+  exit: (cpu) => { cpu.finished = true; return Promise.resolve(0); },
 };
 
 export function pthreadInit(): void {

@@ -13,7 +13,7 @@ import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type Attribute
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
-import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
+import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaAllocateFd, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
   javaDupFd, javaFcntlFd, javaIoctlIntFd, javaLseekFd, javaSyncFd, javaTruncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
 import { fifoOf, holdFifo, javaPipeFds, openFifo } from "./pipe.ts";
 import { closedWrite, hookInotify } from "./inotify.ts";
@@ -252,6 +252,8 @@ function dirents(f: OpenFile, entries: string[], buf: number, size: number): num
   }
   return at || f.pos >= entries.length ? at : -E.INVAL;
 }
+/** fallocate(2): mode 0 allocates; punching holes and collapsing ranges are not supported */
+export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : javaAllocateFd(fd, off, length);
 export function makePipe(out: number, flags: number): number {
   const [read, write] = javaPipeFds(flags);
   mem.st32(out, read); mem.st32(out + 4, write);
@@ -360,6 +362,10 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   mkdirat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mkdirProcess(path) : path; },
   mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
   ftruncate: (_c, a) => javaTruncateFd(a.i(), offArg(a)),
+  fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
+  // the raw call has no flags, libc's (stdio.ts) has
+  faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),
+  getdents64: (_c, a) => getdents64(a.i(), a.p(), a.u()),
   truncate: (_c, a) => {
     const path = a.str(), n = offArg(a);
     return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r)));

@@ -393,11 +393,11 @@ test("ARM signal entry clears Thumb IT state and restores it on return", async (
   }
 });
 
-test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signals", async () => {
-  setA64(true); kernelInit();
+for (const a64 of [true, false]) test(`${a64 ? "ARM64" : "ARM32"} sigtimedwait fills siginfo for pending and subsequently queued signals`, async () => {
+  setA64(a64); kernelInit();
   const cpu = new Cpu(new JThread(), "signal-wait"), storage = mem.calloc(1, 152);
   const set = storage, info = storage + 8, timeout = info + 128;
-  const entry = defineHost("test.signal.timedwait", (c, a) => rawSyscall(c, 137, a));
+  const entry = defineHost("test.signal.timedwait", (c, a) => rawSyscall(c, a64 ? 137 : 177, a));
   cpu.signalMask = 1n << 11n;
   mem.st64(set, cpu.signalMask);
   try {
@@ -413,7 +413,7 @@ test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signa
     expect(await waiting).toBe(12);
     expect(mem.ld32(info)).toBe(12);
     expect(cpu.sigQueued).toBeNull();
-  } finally { mem.free(storage); cpu.dispose(); }
+  } finally { mem.free(storage); cpu.dispose(); setA64(false); }
 });
 
 test("an unhandled terminating signal ends the process once unblocked; ignored ones are discarded", async () => {

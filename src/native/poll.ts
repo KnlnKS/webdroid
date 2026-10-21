@@ -5,6 +5,7 @@ import { mem, anchor } from "./mem.ts";
 import { PTR, complete, type HostFn } from "./host.ts";
 import { E, O_CLOEXEC, O_RDWR, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./abi.ts";
 import { ANON, openFd, installFile, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
+import { readTimeout } from "./kernel.ts";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
 
@@ -174,6 +175,8 @@ export const POLL_SYSCALLS: Record<string, HostFn> = {
     for (const wake of ep.wake) wake();
     return 0;
   },
-  // its sigmask is left as is
+  // their sigmasks are left as they are
   epoll_pwait: (_c, a) => epollWait(a.i(), a.va(), a.i(), a.i()),
+  pselect6: (_c, a) => { const n = a.i(), r = a.p(), w = a.p(), x = a.p(); return nativeSelect(n, r, w, x, readTimeout(a.p())); },
+  ppoll: (_c, a) => { const fds = a.p(), n = a.u(); return nativePoll(fds, n, readTimeout(a.p())); },
 };
