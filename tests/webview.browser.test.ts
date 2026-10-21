@@ -391,13 +391,14 @@ describe("WebView cookies", () => {
           set: value => descriptor.set!.call(document, value),
         });
         const before = document.cookie;
-        for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly"]) document.cookie = value;
+        for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly", "f=6; SameSite=None",
+          "__Secure-g=7", "__Host-h=8; Secure; Path=/dir", "__Host-i=9; Secure; Path=/"]) document.cookie = value;
         const written = document.cookie;
         // the jar's answer to an earlier write is not the cookies the page has since written
         app.postMessage({ kind: "cookies", ack: 1, list: [{ text: "x=1", expires: 0 }] });
-        app.postMessage({ kind: "cookies", ack: 5, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] });
+        app.postMessage({ kind: "cookies", ack: 9, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] });
         return new Promise<unknown>((resolve) => setTimeout(() => resolve([before, written, document.cookie, posted]), 50));
-      })).toEqual(["a=1", "b=2", "b=2; z=9", [1, 2, 3, 4, 5]]);
+      })).toEqual(["a=1", "b=2; __Host-i=9", "b=2; z=9", [1, 2, 3, 4, 5, 6, 7, 8, 9]]);
     } finally { await page.close(); }
   });
 });
