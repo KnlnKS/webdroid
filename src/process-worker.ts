@@ -1,3 +1,4 @@
+import { captureLogs } from "./shell/logs.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
 import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-host.ts";
@@ -5,13 +6,8 @@ import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
 // Its URL carries the screen and native pins before any JVM import runs.
-const logs: string[] = [];
-const logError = console.error.bind(console);
-console.error = (...args: unknown[]) => { logError(...args); logs.push(args.map(String).join(" ")); };
-globalThis.addEventListener("unhandledrejection", event => {
-  const error = (event as PromiseRejectionEvent).reason as { message?: string; msg?: string; stack?: string } | null;
-  logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
-});
+// its console.error is its logcat, which the harness does not count as the page's errors
+const logs = captureLogs({ error: "logcat" }, 4000);
 
 const post = (status: ProcessWorkerStatus) => globalThis.postMessage(status);
 let rateKnown!: (hz: number) => void;

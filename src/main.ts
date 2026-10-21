@@ -29,6 +29,7 @@ import { jitStats } from "./native/core.ts";
 import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics.ts";
 import { countVsyncs, workerControl, type WorkerControl } from "./shell/worker-control.ts";
 import { createShell } from "./shell/ui.ts";
+import { captureLogs } from "./shell/logs.ts";
 import { openInstallLocal, openInstallRemote } from "./shell/install.ts";
 import { activateLocalAssets, localAsset } from "./shell/localassets.ts";
 import { vfs } from "./shell/vfs.ts";
@@ -80,20 +81,8 @@ navigator.serviceWorker?.addEventListener("message", (event: MessageEvent) => {
   void localAsset(path).then((reply) => { port.postMessage(reply); port.close(); }, () => { port.postMessage({ status: 500 }); port.close(); });
 });
 
-// console capture: wd.logs is what the e2e driver and scripts/dbg.ts read back out of the page
-const logBuf: string[] = [];
-for (const level of ["log", "warn", "error"] as const) {
-  const orig = console[level].bind(console);
-  console[level] = (...args: unknown[]) => {
-    orig(...args);
-    try {
-      logBuf.push(level + ": " + args.map((a) => typeof a === "string" ? a : ((a as any)?.msg ?? (a as any)?.message ?? JSON.stringify(a)?.slice(0, 200) ?? String(a))).join(" "));
-      if (logBuf.length > 4000) logBuf.splice(0, 1000);
-    } catch { /* */ }
-  };
-}
-window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message + " @" + e.filename + ":" + e.lineno));
-window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
+// wd.logs is what the e2e driver and scripts/dbg.ts read back out of the page
+const logBuf = captureLogs({ log: "log", warn: "warn", error: "error" }, 4000);
 
 let booting = false;
 // the page opens one app; reopening it starts a new process
