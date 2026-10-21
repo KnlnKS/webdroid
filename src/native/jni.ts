@@ -23,8 +23,6 @@ function putUnits(p: number, s: string, from: number, n: number): void {
   for (let i = 0; i < n; i++) units[i] = s.charCodeAt(from + i);
   mem.write(p, new Uint8Array(units.buffer));
 }
-/** a failed call's result: zero of the return type's width */
-const zero = (ret: string) => (ret === "J" || ret === "D" ? 0n : 0);
 const GLOBAL_BIT = 0x40000000, WEAK_BIT = 0x20000000;
 const globals: unknown[] = [null];
 const freeGlobals: number[] = [];
@@ -64,7 +62,7 @@ export const deref = (h: number, cpu: Cpu): unknown => vm.host(object(h, cpu));
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
 
-interface MethodRec { cls: JniClass; name: string; desc: string; isStatic: boolean; params: string[]; ret: string }
+interface MethodRec { cls: JniClass; name: string; desc: string; isStatic: boolean; args: Codec[]; out: Codec }
 const methods: MethodRec[] = [null as unknown as MethodRec];
 const methodIds = new WeakMap<JniClass, Map<string, number>>();
 // A jmethodID/jfieldID is an ArtMethod*/ArtField* on a device, and an image may read the bytes
@@ -89,7 +87,7 @@ function methodId(cls: JniClass, name: string, desc: string, isStatic: boolean):
   let id = ids.get(key);
   if (id === undefined) {
     const { params, ret } = parseMethodDesc(desc);
-    methods.push({ cls, name, desc, isStatic, params, ret });
+    methods.push({ cls, name, desc, isStatic, args: params.map(codec), out: codec(ret) });
     ids.set(key, (id = mintId(methodIdx, methods.length - 1)));
   }
   return id;
@@ -108,7 +106,7 @@ function fieldId(f: JniField): number {
   return id;
 }
 
-interface Registered { c: JniClass; cls: string; name: string; sig: string; fn: number; isStatic: boolean; critical: boolean; params: string[]; ret: string; label: string }
+interface Registered { c: JniClass; cls: string; name: string; sig: string; fn: number; isStatic: boolean; critical: boolean; args: Codec[]; out: Codec; label: string }
 export const registered: Registered[] = [];
 
 const classOf = (clsRef: number, cpu: Cpu): JniClass | null => {
@@ -122,54 +120,36 @@ function pend(cpu: Cpu, e: unknown): void {
 /** the exception a failed call leaves pending */
 const failed = (cpu: Cpu, e: unknown): void => pend(cpu, vm.caught(e));
 
-// argument readers per Java descriptor
-type Reader = { i(): number; l(): bigint; d(): number; p(): number };
-function readArgs(params: string[], r: Reader, cpu: Cpu): unknown[] {
-  const out: unknown[] = [];
-  for (const t of params) {
-    switch (t[0]) {
-      case "Z": out.push(r.i() ? 1 : 0); break;
-      case "B": out.push((r.i() << 24) >> 24); break;
-      case "C": out.push(r.i() & 0xffff); break;
-      case "S": out.push((r.i() << 16) >> 16); break;
-      case "I": out.push(r.i()); break;
-      case "J": out.push(r.l()); break;
-      case "F": out.push(Math.fround(r.d())); break;   // varargs promote float to double
-      case "D": out.push(r.d()); break;
-      default: out.push(object(r.p(), cpu));
-    }
-  }
-  return out;
+/** a JNI type's Java values as guest code holds them: read from an argument (a float arrives as a double
+ *  among variadic ones) or a jvalue, returned to guest code or passed to it, and read from its result.
+ *  A narrow value is extended here, as AAPCS64 leaves the bits above it unspecified. */
+interface Codec {
+  read(a: ArgReader, cpu: Cpu, variadic: boolean): unknown;
+  jvalue(p: number, cpu: Cpu): unknown;
+  ret(v: unknown, cpu: Cpu): HostRet;
+  pass(v: unknown, cpu: Cpu): CallArg;
+  result(r0: number, cpu: Cpu): unknown;
+  /** what a failed call answers */
+  zero: unknown;
 }
-function readJvalues(params: string[], p: number, cpu: Cpu): unknown[] {
-  const out: unknown[] = [];
-  for (const t of params) {
-    switch (t[0]) {
-      case "Z": out.push(mem.ld8u(p) ? 1 : 0); break;
-      case "B": out.push(mem.ld8s(p)); break;
-      case "C": out.push(mem.ld16u(p)); break;
-      case "S": out.push(mem.ld16s(p)); break;
-      case "I": out.push(mem.ld32(p)); break;
-      case "J": out.push(mem.ld64(p)); break;
-      case "F": out.push(mem.ldf32(p)); break;
-      case "D": out.push(mem.ldf64(p)); break;
-      default: out.push(object(mem.ld32(p), cpu));
-    }
-    p += 8;
-  }
-  return out;
-}
-function retWord(ret: string, v: unknown, cpu: Cpu): HostRet {
-  switch (ret[0]) {
-    case "V": return 0;
-    case "Z": return v ? 1 : 0;
-    case "J": return v as bigint;
-    case "F": return retF(cpu, v as number);
-    case "D": return retD(cpu, v as number);
-    case "L": case "[": return toRef(v, cpu);
-    default: return (v as number) | 0;
-  }
-}
+const narrow = (norm: (x: number) => number): Codec =>
+  ({ read: (a) => norm(a.i()), jvalue: (p) => norm(mem.ld32(p)), ret: (v) => norm(v as number), pass: (v) => norm(v as number), result: norm, zero: 0 });
+const REFERENCE: Codec = { read: (a, cpu) => object(a.p(), cpu), jvalue: (p, cpu) => object(mem.ld32(p), cpu), ret: toRef, pass: toRef, result: object, zero: null };
+const CODECS: Record<string, Codec> = {
+  Z: narrow((x) => (x & 0xff ? 1 : 0)), B: narrow((x) => (x << 24) >> 24), C: narrow((x) => x & 0xffff), S: narrow((x) => (x << 16) >> 16), I: narrow((x) => x | 0),
+  J: { read: (a) => a.l(), jvalue: (p) => mem.ld64(p), ret: (v) => v as bigint, pass: (v) => v as bigint, result: (r0, cpu) => retPair(r0, cpu.ret1), zero: 0n },
+  F: { read: (a, _c, variadic) => (variadic ? Math.fround(a.d()) : a.f()), jvalue: (p) => mem.ldf32(p), ret: (v, cpu) => retF(cpu, v as number), pass: (v) => ({ f: v as number }), result: (_r, cpu) => cpu.retF(), zero: 0 },
+  D: { read: (a) => a.d(), jvalue: (p) => mem.ldf64(p), ret: (v, cpu) => retD(cpu, v as number), pass: (v) => ({ d: v as number }), result: (_r, cpu) => cpu.retD(), zero: 0 },
+  V: { ...narrow((x) => x), ret: () => 0, result: () => undefined, zero: undefined },
+  L: REFERENCE, "[": REFERENCE,
+};
+const codec = (desc: string): Codec => CODECS[desc[0]];
+/** a call's arguments as guest code passes them: variadic, in a va_list, or in a jvalue array */
+const FORMS: Record<string, (m: MethodRec, a: ArgReader, cpu: Cpu) => unknown[]> = {
+  "": (m, a, cpu) => m.args.map((c) => c.read(a, cpu, true)),
+  V: (m, a, cpu) => { const list = vaList(a.p()); return m.args.map((c) => c.read(list, cpu, true)); },
+  A: (m, a, cpu) => { const p = a.p(); return m.args.map((c, i) => c.jvalue(p + 8 * i, cpu)); },
+};
 
 /** ART hands out array elements in place, so native code reads a pinned pointer after Java
  *  filled the array (InputStream.read into it) and passes arrays it wrote through one: a pinned
@@ -190,15 +170,15 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
     const r = after(p, () => vm.invoke(m.cls, m.name, m.desc, m.isStatic, self, args, nonvirtual));
     if (r instanceof Promise) {
       pending = true;
-      return r.then(value => retWord(m.ret, value, cpu)).catch(e => {
+      return r.then(value => m.out.ret(value, cpu)).catch(e => {
         failed(cpu, e);
-        return zero(m.ret);
+        return m.out.ret(m.out.zero, cpu);
       }).finally(() => { if (synced) syncPinned(args, false); });
     }
-    return retWord(m.ret, r, cpu);
+    return m.out.ret(r, cpu);
   } catch (e) {
     failed(cpu, e);
-    return zero(m.ret);
+    return m.out.ret(m.out.zero, cpu);
   } finally {
     if (synced && !pending) syncPinned(args, false);
   }
@@ -207,40 +187,16 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the
  *  result; driven, so it continues as the calling thread and chain */
 function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Gen<unknown> {
-  const { params, ret } = r;
   yield cpu.idleBase();
   const previousClass = cpu.nativeClass;
   cpu.nativeClass = r.c;
   if (!r.critical) pushFrame(cpu);
   try {
     const list: CallArg[] = r.critical ? [] : [envFor(cpu), toRef(r.isStatic ? vm.mirror(r.c) : self, cpu)];
-    for (let i = 0; i < params.length; i++) {
-      const t = params[i], v = args[i];
-      switch (t[0]) {
-        case "J": list.push(v as bigint); break;
-        case "F": list.push({ f: v as number }); break;
-        case "D": list.push({ d: v as number }); break;
-        case "L": case "[": list.push(toRef(v, cpu)); break;
-        default: list.push((v as number) | 0);
-      }
-    }
+    for (let i = 0; i < r.args.length; i++) list.push(r.args[i].pass(args[i], cpu));
     if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
-    let r0: number, r1: number;
-    r0 = yield cpu.callSync(r.fn, list, r.label);
-    r1 = cpu.ret1;
-    let out: unknown;
-    switch (ret[0]) {
-      case "V": out = undefined; break;
-      case "Z": out = r0 & 0xff ? 1 : 0; break;
-      case "B": out = (r0 << 24) >> 24; break;
-      case "C": out = r0 & 0xffff; break;
-      case "S": out = (r0 << 16) >> 16; break;
-      case "I": out = r0; break;
-      case "J": out = retPair(r0, r1); break;
-      case "F": out = cpu.retF(); break;
-      case "D": out = cpu.retD(); break;
-      default: out = object(r0, cpu);
-    }
+    const r0: number = yield cpu.callSync(r.fn, list, r.label);
+    const out = r.out.result(r0, cpu);
     const exc = cpu.exc;
     if (exc) { cpu.exc = null; throw vm.raise(exc); }
     return out;
@@ -260,6 +216,25 @@ function envFor(cpu: Cpu): number {
 /** the types of JNI's per-type functions, in its order: Object, the primitives, Void */
 const PRIM = ["Object", ...Object.values(PRIMS).map((p) => p.title), "Void"];
 const PRIM_DESC = ["L", ...Object.keys(PRIMS), "V"];
+const FIELD_TYPES = PRIM.slice(0, 9), ARRAY_TYPES = PRIM.slice(1, 9);
+const calls = (kind: string) => PRIM.flatMap((t) => Object.keys(FORMS).map((form) => `Call${kind}${t}Method${form}`));
+/** the JNIEnv function table, in jni.h's order */
+const JNI_ORDER = [
+  "reserved0", "reserved1", "reserved2", "reserved3", "GetVersion", "DefineClass", "FindClass", "FromReflectedMethod", "FromReflectedField", "ToReflectedMethod",
+  "GetSuperclass", "IsAssignableFrom", "ToReflectedField", "Throw", "ThrowNew", "ExceptionOccurred", "ExceptionDescribe", "ExceptionClear", "FatalError",
+  "PushLocalFrame", "PopLocalFrame", "NewGlobalRef", "DeleteGlobalRef", "DeleteLocalRef", "IsSameObject", "NewLocalRef", "EnsureLocalCapacity",
+  "AllocObject", "NewObject", "NewObjectV", "NewObjectA", "GetObjectClass", "IsInstanceOf",
+  "GetMethodID", ...calls(""), ...calls("Nonvirtual"),
+  "GetFieldID", ...FIELD_TYPES.map((t) => `Get${t}Field`), ...FIELD_TYPES.map((t) => `Set${t}Field`),
+  "GetStaticMethodID", ...calls("Static"),
+  "GetStaticFieldID", ...FIELD_TYPES.map((t) => `GetStatic${t}Field`), ...FIELD_TYPES.map((t) => `SetStatic${t}Field`),
+  "NewString", "GetStringLength", "GetStringChars", "ReleaseStringChars", "NewStringUTF", "GetStringUTFLength", "GetStringUTFChars", "ReleaseStringUTFChars",
+  "GetArrayLength", "NewObjectArray", "GetObjectArrayElement", "SetObjectArrayElement",
+  ...["New%Array", "Get%ArrayElements", "Release%ArrayElements", "Get%ArrayRegion", "Set%ArrayRegion"].flatMap((f) => ARRAY_TYPES.map((t) => f.replace("%", t))),
+  "RegisterNatives", "UnregisterNatives", "MonitorEnter", "MonitorExit", "GetJavaVM", "GetStringRegion", "GetStringUTFRegion",
+  "GetPrimitiveArrayCritical", "ReleasePrimitiveArrayCritical", "GetStringCritical", "ReleaseStringCritical", "NewWeakGlobalRef", "DeleteWeakGlobalRef",
+  "ExceptionCheck", "NewDirectByteBuffer", "GetDirectBufferAddress", "GetDirectBufferCapacity", "GetObjectRefType",
+];
 /** the native copies of arrays that Get<Prim>ArrayElements and GetPrimitiveArrayCritical gave out, until released: by pointer, and by array for the call boundaries that sync them */
 const pinned = new Map<number, { arr: unknown; type: string }>();
 const pinsOf = new Map<unknown, number[]>();
@@ -289,24 +264,23 @@ const text = (ref: number, cpu: Cpu): string => { const s = object(ref, cpu); re
 
 export function jniInit(): void {
   jniTrace.on ||= !!(globalThis as { __wdJniTrace?: boolean }).__wdJniTrace;
-  const T: (HostFn | null)[] = new Array(233).fill(null);
-  const names: string[] = new Array(233).fill("?");
-  const def = (i: number, name: string, fn: HostFn) => { T[i] = fn; names[i] = name; };
+  const T: (HostFn | undefined)[] = [];
+  const def = (name: string, fn: HostFn) => { const i = JNI_ORDER.indexOf(name); if (i < 0) throw new Error(`JNI has no ${name}`); T[i] = fn; };
 
-  def(4, "GetVersion", () => 0x00010006);
-  def(7, "FromReflectedMethod", (cpu, a) => {
+  def("GetVersion", () => 0x00010006);
+  def("FromReflectedMethod", (cpu, a) => {
     a.p(); const o = object(a.i(), cpu);
     try { const m = vm.unreflectMethod(o); return m ? methodId(m.cls, m.name, m.desc, m.isStatic) : 0; } catch (e) { failed(cpu, e); return 0; }
   });
-  def(8, "FromReflectedField", (cpu, a) => {
+  def("FromReflectedField", (cpu, a) => {
     a.p(); const o = object(a.p(), cpu);
     try { const f = vm.unreflectField(o); return f ? fieldId(f) : 0; } catch (e) { failed(cpu, e); return 0; }
   });
-  def(9, "ToReflectedMethod", (cpu, a) => {
+  def("ToReflectedMethod", (cpu, a) => {
     a.p(); a.p(); const m = methodOf(a.p()); a.i();
     try { return m ? toRef(vm.reflect(m.cls, m.name, m.desc, m.isStatic), cpu) : 0; } catch (e) { failed(cpu, e); return 0; }
   });
-  def(6, "FindClass", (cpu, a) => {
+  def("FindClass", (cpu, a) => {
     a.p(); const n = a.str().replace(/\./g, "/");
     const found = (c: JniClass | null): number => {
       if (!c) { pend(cpu, vm.noClass(n)); return 0; }
@@ -318,23 +292,23 @@ export function jniInit(): void {
       return result instanceof Promise ? result.then(found).catch(rejected) : found(result);
     } catch (e) { return rejected(e); }
   });
-  def(10, "GetSuperclass", (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? toRef(vm.superClass(c), cpu) : 0; });
-  def(11, "IsAssignableFrom", (cpu, a) => { a.p(); const s = classOf(a.p(), cpu), t = classOf(a.p(), cpu); return s && t && vm.assignable(s, t) ? 1 : 0; });
-  def(13, "Throw", (cpu, a) => { a.p(); pend(cpu, object(a.p(), cpu)); return 0; });
-  def(14, "ThrowNew", (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); const msg = a.p(); pend(cpu, vm.throwable(c?.name ?? "java/lang/Error", msg ? mem.cstr(msg) : "")); return 0; });
-  def(15, "ExceptionOccurred", (cpu) => toRef(cpu.exc, cpu));
-  def(16, "ExceptionDescribe", async (cpu) => { if (cpu.exc) console.warn("[jni] exception:", await vm.describe(cpu.exc)); });
-  def(17, "ExceptionClear", (cpu) => { cpu.exc = null; });
-  def(18, "FatalError", (cpu, a) => { a.p(); cpu.fault("JNI FatalError: " + a.str()); });
-  def(19, "PushLocalFrame", (cpu) => { pushFrame(cpu); return 0; });
-  def(20, "PopLocalFrame", (cpu, a) => { a.p(); const o = object(a.p(), cpu); popFrame(cpu); return toRef(o, cpu); });
-  def(21, "NewGlobalRef", (cpu, a) => { a.p(); return newGlobalRef(object(a.p(), cpu)); });
-  def(22, "DeleteGlobalRef", (_c, a) => { a.p(); const h = a.p(); if (h & GLOBAL_BIT) { globals[h & ~GLOBAL_BIT] = null; freeGlobals.push(h & ~GLOBAL_BIT); } });
-  def(23, "DeleteLocalRef", (cpu, a) => { a.p(); const h = a.p(); if (h && !(h & (GLOBAL_BIT | WEAK_BIT))) locals(cpu).refs[h] = null; });
-  def(24, "IsSameObject", (cpu, a) => { a.p(); return object(a.p(), cpu) === object(a.p(), cpu) ? 1 : 0; });
-  def(25, "NewLocalRef", (cpu, a) => { a.p(); return toRef(object(a.p(), cpu), cpu); });
-  def(26, "EnsureLocalCapacity", () => 0);
-  def(27, "AllocObject", async (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? after(vm.init(c), () => toRef(vm.allocate(c), cpu)) : 0; });
+  def("GetSuperclass", (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? toRef(vm.superClass(c), cpu) : 0; });
+  def("IsAssignableFrom", (cpu, a) => { a.p(); const s = classOf(a.p(), cpu), t = classOf(a.p(), cpu); return s && t && vm.assignable(s, t) ? 1 : 0; });
+  def("Throw", (cpu, a) => { a.p(); pend(cpu, object(a.p(), cpu)); return 0; });
+  def("ThrowNew", (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); const msg = a.p(); pend(cpu, vm.throwable(c?.name ?? "java/lang/Error", msg ? mem.cstr(msg) : "")); return 0; });
+  def("ExceptionOccurred", (cpu) => toRef(cpu.exc, cpu));
+  def("ExceptionDescribe", async (cpu) => { if (cpu.exc) console.warn("[jni] exception:", await vm.describe(cpu.exc)); });
+  def("ExceptionClear", (cpu) => { cpu.exc = null; });
+  def("FatalError", (cpu, a) => { a.p(); cpu.fault("JNI FatalError: " + a.str()); });
+  def("PushLocalFrame", (cpu) => { pushFrame(cpu); return 0; });
+  def("PopLocalFrame", (cpu, a) => { a.p(); const o = object(a.p(), cpu); popFrame(cpu); return toRef(o, cpu); });
+  def("NewGlobalRef", (cpu, a) => { a.p(); return newGlobalRef(object(a.p(), cpu)); });
+  def("DeleteGlobalRef", (_c, a) => { a.p(); const h = a.p(); if (h & GLOBAL_BIT) { globals[h & ~GLOBAL_BIT] = null; freeGlobals.push(h & ~GLOBAL_BIT); } });
+  def("DeleteLocalRef", (cpu, a) => { a.p(); const h = a.p(); if (h && !(h & (GLOBAL_BIT | WEAK_BIT))) locals(cpu).refs[h] = null; });
+  def("IsSameObject", (cpu, a) => { a.p(); return object(a.p(), cpu) === object(a.p(), cpu) ? 1 : 0; });
+  def("NewLocalRef", (cpu, a) => { a.p(); return toRef(object(a.p(), cpu), cpu); });
+  def("EnsureLocalCapacity", () => 0);
+  def("AllocObject", async (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? after(vm.init(c), () => toRef(vm.allocate(c), cpu)) : 0; });
   const newObject = (read: (m: MethodRec, a: ArgReader, cpu: Cpu) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const m = methodOf(a.p());
     if (!c || !m) return 0;
@@ -346,11 +320,9 @@ export function jniInit(): void {
       } catch (e) { failed(cpu, e); return 0; }
     }());
   };
-  def(28, "NewObject", newObject((m, a, cpu) => readArgs(m.params, a, cpu)));
-  def(29, "NewObjectV", newObject((m, a, cpu) => readArgs(m.params, vaList(a.p()), cpu)));
-  def(30, "NewObjectA", newObject((m, a, cpu) => readJvalues(m.params, a.p(), cpu)));
-  def(31, "GetObjectClass", (cpu, a) => { a.p(); const o = object(a.p(), cpu); return o === null ? 0 : toRef(vm.objectClass(o), cpu); });
-  def(32, "IsInstanceOf", (cpu, a) => { a.p(); const o = object(a.p(), cpu); const c = classOf(a.p(), cpu); return o === null ? 1 : c ? +vm.isInstance(o, c) : 0; });
+  for (const [form, read] of Object.entries(FORMS)) def(`NewObject${form}`, newObject(read));
+  def("GetObjectClass", (cpu, a) => { a.p(); const o = object(a.p(), cpu); return o === null ? 0 : toRef(vm.objectClass(o), cpu); });
+  def("IsInstanceOf", (cpu, a) => { a.p(); const o = object(a.p(), cpu); const c = classOf(a.p(), cpu); return o === null ? 1 : c ? +vm.isInstance(o, c) : 0; });
   const getMethodID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const name = a.str(), sig = a.str();
     if (!c) { pend(cpu, vm.throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
@@ -358,33 +330,19 @@ export function jniInit(): void {
     if (!vm.hasMethod(c, name, sig, isStatic)) { pend(cpu, vm.throwable("java/lang/NoSuchMethodError", `${c.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${c.name}.${name}${sig}`); return 0; }
     return methodId(c, name, sig, isStatic);
   };
-  def(33, "GetMethodID", getMethodID(false));
-  def(113, "GetStaticMethodID", getMethodID(true));
-  // Call<Type>Method / V / A, Nonvirtual, Static
-  for (let k = 0; k < 10; k++) {
-    const P = PRIM[k];
-    const mk = (base: number, kind: "virtual" | "nonvirtual" | "static") => {
-      const readers: ((m: MethodRec, a: ArgReader, cpu: Cpu) => unknown[])[] = [
-        (m, a, cpu) => readArgs(m.params, a, cpu), (m, a, cpu) => readArgs(m.params, vaList(a.p()), cpu), (m, a, cpu) => readJvalues(m.params, a.p(), cpu),
-      ];
-      const suffix = ["", "V", "A"];
-      for (let v = 0; v < 3; v++) {
-        const read = readers[v];
-        def(base + v, `Call${kind === "static" ? "Static" : kind === "nonvirtual" ? "Nonvirtual" : ""}${P}Method${suffix[v]}`, (cpu, a) => {
-          a.p();
-          const self = kind === "static" ? null : object(a.p(), cpu);
-          if (kind !== "virtual") a.p(); // jclass
-          const m = methodOf(a.p());
-          if (!m) { pend(cpu, vm.throwable("java/lang/NoSuchMethodError", "bad methodID")); return 0; }
-          const args = read(m, a, cpu);
-          if (jniTrace.on) console.log("[jni] ←", m.cls.name, m.name, m.desc, args.map((v) => typeof v === "string" ? JSON.stringify(v.slice(0, 200)) : Array.isArray(v) ? `[${v.length}]` : v !== null && typeof v === "object" ? "<reference>" : String(v)).join(" "));
-          return invoke(cpu, m, self, args, kind === "nonvirtual");
-        });
-      }
-    };
-    mk(34 + k * 3, "virtual");
-    mk(64 + k * 3, "nonvirtual");
-    mk(114 + k * 3, "static");
+  def("GetMethodID", getMethodID(false));
+  def("GetStaticMethodID", getMethodID(true));
+  for (const kind of ["", "Nonvirtual", "Static"]) for (const P of PRIM) for (const [form, read] of Object.entries(FORMS)) {
+    def(`Call${kind}${P}Method${form}`, (cpu, a) => {
+      a.p();
+      const self = kind === "Static" ? null : object(a.p(), cpu);
+      if (kind) a.p(); // jclass
+      const m = methodOf(a.p());
+      if (!m) { pend(cpu, vm.throwable("java/lang/NoSuchMethodError", "bad methodID")); return 0; }
+      const args = read(m, a, cpu);
+      if (jniTrace.on) console.log("[jni] ←", m.cls.name, m.name, m.desc, args.map((v) => typeof v === "string" ? JSON.stringify(v.slice(0, 200)) : Array.isArray(v) ? `[${v.length}]` : v !== null && typeof v === "object" ? "<reference>" : String(v)).join(" "));
+      return invoke(cpu, m, self, args, kind === "Nonvirtual");
+    });
   }
   const getFieldID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const name = a.str(), sig = a.str();
@@ -394,61 +352,60 @@ export function jniInit(): void {
     if (!f) { pend(cpu, vm.throwable("java/lang/NoSuchFieldError", `${c.name}.${name}`)); jniMissing.add(`${isStatic ? "static field" : "field"} ${c.name}.${name}`); return 0; }
     return fieldId(f);
   };
-  def(94, "GetFieldID", getFieldID(false));
-  def(144, "GetStaticFieldID", getFieldID(true));
-  for (let k = 0; k < 9; k++) {
-    const P = PRIM[k], D = PRIM_DESC[k];
-    const fromJava = (v: unknown, cpu: Cpu): HostRet => retWord(D, v, cpu);
-    const toJava = (a: ArgReader, cpu: Cpu): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? object(a.p(), cpu) : D === "Z" ? (a.i() & 255 ? 1 : 0) : a.i();
-    def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = object(a.p(), cpu); const f = fieldOf(a.p()); return o !== null && f ? fromJava(vm.get(f, o), cpu) : zero(D); });
-    def(104 + k, `Set${P}Field`, (cpu, a) => { a.p(); const o = object(a.p(), cpu); const f = fieldOf(a.p()); const v = toJava(a, cpu); if (o !== null && f) vm.set(f, o, v); });
-    def(145 + k, `GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fieldOf(a.p()); return f ? fromJava(vm.get(f, null), cpu) : zero(D); });
-    def(154 + k, `SetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fieldOf(a.p()); const v = toJava(a, cpu); if (f) vm.set(f, null, v); });
-  }
+  def("GetFieldID", getFieldID(false));
+  def("GetStaticFieldID", getFieldID(true));
+  FIELD_TYPES.forEach((P, k) => {
+    const c = codec(PRIM_DESC[k]);
+    def(`Get${P}Field`, (cpu, a) => { a.p(); const o = object(a.p(), cpu); const f = fieldOf(a.p()); return c.ret(o !== null && f ? vm.get(f, o) : c.zero, cpu); });
+    def(`Set${P}Field`, (cpu, a) => { a.p(); const o = object(a.p(), cpu); const f = fieldOf(a.p()); const v = c.read(a, cpu, false); if (o !== null && f) vm.set(f, o, v); });
+    def(`GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fieldOf(a.p()); return c.ret(f ? vm.get(f, null) : c.zero, cpu); });
+    def(`SetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fieldOf(a.p()); const v = c.read(a, cpu, false); if (f) vm.set(f, null, v); });
+  });
   // strings
-  def(163, "NewString", (cpu, a) => { a.p(); const p = a.p(), n = Math.max(0, a.i()), b = mem.bytes(p, 2 * n); return toRef(vm.string(charsToString(p & 1 ? new Uint16Array(b.slice().buffer) : new Uint16Array(b.buffer, b.byteOffset, n), 0, n)), cpu); });
-  def(164, "GetStringLength", (cpu, a) => { a.p(); return text(a.p(), cpu).length; });
-  def(165, "GetStringChars", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const isCopy = a.p(); const p = mem.malloc(s.length * 2 + 2); putUnits(p, s, 0, s.length); mem.st16(p + s.length * 2, 0); if (isCopy) mem.st8(isCopy, 1); return p; });
-  def(166, "ReleaseStringChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
-  def(167, "NewStringUTF", (cpu, a) => {
+  def("NewString", (cpu, a) => { a.p(); const p = a.p(), n = Math.max(0, a.i()), b = mem.bytes(p, 2 * n); return toRef(vm.string(charsToString(p & 1 ? new Uint16Array(b.slice().buffer) : new Uint16Array(b.buffer, b.byteOffset, n), 0, n)), cpu); });
+  def("GetStringLength", (cpu, a) => { a.p(); return text(a.p(), cpu).length; });
+  const getChars: HostFn = (cpu, a) => { a.p(); const s = text(a.p(), cpu); const isCopy = a.p(); const p = mem.malloc(s.length * 2 + 2); putUnits(p, s, 0, s.length); mem.st16(p + s.length * 2, 0); if (isCopy) mem.st8(isCopy, 1); return p; };
+  const releaseChars: HostFn = (_c, a) => { a.p(); a.p(); mem.free(a.p()); };
+  def("GetStringChars", getChars); def("GetStringCritical", getChars);
+  def("ReleaseStringChars", releaseChars); def("ReleaseStringCritical", releaseChars);
+  def("NewStringUTF", (cpu, a) => {
     a.p(); const p = a.p();
     if (!p) return 0;
     mem.ld8u(p); // faults on a bad pointer as reading it would
     const end = mem.u8.indexOf(0, p);
     return toRef(vm.string(decodeModifiedUtf8(mem.u8, p, end < 0 ? mem.u8.length : end)), cpu);
   });
-  def(168, "GetStringUTFLength", (cpu, a) => { a.p(); return encodeModifiedUtf8(text(a.p(), cpu)).length; });
-  def(169, "GetStringUTFChars", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const isCopy = a.p(); const p = putUtf8(encodeModifiedUtf8(s)); if (isCopy) mem.st8(isCopy, 1); return p; });
-  def(170, "ReleaseStringUTFChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
-  def(220, "GetStringRegion", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const st = a.i(), n = a.i(); putUnits(a.p(), s, st, n); });
-  def(221, "GetStringUTFRegion", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const st = a.i(), n = a.i(), buf = a.p(); putUtf8(encodeModifiedUtf8(s.slice(st, st + n)), buf); });
-  def(224, "GetStringCritical", T[165]!);
-  def(225, "ReleaseStringCritical", T[166]!);
+  def("GetStringUTFLength", (cpu, a) => { a.p(); return encodeModifiedUtf8(text(a.p(), cpu)).length; });
+  def("GetStringUTFChars", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const isCopy = a.p(); const p = putUtf8(encodeModifiedUtf8(s)); if (isCopy) mem.st8(isCopy, 1); return p; });
+  def("ReleaseStringUTFChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
+  def("GetStringRegion", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const st = a.i(), n = a.i(); putUnits(a.p(), s, st, n); });
+  def("GetStringUTFRegion", (cpu, a) => { a.p(); const s = text(a.p(), cpu); const st = a.i(), n = a.i(), buf = a.p(); putUtf8(encodeModifiedUtf8(s.slice(st, st + n)), buf); });
   // arrays
-  def(171, "GetArrayLength", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); return arr === null ? 0 : vm.length(arr); });
-  def(172, "NewObjectArray", (cpu, a) => { a.p(); const n = a.i(); const c = classOf(a.p(), cpu); const init = object(a.p(), cpu); return toRef(vm.newObjectArray(n, c, init), cpu); });
-  def(173, "GetObjectArrayElement", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const i = a.i(); if (arr === null || i < 0 || i >= vm.length(arr)) { pend(cpu, vm.throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return 0; } return toRef(vm.element(arr, i), cpu); });
-  def(174, "SetObjectArrayElement", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const i = a.i(); const v = object(a.p(), cpu); if (arr === null || i < 0 || i >= vm.length(arr)) { pend(cpu, vm.throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return; } vm.setElement(arr, i, v); });
-  for (let k = 1; k <= 8; k++) {
-    const P = PRIM[k], D = PRIM_DESC[k];
-    def(174 + k, `New${P}Array`, (cpu, a) => { a.p(); return toRef(vm.newPrimitiveArray(D, a.i()), cpu); });
-    def(182 + k, `Get${P}ArrayElements`, (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const isCopy = a.p(); return arr !== null ? pin(arr, D, isCopy) : 0; });
-    def(190 + k, `Release${P}ArrayElements`, (_c, a) => {
-      a.p(); a.p(); const p = a.p(), mode = a.i();
-      const held = pinned.get(p);
-      if (!held) return;
-      if (mode !== 2) vm.fromGuest(held.arr, held.type, 0, vm.length(held.arr), p);
-      if (mode !== 1) { unpin(p, held.arr); mem.free(p); }
-    });
-    for (const [slot, kind, copy] of [[198, "Get", vm.toGuest], [206, "Set", vm.fromGuest]] as const) def(slot + k, `${kind}${P}ArrayRegion`, (cpu, a) => {
+  def("GetArrayLength", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); return arr === null ? 0 : vm.length(arr); });
+  def("NewObjectArray", (cpu, a) => { a.p(); const n = a.i(); const c = classOf(a.p(), cpu); const init = object(a.p(), cpu); return toRef(vm.newObjectArray(n, c, init), cpu); });
+  def("GetObjectArrayElement", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const i = a.i(); if (arr === null || i < 0 || i >= vm.length(arr)) { pend(cpu, vm.throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return 0; } return toRef(vm.element(arr, i), cpu); });
+  def("SetObjectArrayElement", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const i = a.i(); const v = object(a.p(), cpu); if (arr === null || i < 0 || i >= vm.length(arr)) { pend(cpu, vm.throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return; } vm.setElement(arr, i, v); });
+  const releaseElements: HostFn = (_c, a) => {
+    a.p(); a.p(); const p = a.p(), mode = a.i();
+    const held = pinned.get(p);
+    if (!held) return;
+    if (mode !== 2) vm.fromGuest(held.arr, held.type, 0, vm.length(held.arr), p);
+    if (mode !== 1) { unpin(p, held.arr); mem.free(p); }
+  };
+  ARRAY_TYPES.forEach((P, k) => {
+    const D = PRIM_DESC[k + 1];
+    def(`New${P}Array`, (cpu, a) => { a.p(); return toRef(vm.newPrimitiveArray(D, a.i()), cpu); });
+    def(`Get${P}ArrayElements`, (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const isCopy = a.p(); return arr !== null ? pin(arr, D, isCopy) : 0; });
+    def(`Release${P}ArrayElements`, releaseElements);
+    for (const [kind, copy] of [["Get", vm.toGuest], ["Set", vm.fromGuest]] as const) def(`${kind}${P}ArrayRegion`, (cpu, a) => {
       a.p(); const arr = object(a.p(), cpu); const st = a.i(), n = a.i(), buf = a.p();
       if (arr === null || st < 0 || st + n > vm.length(arr)) { pend(cpu, vm.throwable("java/lang/ArrayIndexOutOfBoundsException", `${st}+${n}`)); return; }
       copy(arr, D, st, n, buf);
     });
-  }
-  def(222, "GetPrimitiveArrayCritical", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const isCopy = a.p(); return arr !== null ? pin(arr, vm.elementType(arr), isCopy) : 0; });
-  def(223, "ReleasePrimitiveArrayCritical", T[191]!);
-  def(215, "RegisterNatives", (cpu, a) => {
+  });
+  def("GetPrimitiveArrayCritical", (cpu, a) => { a.p(); const arr = object(a.p(), cpu); const isCopy = a.p(); return arr !== null ? pin(arr, vm.elementType(arr), isCopy) : 0; });
+  def("ReleasePrimitiveArrayCritical", releaseElements);
+  def("RegisterNatives", (cpu, a) => {
     a.p(); const c = classOf(a.p(), cpu); const tab = a.p(), n = a.i();
     if (!c) return -1;
     for (let k = 0; k < n; k++) {
@@ -459,9 +416,9 @@ export function jniInit(): void {
     }
     return 0;
   });
-  def(216, "UnregisterNatives", () => 0);
-  for (const [index, name, enter] of [[217, "MonitorEnter", true], [218, "MonitorExit", false]] satisfies [number, string, boolean][]) {
-    def(index, name, (cpu, a) => {
+  def("UnregisterNatives", () => 0);
+  for (const [name, enter] of [["MonitorEnter", true], ["MonitorExit", false]] satisfies [string, boolean][]) {
+    def(name, (cpu, a) => {
       a.p(); const obj = object(a.p(), cpu);
       try {
         if (typeof obj !== "object" && typeof obj !== "string") throw vm.throwable("java/lang/NullPointerException", "JNI monitor reference");
@@ -470,11 +427,11 @@ export function jniInit(): void {
       } catch (e) { failed(cpu, e); return -1; }
     });
   }
-  def(219, "GetJavaVM", (_c, a) => { a.p(); stp(a.p(), javaVM.addr); return 0; });
-  def(226, "NewWeakGlobalRef", (cpu, a) => { a.p(); return newWeakRef(object(a.p(), cpu)); });
-  def(227, "DeleteWeakGlobalRef", (_c, a) => { a.p(); const h = a.p(); if (h & WEAK_BIT) { weaks[h & ~WEAK_BIT] = null; freeWeaks.push(h & ~WEAK_BIT); } });
-  def(228, "ExceptionCheck", (cpu) => (cpu.exc ? 1 : 0));
-  def(229, "NewDirectByteBuffer", (cpu, a) => {
+  def("GetJavaVM", (_c, a) => { a.p(); stp(a.p(), javaVM.addr); return 0; });
+  def("NewWeakGlobalRef", (cpu, a) => { a.p(); return newWeakRef(object(a.p(), cpu)); });
+  def("DeleteWeakGlobalRef", (_c, a) => { a.p(); const h = a.p(); if (h & WEAK_BIT) { weaks[h & ~WEAK_BIT] = null; freeWeaks.push(h & ~WEAK_BIT); } });
+  def("ExceptionCheck", (cpu) => (cpu.exc ? 1 : 0));
+  def("NewDirectByteBuffer", (cpu, a) => {
     a.p(); const address = a.p(), cap = a.l();
     if (cap < 0n || cap > 0x7fffffffn) return 0;
     try {
@@ -482,7 +439,7 @@ export function jniInit(): void {
       return b instanceof Promise ? b.then((v) => toRef(v, cpu), (e) => { failed(cpu, e); return 0; }) : toRef(b, cpu);
     } catch (e) { failed(cpu, e); return 0; }
   });
-  def(230, "GetDirectBufferAddress", (cpu, a) => {
+  def("GetDirectBufferAddress", (cpu, a) => {
     a.p(); const address = vm.bufferAddress(object(a.p(), cpu));
     if (address === null) return 0;
     try {
@@ -490,19 +447,17 @@ export function jniInit(): void {
       return native instanceof Promise ? native.catch((e) => { failed(cpu, e); return 0; }) : native;
     } catch (e) { failed(cpu, e); return 0; }
   });
-  def(231, "GetDirectBufferCapacity", (cpu, a) => {
+  def("GetDirectBufferCapacity", (cpu, a) => {
     a.p(); const b = object(a.p(), cpu), address = vm.bufferAddress(b);
     return address ? BigInt(vm.bufferCapacity(b)) : -1n;
   });
-  def(232, "GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : h & WEAK_BIT ? 3 : 1; });
+  def("GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : h & WEAK_BIT ? 3 : 1; });
 
-  envTable = mem.hostAlloc(233 * PTR);
-  for (let i = 0; i < 233; i++) {
-    const fn = T[i];
-    const name = fn ? names[i] : `JNI#${i}`;
-    const wrapped: HostFn = fn ?? (() => { if (!jniMissing.has(name)) { jniMissing.add(name); console.warn("[jni missing]", name); } return 0; });
-    stp(envTable + i * PTR, defineHost("JNI:" + name, wrapped));
-  }
+  envTable = mem.hostAlloc(JNI_ORDER.length * PTR);
+  JNI_ORDER.forEach((name, i) => {
+    const missing: HostFn = () => { if (!jniMissing.has(name)) { jniMissing.add(name); console.warn("[jni missing]", name); } return 0; };
+    stp(envTable + i * PTR, defineHost("JNI:" + name, T[i] ?? missing));
+  });
   const vmTable = mem.hostAlloc(8 * PTR);
   const attach: HostFn = (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; };
   const vmFns: [number, string, HostFn][] = [
@@ -519,7 +474,7 @@ export function jniInit(): void {
 
 function registerNative(c: JniClass, name: string, sig: string, fn: number): void {
   const { isStatic, critical } = vm.nativeKind(c, name, sig), { params, ret } = parseMethodDesc(sig);
-  const rec: Registered = { c, cls: c.name, name, sig, fn, isStatic, critical, params, ret, label: c.name.split("/").pop() + "." + name };
+  const rec: Registered = { c, cls: c.name, name, sig, fn, isStatic, critical, args: params.map(codec), out: codec(ret), label: c.name.split("/").pop() + "." + name };
   registered.push(rec);
   vm.bind(c, name, sig, isStatic, native(rec), params.length);
 }
