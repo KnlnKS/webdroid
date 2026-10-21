@@ -10,7 +10,7 @@ import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
 import { NativePath, inversePath, pathAt } from "./path.ts";
 import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
-import { BlurMask, MAX_SIGMA } from "./maskfilter.ts";
+import { BlurMask, cssBlur } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
 import { NativePaint, UNBOUNDED, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, COMPOSITE, PLANE, canvasLocalBounds, fillWithShader, shaderIdentity, recolor } from "./graphics.ts";
@@ -655,7 +655,7 @@ export function beginPaint(ctx: Ctx2D, p: NativePaint, op: GlobalCompositeOperat
   if (fade && beginAlpha(ctx, p.color >>> 24)) undo = FADED;
   if (p.shadowRadius > 0 && beginPaintShadow(ctx, p)) undo |= SHADOWED;
   if (op !== null) { ctx.globalCompositeOperation = op; undo |= BLENDED; }
-  if (blur !== null) { ctx.filter = `blur(${Math.min(blur.sigma * deviceScale(transformOf(ctx)), MAX_SIGMA)}px)`; undo |= BLURRED; }
+  if (blur !== null) { ctx.filter = cssBlur(blur.sigma, deviceScale(transformOf(ctx))); undo |= BLURRED; }
   return undo;
 }
 export function endPaint(ctx: Ctx2D, undo: number): void {

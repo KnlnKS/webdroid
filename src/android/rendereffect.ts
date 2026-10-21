@@ -4,6 +4,7 @@ import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { COMPOSITE, BLEND_MODES, type NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics.ts";
 import type { NativeBitmap } from "./bitmap.ts";
+import { radiusToSigma } from "./maskfilter.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
 import type { Ctx2D } from "./recording.ts";
 
@@ -58,8 +59,6 @@ function flatten(target: OffscreenCanvas | null, f: Filtered): OffscreenCanvas {
   g.reset(); g.drawImage(f.img, 0, 0, f.w, f.h);
   return c;
 }
-/** Blur::convertRadiusToSigma */
-const sigmaOf = (radius: number) => (radius > 0 ? Math.fround(Math.fround(0.57735 * radius) + 0.5) : 0);
 
 export abstract class NativeRenderEffect {
   protected out: OffscreenCanvas | null = null;
@@ -93,7 +92,7 @@ class Blur extends Unary implements BlurCache {
   constructor(rx: number, ry: number, tile: number, input: NativeRenderEffect | null) {
     super(input);
     this.tile = tile;
-    this.sx = sigmaOf(rx); this.sy = sigmaOf(ry);
+    this.sx = radiusToSigma(rx); this.sy = radiusToSigma(ry);
   }
   protected apply(f: Filtered): Filtered {
     if (!this.sx && !this.sy) return f;
