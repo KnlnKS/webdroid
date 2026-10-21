@@ -31,7 +31,7 @@ import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
-import { unregisterPackage } from "../android/packages.ts";
+import { unregisterPackage } from "../android/installpackage.ts";
 import { asBroker, brokerMethods, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import type { ProcessBroker } from "./processes.ts";
 import type { ServiceRequest } from "./servicerecords.ts";

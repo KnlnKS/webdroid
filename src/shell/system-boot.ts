@@ -46,7 +46,7 @@ export function bootSystemOwner(): Promise<void> {
  * loading its bytecode remains the application's Worker responsibility. */
 export async function prepareWorkerInstall(install: import("./install.ts").Install): Promise<{ pkg: string; label: string }> {
   const [{ apkCertificates, packageArchive }, { registerPackage }, { readFully }] = await Promise.all([
-    import("../android/packagearchive.ts"), import("../android/packages.ts"), import("./lazyfile.ts"),
+    import("../android/packagearchive.ts"), import("../android/installpackage.ts"), import("./lazyfile.ts"),
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
   const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install.lazyEntries);

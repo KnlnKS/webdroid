@@ -23,10 +23,11 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installedPath, registerPackage, installTime, type ComponentKind,
+import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installedPath, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
+import { registerPackage } from "./installpackage.ts";
 import { digestBytes } from "../jvm/natives/digest.ts";
 import { hostService, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";

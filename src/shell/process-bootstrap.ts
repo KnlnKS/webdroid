@@ -6,7 +6,8 @@ import { rt } from "../jvm/runtime.ts";
 import { openInstallApks, type Install } from "./install.ts";
 import { RemoteFile } from "./remote-file.ts";
 import { readFully } from "./lazyfile.ts";
-import { installedPath, registerPackage } from "../android/packages.ts";
+import { installedPath } from "../android/packages.ts";
+import { registerPackage } from "../android/installpackage.ts";
 import { hexBytes, u8 } from "../jvm/abi.ts";
 import type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 

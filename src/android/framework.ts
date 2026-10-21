@@ -18,7 +18,7 @@ import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
 import { vfs } from "../shell/vfs.ts";
 import { BytesFile, type FileSource } from "../shell/lazyfile.ts";
 import { parseAXML } from "./axml.ts";
-import { registerPackage } from "./packages.ts";
+import { registerPackage } from "./installpackage.ts";
 import { apkCertificates } from "./packagearchive.ts";
 
 let pending: Promise<Arsc> | null = null;
