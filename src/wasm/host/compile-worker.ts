@@ -3,7 +3,7 @@
 // them: it may run in another origin's process.
 import "../../natives.ts";
 import { jarDexes, platformJarUrl } from "../../android/framework.ts";
-import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance.ts";
+import { PLATFORM_JARS } from "../../jvm/provenance.ts";
 import { externs, intrinsics } from "../link/intrinsics.ts";
 import { serveCompile } from "./compile-serve.ts";
 import { natives } from "./nativesource.ts";
@@ -21,6 +21,6 @@ onmessage = ({ data: { port, fetcher, jars } }: MessageEvent<{ port: MessagePort
   const fetchBytes = (url: string) => new Promise<Uint8Array>((resolve, reject) => { waiting.set(next, [resolve, reject]); fetcher.postMessage([next++, url]); });
   serveCompile(port, {
     platform: async () => (jars ?? await Promise.all(PLATFORM_JARS.map((jar) => fetchBytes(platformJarUrl(jar))))).flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])),
-    natives, intrinsics, externs, heapUsed, hostWhole, fetchBytes,
+    natives, intrinsics, externs, heapUsed, fetchBytes,
   });
 };

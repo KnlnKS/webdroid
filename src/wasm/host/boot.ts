@@ -14,7 +14,7 @@ import { vfs } from "../../shell/vfs.ts";
 import { appArchives, packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
 import { fetchPlatformJars, jarDexes } from "../../android/framework.ts";
-import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance.ts";
+import { PLATFORM_JARS } from "../../jvm/provenance.ts";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput, answeringFor } from "../../jvm/yield.ts";
 import { World, type WorldOptions } from "../link/world.ts";
 import { objectOfLoader } from "../link/loaders.ts";
@@ -67,7 +67,7 @@ export const hostLoop: HostLoop = {
 };
 
 /** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */
-export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = new World(prog, { ...worldOptions(), holdUpgrades: () => starting, answering: () => answeringFor() > 0, heapLimit: TAB_HEAP, note: note as (ev: number, arg?: number) => void, ...extra });

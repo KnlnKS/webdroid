@@ -22,20 +22,20 @@ function native(cls: string, key: string, index: number): MethodInfo {
 }
 /** whether `spec` takes the place of methods of its dex class `jc` (overlay), rather than standing for an interface with a class of natives (javaClass) */
 const overlays = (jc: JClass, spec: HostSpec): boolean => !jc.isInterface || !!spec.statics;
-/** the methods of dex class `jc` whose code the natives of `spec` replace (`whole`: the host implements the class whole, so its initializer does not run) */
-function hostTakes(jc: JClass, spec: HostSpec, whole: boolean): MethodInfo[] {
+/** the methods of dex class `jc` whose code the natives of `spec` replace */
+function hostTakes(jc: JClass, spec: HostSpec): MethodInfo[] {
   if (!overlays(jc, spec)) return [];
-  const clinit = jc.byKey.get(CLINIT), out = clinit && (!spec.platformClinit || whole) ? [clinit] : [];
+  const clinit = jc.byKey.get(CLINIT), out = clinit && !spec.platformClinit ? [clinit] : [];
   if (!jc.isInterface) for (const key of spec.methods) { const m = native(spec.name, key, 0), own = jc.byKey.get(m.key); if (own && own.isStatic === m.isStatic) out.push(own); }
   return out;
 }
 /** what defining `specs` takes from the code of `prog`'s classes: the methods whose code the host replaces, and the instance methods (name+descriptor) each spec's
  *  class implements, which its objects run even where the class inherits them, since overlay gives it their natives (HostClasses.mayReach) */
-export function hostTakeover(prog: Program, specs: readonly HostSpec[], whole?: (name: string) => boolean): { taken: MethodInfo[]; implemented: [string, string[]][] } {
+export function hostTakeover(prog: Program, specs: readonly HostSpec[]): { taken: MethodInfo[]; implemented: [string, string[]][] } {
   const taken: MethodInfo[] = [], implemented: [string, string[]][] = [];
   for (const spec of specs) {
     const jc = prog.get(spec.name), keys = spec.methods.filter((k) => !k.startsWith(STATIC) && k[0] !== "<");
-    if (jc?.dex) taken.push(...hostTakes(jc, spec, !!whole?.(jc.name)));
+    if (jc?.dex) taken.push(...hostTakes(jc, spec));
     if (keys.length) implemented.push([spec.name, keys]);
   }
   return { taken, implemented };
@@ -167,11 +167,11 @@ export class HostClasses {
   private overlay(jc: JClass, spec: HostSpec): void {
     const prog = this.w.prog, hosted = new PlainClass(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
     const over = new PlainClass(jc.name, jc.sup, jc.ifaces, jc.flags, jc.methods.map((m) => ({ ...m })), jc.fields, jc.dex, jc.def);
-    const taken = hostTakes(jc, spec, !!this.w.opts.hostWhole?.(jc.name)).map((m) => over.byKey.get(m.key)!), virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
+    const taken = hostTakes(jc, spec).map((m) => over.byKey.get(m.key)!), virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
     for (const own of taken) {
       if (own.key !== CLINIT) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; if (!own.isStatic && !own.isCtor) virtual.push(own.key); continue; }
       // a class a spec implements is initialized without its `<clinit>`: with the values the spec names, if any. The platform build's class module runs the `<clinit>`
-      // slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values; a class the host implements whole does not run its platform initializer
+      // slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values
       if (!spec.platformClinit) { own.flags |= ACC.NATIVE; own.codeOff = 0; }
       if (!spec.statics || spec.platformClinit) bodies.set(own, () => {});
     }

@@ -28,7 +28,7 @@ export class AotBuilder {
     const n = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));
     this.seeded = w.numbers.marks();
     // the methods the host takes over keep their slots, as a process's World overrides them
-    const host = hostTakeover(w.prog, w.natives.source?.hostSpecs?.() ?? [], w.opts.hostWhole);
+    const host = hostTakeover(w.prog, w.natives.source?.hostSpecs?.() ?? []);
     w.hosts.adoptTakeover(host.implemented, []);
     for (const m of host.taken) w.hosts.take(m);
     const dIds = new Map<string, number>(), cIds = new Map<string, number>(), id = (m: Map<string, number>, keys: string[], k: string | null) => {

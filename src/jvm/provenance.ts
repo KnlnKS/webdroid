@@ -53,13 +53,9 @@ export const TS_SPECS: Record<string, string> = {
   "com/android/okhttp/HttpHandler": "HTTP over the fetch proxy",
   "com/android/okhttp/HttpsHandler": "HTTPS over the fetch proxy",
   "com/android/org/conscrypt/SSLParametersImpl": "TLS at the relay",
-  "javax/microedition/khronos/": "GL over the browser's WebGL",
   "android/net/ssl/SSLSockets": "TLS at the relay, whose sockets are not Conscrypt's",
   "android/webkit/WebViewFactory": "the WebView provider over the browser",
 };
-
-/** classes of the platform jars that the host implements whole: the Wasm tier does not run their initializers */
-export const hostWhole = (name: string): boolean => name.startsWith("javax/microedition/khronos/");
 
 /** the TS_SPECS key that allows `name`, if any */
 export const tsSpecAllowance = (name: string): string | undefined =>

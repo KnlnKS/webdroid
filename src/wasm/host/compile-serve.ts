@@ -24,7 +24,6 @@ export interface CompileEnv {
   externs: string[];
   fetchBytes(url: string): Promise<Uint8Array>;
   heapUsed(): number;
-  hostWhole?(name: string): boolean;
 }
 /** the methods an app build compiles: the baseline profile's, then all of the app's when `whole`, else those of the classes a launch instantiates, those of the manifest's
  *  other components, and what these call, up to `limit` */
@@ -143,7 +142,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       for (const [id, before, after] of loaders.libraries) program.libraries(program.loaderAt(id), before.map(id => program.loaderAt(id)), after.map(id => program.loaderAt(id)));
       for (const [id, name, key] of loaders.initiated) program.initiate(program.loaderAt(id), name, key);
     }
-    const w = new World(program, { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, hostWhole: env.hostWhole, compileOnly: true,
+    const w = new World(program, { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, compileOnly: true,
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
     // Initial app builds precede hostClasses arriving. Apply overlays from the start, as the page does.
     for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);

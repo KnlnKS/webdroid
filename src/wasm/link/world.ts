@@ -57,8 +57,6 @@ export interface WorldOptions {
   guest?: GuestMemory;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
   claim?: (owner: object, handle: bigint) => void;
-  /** classes of the platform the host implements whole: their initializers do not run (hostclass.ts) */
-  hostWhole?: (name: string) => boolean;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
   /** a World that makes that code (aotbuild.ts AotBuilder): classes, slots and selectors are numbered but nothing is instantiated */
