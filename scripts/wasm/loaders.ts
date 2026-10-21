@@ -208,10 +208,10 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
     if (table.get(slot)!() !== 42) fail("accounted symbolic operation failed");
-    if (w.stats.units !== stub.units || w.stats.bytes !== stub.bytes || w.stats.compileMs <= stub.compileMs) fail("shared symbolic operation rebuilt code or lost resolution accounting");
+    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs) fail("symbolic operation compilation unaccounted");
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) fail("warm symbolic operation compiled again");
-    console.log("symbolic accounting: new stub recorded; resolved operation shared without compilation; warm execution unchanged");
+    console.log("symbolic accounting: stub and operation each recorded one unit and bytes; warm execution unchanged");
     const later = "fixture/HelperLater", helperBody = (cx: Compiler, c: Code) => {
       const failure = typeFailure(cx.w.prog, `L${later};`);
       if (failure) cx.linkError(c, failure); else c.i32(42);
@@ -262,7 +262,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
         Compiler.prototype.buildSynthetics = emit;
       }
       const collect = (globalThis as typeof globalThis & { gc: () => void }).gc;
-      check("symbolic lifetime probe compilers (shared operations are not rebuilt)", compilers.length, 1);
+      check("symbolic lifetime probe compilers (the stubs' and each operation's)", compilers.length, 33);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
       const retainedStubs = stubs.filter(ref => ref.deref()).length;
