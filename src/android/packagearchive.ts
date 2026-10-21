@@ -59,20 +59,15 @@ export function packageArchive(zip: Record<string, Uint8Array>, certificates: Ui
   return { root, pkg, apk: { table, zip, lazyEntries }, certificates };
 }
 
-/** Certificates come from the installed record. Resource-table files stay synchronous for
- *  Resources.fileOf; unrelated archive entries retain the normal lazy file path. */
+/** An installed package read over `source`: its manifest and table resident, every other entry
+ *  read when ApkAssets opens it. Certificates come from the installed record. */
 export async function packageArchiveSource(source: FileSource, certificates: Uint8Array[]): Promise<PackageArchive> {
   const entries = await centralDirOfSource(source), lazy = new Map<string, FileSource>();
   for (const [name, entry] of entries) if (!name.endsWith("/")) lazy.set(name, new ZipEntryFile(source, entry));
   const zip: Record<string, Uint8Array> = {};
-  for (const name of ["AndroidManifest.xml", "resources.arsc"]) {
+  await Promise.all(["AndroidManifest.xml", "resources.arsc"].map(async (name) => {
     const file = lazy.get(name);
     if (file) { zip[name] = await readFully(file); lazy.delete(name); }
-  }
-  const archive = packageArchive(zip, certificates, lazy), pool = archive.apk.table?.values;
-  for (let i = 0; pool && i < pool.length; i++) {
-    const name = pool.get(i), file = lazy.get(name);
-    if (file) { zip[name] = await readFully(file); lazy.delete(name); }
-  }
-  return archive;
+  }));
+  return packageArchive(zip, certificates, lazy);
 }

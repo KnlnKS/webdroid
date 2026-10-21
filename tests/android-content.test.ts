@@ -265,13 +265,11 @@ describe("packagearchive", () => {
     expect(archive.certificates).toEqual(baseline.certificates);
     expect(archive.apk.zip["resources.arsc"]).toEqual(baseline.apk.zip["resources.arsc"]);
     expect(readBytes).toBeLessThan(bytes.length);
-    const pool = archive.apk.table!.values;
-    for (let i = 0; i < pool.length; i++) {
-      const name = pool.get(i);
-      if (Object.hasOwn(baseline.apk.zip, name)) expect(archive.apk.table!.files(name)).toEqual(baseline.apk.zip[name]);
-    }
-    expect(archive.apk.lazyEntries.has("classes.dex")).toBe(true);
+    expect(Object.keys(archive.apk.zip).sort()).toEqual(["AndroidManifest.xml", "resources.arsc"]);
     const metadataBytes = readBytes, residentBytes = Object.values(archive.apk.zip).reduce((sum, data) => sum + data.length, 0);
+    // a file resource, named in the table's pool, is read when opened
+    const pool = archive.apk.table!.values, entry = Array.from({ length: pool.length }, (_, i) => pool.get(i)).find((name) => Object.hasOwn(baseline.apk.zip, name))!;
+    expect(await readFully(archive.apk.lazyEntries.get(entry)!)).toEqual(baseline.apk.zip[entry]);
     expect(await readFully(archive.apk.lazyEntries.get("classes.dex")!)).toEqual(baseline.apk.zip["classes.dex"]);
     console.log(JSON.stringify({ apkBytes: bytes.length, metadataBytes, residentBytes }));
   });
