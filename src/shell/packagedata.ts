@@ -7,7 +7,7 @@ import type { processBroker } from "./processes.ts";
 import type { ParcelData } from "../android/binder.ts";
 import { webData } from "../android/webstorage.ts";
 import { keystoreData } from "../android/keystore.ts";
-import { uriGrantData } from "../android/urigrants.ts";
+import { uriGrantData } from "../android/server/urigrants.ts";
 import { legacySnapshotData } from "../android/sqlite.ts";
 import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
 import { jobData } from "../android/job.ts";

@@ -372,7 +372,7 @@ function* queryComponents$(q: IntentQuery, flags: number, kind: ComponentKind): 
       let priority = -Infinity, isDefault = false;
       for (const node of c.node.children) {
         if (node.name !== "intent-filter") continue;
-        const filter: JObj = yield* manifestFilter$(node);
+        const filter: JObj = yield* manifestFilter$(node, owner.res);
         if (!(yield* matches$(filter, target, defaultOnly))) continue;
         priority = Math.max(priority, yield vcall(filter, "getPriority", "()I"));
         isDefault ||= !!(yield vcall(filter, "hasCategory", "(Ljava/lang/String;)Z", "android.intent.category.DEFAULT"));

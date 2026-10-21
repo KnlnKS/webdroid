@@ -119,7 +119,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   if (!started) {
     started = entry = (async () => {
       const { startActivityThread } = await import("../src/android/server/am.ts");
-      const { hostWindowManager } = await import("../src/android/server/wm.ts");
       const { serviceTransport } = await import("../src/android/server/activeservices.ts");
       const { ServiceRecords } = await import("../src/shell/servicerecords.ts");
       // the start state the broker keeps of this realm's services, which no broker holds here
@@ -127,7 +126,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
       serviceTransport.starts = () => starts;
       await loadPlatform();
       await loadSystemFonts();
-      hostWindowManager();
       await onMain(() => startActivityThread(false));
       // bindApplication is a message to the main looper; the Application exists once it ran
       return onMain(async () => {

@@ -6,10 +6,10 @@ import { awaited, type JObj, driven, type Gen } from "../../jvm/runtime.ts";
 import { newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
 import { PROCESS_UID } from "../os.ts";
-import { appHost } from "../apphost.ts";
+import { runningApp } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";
 import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
-import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./am.ts";
+import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
@@ -60,7 +60,7 @@ function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<b
 export const deliverBroadcast = driven(function* (intent: JObj, component: string | null, ordered: boolean, result: BroadcastResult, sender: Sender | null): Gen<BroadcastResult> {
   const from = sender ?? SYSTEM;
   if (component) {
-    const name = yield* awaited(mkComponentName(appHost!.pkg, component));
+    const name = yield* awaited(mkComponentName(runningApp().pkg, component));
     const info = yield vcall(yield* awaited(pms()), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, STOCK_PM_FLAGS, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
     const copy = yield* withComponent$(intent, name);
@@ -90,7 +90,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
 export const broadcastIntent = driven(function* (intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Gen<void> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
   const final = yield* awaited(broadcastTransport.send(copy, permissions, ordered, initial));
-  if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: PROCESS_UID, pkg: appHost!.pkg });
+  if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: PROCESS_UID, pkg: runningApp().pkg });
 });
 
 /** the methods IActivityManager adds for ActivityThread's receivers */

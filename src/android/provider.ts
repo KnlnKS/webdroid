@@ -5,7 +5,7 @@ import { awaited, rt, type JObj, getDeclared, driven, type Gen } from "../jvm/ru
 import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
 import { serviceContext } from "./binder.ts";
 import { startActivityFor } from "./server/atm.ts";
-import { thisApp } from "./server/am.ts";
+import { thisApp } from "./server/process.ts";
 import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery$, mkComponentName, type JIntent } from "./intent.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { frameworkString } from "./res.ts";

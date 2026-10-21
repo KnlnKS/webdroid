@@ -11,6 +11,7 @@ import { packages } from "../android/packages.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
+import { senderRecord } from "../android/pendingintent.ts";
 import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
@@ -324,9 +325,10 @@ export class ProcessBroker {
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
     const caller = this.entry(callerPid);
-    if (request.handle.pid === 0) {
+    const record = senderRecord(request.handle);
+    if (record !== null) {
       try {
-        if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
+        if (!this.intents.known(record)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
         const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
         if (handled) writeString(reply, "android.content.IIntentSender");
         return { handled, data: await exportParcel(reply) };

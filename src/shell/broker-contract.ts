@@ -4,6 +4,7 @@
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
 import type { PermissionCalls } from "../android/permissions.ts";
+import type { UriGrantCalls } from "../android/urigrants.ts";
 import type { PreferenceCalls } from "../android/sharedprefs.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
@@ -56,6 +57,7 @@ export type BrokerCalls = CookieCalls & {
   permissions: PermissionCalls;
   settings: Calls<SettingsAccess>;
   activity: ActivityCalls;
+  uriGrants: Calls<UriGrantCalls>;
   ui: HostUi;
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   systemService: (name: string) => Promise<BinderHandle | null>;
@@ -83,7 +85,7 @@ export const brokerMethods = {
   process: methodsOf<ProcessLifeCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch"]),
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
-  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "operation", "kind", "flags", "creator"]),
+  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "take", "peek"]),
   prefs: methodsOf<PreferenceCalls>()(["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),
@@ -91,6 +93,7 @@ export const brokerMethods = {
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
   ui: hostUiMethods,
+  uriGrants: methodsOf<UriGrantCalls>()(["check", "grant", "revoke"]),
 } satisfies MethodTree & { [D in Domains<BrokerCalls>]: readonly (keyof BrokerCalls[D])[] };
 export const brokerCallNames = qualified(brokerMethods);
 

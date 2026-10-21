@@ -6,15 +6,15 @@ import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { newLinkedHashSet } from "../jvm/natives/jcoll.ts";
 import { attr, attrStr, TV, type XmlNode } from "./axml.ts";
 import { mkUri } from "./net.ts";
-import { appHost } from "./apphost.ts";
-import { resString } from "./res.ts";
+import { resString, type Resources } from "./res.ts";
 import type { IntentQuery } from "./intent.ts";
 import { awaited } from "../jvm/runtime.ts";
 
 const S = "Ljava/lang/String;";
-function value(node: XmlNode, name: string): string | null {
+/** an attribute's string, a reference read through the resources of the filter's own package */
+function value(res: Resources, node: XmlNode, name: string): string | null {
   const a = attr(node, name);
-  return a?.type === TV.REFERENCE && appHost ? resString(appHost.res, a.data) : attrStr(node, name);
+  return a?.type === TV.REFERENCE ? resString(res, a.data) : attrStr(node, name);
 }
 /** each attribute suffix's PatternMatcher type: LITERAL, PREFIX, SIMPLE_GLOB, ADVANCED_GLOB, SUFFIX */
 const PATTERNS = [["", 0], ["Prefix", 1], ["Pattern", 2], ["AdvancedPattern", 3], ["Suffix", 4]] as const;
@@ -22,46 +22,46 @@ const PATTERNS = [["", 0], ["Prefix", 1], ["Pattern", 2], ["AdvancedPattern", 3]
 const URI_PARTS = [["path", 0], ["query", 1], ["fragment", 2]] as const;
 
 const filters = new WeakMap<XmlNode, JObj>();
-/** the IntentFilter the package parser builds from `node` */
-export function* manifestFilter$(node: XmlNode): Gen<JObj> {
+/** the IntentFilter the package parser builds from `node`, a filter of the package `res` belongs to */
+export function* manifestFilter$(node: XmlNode, res: Resources): Gen<JObj> {
   const known = filters.get(node);
   if (known) return known;
   const filter: JObj = yield newObj("android/content/IntentFilter");
   yield vcall(filter, "setPriority", "(I)V", attr(node, "priority")?.data ?? 0);
   yield vcall(filter, "setOrder", "(I)V", attr(node, "order")?.data ?? 0);
   for (const child of node.children) {
-    const name = child.name === "action" || child.name === "category" ? value(child, "name") : null;
+    const name = child.name === "action" || child.name === "category" ? value(res, child, "name") : null;
     if (child.name === "action" && name !== null) yield vcall(filter, "addAction", `(${S})V`, name);
     else if (child.name === "category" && name !== null) yield vcall(filter, "addCategory", `(${S})V`, name);
-    else if (child.name === "data") yield* addData$(filter, child);
-    else if (child.name === "uri-relative-filter-group") yield* addGroup$(filter, child);
+    else if (child.name === "data") yield* addData$(filter, res, child);
+    else if (child.name === "uri-relative-filter-group") yield* addGroup$(filter, res, child);
   }
   filters.set(node, filter);
   return filter;
 }
-function* addData$(filter: JObj, data: XmlNode): Gen<void> {
-  const type = value(data, "mimeType"), group = value(data, "mimeGroup"), scheme = value(data, "scheme");
+function* addData$(filter: JObj, res: Resources, data: XmlNode): Gen<void> {
+  const type = value(res, data, "mimeType"), group = value(res, data, "mimeGroup"), scheme = value(res, data, "scheme");
   if (type !== null) yield vcall(filter, "addDataType", `(${S})V`, type);
   if (group !== null) yield vcall(filter, "addMimeGroup", `(${S})V`, group);
   if (scheme !== null) yield vcall(filter, "addDataScheme", `(${S})V`, scheme);
   for (const [suffix, pattern] of PATTERNS) {
-    const ssp = value(data, "ssp" + suffix);
+    const ssp = value(res, data, "ssp" + suffix);
     if (ssp !== null) yield vcall(filter, "addDataSchemeSpecificPart", `(${S}I)V`, ssp, pattern);
   }
-  const host = value(data, "host");
-  if (host !== null) yield vcall(filter, "addDataAuthority", `(${S}${S})V`, host, value(data, "port"));
+  const host = value(res, data, "host");
+  if (host !== null) yield vcall(filter, "addDataAuthority", `(${S}${S})V`, host, value(res, data, "port"));
   for (const [suffix, pattern] of PATTERNS) {
-    const path = value(data, "path" + suffix);
+    const path = value(res, data, "path" + suffix);
     if (path !== null) yield vcall(filter, "addDataPath", `(${S}I)V`, path, pattern);
   }
 }
 /** the reference build parses these (Flags.relativeReferenceIntentFilters is true there) */
-function* addGroup$(filter: JObj, node: XmlNode): Gen<void> {
+function* addGroup$(filter: JObj, res: Resources, node: XmlNode): Gen<void> {
   const allow = attr(node, "allow");
   const group: JObj = yield newObj("android/content/UriRelativeFilterGroup", "(I)V", allow?.type === TV.BOOLEAN && !allow.data ? 1 : 0);
   let added = false;
   for (const data of node.children) if (data.name === "data") for (const [part, id] of URI_PARTS) for (const [suffix, pattern] of PATTERNS) {
-    const text = value(data, part + suffix);
+    const text = value(res, data, part + suffix);
     if (text === null) continue;
     yield vcall(group, "addUriRelativeFilter", "(Landroid/content/UriRelativeFilter;)V",
       yield newObj("android/content/UriRelativeFilter", `(II${S})V`, id, pattern, text));

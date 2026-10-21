@@ -59,11 +59,11 @@ const roles: Record<string, () => (data: never) => void> = {
         return { pid: read[0], id: read.length };
       },
       47: async () => {
-        const live = await life.alive(8001), system = await life.alive(0), absent = await life.alive(9999);
+        const live = await life.alive(8001), absent = await life.alive(9999);
         (await life.watch(8001, () => { deaths += 100; }))();
         await life.watch(8001, () => { deaths++; });
         const denied = await life.watch(9999, () => { deaths += 1000; }).then(() => false, () => true);
-        return { pid: +live + 2 * +system + 4 * +absent, id: +denied };
+        return { pid: +live + 2 * +absent, id: +denied };
       },
       48: async () => ({ pid: deaths, id: +await life.alive(8001) }),
       49: async () => { await life.signal(8001, 9); await life.signal(8003, 9); return { pid: deaths, id: 1 }; },

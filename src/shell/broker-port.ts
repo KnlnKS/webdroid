@@ -7,6 +7,7 @@ import { PROCESS_PID } from "../android/os.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
+import { uriGrantCommands } from "../android/server/urigrants.ts";
 import { canonicalPreferenceCommands, createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
@@ -58,11 +59,10 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const watches = new Map<number, () => void>();
   const calls: Answers<BrokerCalls> = {
     process: {
-      processAlive: target => target === 0 || broker.alive(target),
+      processAlive: target => broker.alive(target),
       processSignal: (target, signal) => broker.signal(pid, target, signal),
       processWatch: (target, token) => {
         watches.get(token)?.(); watches.delete(token);
-        if (target === 0) return;
         watches.set(token, broker.watch(target, () => {
           watches.delete(token);
           if (broker.alive(pid)) unawaited(broker.request(broker.entry(pid), endpoint => endpoint.processDied(token)));
@@ -87,12 +87,10 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       create: (pkg, kind, code, flags, intent, intents) => broker.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
       cancel: id => broker.cancelPending(pid, id),
       send: (id, fill) => broker.intents.send(id, fill),
-      operation: id => broker.takePending(pid, id),
-      kind: id => broker.intents.get(id)?.kind ?? null,
-      flags: id => broker.intents.get(id)?.flags ?? 0,
-      creator: id => {
+      take: id => broker.takePending(pid, id),
+      peek: id => {
         const operation = broker.intents.get(id);
-        return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+        return operation && { pkg: operation.pkg, uid: operation.uid, kind: operation.kind, flags: operation.flags };
       },
     },
     files: {
@@ -123,11 +121,12 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       finish: (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
       presentation: translucent => broker.activities.presentation(pid, translucent),
     },
+    uriGrants: uriGrantCommands(() => caller.uid),
     ui: Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
       (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
     serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
     systemService: async name => {
-      if (!SYSTEM_SERVICES.includes(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+      if (!SYSTEM_SERVICES.has(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
       const handle = await asSystem(() => ownedSystemService(name));
       broker.entry(pid);
       return handle;

@@ -4,7 +4,8 @@
 import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, waits, type Gen } from "../../jvm/runtime.ts";
 import { jarray } from "../../jvm/abi.ts";
 import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry.ts";
-import { hostStub } from "../binder.ts";
+import { csText } from "../../jvm/natives/jchars.ts";
+import { hostService } from "../binder.ts";
 import { device } from "../../shell/config.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger.ts";
@@ -151,7 +152,7 @@ function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: J
   yield vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
   const type = lp<number>(attrs, "type"), token = lp<JObj | null>(attrs, "token");
   const parent = isSubWindow(type) && token ? windows.get(token) ?? null : null;
-  const title = String((yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")) ?? "");
+  const title = yield* awaited(csText(yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")));
   const ws = new WindowState(window, copy, parent, title, type, windowZ(type, token, ++seq));
   ws.visibility = visibility;
   ws.requestedVisibleTypes = yield* awaited(insetsType("defaultVisible"));
@@ -376,7 +377,8 @@ rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: 
   ...stubs(null, "getWindowId(Landroid/os/IBinder;)Landroid/view/IWindowId;"),
 } });
 
-rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: "android/view/IWindowManager$Stub", methods: {
+// WindowManagerGlobal's IWindowManager, for an app whose windows AOSP's ViewRootImpl manages
+hostService("window", "webdroid/WindowManager", "android/view/IWindowManager$Stub", {
   "openSession(Landroid/view/IWindowSessionCallback;)Landroid/view/IWindowSession;": () => newObj("webdroid/WindowSession"),
   "getCurrentAnimatorScale()F": () => 1,
   "getWindowInsets(ILandroid/os/IBinder;Landroid/view/InsetsState;)Z": driven(function* (_display: number, _token: JObj, out: JObj) {
@@ -410,7 +412,4 @@ rt.register({ name: "webdroid/WindowManager", ctor: class extends JObj {}, sup: 
   // nothing records the screen
   "registerScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)Z": () => 0,
   "unregisterScreenRecordingCallback(Landroid/window/IScreenRecordingCallback;)V": () => {},
-} });
-
-/** WindowManagerGlobal's IWindowManager, for an app whose windows AOSP's ViewRootImpl manages */
-export function hostWindowManager(): void { hostStub("window", "webdroid/WindowManager"); }
+});

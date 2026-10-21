@@ -10,7 +10,6 @@ import { loadAppCode, loadTier } from "../jvm/tier.ts";
 import { startZygote, setSystemDisplayTarget, useDisplayRotation } from "./device.ts";
 import { connectProcess } from "./process-endpoint.ts";
 import { processBroker } from "./processes.ts";
-import { hostWindowManager } from "../android/server/wm.ts";
 import { loadSystemFontMap } from "../android/fonts.ts";
 import { rt } from "../jvm/runtime.ts";
 
@@ -28,7 +27,6 @@ export function bootSystemOwner(): Promise<void> {
     const broker = processBroker();
     broker.registerSystemServer();
     await loadAppCode();
-    hostWindowManager();
     setSystemDisplayTarget();
     useDisplayRotation();
     await startZygote();
