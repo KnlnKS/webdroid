@@ -25,10 +25,9 @@ procMemory.maps = () => [...modules.map((m) => `${hex(m.base)}-${hex(m.end)} r-x
 procMemory.startStack = () => { const main = cpuOf(mainThread); return main?.stackTop ? main.stackTop - 64 : 0; };
 
 let inited = false;
-function nativeInit(abi: string): void {
-  const wide = abi === "arm64-v8a";
+function nativeInit(wide: boolean): void {
   if (inited) {
-    if (wide !== isA64()) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `Cannot load ${abi} code in a ${isA64() ? "64" : "32"}-bit process`);
+    if (wide !== isA64()) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `Cannot load ${wide ? "64" : "32"}-bit code in a ${isA64() ? "64" : "32"}-bit process`);
     return;
   }
   setA64(wide);
@@ -62,8 +61,8 @@ function libcReady(cpu: Cpu): Promise<void> | null {
 
 /** Load and relocate an image without executing a single instruction of it. An ABI whose
  *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */
-export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): Promise<Module> {
-  nativeInit(abi);
+export async function linkNativeLib(name: string, bytes: Uint8Array): Promise<Module> {
+  nativeInit(bytes[4] === 2);                                                   // EI_CLASS: ELFCLASS64
   await libcReady(cpuFor(curThread));
   return loadModule(name, bytes, true);
 }
@@ -75,7 +74,7 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   }
   // the ABI decides the pointer width the JNI tables are laid out at, so it has to be known
   // before nativeInit builds them
-  nativeInit(abi);
+  nativeInit(ABIS_64.includes(abi));
   // the caller's Cpu, chosen before anything suspends: init arrays and JNI_OnLoad run on the thread
   // that called dlopen (the main Cpu may be parked mid-static-initialiser meanwhile, where libc++'s
   // guard would report a recursive initialisation), and driven, as its call chain: a <clinit>'s

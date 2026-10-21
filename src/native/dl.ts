@@ -5,7 +5,7 @@
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
 import { mem } from "./mem.ts";
 import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, cstr, type HostFn } from "./host.ts";
-import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu.ts";
+import { cpuFor, cpus, setSymbolizeHook, isA64, type Cpu } from "./cpu.ts";
 import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
@@ -62,9 +62,8 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
     mod.path = source?.device;
-    // a process is one ABI: the first image decides which emitter its code compiles with
-    if (!modules.length) setA64(mod.w64);
-    else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
+    // a process is one ABI, which its first image decided (loader.ts)
+    if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules load (and initialise) first, each holding a reference;
