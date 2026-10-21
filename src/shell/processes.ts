@@ -347,15 +347,8 @@ export class ProcessBroker {
   }
   /** `use` with `data`'s descriptor rights moved from `from` to `to`, which gets them back unless `use`
    *  succeeds; `from`'s staged rights are discarded either way */
-  async withTransferred<T>(from: number, to: number, data: ParcelData, use: (moved: ParcelData) => Promise<T>, broker = false): Promise<T> {
-    let moved: ParcelData | null = null;
-    try {
-      moved = await this.transferDescriptors(from, to, data, broker);
-      return await use(moved);
-    } catch (error) {
-      if (moved) await this.discardDescriptors(to, moved, false);
-      throw error;
-    } finally { await this.discardDescriptors(from, data, true); }
+  withTransferred<T>(from: number, to: number, data: ParcelData, use: (moved: ParcelData) => Promise<T>, broker = false): Promise<T> {
+    return this.fileDescriptors.withTransferred(from, to, data, use, () => { this.entry(from); if (!broker) this.entry(to); });
   }
   /** the descriptor rights of `pid`, a process in this realm: staging and taking need it alive, discarding does not */
   descriptorRights(pid: number): DescriptorRights {
@@ -366,19 +359,6 @@ export class ProcessBroker {
   }
   discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
     return releaseRights(data,this.fileDescriptors.rights(pid),staged);
-  }
-  async transferDescriptors(from: number, to: number, data: ParcelData, broker = false): Promise<ParcelData> {
-    this.entry(from);if (!broker) this.entry(to);this.fileDescriptors.ensureReceiver(to);
-    const transferred: ParcelData = {bytes:data.bytes.slice(),objects:[]};
-    try {
-      for (const [at,object] of data.objects) {
-        if (!object || !("descriptor" in object)) { transferred.objects.push([at,object]);continue; }
-        const token = await this.fileDescriptors.receive(from,object.descriptor,to);
-        if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Invalid Binder descriptor right: " + token);
-        transferred.objects.push([at,{descriptor:token}]);
-      }
-      return transferred;
-    } catch (error) { await this.discardDescriptors(to,transferred,false);throw error; }
   }
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     if (pid !== null) this.entry(pid);

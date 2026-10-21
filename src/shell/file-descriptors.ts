@@ -7,6 +7,8 @@ import type { AttributeChange } from "./file-path.ts";
 import { fifoOf, holdFifo, type Pipe } from "../native/pipe.ts";
 import { vfs, type VfsFile } from "./vfs.ts";
 import { writable } from "./lazyfile.ts";
+import { releaseRights, type ParcelData } from "../android/binder.ts";
+import { rt } from "../jvm/runtime.ts";
 
 /** each descriptor operation's request, and what it answers other than a number (a result or -errno) */
 type Operations = {
@@ -58,6 +60,18 @@ function rangeError(mapping: Mapping, offset: number, length: number, access: nu
   return mapping.offset + offset + length > mapping.file.content.len ? E.NOTSUP : 0;
 }
 
+type ParcelObject = ParcelData["objects"][number][1];
+/** a copy of `data` whose objects are what `map` makes of them; on failure `undo` gets the copy as far as it got,
+ *  to release the rights it holds */
+export async function mapRights(data: ParcelData, map: (object: ParcelObject, at: number) => ParcelObject | Promise<ParcelObject>,
+  undo: (partial: ParcelData) => Promise<void>): Promise<ParcelData> {
+  const mapped: ParcelData = { bytes: data.bytes.slice(), objects: [] };
+  try {
+    for (const [at, object] of data.objects) mapped.objects.push([at, await map(object, at)]);
+    return mapped;
+  } catch (error) { await undo(mapped); throw error; }
+}
+
 /** The page's kernel owns open files; process tokens never expose its descriptor numbers.
  * Duplication retains that open file (including position/status flags), rather than reopening
  * a path or copying bytes. Mapping transport is a separate kernel operation. */
@@ -92,6 +106,25 @@ export class FileDescriptors {
     if (right.closing) return right.closing;
     right.closed=true;
     return right.closing=this.ordered(right.file,()=>{javaCloseFd(right.fd);});
+  }
+  /** `use` with `data`'s descriptor rights moved from `from` to `to`, which gives them back unless `use` succeeds;
+   *  `from`'s staged rights are discarded either way. `check` throws once either process may not take part. */
+  async withTransferred<T>(from: number, to: number, data: ParcelData, use: (moved: ParcelData) => Promise<T>, check: () => void): Promise<T> {
+    let moved: ParcelData | null = null;
+    try {
+      check();
+      this.ensureReceiver(to);
+      moved = await mapRights(data, async object => {
+        if (!object || !("descriptor" in object)) return object;
+        const token = await this.receive(from, object.descriptor, to);
+        if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid Binder descriptor right: " + token);
+        return { descriptor: token };
+      }, partial => releaseRights(partial, this.rights(to), false));
+      return await use(moved);
+    } catch (error) {
+      if (moved) await releaseRights(moved, this.rights(to), false);
+      throw error;
+    } finally { await releaseRights(data, this.rights(from), true); }
   }
 
   session(pid: number, authorize: Session["authorize"], uid?: number): DescriptorCalls {
