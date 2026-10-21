@@ -50,6 +50,8 @@ interface ProgramRec {
 export const programRecs = new WeakMap<WebGLProgram, ProgramRec>();
 /** a guest uniform location naming a swizzled sampler: the program's record, its binding and element */
 export const samplerSlots = new WeakMap<WebGLUniformLocation, { rec: ProgramRec; binding: SamplerBinding; index: number }>();
+/** glGetUniformLocation's handles by program and name: a location is one integer until the program relinks */
+export const uniformHandles = new WeakMap<WebGLProgram, Map<string, number>>();
 export interface ContextState {
   activeUnit: number;
   bindings: Map<number, Map<number, WebGLTexture | null>>;
@@ -146,6 +148,7 @@ function samplerTarget(type: number): number {
 export function linkProgram(program: WebGLProgram): void {
   const gl = g();
   gl.linkProgram(program);
+  uniformHandles.delete(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { programRecs.delete(program); return; }
   const rewrites = (gl.getAttachedShaders(program) ?? []).map((shader) => shaderRecs.get(shader)?.rewrite).filter((r): r is SwizzleRewrite => !!r);
   const hidden = new Set(rewrites.flatMap((rewrite) => [...rewrite.hidden]));

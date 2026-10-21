@@ -15,7 +15,7 @@ import { rewriteTextureSwizzles } from "./swizzle.ts";
 import { activateEglCurrent } from "./egl-current.ts";
 import {
   g, H, TEXTURE0, UNBOUND, contextState, textureRec, texRecs, textureTarget, externalSamplersAs2D, activeUniformInfo, boundTexture, linkProgram,
-  prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, pbo, type GL, type ContextState,
+  prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, uniformHandles, pbo, type GL, type ContextState,
 } from "./gles3-state.ts";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
 import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
@@ -145,6 +145,15 @@ const active = (q: (p: WebGLProgram, i: number) => WebGLActiveInfo | null): Host
   if (typep) mem.st32(typep, info.type);
   outStr(info.name, bufsize, lenp, name);
 };
+function uniformLocation(p: WebGLProgram, name: string): number {
+  const [, base, index] = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!, rec = programRecs.get(p);
+  if (rec && rec.hidden.has(base)) return -1;
+  const u = g().getUniformLocation(p, name);
+  if (!u) return -1;
+  const binding = rec && rec.samplers.get(base);
+  if (rec && binding) samplerSlots.set(u, { rec, binding, index: Number(index ?? 0) });
+  return put(T().uniforms, u);
+}
 const names = (pp: number, n: number): string[] => { const r: string[] = []; for (let i = 0; i < n; i++) r.push(mem.cstr(ldp(pp + i * PTR))); return r; };
 
 /** the state entry points ES 1.1 and ES 3.0 share */
@@ -202,7 +211,7 @@ export function gles3Init(): void {
     glPixelStorei: keepsClean((_c, a) => { const pn = a.i(), v = a.i(); if (!pixelStoreAccepted(pn, v)) unsure(); pixelStore(g(), pn, v); }),
 
     // ── shaders and programs
-    glCreateShader: (_c, a) => put(T().shaders, g().createShader(a.i())),
+    glCreateShader: (_c, a) => { const s = g().createShader(a.i()); return s ? put(T().shaders, s) : 0; },
     glDeleteShader: keepsClean((_c, a) => { const h = a.i(), s = T().shaders[h]; if (s) { g().deleteShader(s); T().shaders[h] = null; } }),
     glIsShader: keepsClean((_c, a) => (H(T().shaders, a.i()) ? 1 : 0)),
     glShaderSource: (_c, a) => {
@@ -225,7 +234,7 @@ export function gles3Init(): void {
     glGetShaderSource: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && (shaderRecs.get(s)?.original ?? g().getShaderSource(s))) ?? "", a.i(), a.p(), a.p()); },
     glReleaseShaderCompiler: () => {},
     glShaderBinary: () => { raise(0x500); },                                       // INVALID_ENUM: no binary formats
-    glCreateProgram: () => put(T().programs, g().createProgram()),
+    glCreateProgram: () => { const p = g().createProgram(); return p ? put(T().programs, p) : 0; },
     glDeleteProgram: keepsClean((_c, a) => { const h = a.i(), p = T().programs[h]; if (p) { g().deleteProgram(p); T().programs[h] = null; } }),
     glIsProgram: keepsClean((_c, a) => (H(T().programs, a.i()) ? 1 : 0)),
     glAttachShader: (_c, a) => { const p = H(T().programs, a.i()), s = H(T().shaders, a.i()); if (p && s) g().attachShader(p, s); },
@@ -249,14 +258,13 @@ export function gles3Init(): void {
     glGetAttribLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getAttribLocation(p, a.str()) : -1; },
     glGetFragDataLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getFragDataLocation(p, a.str()) : -1; },
     glGetUniformLocation: (_c, a) => {
-      const p = H(T().programs, a.i()), name = a.str(), [, base, index] = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!;
-      const rec = p && programRecs.get(p);
-      if (rec && rec.hidden.has(base)) return -1;
-      const u = p && g().getUniformLocation(p, name);
-      if (!u) return -1;
-      const binding = rec && rec.samplers.get(base);
-      if (rec && binding) samplerSlots.set(u, { rec, binding, index: Number(index ?? 0) });
-      return put(T().uniforms, u);
+      const p = H(T().programs, a.i()), name = a.str();
+      if (!p) return -1;
+      let handles = uniformHandles.get(p), h = handles?.get(name);
+      if (h !== undefined) return h;
+      if (!handles) uniformHandles.set(p, handles = new Map());
+      handles.set(name, h = uniformLocation(p, name));
+      return h;
     },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
     glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return activeUniformInfo(g(), p, rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i)); }),
