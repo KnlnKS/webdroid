@@ -13,7 +13,7 @@ export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement, s
   closeInput?.();
   let closed = false, stop: (() => void) | undefined;
   const input = new MessageChannel(), view = new MessageChannel();
-  const realm = attachRealmInput(canvas, () => device, input.port2, view.port2, { dispatch: dispatchTouches, kbd, source });
+  const realm = attachRealmInput(canvas, device, input.port2, view.port2, { dispatch: dispatchTouches, kbd, source });
   void serveInput(input.port1, view.port1).then(close => { if (closed) close(); else stop = close; });
   closeInput = () => {
     if (closed) return;

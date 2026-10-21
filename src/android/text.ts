@@ -2,16 +2,16 @@
 import { rt, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { isLead, isTrail } from "../jvm/natives/jstring.ts";
-import { uchar } from "../jvm/natives/jicu.ts";
+import { intProperty, uchar } from "../jvm/natives/jicu.ts";
 
 // android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)
 // and u_charMirror, answered by ICU4J's UCharacter over the same ICU data
-const icuDirection = uchar("getDirection", "(I)I"), icuProperty = uchar("getIntPropertyValue", "(II)I"), icuMirror = uchar("getMirror", "(I)I");
+const icuDirection = uchar("getDirection", "(I)I"), icuMirror = uchar("getMirror", "(I)I");
 /** ICU's UCharDirection as Character.DIRECTIONALITY_*; the isolates (19-22) are outside the map
  *  and read as PROPERTY_UNDEFINED, as on the device */
 const DIRECTIONALITY = [0, 1, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 2, 16, 17, 18, 8, 9];
 const directionality = (c: number) => after(icuDirection(c), (d) => DIRECTIONALITY[d as number] ?? -1);
-const eastAsianWidth = (c: number) => icuProperty(c, 0x1004);
+const eastAsianWidth = (c: number) => intProperty(c, 0x1004);
 function checkRange(length: number, start: number, count: number) {
   if (start < 0 || count < 0 || length < start + count) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
 }

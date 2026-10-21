@@ -27,11 +27,13 @@ export function sfntTables(b: Uint8Array, ttcIndex: number): Tables | null {
   }
   return { dv, at };
 }
-export const T_HEAD = 0x68656164, T_COLR = 0x434f4c52;
+const T_HEAD = 0x68656164, T_COLR = 0x434f4c52;
 const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_POST = 0x706f7374, T_NAME = 0x6e616d65, T_CFF = 0x43464620, T_CFF2 = 0x43464632, T_FVAR = 0x66766172;
 export const T_CMAP = 0x636d6170;
 const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
 const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);
+
+const unitsPerEm = (t: Tables, head: number) => t.dv.getUint16(head + 18);
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
 function sfntStyle(b: Uint8Array, t: Tables | null): { weight: number; italic: boolean } | null {
@@ -48,7 +50,7 @@ export interface FaceMetrics { ascent: number; descent: number; top: number; bot
 function sfntMetrics(b: Uint8Array, t: Tables | null): FaceMetrics | null {
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
   if (!t || head === undefined || hhea === undefined || head + 44 > b.length || hhea + 10 > b.length) return null;
-  const upem = t.dv.getUint16(head + 18), cblc = t.at.get(T_CBLC);
+  const upem = unitsPerEm(t, head), cblc = t.at.get(T_CBLC);
   if (!upem) return null;
   if (!isScalable(t.at) && cblc !== undefined && cblc + 8 <= b.length) {
     let best = -1;
@@ -66,6 +68,23 @@ function sfntMetrics(b: Uint8Array, t: Tables | null): FaceMetrics | null {
     m.underline = -t.dv.getInt16(post + 8) / upem; m.underlineThickness = t.dv.getInt16(post + 10) / upem;
   }
   return m;
+}
+
+/** a COLRv1 face's ClipList: how far each glyph's clip box reaches above and below the baseline, in ems */
+export function colorGlyphClips(b: Uint8Array): Map<number, [number, number]> {
+  const t = sfntTables(b, 0), clips = new Map<number, [number, number]>();
+  const head = t?.at.get(T_HEAD), colr = t?.at.get(T_COLR);
+  if (!t || !head || !colr || t.dv.getUint16(colr) !== 1) return clips;
+  const font = t.dv, units = unitsPerEm(t, head), list = colr + font.getUint32(colr + 22);
+  for (let i = 0, count = font.getUint32(list + 1); i < count; i++) {
+    const record = list + 5 + i * 7;
+    const start = font.getUint16(record), end = font.getUint16(record + 2);
+    const box = list + (font.getUint16(record + 4) << 8) + font.getUint8(record + 6);
+    if (font.getUint8(box) !== 1) continue;
+    const limits: [number, number] = [font.getInt16(box + 7) / units, -font.getInt16(box + 3) / units];
+    for (let glyph = start; glyph <= end; glyph++) clips.set(glyph, limits);
+  }
+  return clips;
 }
 
 // minikin's FontFileParser, which FontFileUtil's natives answer from. An unreadable face has no

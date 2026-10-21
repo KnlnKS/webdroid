@@ -23,18 +23,14 @@ export interface Axis { tag: number; value: number }
 /** A font whose bytes are not in memory yet. Text natives run synchronously over loaded fonts and
  *  throw this to wait for one, then run again (withFonts). */
 export class FontPending { readonly wait: Promise<unknown>; constructor(wait: Promise<unknown>) { this.wait = wait; } }
-/** `f()`, again once any font it reached has loaded; `f` must have no effect before it reads fonts */
+/** `f()`, again once any font it reached has loaded; `f` must have no effect before it reads fonts.
+ *  A native over a primitive array reads it into a value before it gets here, so a wait holds no view
+ *  of linear memory; one that writes an array after the fonts is declared to wait (`waits`). */
 export function withFonts<T>(f: () => T): T | Promise<T> {
   try { return f(); } catch (e) {
     if (e instanceof FontPending) return e.wait.then(() => withFonts(f));
     throw e;
   }
-}
-/** natives that read fonts, each run again once a font it reached has loaded */
-export function fontNatives<T extends Record<string, (...args: never[]) => unknown>>(natives: T): T {
-  const out: Record<string, unknown> = {};
-  for (const [name, f] of Object.entries(natives)) out[name] = function (this: unknown, ...args: never[]) { return withFonts(() => f.apply(this, args)); };
-  return out as T;
 }
 /** one font file: its bytes in memory, or a reference-build font file (isPlatformFont) read whole on
  *  first use. A platform file is the tab's: its realms share its bytes, and so HarfBuzz's face of it. */
@@ -356,7 +352,7 @@ rt.registerJnis("android/graphics/Typeface", {
   "nativeCreateFromTypefaceWithVariation(JLjava/util/List;)J": (h: bigint, axes: object) => after(createWithVariation(typefaceAt(h), axes), handle),
   "nativeCreateWeightAlias(JI)J": (h: bigint, weight: number) => handle(createWithBaseWeight(typefaceAt(h), weight)),
   "nativeCreateFromArray([JJII)J": (families: BigInt64Array, fallback: bigint, weight: number, italic: number) =>
-    withFonts(() => handle(createFromFamilies(Array.from(families, (h) => deref<NativeFamily>(h)), weight, italic, fallback ? deref<NativeTypeface>(fallback) : null))),
+    handle(createFromFamilies(Array.from(families, (h) => deref<NativeFamily>(h)), weight, italic, fallback ? deref<NativeTypeface>(fallback) : null)),
   "nativeGetStyle(J)I": (h: bigint) => deref<NativeTypeface>(h).apiStyle,
   "nativeGetWeight(J)I": (h: bigint) => deref<NativeTypeface>(h).weight,
   "nativeGetSupportedAxes(J)[I": (h: bigint) => {
@@ -414,6 +410,7 @@ rt.registerJnis("android/graphics/fonts/Font$Builder", {
     return wrapFont(fontOf(font).clone(ttcIndex, weight, !!italic, axes));
   },
 });
+// shaping.ts registers the Font natives that measure at a paint's size
 rt.registerJnis("android/graphics/fonts/Font", {
   "nGetReleaseNativeFont()J": () => FINALIZER,
   "nCloneFont(J)J": (h: bigint) => wrapFont(fontOf(h)),

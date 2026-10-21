@@ -13,8 +13,8 @@ import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts"
 import { javaConfiguration, systemResource } from "../configuration.ts";
 import { edges } from "../graphics.ts";
 import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
-import { SOURCE_KEYBOARD } from "../keyevent.ts";
-import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, type TouchPointer } from "../../shell/pointer-queue.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, KEY_ACTION_DOWN, KEY_ACTION_UP, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD } from "../input-codes.ts";
+import type { TouchPointer } from "../../shell/pointer-queue.ts";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
@@ -271,7 +271,8 @@ function updateFocus(): void {
   }
   for (const changed of inputWatchers) changed();
 }
-let touchTarget: WindowState | null = null;
+/** the window the gesture went down on, and when */
+let touchTarget: WindowState | null = null, touchDown = 0n;
 function touchedWindow(x: number, y: number): WindowState | null {
   for (const ws of topFirst()) {
     const f = flags(ws);
@@ -298,9 +299,9 @@ export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(fun
   const ws = focused;
   if (!ws?.channel) return;
   const down = BigInt(Math.floor(uptimeMillis()));
-  for (const action of [ACTION_DOWN, ACTION_UP]) {
-    const now = action === ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
-    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, 0x8, SOURCE_KEYBOARD);
+  for (const action of [KEY_ACTION_DOWN, KEY_ACTION_UP]) {
+    const now = action === KEY_ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
+    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD);
     yield publish(ws.channel, event);
   }
 }());
@@ -314,10 +315,10 @@ let spare: Pointers | null = null;
  *  every pointer down, a finger each, in id order. The window touched at DOWN gets the whole
  *  gesture (a split touch across windows is not modeled), in its own coordinates. Resolves whether
  *  it handled the event. */
-export const dispatchTouch = (action: number, pointers: readonly TouchPointer[], downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
+export const dispatchTouch = (action: number, pointers: readonly TouchPointer[], eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
   const masked = action & 0xff;
-  if (masked === ACTION_DOWN) touchTarget = touchedWindow(pointers[0].x, pointers[0].y);
-  const ws = touchTarget;
+  if (masked === ACTION_DOWN) { touchTarget = touchedWindow(pointers[0].x, pointers[0].y); touchDown = eventTime; }
+  const ws = touchTarget, downTime = touchDown;
   if (masked === ACTION_UP || masked === ACTION_CANCEL) touchTarget = null;
   if (!ws?.channel) return false;
   const f = pointerFields ??= { id: declaredField(PP, "id"), toolType: declaredField(PP, "toolType"), x: declaredField(PC, "x"),

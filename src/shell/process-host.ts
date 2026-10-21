@@ -155,7 +155,7 @@ export class ProcessHost {
     const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
     const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
     if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
-    const text = this.ime = attachRealmInput(canvas, () => device, input.port1, ime.port1);
+    const text = this.ime = attachRealmInput(canvas, device, input.port1, ime.port1);
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
     this.ends.push(text.close, frames.close, receiveMedia(media.port1), surfaces.close);

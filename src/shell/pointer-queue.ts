@@ -1,5 +1,5 @@
-/** MotionEvent's actions; POINTER_DOWN and POINTER_UP carry the changed pointer's index from bit 8 */
-export const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
+import { ACTION_MOVE } from "../android/input-codes.ts";
+
 /** a touch pointer: its Android pointer id and display position */
 export type TouchPointer = { id: number; x: number; y: number };
 /** one MotionEvent: the action (POINTER_DOWN/UP with the changed pointer's index) and every pointer

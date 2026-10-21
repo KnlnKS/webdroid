@@ -15,7 +15,7 @@ function attach() {
   const source = new EventTarget(), sent: number[][] = [];
   const canvas = Object.assign(source, { getBoundingClientRect: () => new Rect(0, 0, 100, 200) });
   const input = attachPointerInput(canvas as unknown as HTMLCanvasElement,
-    () => ({ width: 200, height: 400, scrollUnit: 128, touchSlop: 16, edgeSlop: 10, minScalingSpan: 49 }),
+    { width: 200, height: 400, scrollUnit: 128, touchSlop: 16, edgeSlop: 10, minScalingSpan: 49 },
     async (action, pointers) => { sent.push([action, ...pointers.flatMap(p => [p.id, p.x, p.y])]); });
   const pointer = (type: string, pointerId: number, clientX: number, clientY: number, init: object = {}) =>
     source.dispatchEvent(Object.assign(new Event(type), { pointerId, clientX, clientY, pointerType: "touch", altKey: false, ...init }));

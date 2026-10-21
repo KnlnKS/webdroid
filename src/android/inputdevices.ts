@@ -11,6 +11,8 @@ import { hostService } from "./binder.ts";
 import { device } from "../shell/config.ts";
 import { KEY_CHARACTER_MAPS, DEVICE_KEYS } from "./keychars.ts";
 import { parseKeyMap, javaKeyCharacterMap } from "./keyevent.ts";
+import { AXIS_ORIENTATION, AXIS_PRESSURE, AXIS_SIZE, AXIS_TOOL_MAJOR, AXIS_TOOL_MINOR, AXIS_TOUCH_MAJOR, AXIS_TOUCH_MINOR, AXIS_X, AXIS_Y,
+  SOURCE_KEYBOARD } from "./input-codes.ts";
 
 export const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
 /** TOUCHSCREEN | STYLUS: the source of the touchscreen's events */
@@ -39,8 +41,9 @@ const inputDevices = once(driven(function* (): Gen<Map<number, JObj>> {
   // the switch mapper's source (AINPUT_SOURCE_SWITCH, 0x80000000) rides along with keyboard, touchscreen and stylus
   const touch = yield* build([...common(TOUCHSCREEN, 86, "virtio_input_multi_touch_1", "43db9dd6fa61939c1b516cd9522f0fe93926a00b", 0x80005103 | 0, 1, 6, 0),
     ["setKeyCharacterMap", "Landroid/view/KeyCharacterMap;", yield* awaited(javaKeyCharacterMap(TOUCHSCREEN, keyMap("Generic.kcm")))]],
-  [[0, 0, (RAW_RANGE - 1) * width / RAW_RANGE], [1, 0, (RAW_RANGE - 1) * height / RAW_RANGE], [2, 0, 1], [3, 0, 1],
-    [4, 0, diagonal], [5, 0, diagonal], [6, 0, diagonal], [7, 0, diagonal], [8, -Math.PI / 2, Math.PI / 2]]);
+  [[AXIS_X, 0, (RAW_RANGE - 1) * width / RAW_RANGE], [AXIS_Y, 0, (RAW_RANGE - 1) * height / RAW_RANGE], [AXIS_PRESSURE, 0, 1], [AXIS_SIZE, 0, 1],
+    [AXIS_TOUCH_MAJOR, 0, diagonal], [AXIS_TOUCH_MINOR, 0, diagonal], [AXIS_TOOL_MAJOR, 0, diagonal], [AXIS_TOOL_MINOR, 0, diagonal],
+    [AXIS_ORIENTATION, -Math.PI / 2, Math.PI / 2]]);
   return new Map([[VIRTUAL_KEYBOARD, virtual], [TOUCHSCREEN, touch]]);
 }));
 
@@ -49,7 +52,7 @@ function hasKeys(id: number, sourceMask: number, codes: Int32Array, out: Uint8Ar
   if (codes.length > out.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "keyExists must be at least as large as keyCodes");
   out.fill(0, 0, codes.length);
   if (id !== VIRTUAL_KEYBOARD && id !== TOUCHSCREEN && id >= 0) return 0;
-  if (!(sourceMask & 0x101 & ~0xff)) return 0;
+  if (!(sourceMask & SOURCE_KEYBOARD & ~0xff)) return 0;
   const keys = new Set(DEVICE_KEYS[id === TOUCHSCREEN ? "virtio_input_multi_touch_1" : "Virtual"]);
   codes.forEach((code, i) => { if (keys.has(code)) out[i] = 1; });
   return 1;
