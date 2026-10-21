@@ -8,7 +8,7 @@
     "worker:dev": "vp build --configLoader native && wrangler dev",
     "worker:check": "vp build --configLoader native && wrangler deploy --env=\"\" --dry-run",
     "generate": "node scripts/generated.ts --force",
-    "typecheck": "node scripts/generated.ts && wrangler types && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
+    "typecheck": "node scripts/generated.ts && wrangler types && tsrs -p tsconfig.json && tsrs -p tsconfig.worker.json",
     "test": "vp test run --configLoader native",
     "ts": "scripts/node",
     "inspect": "scripts/node scripts/inspect.ts",
@@ -46,8 +46,7 @@
     "mp4box": "2.3.0",
     "pako": "^2.1.0",
     "sql.js": "workspace:*",
-    "tough-cookie": "^6.0.2",
-    "typescript": "^5.9.2"
+    "tough-cookie": "^6.0.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260924.1",
@@ -61,6 +60,8 @@
     "pixelmatch": "^7.2.0",
     "playwright": "^1.62.1",
     "pngjs": "^7.0.0",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "typescript": "^5.9.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
     "vite-plus": "1.3.0",
     "wrangler": "^4.137.0",

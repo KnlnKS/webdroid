@@ -881,6 +881,20 @@ current state and keep the measured reason for any rejected alternative. Record 
 - **Scope**. A second review of `knlnks/bytecode-wasm` against `main` was implemented in 15 worktree lanes merged one at a time (binder, webview, resources, linker, shell, text-input, compiler, tooling, device, libcore, graphics, native, gl-media, VM runtime). The findings are recorded under their topics with this date. Not done: one broker accessor in place of the per-module transport slots, a registration record that makes an intrinsic shadowing a native impossible, the main thread's context loader as one realm-start step, reflection names passed as strings, one intrinsic registry, and the compiler's `vtOf`/`idOf`/`natives` pass-throughs (about 45 call sites for three one-line methods).
 - **Tooling**. Tools boot Java headlessly through `scripts/wasm/lib.ts` (`platform()`/`world()` attach natives and host classes by default) and `scripts/tier.ts`. `scripts/page.ts` is the one way to open webdroid, and "up" means the foreground app process drew its first frame within a deadline. gen-framework runs `--only <recorders>` from one RECORDERS table. jbench compares with ART's recorded answers (`Bench.expected.json`), and BLOCKED fails. lat counts realms whose diagnostics did not arrive. `pnpm aot` writes empty `apps.json`/`prefix.json`, so bundled app builds need `aot-profile`.
 
+### Rust TypeScript checker (2026-10-20)
+
+- `pnpm typecheck` uses [tsrs](https://github.com/oxc-project/tsrs), pinned to the experimental
+  `0.18.0-ts7.1.0-dev.20260929` release, for both configs. Generation still runs first; `noEmit`, strict checking
+  and `noUnusedLocals` remain in the configs. TypeScript 5.9 stays as a dev dependency for the parser API used by
+  `scripts/generators.ts` and the import-cycle tests. The newer DOM types require `randomBytes` to express the
+  non-shared buffer type already guaranteed by its guard; this is an erased assertion, with no allocation added.
+- Three interleaved runs of both configs on this checkout measured medians of 4.109 s with `tsc` 5.9.3 and 0.165 s
+  with `tsrs` (about 25× faster; compiler commands only, excluding generation). `pnpm typecheck`, frozen-lockfile
+  installation and all 1,187 unit tests in 65 files passed. An existing ignored `scripts/wasm/scratch-cbench.ts`
+  fails under both compilers; it was temporarily set aside for the typecheck and timings, then restored unchanged.
+  No runtime, framework or browser behavior changed, so the broader APK matrix was not rerun. The pinned tsrs
+  package supplies native binaries for macOS ARM64 and Linux x64/ARM64, but not macOS x64 or Windows.
+
 ## Removed designs
 
 On 2026-10-13 the DEX-to-JavaScript tier and the Wasm cold interpreter/slow runtime with compiled resume and deoptimization guards (`7f6fc18f`) were deleted; on 2026-10-11 process iframes were replaced by one Worker per app process.
