@@ -396,9 +396,9 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const settle = `(v)=>{${resume}${done}},(e)=>{${resume}${scope[1]};return raise(e)}`;
-    // a native that retries is called again over fresh views, its scope taken up for the call and set aside again if it waits once more
+    // a native that retries is called again (`run`, over fresh views of its arrays), its scope taken up for the call and set aside again if it waits once more
     const fail = `(e)=>{${resume}${scope[1]};return raise(e)}`;
-    const again = `const again=()=>{${resume}try{r=${call}}catch(e){${scope[1]};return raise(e)}if(r instanceof Promise){${hold}return r.then(again,${fail})}try{${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}};`;
+    const again = `const again=()=>{${resume}try{r=run()}catch(e){${scope[1]};return raise(e)}if(r instanceof Promise){${hold}return r.then(again,${fail})}try{${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}};`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();${hold}${p.retry ? `${again}X.park(r.then(again,${fail}))` : `X.park(r.then(${settle}))`};return ${zero}}if(X.owes()){${hold}X.yield(Promise.resolve(r).then(${settle}));return ${zero}}`;
     const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
     const returned = lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result;
@@ -406,7 +406,7 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const wait = susp ? `if(r instanceof Promise){${hold}return(async()=>{try{try{r=await r}finally{${resume}}${toJava}}catch(e){${failure}}finally{${scope[1]}}
 ${returned}})()}`
       : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};${failure}}
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r${p.retry ? ",run" : ""};try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}${p.retry ? `run=()=>${call};r=run()` : `r=${call}`}}catch(e){S(e);${scope[1]};${failure}}
 ${susp ? wait : ""}try{${susp ? "" : wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
 ${returned}}`) as Maker;
     makers.set(key, make);
