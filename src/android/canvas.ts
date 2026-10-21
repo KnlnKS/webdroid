@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
+import { isInvertible, isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
 import { aliasedStroke } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
@@ -30,6 +30,8 @@ const NO_DASH: number[] = [];
 const MATRIX_CLIP = 3;
 /** the context's transform as SkMatrix holds it, in floats */
 const skMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+/** the bounds each clip and layer computation reads before the next */
+const box = new Float64Array(4);
 
 /** what planDraw draws: geometry (and text), an ALPHA_8 image (coverage in the paint's colour) or
  *  any other image, whose source is its pixels rather than a colour */
@@ -316,7 +318,7 @@ export class NativeCanvas {
     const ctx = this.ctx, m = transformOf(ctx);
     if (l > r) { const x = l; l = r; r = x; }
     if (t > b) { const y = t; t = b; b = y; }
-    if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
+    if (r === l || b === t || !isInvertible(m)) {
       this.setClipEmpty();
       clipNothing(ctx);
       this.persist(clipNothing);
@@ -329,7 +331,7 @@ export class NativeCanvas {
     if (this.clipEmpty) return false;
     if (m.b === 0 && m.c === 0 && !this.poly) {
       // an axis-aligned rect: a hard edge, rounded to pixels as SkRect::round does
-      const d = deviceBounds(m, l, t, r, b);
+      const d = deviceBounds(m, l, t, r, b, box);
       this.narrow(Math.round(d[0]), Math.round(d[1]), Math.round(d[2]), Math.round(d[3]));
       return !this.clipEmpty;
     }
@@ -390,8 +392,8 @@ export class NativeCanvas {
     recordOrRun(this.ctx, apply);
     this.persist(apply);
     const m = transformOf(this.ctx);
-    if (this.clipEmpty || !(m.a * m.d - m.b * m.c)) return !this.clipEmpty;
-    const d = deviceBounds(m, l, t, r, b), x0 = Math.round(d[0]), y0 = Math.round(d[1]), x1 = Math.round(d[2]), y1 = Math.round(d[3]);
+    if (this.clipEmpty || !isInvertible(m)) return !this.clipEmpty;
+    const d = deviceBounds(m, l, t, r, b, box), x0 = Math.round(d[0]), y0 = Math.round(d[1]), x1 = Math.round(d[2]), y1 = Math.round(d[3]);
     const exact = m.b === 0 && m.c === 0;
     if (x0 <= this.cl && x1 >= this.cr && y0 <= this.ct && y1 >= this.cb && (exact || !this.poly)) this.setClipEmpty();
     else if (exact && !this.poly) {
@@ -426,15 +428,15 @@ export class NativeCanvas {
   private narrowOut(l: number, t: number, r: number, b: number) {
     if (this.clipEmpty) return;
     const m = transformOf(this.ctx);
-    if (!(m.a * m.d - m.b * m.c)) { this.setClipEmpty(); return; }
-    const d = deviceBounds(m, l, t, r, b);
+    if (!isInvertible(m)) { this.setClipEmpty(); return; }
+    const d = deviceBounds(m, l, t, r, b, box);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
   /** SkCanvas::quickReject: whether the rect under the matrix misses the device clip's bounds,
    *  outset a pixel for anti-aliasing */
   quickReject(l: number, t: number, r: number, b: number): boolean {
     if (this.clipEmpty) return true;
-    const d = deviceBounds(transformOf(this.ctx), l, t, r, b);
+    const d = deviceBounds(transformOf(this.ctx), l, t, r, b, box);
     if (!(Number.isFinite(d[0]) && Number.isFinite(d[1]) && Number.isFinite(d[2]) && Number.isFinite(d[3]))) return true;
     return !(Math.max(d[0], this.cl - 1) < Math.min(d[2], this.cr + 1) && Math.max(d[1], this.ct - 1) < Math.min(d[3], this.cb + 1));
   }
@@ -443,13 +445,13 @@ export class NativeCanvas {
     if (this.clipEmpty) return null;
     const m = transformOf(this.ctx), f = Math.fround;
     skMatrix.a = f(m.a); skMatrix.b = f(m.b); skMatrix.c = f(m.c); skMatrix.d = f(m.d); skMatrix.e = f(m.e); skMatrix.f = f(m.f);
-    const d = localBounds(skMatrix, this.cr - this.cl, this.cb - this.ct, this.cl, this.ct);
+    const d = localBounds(skMatrix, this.cr - this.cl, this.cb - this.ct, this.cl, this.ct, box);
     return d && { left: Math.round(d[0]), top: Math.round(d[1]), right: Math.round(d[2]), bottom: Math.round(d[3]) };
   }
   /** a layer confines what is drawn in it to its device bounds, rounded out */
   clipToLayer(bounds: Box | null) {
     if (!bounds) return;
-    const d = deviceBounds(transformOf(this.ctx), bounds.left, bounds.top, bounds.right, bounds.bottom);
+    const d = deviceBounds(transformOf(this.ctx), bounds.left, bounds.top, bounds.right, bounds.bottom, box);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
 }
@@ -532,7 +534,7 @@ function openLayer(target: Ctx2D, bounds: Box | null, cpu: boolean): LayerRaster
   const W = target.canvas.width, H = target.canvas.height, m = target.getTransform();
   let x0 = 0, y0 = 0, x1 = W, y1 = H;
   if (bounds) {
-    const d = deviceBounds(m, bounds.left, bounds.top, bounds.right, bounds.bottom);
+    const d = deviceBounds(m, bounds.left, bounds.top, bounds.right, bounds.bottom, box);
     x0 = Math.max(0, Math.floor(d[0])); y0 = Math.max(0, Math.floor(d[1]));
     x1 = Math.min(W, Math.ceil(d[2])); y1 = Math.min(H, Math.ceil(d[3]));
   }
@@ -592,7 +594,7 @@ export function saveLayer(nc: NativeCanvas, bounds: Box | null, paint: NativePai
 function saveBehind(nc: NativeCanvas, l: number, t: number, r: number, b: number): number {
   const count = nc.save(), parent = nc.ctx, behind: Behind = { image: null, x: 0, y: 0 };
   recordOrRun(parent, (ctx) => {
-    const d = deviceBounds(ctx.getTransform(), l, t, r, b);
+    const d = deviceBounds(ctx.getTransform(), l, t, r, b, box);
     const x0 = Math.max(0, Math.floor(d[0])), y0 = Math.max(0, Math.floor(d[1]));
     const x1 = Math.min(ctx.canvas.width, Math.ceil(d[2])), y1 = Math.min(ctx.canvas.height, Math.ceil(d[3]));
     behind.image = null;
@@ -745,7 +747,7 @@ rt.registerJnis("android/graphics/Canvas", {
   "nTranslate(JFF)V": (h: bigint, x: number, y: number) => {
     const ctx = canvasAt(h).ctx, m = transformOf(ctx);
     // a singular matrix stays singular: Canvas2D would drop a translate under one
-    if (m.a * m.d === m.b * m.c) ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
+    if (!isInvertible(m)) ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
     else ctx.translate(x, y);
   },
   "nScale(JFF)V": (h: bigint, x: number, y: number) => canvasAt(h).ctx.scale(x, y),

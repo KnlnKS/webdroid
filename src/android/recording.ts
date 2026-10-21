@@ -9,6 +9,9 @@ const CALL = 0, SET = 1, DEFER = 2;
 
 /** A context's transform: its six values */
 export type Mat2D = { readonly a: number; readonly b: number; readonly c: number; readonly d: number; readonly e: number; readonly f: number };
+/** whether a 2D context can invert the transform, as it asks before every operation but setTransform:
+ *  a finite, non-zero determinant */
+export const isInvertible = (m: Mat2D): boolean => { const det = m.a * m.d - m.b * m.c; return det !== 0 && Number.isFinite(det); };
 let rotator: OffscreenCanvasRenderingContext2D | null = null;
 /** A transform and save stack kept as Canvas2D keeps them, so a recorder answers the matrix without
  *  a DOMMatrix. Canvas2D ignores a non-finite argument, and every operation but setTransform under
@@ -16,7 +19,6 @@ let rotator: OffscreenCanvasRenderingContext2D | null = null;
 export class Transform implements Mat2D {
   a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
   private readonly stack: number[] = [];
-  private invertible(): boolean { const det = this.a * this.d - this.b * this.c; return Number.isFinite(det) && det !== 0; }
   reset(): void { this.resetTransform(); this.stack.length = 0; }
   save(): void { this.stack.push(this.a, this.b, this.c, this.d, this.e, this.f); }
   restore(): void {
@@ -25,12 +27,12 @@ export class Transform implements Mat2D {
   }
   /** Canvas2D rounds the numbers it is given to float */
   translate(x: number, y: number): void {
-    if (!this.invertible() || !Number.isFinite(x + y)) return;
+    if (!isInvertible(this) || !Number.isFinite(x + y)) return;
     x = Math.fround(x); y = Math.fround(y);
     this.e += x * this.a + y * this.c; this.f += x * this.b + y * this.d;
   }
   scale(x: number, y: number): void {
-    if (!this.invertible() || !Number.isFinite(x + y)) return;
+    if (!isInvertible(this) || !Number.isFinite(x + y)) return;
     x = Math.fround(x); y = Math.fround(y);
     this.a *= x; this.b *= x; this.c *= y; this.d *= y;
   }
@@ -43,7 +45,7 @@ export class Transform implements Mat2D {
     this.a = m.a; this.b = m.b; this.c = m.c; this.d = m.d; this.e = m.e; this.f = m.f;
   }
   transform(a: number, b: number, c: number, d: number, e: number, f: number): void {
-    if (!this.invertible() || !Number.isFinite(a + b + c + d + e + f)) return;
+    if (!isInvertible(this) || !Number.isFinite(a + b + c + d + e + f)) return;
     a = Math.fround(a); b = Math.fround(b); c = Math.fround(c); d = Math.fround(d); e = Math.fround(e); f = Math.fround(f);
     const A = this.a, B = this.b, C = this.c, D = this.d;
     this.a = A * a + C * b; this.b = B * a + D * b; this.c = A * c + C * d; this.d = B * c + D * d;

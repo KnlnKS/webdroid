@@ -7,7 +7,7 @@
 import { rt, peerField, setDeclared, type JObj } from "../jvm/runtime.ts";
 import { handle, deref, ownedHandle, release, FINALIZER } from "./handles.ts";
 import type { NativeCanvas } from "./canvas.ts";
-import type { Ctx2D, Mat2D } from "./recording.ts";
+import { type Ctx2D, type Mat2D, isInvertible } from "./recording.ts";
 import { edges, setEdges } from "./graphics.ts";
 
 export type Mat = Float64Array;
@@ -106,23 +106,23 @@ export function setAffine(m: Mat, a: number, b: number, c: number, d: number, e:
 const affineOf = (m: Mat): [number, number, number, number, number, number] => [m[0], m[3], m[1], m[4], m[2], m[5]];
 /** how a 2D context's transform scales lengths: the square root of its area scale */
 export const deviceScale = (m: Mat2D): number => Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
-const box = new Float64Array(4);
-/** the bounding box [x0, y0, x1, y1] of (l, t, r, b) under `m`, in a buffer the next call overwrites */
-export function deviceBounds(m: Mat2D, l: number, t: number, r: number, b: number): Float64Array {
+/** the bounding box [x0, y0, x1, y1] of (l, t, r, b) under `m`, into `out` */
+export function deviceBounds(m: Mat2D, l: number, t: number, r: number, b: number, out = new Float64Array(4)): Float64Array {
   const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
   const wx = m.a * (r - l), wy = m.b * (r - l), hx = m.c * (b - t), hy = m.d * (b - t);
-  box[0] = x + Math.min(0, wx) + Math.min(0, hx); box[1] = y + Math.min(0, wy) + Math.min(0, hy);
-  box[2] = x + Math.max(0, wx) + Math.max(0, hx); box[3] = y + Math.max(0, wy) + Math.max(0, hy);
-  return box;
+  out[0] = x + Math.min(0, wx) + Math.min(0, hx); out[1] = y + Math.min(0, wy) + Math.min(0, hy);
+  out[2] = x + Math.max(0, wx) + Math.max(0, hx); out[3] = y + Math.max(0, wy) + Math.max(0, hy);
+  return out;
 }
 const inverse = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-/** a w x h target in the local coordinates of `m` (deviceBounds of the inverse), null when `m` is singular */
-export function localBounds(m: Mat2D, w: number, h: number, x = 0, y = 0): Float64Array | null {
+/** a w x h target in the local coordinates of `m` (deviceBounds of the inverse), into `out`; null
+ *  when a 2D context could not invert `m` */
+export function localBounds(m: Mat2D, w: number, h: number, x = 0, y = 0, out = new Float64Array(4)): Float64Array | null {
+  if (!isInvertible(m)) return null;
   const det = m.a * m.d - m.b * m.c;
-  if (!det || !Number.isFinite(det)) return null;
   inverse.a = m.d / det; inverse.b = -m.b / det; inverse.c = -m.c / det; inverse.d = m.a / det;
   inverse.e = (m.c * m.f - m.d * m.e) / det; inverse.f = (m.b * m.e - m.a * m.f) / det;
-  const out = deviceBounds(inverse, x, y, x + w, y + h);
+  deviceBounds(inverse, x, y, x + w, y + h, out);
   return out.every(Number.isFinite) ? out : null;
 }
 /** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */

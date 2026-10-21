@@ -138,12 +138,13 @@ function setViewProperties(ctx: Ctx2D, n: NativeRenderNode): void {
   if (n.hasTransform()) applyMatrix(ctx, n.transform!);
 }
 const sameCoordinate = (a: number, b: number) => a === b || Number.isNaN(a) && Number.isNaN(b);
+const nodeBox = new Float64Array(4);
 /** PositionListenerTrampoline::onPositionUpdated: the node's bounds through the frame's transform,
  *  rounded when it only translates, reported when they changed */
 function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
   ctx.save();
   setViewProperties(ctx, n);
-  const m = transformOf(ctx), d = deviceBounds(m, 0, 0, n.width, n.height);
+  const m = transformOf(ctx), d = deviceBounds(m, 0, 0, n.width, n.height, nodeBox);
   let l = d[0], t = d[1], r = d[2], b = d[3];
   const identityScale = m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1;
   ctx.restore();

@@ -253,7 +253,7 @@ function linearGradient(local: Affine | null, x0: number, y0: number, x1: number
 /** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
 export const PLANE = 1e5;
 /** the target's whole area in the context's local coordinates (a recording's, whose mirror is one pixel, is the plane),
- *  null under a singular transform; valid until the next bounds call */
+ *  null under a singular transform */
 export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null {
   return isRecording(ctx) ? localBounds(transformOf(ctx), 2 * PLANE, 2 * PLANE, -PLANE, -PLANE) : localBounds(transformOf(ctx), ctx.canvas.width, ctx.canvas.height);
 }

@@ -7,7 +7,7 @@
 import { type Band, devicePoint, hairlineLine, hairlineRect, scan } from "./scan.ts";
 import { MAX_SAMPLED_PIXELS } from "./skia.ts";
 import { NativePath } from "./path.ts";
-import type { Ctx2D } from "./recording.ts";
+import { type Ctx2D, isInvertible } from "./recording.ts";
 import type { NativePaint } from "./paint.ts";
 import type { NativeCanvas } from "./canvas.ts";
 import type { Box } from "./graphics.ts";
@@ -63,7 +63,7 @@ export function tryBitmapRect(canvas: NativeCanvas, paint: NativePaint, op: Glob
   right: number, bottom: number): boolean {
   const m = canvas.ctx.getTransform();
   if (paint.style === 1 && paint.strokeWidth === 0) {
-    if (m.a * m.d === m.b * m.c) return true;
+    if (!isInvertible(m)) return true;
     if (paint.dash) return false;
     if (paint.antiAlias) {
       const path = new Path2D();
@@ -146,7 +146,7 @@ export function tryBitmapLine(canvas: NativeCanvas, paint: NativePaint, op: Glob
     return true;
   }
   const m = ctx.getTransform(), start = devicePoint(m, x0, y0), end = devicePoint(m, x1, y1);
-  if (m.a * m.d === m.b * m.c || !start.every(Number.isFinite) || !end.every(Number.isFinite)) return false;
+  if (!isInvertible(m) || !start.every(Number.isFinite) || !end.every(Number.isFinite)) return false;
   inDevice(canvas, paint, op, (ctx) => { ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke(); }, true);
   return true;
 }

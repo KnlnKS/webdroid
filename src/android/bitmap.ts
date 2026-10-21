@@ -20,6 +20,7 @@ import { u8 } from "../jvm/abi.ts";
 import { paintAt } from "./paint.ts";
 import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel.ts";
 import { extractBitmapAlpha } from "./maskfilter.ts";
+import { invert } from "./matrix.ts";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -294,11 +295,7 @@ function transfer([a, b, c, d, e, f, g]: number[], x: number): number {
   const s = Math.sign(x), v = Math.abs(x);
   return s * (v < d ? c * v + f : Math.pow(a * v + b, g) + e);
 }
-function invert3(m: number[]): number[] {
-  const [a, b, c, d, e, f, g, h, i] = m, A = e * i - f * h, B = f * g - d * i, C = d * h - e * g, det = a * A + b * B + c * C;
-  return [A / det, (c * h - b * i) / det, (b * f - c * e) / det, B / det, (a * i - c * g) / det, (c * d - a * f) / det, C / det, (b * g - a * h) / det, (a * e - b * d) / det];
-}
-const SRGB_FROM_XYZ = invert3([0, 3, 6, 1, 4, 7, 2, 5, 8].map((k) => SRGB_D50[k]));
+const SRGB_FROM_XYZ = invert(Float64Array.from([0, 3, 6, 1, 4, 7, 2, 5, 8], (k) => SRGB_D50[k]))!;
 /** a colour in `space` as sRGB, clamped: what drawing it into an 8-bit sRGB bitmap stores */
 function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
   if (isSrgb(space)) return rgb.map((v) => Math.min(1, Math.max(0, v)));
