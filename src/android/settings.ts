@@ -195,8 +195,7 @@ function projectionOf(projection: string[] | null): string[] {
   return [...projection];
 }
 const cursorOf = (columns: string[], rows: [string, string, string][]) =>
-  matrixCursor(columns, rows.map(([id, name, value]) => columns.map((column) =>
-    column === "_id" ? id : column === "name" ? name : column === "value" ? value : "false")));
+  matrixCursor(columns, rows.map(([_id, name, value]) => ({ _id, name, value, is_preserved_in_restore: "false" })));
 
 // ── writes
 const SYSTEM_INSERT = 1, SYSTEM_DELETE = 2, SYSTEM_UPDATE = 3;
