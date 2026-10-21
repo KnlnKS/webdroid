@@ -46,7 +46,8 @@ if (aotDir) {
 }
 
 export interface G1Config { cls: string; workload: string; reps: number; dex: string; root: string }
-export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; setup?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Stats; setup?: Stats; first?: Stats; stats?: Stats; error?: string }
+export type Stats = World["stats"];
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;

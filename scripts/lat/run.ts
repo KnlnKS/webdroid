@@ -185,7 +185,9 @@ function profiler({ send, events }: Cdp, file: string) {
 }
 
 const PAGE = await bundle(join(import.meta.dirname, "page.ts"), { format: "iife" });
-async function launch(browser: Browser, apk: string, steps: unknown[], expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
+/** one launch of `apk` through `steps`: `profile` writes its CPU profile, `save` keeps the code it compiles, `replay` starts from the code kept, `trace` writes a browser trace */
+async function launch(browser: Browser, apk: string, steps: unknown[], expectedLaunch: Expectation,
+  { profile, save = false, replay = false, trace }: { profile?: string; save?: boolean; replay?: boolean; trace?: string } = {}): Promise<Capture> {
   const config: LatConfig = { steps, counters: COUNTERS, save, replay, expectedLaunch, E: Ev };
   const injection = `globalThis.__wdLatConfig=${JSON.stringify(config)};${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}${PAGE}`;
   const url = new URL("/", BASE_URL);
@@ -264,12 +266,12 @@ for (const name of names) {
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
     browser = await (engine === "webkit" ? openWebkit : openChrome)(profile); row.browser = browser.version;
     if (warm) {
-      row.preparation = await launch(browser, apk, steps, expectedLaunch, undefined, true);
+      row.preparation = await launch(browser, apk, steps, expectedLaunch, { save: true });
       if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);
       await resetData(browser);
     }
-    Object.assign(row, await launch(browser, apk, steps, expectedLaunch, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm,
-      traceOut && `${traceOut.replace(/\.json$/, "")}-${name}.json`));
+    Object.assign(row, await launch(browser, apk, steps, expectedLaunch, { profile: cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`,
+      replay: warm, trace: traceOut && `${traceOut.replace(/\.json$/, "")}-${name}.json` }));
     if (row.error) throw new Error(row.error);
     const { launch: started, taps } = row;
     if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");

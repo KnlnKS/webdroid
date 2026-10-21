@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { basename, dirname, join, resolve } from "node:path";
 import { NODE_FLAGS } from "../node.ts";
 import { fileResponse, serve } from "../serve.ts";
-import type { G1Config, G1Result } from "./g1run.ts";
+import type { G1Config, G1Result, Stats } from "./g1run.ts";
 import { G1_DIR, JAVA, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { bundleFor, cutWorkloads } from "./tools.ts";
@@ -101,9 +101,10 @@ async function chromeRun() {
 }
 
 // ---- measure
-interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
-type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
+/** a run's result with its times summed up: the first call, the median of the next ten and of the second half; `firstStats`, the World's after the first call */
+type Sample = Omit<G1Result, "workload" | "times" | "units" | "first"> & { first: number; warm: number; steady: number; completedCalls: number; firstStats?: Stats };
+const sample = ({ workload, times, units, first: firstStats, ...r }: G1Result): Sample =>
+  ({ ...r, first: times[0], warm: med(times.slice(1, 11)), steady: med(times.slice(Math.max(1, times.length >> 1))), completedCalls: times.length, firstStats });
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; first: number[]; steady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
@@ -199,7 +200,7 @@ for (const engine of engines) {
   }
   if (opts.phases) {
     // what the engine and our compiler spent from World creation to the end of the first call, split at the end of process setup (medians over runs, ms)
-    const keys = ["prepare", "flow", "infer", "facts", "emit", "encode"], total = (xs: number[]) => med(xs);
+    const keys = ["prepare", "flow", "infer", "facts", "emit", "encode"] as const, total = (xs: number[]) => med(xs);
     console.log("\nphases (ms): boot = process setup, setup = prestarted worker work, first = the first call, rest = the calls after it;  compile = our compiler (prepare flow infer facts emit encode), module/inst = V8, class = class modules (build, link)");
     console.log("workload".padEnd(11), "part".padEnd(5), "methods".padStart(7), "units".padStart(6), "classes".padStart(7), "compile".padStart(8), ...keys.map((k) => k.padStart(7)), "module".padStart(7), "inst".padStart(6), "classB".padStart(7), "classMs".padStart(8), "KB".padStart(6), "aotD".padStart(5), "aotC".padStart(5), "dead".padStart(5), "miss".padStart(5), "aotMs".padStart(6), "read".padStart(5), "aotKB".padStart(6), "upg".padStart(4));
     for (const [w, e] of got) for (const part of ["boot", "setup", "first", "rest"] as const) {
