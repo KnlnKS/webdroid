@@ -3,6 +3,7 @@ import { WebBridgeSession } from "./bridge.ts";
 import { tcpRelay } from "./tcp.ts";
 import { isPublicHost } from "../src/native/net-address.ts";
 import { branchOrigin } from "./preview.ts";
+import { rangeResponse, sliceBody } from "./assets.ts";
 
 export { WebBridgeSession };
 
@@ -30,35 +31,33 @@ async function nameExists(name: string): Promise<boolean | null> {
   return false;
 }
 
-/** a file build-prod split into parts, whole or as the byte range the request names */
-async function largeAsset(request: Request, env: Env): Promise<Response> {
+/** Platform assets, including files build-prod split to fit the asset size limit. */
+async function platformAsset(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  const asset = await env.ASSETS.fetch(request);
+  if (asset.status !== 404) return rangeResponse(request, asset);
   const manifestResponse = await env.ASSETS.fetch(new URL("/large-assets.json", url));
   if (!manifestResponse.ok) return new Response("asset manifest unavailable", { status: 500 });
   const manifest = await manifestResponse.json() as Record<string, { parts: number; size: number; partSize: number }>;
   const entry = manifest[url.pathname];
-  if (!entry) return env.ASSETS.fetch(request);
-  const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+  if (!entry) return asset;
+  await asset.body?.cancel();
+  const range = request.method === "GET" ? /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "") : null;
   const start = range ? Number(range[1]) : 0, end = range?.[2] ? Math.min(Number(range[2]), entry.size - 1) : entry.size - 1;
   if (start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${entry.size}` } });
-  const body = new ReadableStream<Uint8Array>({
+  const body = request.method === "HEAD" ? null : new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
         for (let i = Math.floor(start / entry.partSize); i * entry.partSize <= end; i++) {
           const from = Math.max(start - i * entry.partSize, 0), to = Math.min(end - i * entry.partSize, entry.partSize - 1);
           const part = await env.ASSETS.fetch(new URL(`${url.pathname}.part${i}`, url), { headers: { range: `bytes=${from}-${to}` } });
           if (!part.ok || !part.body) throw new Error(`missing asset part ${i}`);
-          // an asset store that ignores Range sends the whole part: skip to `from` and stop after `to`
-          let at = part.status === 206 ? from : 0;
-          const reader = part.body.getReader();
-          while (at <= to) {
+          const reader = sliceBody(part.body, part.status === 206 ? 0 : from, to - from + 1).getReader();
+          for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            const chunk = value.subarray(Math.max(from - at, 0), Math.max(to + 1 - at, 0));
-            if (chunk.length) controller.enqueue(chunk);
-            at += value.length;
+            controller.enqueue(value);
           }
-          await reader.cancel();
         }
         controller.close();
       } catch (error) { controller.error(error); }
@@ -81,7 +80,7 @@ export default {
       const id = bridgeSocket(url, header);
       return id === null ? new Response("bad bridge", { status: 403 }) : host.bridge(request, id);
     }
-    if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);
+    if (path.startsWith("/vendor/aosp/")) return platformAsset(request, env);
     const gzip = path.startsWith("/vendor/microg/") ? gzipHeaders(url) : null;
     if (gzip) {
       const asset = await env.ASSETS.fetch(request);
@@ -91,6 +90,6 @@ export default {
       headers.delete("content-length");
       return new Response(asset.body, { status: asset.status, headers, encodeBody: "manual" });
     }
-    return env.ASSETS.fetch(request);
+    return rangeResponse(request, await env.ASSETS.fetch(request));
   },
 } satisfies ExportedHandler<Env>;

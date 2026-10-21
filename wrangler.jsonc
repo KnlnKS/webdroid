@@ -9,7 +9,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/proxy*", "/tcp*", "/dns*", "/webview*", "/vendor/aosp/framework.jar", "/vendor/aosp/framework-res.apk", "/vendor/microg/*.gz"]
+    "run_worker_first": ["/proxy*", "/tcp*", "/dns*", "/webview*", "/vendor/aosp/*", "/vendor/android-cacerts.pem", "/vendor/microg/*.gz"]
   },
   "vars": { "WEBVIEW_ORIGIN": "https://webdroid-renderer.pages.dev", "PREVIEW_BRANCH": "" },
   "previews": {

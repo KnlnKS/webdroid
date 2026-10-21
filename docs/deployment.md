@@ -14,7 +14,7 @@ pnpm build:renderer
 pnpm exec wrangler pages functions build --outdir /tmp/webdroid-pages-check
 ```
 
-The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`pnpm gen-framework`) and fails if any of its files is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. If `vendor/wasm-aot` holds a platform build (`pnpm aot`), it is copied under `aot/` with immutable cache headers; a build made from other sources fails the production build. The generated `dist/` directory is disposable.
+The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`pnpm gen-framework`) and fails if any of its files is missing. Files over Cloudflare’s static asset size limit are split and streamed by the Worker. Platform data and certificate reads also pass through the Worker for byte-range responses, using the same size indexes as the browser’s lazy mounts. If `vendor/wasm-aot` holds a platform build (`pnpm aot`), it is copied under `aot/` with immutable cache headers; a build made from other sources fails the production build. The generated `dist/` directory is disposable.
 
 For local Worker testing, use `pnpm worker:dev`. To deploy after configuring the sites below, run `pnpm build:prod` followed by `pnpm exec wrangler deploy --env=""`.
 
