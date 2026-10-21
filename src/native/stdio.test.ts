@@ -10,6 +10,8 @@ import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, openFd } 
 import { renamePath } from "../shell/file-path.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
+import { mapLease, settleRemoteMaps } from "./mappings.ts";
+import type { ProcessMapping } from "./process-fd.ts";
 
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
@@ -98,6 +100,27 @@ test("mremap carries a shared file mapping's range, and its new pages hold the f
     if (address) await cpu.call(munmap, [address, 8192]);
     javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
+});
+
+test("mremap carries another process's shared mapping on its lease, which munmap gives back once", async () => {
+  setA64(true); kernelInit();
+  const writes: [number, number[]][] = [];
+  let closed = 0;
+  const lease: ProcessMapping = { size: 4096, region: -7, immutable: false, read: async (_o, n) => new Uint8Array(n).fill(5),
+    write: async (o, bytes) => { writes.push([o, [...bytes]]); }, close: async () => { closed++; } };
+  const cpu = new Cpu(mainThread, "remote-mremap-test"), mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap");
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    const address = await cpu.call(mmap, [0, 4096, 3, 0x22, -1, 0]);
+    await mapLease(BigInt(address), lease, 8192, 3);
+    mem.st8(address, 7);
+    const moved = await cpu.call(mremap, [address, 4096, 8192, 1 /* MREMAP_MAYMOVE */]);
+    await settleRemoteMaps(); await settled();
+    expect([mem.ld8u(moved), mem.ld8u(moved + 1), writes, closed]).toEqual([7, 5, [[0, [7]]], 0]);
+    mem.st8(moved + 1, 8);
+    await cpu.call(munmap, [moved, 8192]); await settled();
+    expect([writes, closed]).toEqual([[[0, [7]], [1, [8]]], 1]);
+  } finally { cpu.dispose(); setA64(false); }
 });
 
 test("a private file mapping grows with the file's bytes, and MAP_FIXED/MREMAP_FIXED take free address space", async () => {

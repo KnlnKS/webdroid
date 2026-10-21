@@ -9,7 +9,7 @@ import { invalidateRange } from "./cpu.ts";
 import { offArg } from "./kernel.ts";
 import { fdRead, fdFile, contentAt } from "./fs.ts";
 import { isRemoteFd } from "./process-fd.ts";
-import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings.ts";
+import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, growMap, mapRemoteShared, moveMaps } from "./mappings.ts";
 
 const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 /** mmap, whose file offset `offOf` reads: an off_t, or mmap64's off64_t */
@@ -52,19 +52,19 @@ export const VM_SYSCALLS: Record<string, HostFn> = {
     return mem.unmapVa(va, n) ? 0 : -E.INVAL;
   },
   // A mapping shrinks in place, grows in place when the address space after it is free, and with
-  // MREMAP_MAYMOVE moves (to new_address with MREMAP_FIXED). A shared file mapping keeps its file
-  // range wherever it lands, and its new pages hold the file's bytes.
+  // MREMAP_MAYMOVE moves (to new_address with MREMAP_FIXED). A file mapping keeps its file range
+  // and page cache wherever it lands, and its new pages hold the file's bytes.
   mremap: (_c, a) => {
     const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & 2 ? a.va() : 0n;
     const mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
     if (old & mask || fixed & mask || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return -E.INVAL;
     if (flags & 2 && fixed < old + BigInt(pages(oldSize)) && old < fixed + BigInt(pages(size))) return -E.INVAL;
-    if (!(flags & 2) && pages(size) <= pages(oldSize)) {
+    if (pages(size) < pages(oldSize)) {
       const tail = pages(oldSize) - pages(size);
-      if (tail) { syncShared(old + BigInt(pages(size)), tail, true); mem.unmapVa(old + BigInt(pages(size)), tail); }
-      return result(old);
+      syncShared(old + BigInt(pages(size)), tail, true); mem.unmapVa(old + BigInt(pages(size)), tail);
     }
-    const mapping = fileMapAt(old);
+    if (!(flags & 2) && pages(size) <= pages(oldSize)) return result(old);
+    const have = Math.min(oldSize, size);
     let to = old;
     if (flags & 2 || !mem.extendVa(old, oldSize, size)) {
       if (!(flags & 1)) return -E.NOMEM;
@@ -78,18 +78,14 @@ export const VM_SYSCALLS: Record<string, HostFn> = {
         if (!moved) return -E.NOMEM;
         to = BigInt(moved);
       }
-      syncShared(old, oldSize, true);
-      mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), Math.min(oldSize, size)));
-      mem.unmapVa(old, pages(oldSize));
-    } else syncShared(old, oldSize, true);
+      mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), have));
+      moveMaps(old, have, to);
+      mem.unmapVa(old, pages(have));
+    }
+    const mapping = size > have ? fileMapAt(to) : null;
     if (!mapping) return result(to);
-    const track = () => {
-      if (mapping.shared) trackSharedMap(to, size, mapping.off, mapping.file, mapping.writable); else trackPrivateMap(to, size, mapping.off, mapping.file);
-      return result(to);
-    };
-    if (size <= oldSize) return track();
-    const tail = contentAt(mapping.file, mapping.off + oldSize, size - oldSize);
-    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(oldSize)), bytes); return track(); };
+    const tail = contentAt(mapping.file, mapping.off + have, size - have);
+    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(have)), bytes); growMap(to, size); return result(to); };
     return tail instanceof Promise ? tail.then(fill, () => -E.IO) : fill(tail);
   },
   // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
