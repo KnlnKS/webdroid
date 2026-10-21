@@ -142,8 +142,8 @@ test.concurrent("drawable spans align their drawable and text shadows preserve s
 });
 
 test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and errors across suspension and release", async () => {
-  expect(await probe("eglThread")).toEqual({ bound10: 1, interval10: 1, bound14: 1, emptySecond: true, isolated: true, restored: true,
-    sameContext10: true, sameContext14: true, firstError: 0x3000, secondError: 0x3008,
+  expect(await probe("eglThread")).toEqual({ bound10: 1, bound14: 1, emptySecond: true, isolated: true, restored: true,
+    sameContext10: true, sameContext14: true, firstError: 0x3000, secondError: 0x300c,
     restoredAfterRelease: true, swapped: 1, pixel: [255, 0, 0, 255], mainEmpty: true, callbackRestored: true, mainStillEmpty: true,
     readback: { compiled: true, before: [1, 1], after: [2, 2], error: 0, es1: [2, 2], es1Error: 0, unaligned: 0x12345678, integerError: 0 },
     uploads: { lengths: [21, 132], error2D: 0, error3D: 0 },

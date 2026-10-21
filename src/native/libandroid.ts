@@ -6,7 +6,6 @@ import { mem, anchor } from "./mem.ts";
 import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
 import { deref } from "./jni.ts";
 import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface.ts";
-import { activateEglCurrent } from "./egl-current.ts";
 import type { Cpu } from "./cpu.ts";
 import { onMain } from "../android/mainloop.ts";
 import { after, mainThread } from "../jvm/natives/jentry.ts";
@@ -86,11 +85,9 @@ const YV12 = 0x32315659;
 // GL calls act in the calling thread's context.
 const surfaceTextures = new Map<number, NativeSurfaceTexture>();
 let nextSurfaceTexture = 1;
-const inContext = <T>(cpu: Cpu, a: ArgReader, op: (st: NativeSurfaceTexture) => T): T | number => {
+const withSurfaceTexture = <T>(a: ArgReader, op: (st: NativeSurfaceTexture) => T): T | number => {
   const st = surfaceTextures.get(a.i());
-  if (!st) return BAD_VALUE;
-  activateEglCurrent(cpu.jthread);
-  return op(st);
+  return st ? op(st) : BAD_VALUE;
 };
 
 function lockWindow(_cpu: Cpu, args: ArgReader): number {
@@ -278,9 +275,9 @@ export function ndkInit(): void {
     },
     ASurfaceTexture_release: (_c, a) => { surfaceTextures.delete(a.i()); },
     ASurfaceTexture_acquireANativeWindow: (_c, a) => { const st = surfaceTextures.get(a.i()); return st && !st.abandoned ? nativeWindowFor(st.surface) : 0; },
-    ASurfaceTexture_attachToGLContext: (cpu, a) => inContext(cpu, a, (st) => st.attach(a.u())),
-    ASurfaceTexture_detachFromGLContext: (cpu, a) => inContext(cpu, a, (st) => st.detach()),
-    ASurfaceTexture_updateTexImage: (cpu, a) => inContext(cpu, a, (st) => st.update()),
+    ASurfaceTexture_attachToGLContext: (cpu, a) => withSurfaceTexture(a, (st) => st.attach(a.u(), cpu.jthread)),
+    ASurfaceTexture_detachFromGLContext: (cpu, a) => withSurfaceTexture(a, (st) => st.detach(cpu.jthread)),
+    ASurfaceTexture_updateTexImage: (cpu, a) => withSurfaceTexture(a, (st) => st.update(cpu.jthread)),
     ASurfaceTexture_getTransformMatrix: (_c, a) => {
       const st = surfaceTextures.get(a.i()), out = a.p();
       if (st) st.matrix.forEach((v, i) => mem.stf32(out + 4 * i, v));

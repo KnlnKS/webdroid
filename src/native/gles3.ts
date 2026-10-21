@@ -1,21 +1,20 @@
 // OpenGL ES 3.0 over WebGL2, registered as libGLESv2.so and libGLESv3.so. Closed: a name outside
 // ES 3.0 core (KHR_debug, the ES 3.1 entry points) is NULL from dlsym and eglGetProcAddress, so
-// an engine feature-gates as on a device. Handles are gl.ts's per-context tables, shared with the
+// an engine feature-gates as on a device. Handles are gl-context.ts's per-context tables, shared with the
 // Java GLES20 bindings. Pointer arguments are guest memory, or offsets while a pixel or element
 // buffer is bound, as in GL. The state kept beside WebGL is gles3-state.ts's, with its buffers,
 // pixels, client arrays and validation in the gles3-* modules beside it.
 
 import { mem } from "./mem.ts";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host.ts";
-import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl.ts";
+import { gl as current, tables as T, put, takeError, raise, unsure, entry } from "./gl-context.ts";
 import { yieldToLoop } from "../jvm/yield.ts";
 import { perf } from "../perf.ts";
 import { utf8 } from "../jvm/abi.ts";
 import { rewriteTextureSwizzles } from "./swizzle.ts";
-import { activateEglCurrent } from "./egl-current.ts";
 import {
   g, H, TEXTURE0, UNBOUND, contextState, textureRec, texRecs, textureTarget, externalSamplersAs2D, activeUniformInfo, boundTexture, linkProgram,
-  prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, pbo, type GL, type ContextState,
+  prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, uniformHandles, pbo, type GL, type ContextState,
 } from "./gles3-state.ts";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
 import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
@@ -70,7 +69,7 @@ export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeout
   while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = gl.clientWaitSync(sync, 0, 0); }
   return r;
 }
-export function gles3Extensions(gl: GL): string[] {
+function gles3Extensions(gl: GL): string[] {
   let e = extsOf.get(gl);
   if (!e) {
     e = CORE.split(" ");
@@ -145,6 +144,15 @@ const active = (q: (p: WebGLProgram, i: number) => WebGLActiveInfo | null): Host
   if (typep) mem.st32(typep, info.type);
   outStr(info.name, bufsize, lenp, name);
 };
+function uniformLocation(p: WebGLProgram, name: string): number {
+  const [, base, index] = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!, rec = programRecs.get(p);
+  if (rec && rec.hidden.has(base)) return -1;
+  const u = g().getUniformLocation(p, name);
+  if (!u) return -1;
+  const binding = rec && rec.samplers.get(base);
+  if (rec && binding) samplerSlots.set(u, { rec, binding, index: Number(index ?? 0) });
+  return put(T().uniforms, u);
+}
 const names = (pp: number, n: number): string[] => { const r: string[] = []; for (let i = 0; i < n; i++) r.push(mem.cstr(ldp(pp + i * PTR))); return r; };
 
 /** the state entry points ES 1.1 and ES 3.0 share */
@@ -166,10 +174,9 @@ export const glCommon: Record<string, HostFn> = {
   glCopyTexSubImage2D: (_c, a) => g().copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
 };
 const draw = (): ContextState => { perf.glDraws++; return prepareDraw(); };
-type Setter = (this: GL, ...v: unknown[]) => void;
-const method = (name: string): (() => Setter) => { let m: Setter | undefined; return () => (m ??= (g() as unknown as Record<string, Setter>)[name]); };
 
 export function gles3Init(): void {
+  if (gles3Procs.glClear) return;
   const G: Record<string, HostFn> = {
     ...glCommon,
     // ── strings, state queries, errors
@@ -202,7 +209,7 @@ export function gles3Init(): void {
     glPixelStorei: keepsClean((_c, a) => { const pn = a.i(), v = a.i(); if (!pixelStoreAccepted(pn, v)) unsure(); pixelStore(g(), pn, v); }),
 
     // ── shaders and programs
-    glCreateShader: (_c, a) => put(T().shaders, g().createShader(a.i())),
+    glCreateShader: (_c, a) => { const s = g().createShader(a.i()); return s ? put(T().shaders, s) : 0; },
     glDeleteShader: keepsClean((_c, a) => { const h = a.i(), s = T().shaders[h]; if (s) { g().deleteShader(s); T().shaders[h] = null; } }),
     glIsShader: keepsClean((_c, a) => (H(T().shaders, a.i()) ? 1 : 0)),
     glShaderSource: (_c, a) => {
@@ -225,7 +232,7 @@ export function gles3Init(): void {
     glGetShaderSource: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && (shaderRecs.get(s)?.original ?? g().getShaderSource(s))) ?? "", a.i(), a.p(), a.p()); },
     glReleaseShaderCompiler: () => {},
     glShaderBinary: () => { raise(0x500); },                                       // INVALID_ENUM: no binary formats
-    glCreateProgram: () => put(T().programs, g().createProgram()),
+    glCreateProgram: () => { const p = g().createProgram(); return p ? put(T().programs, p) : 0; },
     glDeleteProgram: keepsClean((_c, a) => { const h = a.i(), p = T().programs[h]; if (p) { g().deleteProgram(p); T().programs[h] = null; } }),
     glIsProgram: keepsClean((_c, a) => (H(T().programs, a.i()) ? 1 : 0)),
     glAttachShader: (_c, a) => { const p = H(T().programs, a.i()), s = H(T().shaders, a.i()); if (p && s) g().attachShader(p, s); },
@@ -249,14 +256,13 @@ export function gles3Init(): void {
     glGetAttribLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getAttribLocation(p, a.str()) : -1; },
     glGetFragDataLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getFragDataLocation(p, a.str()) : -1; },
     glGetUniformLocation: (_c, a) => {
-      const p = H(T().programs, a.i()), name = a.str(), [, base, index] = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!;
-      const rec = p && programRecs.get(p);
-      if (rec && rec.hidden.has(base)) return -1;
-      const u = p && g().getUniformLocation(p, name);
-      if (!u) return -1;
-      const binding = rec && rec.samplers.get(base);
-      if (rec && binding) samplerSlots.set(u, { rec, binding, index: Number(index ?? 0) });
-      return put(T().uniforms, u);
+      const p = H(T().programs, a.i()), name = a.str();
+      if (!p) return -1;
+      let handles = uniformHandles.get(p), h = handles?.get(name);
+      if (h !== undefined) return h;
+      if (!handles) uniformHandles.set(p, handles = new Map());
+      handles.set(name, h = uniformLocation(p, name));
+      return h;
     },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
     glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return activeUniformInfo(g(), p, rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i)); }),
@@ -414,21 +420,7 @@ export function gles3Init(): void {
       state.revision++;
     }),
     glIsTexture: keepsClean((_c, a) => (H(T().textures, a.i()) ? 1 : 0)),
-    glBindTexture: keepsClean((_c, a) => {
-      const target = textureTarget(a.i()), texture = H(T().textures, a.i()), state = contextState();
-      g().bindTexture(target, texture);
-      const rec = texture && texRecs.get(texture), tracking = rec && rec.tracking;
-      let unit = state.bindings.get(state.activeUnit);
-      if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
-      // a texture takes its target at its first bind; WebGL refuses another one
-      if (!TEXTURE_TARGETS.has(target) || texture && (!rec || rec.deleted || tracking!.kind === "unknown" || tracking!.kind === "bound" && tracking!.target !== target)) {
-        unsure();
-        if (unit.delete(target)) state.revision++;
-        return;
-      }
-      if (rec && tracking!.kind === "unbound") rec.tracking = { kind: "bound", target, storage: { immutable: false, images: new Map() } };
-      if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
-    }),
+    glBindTexture: keepsClean((_c, a) => bindTexture(a.i(), a.i())),
     glTexImage2D: keepsClean((_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(), p = a.p();
       const images = imageAccepted(t, l, f, w, h, b, fmt, ty, p);
@@ -557,44 +549,22 @@ export function gles3Init(): void {
     G[`glTexParameter${s}`] = keepsClean((_c, a) => { const t = textureTarget(a.i()), pn = a.i(); (int ? texParam : texParamf)(t, pn, read(a)); });
     G[`glSamplerParameter${s}`] = (_c, a) => { const smp = H(T().samplers, a.i()); const pn = a.i(), v = read(a); if (smp) { if (int) g().samplerParameteri(smp, pn, v); else g().samplerParameterf(smp, pn, v); } };
   }
-  // ── uniforms: glUniform{1..4}{f,i,ui}[v] and the nine matrix shapes
-  const kinds = [["f", (a: ArgReader) => a.f(), f32], ["i", (a: ArgReader) => a.i(), i32], ["ui", (a: ArgReader) => a.u(), u32]] as const;
-  for (let n = 1; n <= 4; n++) for (const [k, rd, vw] of kinds) {
-    const set = method(`uniform${n}${k}`), setv = method(`uniform${n}${k}v`), sampler = n === 1 && k === "i";
-    G[`glUniform${n}${k}`] = (_c, a) => {
-      const u = U(a.i()), x = rd(a), y = n > 1 ? rd(a) : 0, z = n > 2 ? rd(a) : 0, w = n > 3 ? rd(a) : 0;
-      if (!u) return;
-      set().call(g(), u, x, y, z, w);
-      if (sampler && samplerSlots.has(u)) setSamplerUnits(u, [x]);
-    };
-    G[`glUniform${n}${k}v`] = (_c, a) => {
-      const u = U(a.i()), cnt = a.i(), p = a.p();
-      if (!u) return;
-      const values = vw(p, cnt * n);
-      setv().call(g(), u, values);
-      if (sampler) setSamplerUnits(u, values);
-    };
+  // ── uniforms: glUniform{1..4}{f,i,ui}[v] and the nine matrix shapes, each a function of its own that calls its WebGL method itself:
+  // draws call them often, and one closure for all would leave the engine a call it cannot inline
+  const named = (name: string, scope: Record<string, unknown>, body: string): HostFn =>
+    new Function(...Object.keys(scope), `"use strict";return function ${name}(_c,a){${body}}`)(...Object.values(scope)) as HostFn;
+  const reads = { f: "f", i: "i", ui: "u" }, views = { f: f32, i: i32, ui: u32 };
+  for (let n = 1; n <= 4; n++) for (const k of ["f", "i", "ui"] as const) {
+    const xs = ["x", "y", "z", "w"].slice(0, n), sampler = n === 1 && k === "i", scope = { U, g, samplerSlots, setSamplerUnits, view: views[k] };
+    G[`glUniform${n}${k}`] = named(`glUniform${n}${k}`, scope, `const u=U(a.i())${xs.map((x) => `,${x}=a.${reads[k]}()`).join("")};if(u===null)return;
+      g().uniform${n}${k}(u,${xs});${sampler ? "if(samplerSlots.has(u))setSamplerUnits(u,[x]);" : ""}`);
+    G[`glUniform${n}${k}v`] = named(`glUniform${n}${k}v`, scope, `const u=U(a.i()),cnt=a.i(),p=a.p();if(u===null)return;
+      const values=view(p,cnt*${n});g().uniform${n}${k}v(u,values);${sampler ? "setSamplerUnits(u,values);" : ""}`);
   }
-  for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const) {
-    const set = method(`uniformMatrix${m}fv`);
-    G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
-  }
-  // libEGL turns a call with no current context into a logged no-op; it never faults the thread
-  // (MapLibre deletes its textures on a GLThread whose context is already released)
-  const noContext = new WeakSet<object>();
-  for (const [name, fn] of Object.entries(G)) G[name] = keptClean(fn) ? (cpu, args) => {
-    activateEglCurrent(cpu.jthread);
-    if (current) return fn(cpu, args);
-    return noCurrent(cpu, name);
-  } : (cpu, args) => {
-    activateEglCurrent(cpu.jthread);
-    if (current) { unsure(); return fn(cpu, args); }
-    return noCurrent(cpu, name);
-  };
-  function noCurrent(cpu: Parameters<HostFn>[0], name: string): number {
-    if (!noContext.has(cpu.jthread)) { noContext.add(cpu.jthread); console.warn(`[gl] ${name}: call to OpenGL ES API with no current context`); }
-    return 0;
-  }
+  for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const)
+    G[`glUniformMatrix${m}fv`] = named(`glUniformMatrix${m}fv`, { U, g, f32 },
+      `const u=U(a.i()),cnt=a.i(),t=!!(a.i()&255),p=a.p();if(u!==null)g().uniformMatrix${m}fv(u,t,f32(p,cnt*${e}))`);
+  for (const [name, fn] of Object.entries(G)) G[name] = entry(name, fn, keptClean(fn) ? undefined : unsure);
   // the probe: after each entry point, count and name a GL error
   if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;
@@ -609,6 +579,36 @@ export function gles3Init(): void {
   hostLib("libGLESv2.so", G, { closed: true });
   hostLib("libGLESv3.so", G, { closed: true });
 }
+/** glBindTexture in the current context */
+export function bindTexture(name: number, handle: number): void {
+  const target = textureTarget(name), texture = H(T().textures, handle), state = contextState();
+  g().bindTexture(target, texture);
+  const rec = texture && texRecs.get(texture), tracking = rec && rec.tracking;
+  let unit = state.bindings.get(state.activeUnit);
+  if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
+  // a texture takes its target at its first bind; WebGL refuses another one
+  if (!TEXTURE_TARGETS.has(target) || texture && (!rec || rec.deleted || tracking!.kind === "unknown" || tracking!.kind === "bound" && tracking!.target !== target)) {
+    unsure();
+    if (unit.delete(target)) state.revision++;
+    return;
+  }
+  if (rec && tracking!.kind === "unbound") rec.tracking = { kind: "bound", target, storage: { immutable: false, images: new Map() } };
+  if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
+}
+const extent = (src: TexImageSource): [number, number] =>
+  "displayWidth" in src ? [src.displayWidth, src.displayHeight] : [(src as ImageBitmap).width, (src as ImageBitmap).height];
+/** glTexImage2D from a host image (a SurfaceTexture's frame, a Bitmap's pixels), recorded as one from guest memory is */
+export function texImageSource(t: number, l: number, internal: number, format: number, type: number, src: TexImageSource): void {
+  const [w, h] = extent(src), images = imageAccepted(t, l, internal, w, h, 0, format, type, 0);
+  if (images) recordImage(images, t, l, { width: w, height: h, internal, format, type }); else untrust(textureOf(t));
+  g().texImage2D(t, l, internal, format, type, src);
+}
+export function texSubImageSource(t: number, l: number, x: number, y: number, format: number, type: number, src: TexImageSource): void {
+  const [w, h] = extent(src);
+  if (!subImageAccepted(t, l, x, y, w, h, format, type, 0)) unsure();
+  g().texSubImage2D(t, l, x, y, format, type, src);
+}
+
 function texParam(t: number, pn: number, v: number): void {
   if (pn >= 0x8e42 && pn <= 0x8e45) { setSwizzle(t, pn, v); return; }
   if (!texParamAccepted(t, pn, v)) unsure();

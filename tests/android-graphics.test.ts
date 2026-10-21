@@ -8,12 +8,12 @@ import { typefaceOf } from "../src/android/fonts.ts";
 import { declaredField } from "../src/jvm/runtime.ts";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path.ts";
 import { canvasOver, canvasOf } from "../src/android/canvas.ts";
-import { glSurfaces } from "../src/native/egl-current.ts";
+import { currentContext } from "../src/native/gl-context.ts";
 import { NativeRenderNode } from "../src/android/rendernode.ts";
 import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix.ts";
 import { Transform } from "../src/android/recording.ts";
 import { rt } from "../src/jvm/runtime.ts";
-import { newObj, linkInit, vcall, iof, staticField } from "../src/jvm/natives/jentry.ts";
+import { newObj, linkInit, vcall, iof, staticField, curThread } from "../src/jvm/natives/jentry.ts";
 import { parsePackageArchive } from "../src/android/packagearchive.ts";
 import { appResources, loadSystemFonts, scall, thrown } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
@@ -87,9 +87,9 @@ describe("egl10", () => {
     expect(none).not.toBeNull();
     expect(iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(true);
     expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
-    expect(glSurfaces.current).toBeNull();
+    expect(currentContext(curThread)).toBeNull();
     expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, null, null, none)).toBe(1);
-    expect(glSurfaces.current).toBeNull();
+    expect(currentContext(curThread)).toBeNull();
   });
 });
 

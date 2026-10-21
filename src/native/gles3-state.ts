@@ -2,7 +2,7 @@
 // of each texture's binding and storage), programs' sampler maps for texture swizzles, the buffer
 // and vertex array bindings, and the default vertex array's client arrays.
 
-import { gl as current } from "../android/gl.ts";
+import { gl as current } from "./gl-context.ts";
 import { uniformBase, visibleUniforms, IDENTITY_SWIZZLE, type SwizzleRewrite, type VisibleUniforms } from "./swizzle.ts";
 import type { BufRec } from "./gles3-buffers.ts";
 
@@ -50,6 +50,8 @@ interface ProgramRec {
 export const programRecs = new WeakMap<WebGLProgram, ProgramRec>();
 /** a guest uniform location naming a swizzled sampler: the program's record, its binding and element */
 export const samplerSlots = new WeakMap<WebGLUniformLocation, { rec: ProgramRec; binding: SamplerBinding; index: number }>();
+/** glGetUniformLocation's handles by program and name: a location is one integer until the program relinks */
+export const uniformHandles = new WeakMap<WebGLProgram, Map<string, number>>();
 export interface ContextState {
   activeUnit: number;
   bindings: Map<number, Map<number, WebGLTexture | null>>;
@@ -75,9 +77,11 @@ export interface ContextState {
 }
 export interface ClientArray { size: number; type: number; normalized: boolean; stride: number; ptr: number; integer: boolean }
 const contextStates = new WeakMap<GL, ContextState>();
+let lastGL: GL | null = null, last: ContextState | null = null;
 
 export function contextState(): ContextState {
   const gl = g();
+  if (gl === lastGL) return last!;
   let state = contextStates.get(gl);
   if (!state) {
     const active = gl.getParameter(ACTIVE_TEXTURE) as number;
@@ -87,7 +91,8 @@ export function contextState(): ContextState {
       limits: Int32Array.from([0x8b4d, 0x0d33, 0x851c, 0x84e8], (pname) => gl.getParameter(pname) as number) };
     contextStates.set(gl, state);
   }
-  return state;
+  lastGL = gl;
+  return last = state;
 }
 
 export function textureRec(texture: WebGLTexture): TexRec {
@@ -146,6 +151,7 @@ function samplerTarget(type: number): number {
 export function linkProgram(program: WebGLProgram): void {
   const gl = g();
   gl.linkProgram(program);
+  uniformHandles.delete(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { programRecs.delete(program); return; }
   const rewrites = (gl.getAttachedShaders(program) ?? []).map((shader) => shaderRecs.get(shader)?.rewrite).filter((r): r is SwizzleRewrite => !!r);
   const hidden = new Set(rewrites.flatMap((rewrite) => [...rewrite.hidden]));

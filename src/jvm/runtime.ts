@@ -140,7 +140,16 @@ export class Runtime {
   registerJnis(cls: string, table: Record<string, unknown>) {
     for (const [sig, fn] of Object.entries(table)) this.registerJni(cls, sig, fn as (...a: never[]) => unknown);
   }
-  jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? this.jniResolver?.(cls, sig) ?? null; }
+  /** classes whose natives one resolver makes from their descriptors (the GL bindings), each registered when first asked for */
+  private families = new Map<string, (sig: string) => ((...a: never[]) => unknown) | null>();
+  registerJniFamily(cls: string, resolve: (sig: string) => ((...a: never[]) => unknown) | null) { this.families.set(cls, resolve); }
+  jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null {
+    const own = this.jni.get(cls + "|" + sig);
+    if (own) return own;
+    const made = this.families.get(cls)?.(sig);
+    if (made) { this.registerJni(cls, sig, made); return made; }
+    return this.jniResolver?.(cls, sig) ?? null;
+  }
   /** set by the native tier: resolve a native by its JNI short-name export (`Java_pkg_Cls_m`) in a loaded library */
   jniResolver: ((cls: string, sig: string) => ((...a: never[]) => unknown) | null) | null = null;
   /** library names (System.loadLibrary spelling) whose natives a TS shim provides */

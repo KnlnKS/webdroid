@@ -1,11 +1,11 @@
 // What WebGL accepts without raising an error, mirrored from its validation so a call that keeps the
-// context clean lets glGetError answer NO_ERROR without asking WebGL (android/gl.ts takeError). An
+// context clean lets glGetError answer NO_ERROR without asking WebGL (gl-context.ts takeError). An
 // entry point marked keepsClean judges each call itself, calling unsure() when WebGL may reject
 // it (an argument not recognized here included); every other entry leaves the context unsure.
 
 import { mem } from "./mem.ts";
 import type { HostFn } from "./host.ts";
-import { unsure } from "../android/gl.ts";
+import { unsure } from "./gl-context.ts";
 import { g, contextState, texRecs, pbo, imageKey, UNKNOWN, type ContextState, type Bound, type TexImage } from "./gles3-state.ts";
 import { ALIGNMENTS, pixelParam, uploadExtent } from "./gles3-pixels.ts";
 
