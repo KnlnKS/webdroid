@@ -410,6 +410,7 @@ rt.registerJnis("android/graphics/fonts/Font$Builder", {
     return wrapFont(fontOf(font).clone(ttcIndex, weight, !!italic, axes));
   },
 });
+// shaping.ts registers the Font natives that measure at a paint's size
 rt.registerJnis("android/graphics/fonts/Font", {
   "nGetReleaseNativeFont()J": () => FINALIZER,
   "nCloneFont(J)J": (h: bigint) => wrapFont(fontOf(h)),

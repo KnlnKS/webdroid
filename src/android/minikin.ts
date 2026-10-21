@@ -793,6 +793,7 @@ const textAdvances = (h: bigint, text: string, start: number, count: number, out
   if (out) out.set(adv, at);
   return sum(adv);
 });
+// the Paint natives that measure text; paint.ts registers the rest
 rt.registerJnis("android/graphics/Paint", {
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, c: Uint16Array, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
     metricsForText(h, charsToString(c, 0, c.length), start, count, fm),
