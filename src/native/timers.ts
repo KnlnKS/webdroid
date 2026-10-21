@@ -2,7 +2,7 @@ import { processExited } from "../process-exit.ts";
 import { hostLib, PTR, ldp, ldLong, stLong, type HostFn } from "./host.ts";
 import { clockTime, readTs, writeTs, wrapped, KLAYOUT } from "./kernel.ts";
 import { mem } from "./mem.ts";
-import { startThread } from "./pthread.ts";
+import { startThread, threadAttr } from "./pthread.ts";
 import { E } from "./abi.ts";
 import { cpuByOsTid, cpus, type Cpu } from "./cpu.ts";
 import { blocked } from "./signals.ts";
@@ -68,8 +68,8 @@ function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcTh
   } else if (mode === SIGEV_THREAD && libcThreads) {
     const fn = ldp(at + SIGEVENT.union), attributes = ldp(at + SIGEVENT.union + PTR);
     if (!fn) return -E.INVAL;
-    if (attributes) return -E.NOTSUP;
-    notify = () => { startThread(cpu, fn, value, true); };
+    const attr = threadAttr(attributes, true);
+    notify = () => { startThread(cpu, fn, value, attr); };
   } else if (mode !== SIGEV_NONE) return -E.INVAL;
   const timer: Timer = { clock, next: 0, interval: 0, overrun: 0, notify };
   timers.set(id, timer); nextTimerId++;

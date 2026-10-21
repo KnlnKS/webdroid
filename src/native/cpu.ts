@@ -440,9 +440,9 @@ export class Cpu {
   /** clone(CLONE_SETTLS): the guest libc made this thread, with `tls` its thread pointer */
   cloned(tls: bigint): void { this.tlsVa = tls; this.libc = "guest"; threadHooks?.cloned(this); }
 
-  ensureStack(): void {
+  ensureStack(size = this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE): void {
     if (!this.stackTop) {
-      const s = mem.allocStack(this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE);
+      const s = mem.allocStack(size);
       this.stackBase = s.base; this.stackTop = s.top;
       this.w[2 * this.spx] = s.top; this.w[2 * this.spx + 1] = 0;
       if (this.a64) { mem.st64(this.pthreadSelf + 0x20, BigInt(s.base)); mem.st64(this.pthreadSelf + 0x28, BigInt(s.top - s.base)); }

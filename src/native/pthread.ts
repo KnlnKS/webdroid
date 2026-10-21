@@ -9,7 +9,7 @@ import { yieldToLoop } from "../jvm/yield.ts";
 import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
 import { WaitQueue, msLeft } from "./poll.ts";
 import { TLS_KEYS } from "./core.ts";
-import { RET_SENTINEL, E } from "./abi.ts";
+import { RET_SENTINEL, E, PAGE_SIZE, STACK_GUARD, STACK_SIZE } from "./abi.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { logUncaught, dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { threadExit } from "../jvm/natives/jentry.ts";
@@ -62,7 +62,23 @@ function rwRelease(cpu: Cpu, a: number): number {
   if (mem.ld32(a + RW_WAITERS)) queues.get(a)?.wakeAll();
   return 0;
 }
-const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean; storage: number }>();
+/** bionic's ILP32 pthread_attr_t: flags (bit 0: detached), stack base and size, guard size,
+ *  scheduling policy and priority */
+const ATTR = { flags: 0, base: 4, size: 8, guard: 12, policy: 16, priority: 20 }, ATTR_DETACHED = 1;
+export type ThreadAttr = Record<keyof typeof ATTR, number>;
+const ATTR_FIELDS = Object.keys(ATTR) as (keyof typeof ATTR)[];
+const PTHREAD_STACK_MIN = 2 * PAGE_SIZE;
+const DEFAULT_ATTR: ThreadAttr = { flags: 0, base: 0, size: STACK_SIZE, guard: PAGE_SIZE, policy: 0, priority: 0 };
+/** what pthread_create reads from `attr` (0: the defaults), detached if `detached` */
+export function threadAttr(attr: number, detached = false): ThreadAttr {
+  const t = { ...DEFAULT_ATTR };
+  if (attr) for (const field of ATTR_FIELDS) t[field] = mem.ld32(attr + ATTR[field]) >>> 0;
+  if (detached) t.flags |= ATTR_DETACHED;
+  return t;
+}
+function writeAttr(attr: number, t: ThreadAttr): void { for (const field of ATTR_FIELDS) mem.st32(attr + ATTR[field], t[field]); }
+/** each pthread_create thread's attributes, its stack as it got it */
+const threads = new Map<number, { done: Promise<void>; retval: bigint; attr: ThreadAttr; detached: boolean; joined: boolean; exited: boolean; storage: number }>();
 /** pthread_t (the thread's pthread_internal_t address) → Cpu tid, for as long as the thread is joinable or alive */
 const handles = new Map<number, number>();
 export const tidOf = (handle: number): number => handles.get(handle >>> 0) ?? cpuBySelf(handle >>> 0)?.tid ?? -1;
@@ -70,7 +86,6 @@ function cpuBySelf(handle: number): Cpu | undefined { for (const c of cpus) if (
 let keySeq = 1, threadSeq = 0;
 const keyDtors = new Map<number, number>();                              // pthread key → destructor, run for the thread's non-null values at its exit
 const cleanupHeads = new Map<number, number>();
-const attrGuards = new AddrMap<number>();
 async function runCleanupHandlers(cpu: Cpu): Promise<void> {
   for (let head; (head = cleanupHeads.get(cpu.tid) ?? 0);) {
     cleanupHeads.set(cpu.tid, ldp(head));
@@ -216,13 +231,18 @@ function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<
   })(), 0));
 }
 
-export function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
-  const cpu = newThread(parent);
-  try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
+export function startThread(parent: Cpu, start: number, arg: bigint, attr: ThreadAttr): Cpu {
+  const cpu = newThread(parent), detached = !!(attr.flags & ATTR_DETACHED);
+  // the caller's own stack (pthread_attr_setstack) stays the caller's to free
+  if (attr.base) { cpu.stackTop = attr.base + attr.size; cpu.w[2 * cpu.spx] = cpu.stackTop; }
+  else {
+    try { cpu.ensureStack((attr.size + PAGE_SIZE - 1) & -PAGE_SIZE); } catch (e) { cpu.dispose(); throw e; }
+    attr = { ...attr, base: cpu.stackBase, size: cpu.stackTop - cpu.stackBase };
+  }
   cpu.w[0] = Number(arg & 0xffffffffn) | 0;
   cpu.w[2 * cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
-  const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false, storage: 0 };
+  const rec = { retval: 0n, done: Promise.resolve(), attr, detached, joined: false, exited: false, storage: 0 };
   rec.done = launch(cpu, async () => {
     await cpu.run();
     if (!cpu.finished) rec.retval = BigInt(cpu.w[0] >>> 0);
@@ -278,7 +298,7 @@ export function pthreadInit(): void {
     pthread_create: (parent, a) => {
       const out = a.p(), attr = a.p(), start = a.p(), arg = a.va();
       try {
-        const cpu = startThread(parent, start, arg, !!attr && !!(mem.ld32(attr) & 1));
+        const cpu = startThread(parent, start, arg, threadAttr(attr));
         stp(out, cpu.pthreadSelf);
         return 0;
       } catch (e) {
@@ -338,11 +358,17 @@ export function pthreadInit(): void {
     },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,
-    pthread_attr_init: (_c, a) => { const attr = a.p(); mem.st32(attr, 0); attrGuards.set(attr, 4096); return 0; },
-    pthread_attr_destroy: (_c, a) => { attrGuards.delete(a.p()); return 0; },
-    pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
-    pthread_attr_setguardsize: (_c, a) => { attrGuards.set(a.p(), Number(a.va())); return 0; },
-    pthread_attr_getguardsize: (_c, a) => { const attr = a.p(), out = a.p(); stLong(out, attrGuards.get(attr) ?? 4096); return 0; },
+    pthread_attr_init: (_c, a) => { writeAttr(a.p(), DEFAULT_ATTR); return 0; },
+    pthread_attr_destroy: () => 0,
+    pthread_attr_setstacksize: (_c, a) => { const attr = a.p(), size = a.u(); if (size < PTHREAD_STACK_MIN) return E.INVAL; mem.st32(attr + ATTR.size, size); return 0; },
+    pthread_attr_setstack: (_c, a) => {
+      const attr = a.p(), base = a.p(), size = a.u();
+      if (size < PTHREAD_STACK_MIN || (size | base) & (PAGE_SIZE - 1)) return E.INVAL;
+      mem.st32(attr + ATTR.base, base); mem.st32(attr + ATTR.size, size);
+      return 0;
+    },
+    pthread_attr_setguardsize: (_c, a) => { const attr = a.p(); mem.st32(attr + ATTR.guard, a.u()); return 0; },
+    pthread_attr_getguardsize: (_c, a) => { const attr = a.p(), out = a.p(); stLong(out, threadAttr(attr).guard); return 0; },
     pthread_attr_setscope: (_c, a) => { a.p(); const scope = a.i(); return scope === 0 ? 0 : scope === 1 ? E.NOTSUP : E.INVAL; },
     pthread_attr_getscope: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_attr_setdetachstate: (_c, a) => {
@@ -352,11 +378,20 @@ export function pthreadInit(): void {
       return 0;
     },
     pthread_attr_getdetachstate: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 1); return 0; },
-    pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
-    pthread_attr_getschedparam: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
-    pthread_attr_getstacksize: (_c, a) => { a.p(); stLong(a.p(), 0x100000); return 0; },
-    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stLong(sz, cpu.stackTop - cpu.stackBase); return 0; },
-    pthread_getattr_np: () => 0,
+    pthread_attr_setschedparam: (_c, a) => { const attr = a.p(), param = a.p(); mem.st32(attr + ATTR.priority, mem.ld32(param)); return 0; },
+    pthread_attr_setschedpolicy: (_c, a) => { const attr = a.p(); mem.st32(attr + ATTR.policy, a.i()); return 0; },
+    pthread_attr_getschedparam: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr + ATTR.priority)); return 0; },
+    pthread_attr_getstacksize: (_c, a) => { const attr = a.p(); stLong(a.p(), threadAttr(attr).size); return 0; },
+    pthread_attr_getstack: (_c, a) => { const t = threadAttr(a.p()), base = a.p(), size = a.p(); stp(base, t.base); stLong(size, t.size); return 0; },
+    // a thread pthread_create did not start (the main thread, or a Java thread's) has the stack
+    // and guard the host gave it, and nothing joins it
+    pthread_getattr_np: (_c, a) => {
+      const handle = a.p(), attr = a.p(), tid = tidOf(handle), rec = threads.get(tid), t = cpuByTid(tid);
+      if (rec) writeAttr(attr, { ...rec.attr, flags: rec.attr.flags & ~ATTR_DETACHED | (rec.detached ? ATTR_DETACHED : 0) });
+      else if (t) writeAttr(attr, { ...DEFAULT_ATTR, flags: ATTR_DETACHED, base: t.stackBase, size: t.stackTop - t.stackBase, guard: STACK_GUARD });
+      else return E.SRCH;
+      return 0;
+    },
     __pthread_cleanup_push: (cpu, a) => {
       const entry = a.p(), routine = a.p(), arg = a.p();
       stp(entry, cleanupHeads.get(cpu.tid) ?? 0);
