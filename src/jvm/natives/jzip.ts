@@ -8,8 +8,7 @@ import ZStream from "pako/lib/zlib/zstream.js";
 import { rt, waits, type JObj, setDeclared } from "../runtime.ts";
 import { u8 } from "../abi.ts";
 import { after } from "./jentry.ts";
-import type { FileSource } from "../../shell/lazyfile.ts";
-import { crc32, adler32, inflateTree, treeEntrySize } from "../../zip.ts";
+import { crc32, adler32 } from "../../zip.ts";
 import { handle, deref, release } from "../../android/handles.ts";
 import { memoryAt, region } from "./jmemory.ts";
 
@@ -147,15 +146,3 @@ const checksum = (step: (sum: number, b: Uint8Array) => number) => ({
 const crc = checksum(crc32);
 rt.registerJnis("java/util/zip/CRC32", { "update(II)I": crc["update(II)I"], "updateBytes0(I[BII)I": crc["updateBytes(I[BII)I"], "updateByteBuffer0(IJII)I": crc["updateByteBuffer(IJII)I"] });
 rt.registerJnis("java/util/zip/Adler32", checksum(adler32));
-/** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
-export function classpathFile(name: string): FileSource {
-  const resident = Object.hasOwn(rt.classpath, name);
-  return {
-    size: resident ? treeEntrySize(rt.classpath, name) : rt.classpathSource!.entrySize(name),
-    read: async (offset, length) => {
-      if (resident) await inflateTree(rt.classpath, (entry) => entry === name);
-      return (await rt.readClasspath(name))!.subarray(offset, offset + length);
-    },
-  };
-}
-

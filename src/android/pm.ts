@@ -33,7 +33,8 @@ import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
 import { installerService } from "./packageinstaller.ts";
 import { checkPermission } from "./permissions.ts";
 import { libraryAbi } from "../jvm/natives/jlang.ts";
-import { classpathFile } from "../jvm/natives/jzip.ts";
+import { inflateTree, treeEntrySize } from "../zip.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
 import { ABIS_64 } from "../shell/properties.ts";
 
 const PKG = "android/content/pm/";
@@ -77,6 +78,17 @@ function extractNativeLibraries(record: PackageRecord): void {
   const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
   for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
     vfs.mount(dir + name.slice(prefix.length - 1), classpathFile(name));
+}
+/** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
+function classpathFile(name: string): FileSource {
+  const resident = Object.hasOwn(rt.classpath, name);
+  return {
+    size: resident ? treeEntrySize(rt.classpath, name) : rt.classpathSource!.entrySize(name),
+    read: async (offset, length) => {
+      if (resident) await inflateTree(rt.classpath, (entry) => entry === name);
+      return (await rt.readClasspath(name))!.subarray(offset, offset + length);
+    },
+  };
 }
 
 // ── the parsed manifest, read as ParsingPackageUtils reads it. The Java side is built in generators
