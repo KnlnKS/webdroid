@@ -19,12 +19,10 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
-import { hostUnsafe, fieldCookie } from "./unsafe.ts";
-import { hostReflect } from "./reflect.ts";
-import { hostMembers } from "./members.ts";
+import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
-import { UInfo, RInfo, MInfo, Info } from "../compiler/info.ts";
+import { Info } from "../compiler/info.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -53,9 +51,6 @@ function interfaces(w: World, name: string): string[] {
   return l;
 }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
-  if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
-  if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
-  if (kind >= UInfo.FieldGet) return hostUnsafe(w, kind, a, b);
   const name = w.nameOf(a), jc = w.prog.get(name), arr = name[0] === "[", fields = jc?.def ? jc.fields : [];
   switch (kind as Info) {
     case Info.Flags: return isPrim(name) || arr ? ACC.PUBLIC | ACC.FINAL | ACC.ABSTRACT : jc?.flags ?? ACC.PUBLIC;
