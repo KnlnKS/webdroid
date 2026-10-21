@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { declaredField } from "../../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { mangleStaticField } from "../../src/jvm/abi.ts";
-import { exercise, same, thrown, statics, listener, ltrb } from "./harness.ts";
+import { exercise, same, outcome, statics, listener, ltrb } from "./harness.ts";
 
 // Bitmap, BitmapFactory and BitmapRegionDecoder against the reference AVD: every expected value below
 // was printed by the same calls there (images in tests/fixtures/images). Headless there is no image
@@ -66,7 +66,7 @@ await exercise("Bitmap: pixels, configs, copies, buffers, parcels (device values
   const c1010102 = await copy("RGBA_1010102", 1);
   same("copy 1010102", `${await info(c1010102)} | ${await px(c1010102)}`, "3x2 RGBA_1010102 rb=12 bc=24 abc=24 alpha=true premul=true mut=true | aac00000 0 550f2742 ff00ff00 0 55bdbdbd");
   same("create 4444 is 8888", await info(await create(2, 2, "ARGB_4444")), "2x2 ARGB_8888 rb=8 bc=16 abc=16 alpha=true premul=true mut=true");
-  same("create HARDWARE", await thrown(() => create(2, 2, "HARDWARE")), "java.lang.IllegalArgumentException: can't create mutable bitmap with Config.HARDWARE");
+  same("create HARDWARE", await outcome(() => create(2, 2, "HARDWARE")), "java.lang.IllegalArgumentException: can't create mutable bitmap with Config.HARDWARE");
   const a8 = await create(2, 1, "ALPHA_8");
   await vcall(a8, "setPixel", "(III)V", 0, 0, 0x80ff0000 | 0); await vcall(a8, "setPixel", "(III)V", 1, 0, 0xff123456 | 0);
   same("A8", `${await px(a8)} | ${await bufferBytes(a8, 2)}`, "80000000 ff000000 | 128,255 pos=2");
@@ -100,7 +100,7 @@ await exercise("Bitmap: pixels, configs, copies, buffers, parcels (device values
   const re = await create(3, 2, "ARGB_8888"), rg = await vcall(re, "getGenerationId", "()I");
   await vcall(re, "reconfigure", "(IILandroid/graphics/Bitmap$Config;)V", 2, 2, (await configs()).s$RGB_565);
   same("reconfigure", `${await info(re)} ${(await vcall(re, "getGenerationId", "()I")) !== rg}`, "2x2 RGB_565 rb=4 bc=8 abc=24 alpha=false premul=false mut=true true");
-  same("reconfigure larger", await thrown(async () => vcall(re, "reconfigure", "(IILandroid/graphics/Bitmap$Config;)V", 4, 4, (await configs()).s$ARGB_8888)),
+  same("reconfigure larger", await outcome(async () => vcall(re, "reconfigure", "(IILandroid/graphics/Bitmap$Config;)V", 4, 4, (await configs()).s$ARGB_8888)),
     "java.lang.IllegalArgumentException: Bitmap not large enough to support new configuration");
   const fromColors = await scall(BITMAP, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", Int32Array.of(0x80ff0000 | 0, 0xff00ff00 | 0, 0x01808080, 0), 2, 2, (await configs()).s$ARGB_8888);
   same("from colors", `${await info(fromColors)} | ${await px(fromColors)}`, "2x2 ARGB_8888 rb=8 bc=16 abc=16 alpha=true premul=true mut=false | 80ff0000 ff00ff00 1ffffff 0");
@@ -117,7 +117,7 @@ await exercise("Bitmap: pixels, configs, copies, buffers, parcels (device values
   same("parcel", `${await info(back)} dens=${await vcall(back, "getDensity", "()I")} | ${await px(back)} | ${await vcall(back, "sameAs", "(Landroid/graphics/Bitmap;)Z", b)}`,
     "3x2 ARGB_8888 rb=12 bc=24 abc=24 alpha=true premul=true mut=true dens=213 | 80ff0000 1ffffff 40143458 ff00ff00 0 7f7e7e7e | 1");
   await vcall(b, "recycle", "()V");
-  same("recycled", await thrown(() => vcall(b, "getPixel", "(II)I", 0, 0)), "java.lang.IllegalStateException: Can't call getPixel() on a recycled bitmap");
+  same("recycled", await outcome(() => vcall(b, "getPixel", "(II)I", 0, 0)), "java.lang.IllegalStateException: Can't call getPixel() on a recycled bitmap");
 });
 
 await exercise("BitmapFactory: bounds, sampling, density, configs, nine-patch, inBitmap (device values)", async () => {
@@ -181,8 +181,8 @@ await exercise("BitmapFactory: bounds, sampling, density, configs, nine-patch, i
   const reuse = await create(10, 6, "ARGB_8888"), bigger = await create(20, 20, "ARGB_8888");
   same("inBitmap", (await decode(png, await opts({ inBitmap: reuse, inMutable: 1 }))) === reuse, true);
   same("inBitmap larger", `${(await decode(png, await opts({ inBitmap: bigger, inMutable: 1 }))) === bigger} ${await info(bigger)}`, "true 10x6 ARGB_8888 rb=40 bc=240 abc=1600 alpha=true premul=true mut=true");
-  same("inBitmap too small", await thrown(async () => decode(png, await opts({ inBitmap: await create(4, 4, "ARGB_8888"), inMutable: 1 }))), "java.lang.IllegalArgumentException: Problem decoding into existing bitmap");
-  same("inBitmap 565 for alpha", await thrown(async () => decode(png, await opts({ inBitmap: await create(10, 6, "RGB_565"), inMutable: 1 }))), "java.lang.IllegalArgumentException: Problem decoding into existing bitmap");
+  same("inBitmap too small", await outcome(async () => decode(png, await opts({ inBitmap: await create(4, 4, "ARGB_8888"), inMutable: 1 }))), "java.lang.IllegalArgumentException: Problem decoding into existing bitmap");
+  same("inBitmap 565 for alpha", await outcome(async () => decode(png, await opts({ inBitmap: await create(10, 6, "RGB_565"), inMutable: 1 }))), "java.lang.IllegalArgumentException: Problem decoding into existing bitmap");
   const immutable = await decode(png, null);
   same("inBitmap immutable", (await decode(png, await opts({ inBitmap: immutable }))) !== immutable, true);
   const small = await create(5, 3, "ARGB_8888");
@@ -204,10 +204,10 @@ await exercise("BitmapRegionDecoder (device values)", async () => {
     "10x6 3x2 ARGB_8888 rb=12 bc=24 abc=24 alpha=true premul=true mut=false 3x2 image/png");
   const partial = await vcall(rd, "decodeRegion", "(Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;", await rect(-2, -2, 4, 4), null);
   same("partly outside", (await info(partial)).split(" ")[0], "6x6");
-  same("outside", await thrown(async () => vcall(rd, "decodeRegion", "(Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;", await rect(20, 20, 30, 30), null)),
+  same("outside", await outcome(async () => vcall(rd, "decodeRegion", "(Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;", await rect(20, 20, 30, 30), null)),
     "java.lang.IllegalArgumentException: rectangle is outside the image");
-  same("gif", await thrown(async () => open(await image("anim.gif"))), "java.io.IOException: Image format not supported");
-  same("garbage", await thrown(() => open(Int8Array.of(1, 2, 3))), "java.io.IOException: Image format not supported");
+  same("gif", await outcome(async () => open(await image("anim.gif"))), "java.io.IOException: Image format not supported");
+  same("garbage", await outcome(() => open(Int8Array.of(1, 2, 3))), "java.io.IOException: Image format not supported");
 });
 
 await exercise("ImageDecoder: headers, targets, allocators, partial input, drawables (device values)", async () => {
@@ -250,8 +250,8 @@ await exercise("ImageDecoder: headers, targets, allocators, partial input, drawa
   const truncated = await image("truncated.png");
   same("partial image", `${await info(await bitmap(truncated, (d) => vcall(d, "setOnPartialImageListener", "(Landroid/graphics/ImageDecoder$OnPartialImageListener;)V", partial)))} seen ${seen}`,
     "64x64 HARDWARE rb=256 bc=16384 abc=16384 alpha=false premul=false mut=false seen 2 Input was incomplete. null");
-  same("incomplete", await thrown(() => bitmap(truncated)), "android.graphics.ImageDecoder$DecodeException: Input was incomplete.");
-  same("garbage", await thrown(() => bitmap(Int8Array.of(1, 2, 3, 4, 5, 6, 7, 8))),
+  same("incomplete", await outcome(() => bitmap(truncated)), "android.graphics.ImageDecoder$DecodeException: Input was incomplete.");
+  same("garbage", await outcome(() => bitmap(Int8Array.of(1, 2, 3, 4, 5, 6, 7, 8))),
     "android.graphics.ImageDecoder$DecodeException: Failed to create image decoder with message 'unimplemented'Input contained an error.");
   const buffer = await scall("java/nio/ByteBuffer", "wrap", "([B)Ljava/nio/ByteBuffer;", png);
   same("ByteBuffer source", await info(await scall(ID, "decodeBitmap", `(${SRC})Landroid/graphics/Bitmap;`, await scall(ID, "createSource", `(Ljava/nio/ByteBuffer;)${SRC}`, buffer))),

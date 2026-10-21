@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry.ts";
 import { familyOf, typefaceOf } from "../../src/android/fonts.ts";
 import { loadSystemFonts } from "../../tests/java.ts";
-import { exercise, same, thrown, fontMetrics, ltrb } from "./harness.ts";
+import { exercise, same, tokens, outcome, fontMetrics, ltrb } from "./harness.ts";
 
 // Expected values are the reference AVD's for its variable Roboto (OS/2 weight 400, revision 196936,
 // hhea 1900/-500/0 and head yMax/yMin 2163/-555 over 2048 units) and Noto Serif Bold.
@@ -24,7 +24,7 @@ await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
   const bold = await vcall(await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, direct), "build", `()${F}`);
   same("from a direct buffer", await style(bold), "FontStyle { weight=700, slant=0}");
   const heap = await scall("java/nio/ByteBuffer", "wrap", `([B)${BB}`, new Int8Array(boldBytes.buffer));
-  same("a heap buffer", (await thrown(() => newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, heap))).includes("direct"), true);
+  same("a heap buffer", (await outcome(() => newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, heap))).includes("direct"), true);
   const cloning = await newObj("android/graphics/fonts/Font$Builder", `(${F})V`, regular);
   await vcall(cloning, "setWeight", `(I)${FB}`, 500);
   await vcall(cloning, "setFontVariationSettings", `(Ljava/lang/String;)${FB}`, "'wght' 500, 'ital' 1");
@@ -37,12 +37,12 @@ await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
   const bad = await newObj("android/graphics/fonts/Font$Builder", `(${BB})V`, garbage);
   await vcall(bad, "setWeight", `(I)${FB}`, 400);
   await vcall(bad, "setSlant", `(I)${FB}`, 0);
-  same("invalid data", await thrown(() => vcall(bad, "build", `()${F}`)), "java.lang.IllegalArgumentException: Failed to create internal object. maybe invalid font data.");
+  same("invalid data", await outcome(() => vcall(bad, "build", `()${F}`)), "java.lang.IllegalArgumentException: Failed to create internal object. maybe invalid font data.");
 
   const FF = "Landroid/graphics/fonts/FontFamily;", FFB = "Landroid/graphics/fonts/FontFamily$Builder;";
   const builder = await newObj("android/graphics/fonts/FontFamily$Builder", `(${F})V`, regular);
   await vcall(builder, "addFont", `(${F})${FFB}`, bold);
-  same("a second regular", (await thrown(() => vcall(builder, "addFont", `(${F})${FFB}`, regular))).endsWith("has already been added"), true);
+  same("a second regular", (await outcome(() => vcall(builder, "addFont", `(${F})${FFB}`, regular))).endsWith("has already been added"), true);
   const family = await vcall(builder, "build", `()${FF}`);
   const first = await vcall(family, "getFont", `(I)${F}`, 0), again = await vcall(family, "getFont", `(I)${F}`, 0);
   same("the family", [await vcall(family, "getSize", "()I"), await style(await vcall(family, "getFont", `(I)${F}`, 1)), first === again,
@@ -124,11 +124,7 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   const paint = await newObj("android/graphics/Paint", "(I)V", 1);
   const set = (name: string, desc: string, v: unknown) => vcall(paint, name, desc, typeof v === "number" ? Math.fround(v) : v);
   // numbers match to a float ulp: the device sums positions in float, rounding each step
-  const NUM = /^-?\d+(\.\d+)?$/, near = (a: string, b: string) => a === b || NUM.test(a) && NUM.test(b) && Math.abs(+a - +b) <= Math.abs(+b) * 2 ** -23;
-  const same = (what: string, got: string, want: string) => {
-    const g = got.split(/[ |@]+/), w = want.split(/[ |@]+/);
-    if (g.length !== w.length || g.some((t, i) => !near(t, w[i]))) throw new Error(`${what}: ${got}, not ${want}`);
-  };
+  const ulp = { rel: 2 ** -23, abs: 0 };
   let glyphs: unknown;
   const shaped = async (text: string, want: string, rtl = false) => {
     const g = glyphs = await scall("android/graphics/text/TextRunShaper", "shapeTextRun", `(Ljava/lang/CharSequence;IIIIFFZ${P})Landroid/graphics/text/PositionedGlyphs;`, text, 0, text.length, 0, text.length, 0, 0, +rtl, paint);
@@ -140,7 +136,7 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
         + `${await vcall(g, "getFakeBold", "(I)Z", i) ? " FB" : ""}${await vcall(g, "getFakeItalic", "(I)Z", i) ? " FI" : ""}`);
       last = file;
     }
-    same(text, out.join(" | "), want);
+    tokens(text, out.join(" | "), want, ulp);
   };
   await set("setTextSize", "(F)V", 40);
   await shaped("Hello, World!", "225.39453 -37.109375 9.765625 | 45@0 Roboto-Regular.ttf | 74@29 | 81@50 | 81@60 | 84@70 | 17@93 | 5@101 | 60@111 | 84@145.39453 | 87@168.39453 | 81@182.39453 | 73@192.39453 | 6@215.39453");
@@ -149,20 +145,20 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   const context = await scall("android/graphics/text/TextRunShaper", "shapeTextRun", `([CIIIIFFZ${P})Landroid/graphics/text/PositionedGlyphs;`, chars, 1, 11, 0, 13, 0, 0, 0, paint);
   const ids = [];
   for (let i = 0; i < await vcall(context, "glyphCount", "()I"); i++) ids.push(`${await vcall(context, "getGlyphId", "(I)I", i)}@${await vcall(context, "getGlyphX", "(I)F", i)}`);
-  same("a char[] in context", `${await vcall(context, "getAdvance", "()F")} ${ids.join(" ")}`, "203 45@0 74@29 81@50 81@60 84@70 5@93 92@103 84@133 87@156 81@170 73@180");
+  tokens("a char[] in context", `${await vcall(context, "getAdvance", "()F")} ${ids.join(" ")}`, "203 45@0 74@29 81@50 81@60 84@70 5@93 92@103 84@133 87@156 81@170 73@180", ulp);
   // the flags font has only bitmaps: its advances are unhinted, its descent its strike's (27 px at 109 ppem)
   await shaped("office fifty", "177 -37.109375 9.765625 | 84@0 Roboto-Regular.ttf | 1836@23 | 72@57 | 74@78 | 5@99 | 1834@109 | 75@131 | 89@145 | 94@158");
   await shaped("é ñ", "53 -37.109375 9.765625 | 2292@0 Roboto-Regular.ttf | 5@21 | 2299@31");
   // an app's emoji are the update GMS installed in place of the image's NotoColorEmoji.ttf, whose
   // Unicode 16 additions (fingerprint, face with bags under eyes, harp, splatter) the image lacks
   await shaped("a👍🏽b👨‍👩‍👧🇨🇦", "193.80469 -37.109375 9.9082575 | 70@0 Roboto-Regular.ttf | 571@22 NotoColorEmoji.ttf | 71@72 Roboto-Regular.ttf | 856@94 NotoColorEmoji.ttf | 65@144 NotoColorEmojiFlags.ttf");
-  same("the emoji font", await vcall(await vcall(await vcall(glyphs, "getFont", `(I)${F}`, 1), "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"),
-    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf");
+  tokens("the emoji font", await vcall(await vcall(await vcall(glyphs, "getFont", `(I)${F}`, 1), "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"),
+    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf", ulp);
   const available: string[] = [];
   for (const f of await vcall(await scall("android/graphics/fonts/SystemFonts", "getAvailableFonts", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;"))
     available.push(await vcall(await vcall(f, "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"));
-  same("available emoji fonts", available.filter((p) => p.includes("Emoji")).sort().join(" "),
-    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf /system/fonts/NotoColorEmojiFlags.ttf");
+  tokens("available emoji fonts", available.filter((p) => p.includes("Emoji")).sort().join(" "),
+    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf /system/fonts/NotoColorEmojiFlags.ttf", ulp);
   await shaped("🫆🫩🪉🫟", "200 -37.109375 9.765625 | 3254@0 NotoColorEmoji.ttf | 3280@50 | 3183@100 | 3270@150");
   await set("setTextSize", "(F)V", 20);
   await set("setLetterSpacing", "(F)V", 0.1);
@@ -200,7 +196,7 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   // Skia's bounds of hinted outlines: at 13.5 px the device's hinting lifts j's dot a pixel (-11)
   await shaped("Agj", "29 -18.554688 4.8828125 | 38@0 Roboto-Regular.ttf | 76@13 | 79@24");
   // the variable Roboto is set to wght 400 and ital 0
-  same("overrides", `${await vcall(glyphs, "getWeightOverride", "(I)F", 0)} ${await vcall(glyphs, "getItalicOverride", "(I)F", 0)}`, "400 0");
+  tokens("overrides", `${await vcall(glyphs, "getWeightOverride", "(I)F", 0)} ${await vcall(glyphs, "getItalicOverride", "(I)F", 0)}`, "400 0", ulp);
   const font = await vcall(glyphs, "getFont", `(I)${F}`, 0), rect = await newObj("android/graphics/RectF", "()V") as object;
   const bounds = [];
   for (const [size, scale, skew] of [[13.5, 1, 0], [40, 1, 0], [40, 1.5, -0.25]]) {
@@ -209,7 +205,7 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   }
   const want = ["9 0 -10 9 0", "8 0 -8 7 3", "3 -1 -10 3 3", "26 0 -29 26 0", "22 1 -22 20 9", "10 -2 -29 7 9",
     "39.140625 0 -29 39 0", "33.691406 3 -22 35 9", "14.355469 -4 -29 18 9"];
-  same("getGlyphBounds", bounds.join(" | "), want.join(" | "));
+  tokens("getGlyphBounds", bounds.join(" | "), want.join(" | "), ulp);
 
   // text bounds, and metrics from the fonts the text uses: Noto Sans CJK's extent for CJK (the
   // device's hinting lifts the CJK bounds' top a pixel, to -35)
@@ -217,9 +213,9 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   const box = await newObj("android/graphics/Rect", "()V") as object, fmi = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
   const textBounds = async (text: string) => { await vcall(paint, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", text, 0, text.length, box); return ltrb(box).join(" "); };
   await vcall(paint, "getFontMetricsInt", "(Ljava/lang/CharSequence;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V", "日本語", 0, 3, 0, 3, 0, fmi);
-  same("text bounds and metrics", [await textBounds("Agj office"), await textBounds("日本語"), await vcall(paint, "measureText", "(Ljava/lang/String;)F", "日本語"),
+  tokens("text bounds and metrics", [await textBounds("Agj office"), await textBounds("日本語"), await vcall(paint, "measureText", "(Ljava/lang/String;)F", "日本語"),
     await vcall(fmi, "toString", "()Ljava/lang/String;")].join(" | "),
-    "0 -31 166 9 | 7 -34 119 4 | 120 | FontMetricsInt: top=-47 ascent=-46 descent=12 bottom=12 leading=0");
+    "0 -31 166 9 | 7 -34 119 4 | 120 | FontMetricsInt: top=-47 ascent=-46 descent=12 bottom=12 leading=0", ulp);
 });
 
 // getTextWidths of printable ASCII in the default family across weights and sizes, hinting on and
