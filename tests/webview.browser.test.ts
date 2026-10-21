@@ -4,8 +4,10 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml.ts";
 import { webScript } from "../src/shell/webscript.ts";
 import { proxyRequest } from "../src/shell/proxy.ts";
+import { proxyPath, type ProxyQuery } from "../src/shell/webpage/proxywire.ts";
+import type { WebResponse } from "../src/shell/webpage/protocol.ts";
 import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
-import { holdFrames } from "../src/shell/webpage/frames.ts";
+import { holdFrames } from "../src/shell/webpage/holdframes.ts";
 import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
 import { bundle } from "../scripts/bundle.ts";
 import { serveModules } from "./browser.ts";
@@ -109,6 +111,35 @@ describe("WebView generated documents", () => {
       expect(scripts).toEqual(["https://upstream.example/dir/before.js", "https://upstream.example/assets/after.js"]);
       expect(await page.evaluate(() => document.getElementsByTagName("base").length)).toBe(2);
     } finally { await page.close(); }
+  });
+
+  test.concurrent("the proxy readies the client's intercepted response and the app's loopback answer as it readies the site's", async () => {
+    const answers: Record<string, WebResponse | null> = {
+      "https://upstream.example/page": { body: btoa("<p>intercepted"), status: 201, reason: "Made", headers: { "content-type": "text/html" } },
+      "https://upstream.example/site.css": null,
+      "http://127.0.0.1:8080/api": { body: btoa("local"), status: 200, reason: "OK", headers: { "content-type": "text/plain" } },
+    };
+    const calls: unknown[] = [], fetched: string[] = [];
+    const proxy = async (query: ProxyQuery) => {
+      const response = await proxyRequest(new Request("http://renderer.localhost" + proxyPath(query)), {
+        bridgeCall: async (call) => {
+          const { kind, url, main } = await call.json();
+          calls.push([new URL(call.url).searchParams.get("id"), kind, url, main]);
+          return Response.json({ value: answers[url] });
+        },
+        fetch: async (url) => { fetched.push(url); return new Response("upstream-style", { headers: { "content-type": "text/css" } }); },
+      });
+      return [response.status, await response.text(), response.headers.get("x-wd-error")];
+    };
+    const [status, html] = await proxy({ url: "https://upstream.example/page", frame: "main", bridge: "b", intercept: true });
+    expect([status, html]).toEqual([201, expect.stringMatching(/wd-proxy-url" content="https:\/\/upstream.example\/page".*<p>intercepted/s)]);
+    // a client that answers none leaves the request to the site; the device's own address is the app's alone
+    const rest = [];
+    for (const query of [{ url: "https://upstream.example/site.css", bridge: "b", intercept: true }, { url: "http://127.0.0.1:8080/api", bridge: "b" },
+      { url: "http://127.0.0.1:8080/api" }]) rest.push(await proxy(query));
+    expect(rest).toEqual([[200, "upstream-style", null], [200, "local", null], [502, expect.stringContaining("nothing listens"), "refused"]]);
+    expect([calls, fetched]).toEqual([[["b", "request", "https://upstream.example/page", true], ["b", "request", "https://upstream.example/site.css", false],
+      ["b", "loopback", "http://127.0.0.1:8080/api", undefined]], ["https://upstream.example/site.css"]]);
   });
 });
 
@@ -391,13 +422,14 @@ describe("WebView cookies", () => {
           set: value => descriptor.set!.call(document, value),
         });
         const before = document.cookie;
-        for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly"]) document.cookie = value;
+        for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly", "f=6; SameSite=None",
+          "__Secure-g=7", "__Host-h=8; Secure; Path=/dir", "__Host-i=9; Secure; Path=/"]) document.cookie = value;
         const written = document.cookie;
         // the jar's answer to an earlier write is not the cookies the page has since written
         app.postMessage({ kind: "cookies", ack: 1, list: [{ text: "x=1", expires: 0 }] });
-        app.postMessage({ kind: "cookies", ack: 5, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] });
+        app.postMessage({ kind: "cookies", ack: 9, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] });
         return new Promise<unknown>((resolve) => setTimeout(() => resolve([before, written, document.cookie, posted]), 50));
-      })).toEqual(["a=1", "b=2", "b=2; z=9", [1, 2, 3, 4, 5]]);
+      })).toEqual(["a=1", "b=2; __Host-i=9", "b=2; z=9", [1, 2, 3, 4, 5, 6, 7, 8, 9]]);
     } finally { await page.close(); }
   });
 });
@@ -423,7 +455,7 @@ describe("WebView isolation", () => {
       const url = new URL(req.url);
       if (url.pathname === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/webview") return new Response(WEB_FRAME, { headers: html });
-      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async target => target === "https://upstream.example/site.css" ? new Response("upstream-style", {headers:{"content-type":"text/css"}}) : new Response(
+      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetch: async target => target === "https://upstream.example/site.css" ? new Response("upstream-style", {headers:{"content-type":"text/css"}}) : new Response(
         "<script>parent.postMessage({kind: 'upstream', storage: (() => { try { return top.localStorage.getItem('secret'); } catch (e) { return e.name; } })()}, '*')</script>", { headers: html }) });
       return new Response("<!doctype html><body>app", { headers: html });
     } });
@@ -533,7 +565,7 @@ describe("WebView isolation", () => {
     const server = await serve({ fetch: (req) => {
       const path = new URL(req.url).pathname;
       if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
-      if (path === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async (target) => {
+      if (path === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetch: async (target) => {
         const [status, headers] = upstream[new URL(target).pathname];
         return new Response(/html/.test(headers["content-type"]) ? "<!doctype html><body>shown" : "%PDF", { status, headers });
       } });
@@ -770,7 +802,7 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
 });
 
 test("Worker WebStorage commands retain canonical package origins and ordered deletion", async () => {
-  const server=await serveModules(["src/android/webstorage.ts","src/shell/process-port.ts"],(_,path):Response|undefined=>{
+  const server=await serveModules(["src/android/webstorage.ts","src/shell/rpc.ts"],(_,path):Response|undefined=>{
     if(path==="/webview-origin")return Response.json(`http://*.localhost:${server.port}`);
     if(path==="/webview")return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
     if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s').put(new Uint8Array(8192),'data');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
@@ -780,13 +812,13 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
     await page.goto(`http://localhost:${server.port}/`);
     const result=await page.evaluate(async()=>{
       const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage.ts");
-      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port.ts");
+      const {serveCalls}=await import(location.origin+"/rpc.js") as typeof import("../src/shell/rpc.ts");
       localStorage.setItem("wd:install:org.webdroid.surface.owner","1000");
       localStorage.setItem("wd:install:org.webdroid.surface.foreign","1000");
       const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
       const channel=new MessageChannel();const stop=serveCalls(channel.port1,owner);
       const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
-        import {callProxy} from '${location.origin}/process-port.js';
+        import {callProxy} from '${location.origin}/rpc.js';
         onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);webStorageTransport.calls=()=>proxy.endpoint;
           const [a,b]=await Promise.all([webRenderer('https://one.example'),webRenderer('https://two.example')]);
           postMessage({a,b,local:typeof localStorage});};`;
@@ -826,10 +858,8 @@ test("dropped WebView frame owners release their surface without destroy", async
       (globalThis as any).removed = 0;
       frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
       const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit.ts");
-      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor.ts");
       const view = new WebViewChromium();
       view.url = "https://dropped.example";
-      view.hold.functor = createFunctor(view.size);
       frames.viewFrame(view);
       (globalThis as any).owner = view;
     });

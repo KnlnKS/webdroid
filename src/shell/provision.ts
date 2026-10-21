@@ -2,7 +2,8 @@ import { SYSTEM_PACKAGES } from "./system-packages.ts";
 import { packageArchive } from "../android/packagearchive.ts";
 import { systemPackage } from "./packedarchive.ts";
 import { attr, attrStr, TV } from "../android/axml.ts";
-import { resString } from "../android/res.ts";
+import { Resources, resString } from "../android/res.ts";
+import { deviceQualifiers } from "../android/configuration.ts";
 import { packages, componentState } from "../android/packages.ts";
 import { registerPackage } from "../android/installpackage.ts";
 import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
@@ -21,7 +22,8 @@ export function provisionPackages(): Promise<void> {
     const application = archive.root.children.find((n) => n.name === "application");
     const metadata = application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
     const value = metadata && attr(metadata, "value");
-    const signature = value?.type === TV.REFERENCE ? resString(archive.res, value.data) : value?.str;
+    // the signature is the package's own string, read before its record exists
+    const signature = value?.type === TV.REFERENCE ? resString(new Resources([archive.apk], deviceQualifiers()), value.data) : value?.str;
     if (!signature || !/^(?:[a-f\d]{2})+$/i.test(signature)) throw new Error(`Invalid compatibility signature: ${spec.file}`);
     const record = registerPackage(archive, { source: packed, system: true, grants: [...spec.grants, ...spec.defaultGrants], signatures: [hexBytes(signature)] });
     for (const name of spec.disabledComponents) {

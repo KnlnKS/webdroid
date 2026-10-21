@@ -10,22 +10,10 @@ import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { appHost } from "./apphost.ts";
-import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
-import { systemResource } from "./resnative.ts";
+import { systemResource, javaLocales, localesOf, applicationLocales, deviceLocales } from "./configuration.ts";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostService, parceledList } from "./binder.ts";
 import { packages, ownedBy } from "./packages.ts";
-import { broadcastQueueMethods } from "./server/broadcastqueue.ts";
-import { activityManagerMethods } from "./server/am.ts";
-import { activityTaskMethods } from "./server/atm.ts";
-import { activeServiceMethods } from "./server/activeservices.ts";
-
-// IActivityManager and IActivityTaskManager, whose methods come from the server/ modules that
-// implement them; those import one another, so only a module outside that cycle can read their
-// tables as it loads
-hostService("activity", "webdroid/ActivityManagerService", "android/app/IActivityManager$Stub",
-  { ...activityManagerMethods, ...intentSenderMethods, ...activeServiceMethods, ...broadcastQueueMethods });
-hostService("activity_task", "webdroid/ActivityTaskManagerService", "android/app/IActivityTaskManager$Stub", { ...activityTaskMethods, ...intentSenderTaskMethods });
 
 // ITrustManager: the keyguard is never shown and has no secure lock, as on the reference AVD
 hostService("trust", "webdroid/TrustManagerService", "android/app/trust/ITrustManager$Stub", {
@@ -264,6 +252,25 @@ hostService("uimode", "webdroid/UiModeManagerService", "android/app/IUiModeManag
   "setApplicationNightMode(I)V": (mode: number) => appHost?.setApplicationNightMode(mode),
   ...stubs(0, "isNightModeLocked()Z", "isUiModeLocked()Z", "getActiveProjectionTypes()I"),
   ...noops("addCallback(Landroid/app/IUiModeManagerCallback;)V"),
+});
+
+// ILocaleManager, under AOSP's LocaleManager: an app reads and sets its own languages; another
+// app's need READ_APP_SPECIFIC_LOCALES or CHANGE_CONFIGURATION, which no app holds here
+const ownLocales = (pkg: string | null, permission: string) => {
+  if (pkg !== appHost?.pkg) throw rt.mkThrowable("java/lang/SecurityException", `Caller must be ${pkg} or hold ${permission}`);
+};
+hostService("locale", "webdroid/LocaleManagerService", "android/app/ILocaleManager$Stub", {
+  "getApplicationLocales(Ljava/lang/String;I)Landroid/os/LocaleList;": (pkg: string | null) => {
+    ownLocales(pkg, "android.permission.READ_APP_SPECIFIC_LOCALES");
+    return javaLocales(applicationLocales());
+  },
+  "setApplicationLocales(Ljava/lang/String;ILandroid/os/LocaleList;Z)V": (pkg: string | null, _user: number, list: JObj | null) => {
+    ownLocales(pkg, "android.permission.CHANGE_CONFIGURATION");
+    return after(localesOf(list ?? rt.npe()), (locales) => appHost?.setApplicationLocales(locales));
+  },
+  "getSystemLocales()Landroid/os/LocaleList;": () => javaLocales(deviceLocales()),
+  // no app has an override of its LocaleConfig
+  "getOverrideLocaleConfig(Ljava/lang/String;I)Landroid/app/LocaleConfig;": () => null,
 });
 
 // IRestrictionsManager, under AOSP's RestrictionsManager: no device or profile owner manages this

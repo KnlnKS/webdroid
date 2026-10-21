@@ -3,7 +3,7 @@
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
-import { methodOf, mid } from "../compiler/ids.ts";
+import { methodOf, mid } from "../compiler/program.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { JClass } from "../compiler/program.ts";
 import type { UnitHeader } from "./aot.ts";
@@ -20,8 +20,6 @@ export function hasHierarchy(cls: JClass | undefined, sup: string | null, ifaces
 export interface UpgradeJob {
   /** the number its unit's function names carry */
   unit: number;
-  /** A refresh may replace only this live hot-unit generation in the source World. */
-  refresh?: number;
   /** first-tier code of methods already linked, merged into one module (Tiering.mergeJob) */
   merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */

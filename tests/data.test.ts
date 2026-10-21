@@ -28,7 +28,7 @@ import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
 import { WebCookies } from "../src/shell/webcookies.ts";
 import { NativeWindow } from "../src/android/cursorwindow.ts";
 import { handle, release } from "../src/android/handles.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { usePathOwner } from "../src/shell/file-path.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { descriptorTransport } from "../src/native/process-fd.ts";
@@ -106,7 +106,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousPending = {...pendingTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls,
-    previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
+    previousDescriptors = {...descriptorTransport}, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -157,7 +157,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
-    usePathOwner(null); for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors); vfs.prepare = previousPrepare;
+    usePathOwner(null); for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors);
     usePermissionStore(new PermissionStore());
   }
 });
@@ -279,7 +279,7 @@ describe("sqlite", () => {
     type Calls = { sqlite(request: SQLiteRequest): Promise<SQLiteReply> };
     const ports = new MessageChannel();
     const stop = serveCalls<Calls>(ports.port1, { sqlite: request => session.call(request) });
-    const proxy = callProxy<Calls>(ports.port2, ["sqlite"], [], error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message));
+    const proxy = callProxy<Calls>(ports.port2, ["sqlite"], { makeError: error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message) });
     sqliteTransport.call = request => proxy.endpoint.sqlite(request);
     let first: unknown, second: unknown;
     try {
@@ -579,10 +579,10 @@ describe("mediastore", () => {
     };
     try {
       vfs.write(path, new Uint8Array([1]));
-      vfs.mtimes.set(path, 1_600_000_000_500);
+      vfs.setAttributes(path, {mtime:1_600_000_000_500}, false);
       expect(await dates()).toEqual([1_600_000_000n, 1_600_000_000n, 1_600_000_000_500n]);
       vfs.write(path, new Uint8Array([1, 2]));
-      vfs.mtimes.set(path, 1_700_000_000_000);
+      vfs.setAttributes(path, {mtime:1_700_000_000_000}, false);
       expect(await dates()).toEqual([1_600_000_000n, 1_700_000_000n, 1_700_000_000_000n]);
     } finally { vfs.delete(path); }
   });

@@ -11,6 +11,7 @@ import { SUITES } from "../conform/suites.ts";
 import { cli } from "../args.ts";
 import { nodeCommand, run } from "../node.ts";
 import { checker } from "./tools.ts";
+import { runQueue } from "../util.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -50,10 +51,6 @@ async function runClass(args: string[], cls: string): Promise<{ tests: Map<strin
   }
   return { ...parseLines(lines), executions, seconds: (performance.now() - t0) / 1000 };
 }
-async function pool<T>(items: T[], f: (item: T) => Promise<void>): Promise<void> {
-  const queue = [...items];
-  await Promise.all(Array.from({ length: jobs }, async () => { while (queue.length) await f(queue.shift()!); }));
-}
 
 /** findings counted by test method and reason, with the first of each as the example (parameters and the numbers in a message vary within a group) */
 function grouped(lines: string[]): string[] {
@@ -77,7 +74,7 @@ for (const [suiteName, classMatch] of plan) {
   const executions = { pass: 0, fail: 0, skipped: 0 };
   let seconds = 0;
   const started = performance.now();
-  await pool(selected, async (cls) => {
+  await runQueue(selected, jobs, () => 0, async (cls) => {
     const r = await runClass([dexDir, runner, cls], cls);
     results.set(cls, r.tests);
     skipped.set(cls, r.skipped);

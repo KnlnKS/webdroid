@@ -1,5 +1,6 @@
 import { unshared } from "../jvm/abi.ts";
 import { dialName, pageOrigin, parseIpv4, syntheticAddress, type Ipv4 } from "../native/net-address.ts";
+import { parseTcpReady, type RelayEndpoint } from "./tcpwire.ts";
 
 const EMPTY_CHUNK = new Uint8Array(0);
 
@@ -59,12 +60,6 @@ export class DatagramRelay {
   }
 }
 
-interface RelayEndpoint {
-  family: "IPv4" | "IPv6";
-  address: string;
-  port: number;
-}
-
 /** received bytes in arrival order, drained from the front without copying the rest */
 export class ByteQueue {
   private q: Uint8Array[] = [];
@@ -113,16 +108,7 @@ export class Relay {
       transport.onmessage = (event) => {
         if (typeof event.data === "string") {
           if (!settled) {
-            try {
-              const message = JSON.parse(event.data) as { type?: unknown; localFamily?: unknown; localAddress?: unknown; localPort?: unknown; alpn?: unknown };
-              if (message.type === "ready" && (message.localFamily === "IPv4" || message.localFamily === "IPv6") &&
-                  typeof message.localAddress === "string" && Number.isInteger(message.localPort) &&
-                  Number(message.localPort) >= 1 && Number(message.localPort) <= 65535) {
-                this.applicationProtocol = typeof message.alpn === "string" ? message.alpn : "";
-                this.localEndpoint = { family: message.localFamily, address: message.localAddress, port: Number(message.localPort) };
-              }
-            } catch { /* plain "ok": the worker relay could not parse its local address */ }
-            this.applicationProtocol ??= "";
+            ({ local: this.localEndpoint, alpn: this.applicationProtocol } = parseTcpReady(event.data));
             settled = true; this.connected = true; resolve(); wake();
           }
           return;

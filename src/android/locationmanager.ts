@@ -213,4 +213,4 @@ hostService("location", "webdroid/LocationManagerService", "android/location/ILo
   // no GNSS time either: SystemClock.currentGnssTimeClock reports it unavailable
   ...stubs(null, "getGnssHardwareModelName()Ljava/lang/String;", "getGnssTimeMillis()Landroid/location/LocationTime;"),
   ...geocodeMethods,
-});
+}, { system: true });

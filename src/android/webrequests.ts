@@ -5,7 +5,7 @@ import { vcall, callOn, newObj, type JThread } from "../jvm/natives/jentry.ts";
 import { readStreamFully } from "../jvm/natives/jio.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { mkUri } from "./net.ts";
-import type { WebRequest, WebResponse } from "../shell/webbridge.ts";
+import type { WebRequest, WebResponse } from "../shell/webpage/protocol.ts";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 export class JReq extends JObj { url = ""; main = true; gesture = false; method = "GET"; headers: unknown = null; }

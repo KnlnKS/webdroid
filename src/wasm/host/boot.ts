@@ -38,8 +38,8 @@ import type { WarmAnswer } from "./warm-worker.ts";
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
-/** what a process asks of its app code: where a build starts, whether the app is shown, and where the launch says what it waits for */
-type Asked = Pick<AppCodeRequest, "roots" | "shown" | "status">;
+/** what a process asks of its app code: where a build starts, and whether the app is shown */
+type Asked = Pick<AppCodeRequest, "roots" | "shown">;
 
 /** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
 export type WasmStatus = { stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appRejected?: string; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string; ran?: () => number[]; demandMark?: () => number[]; demandSince?: (mark: number[]) => [string, boolean, boolean, boolean][] };
@@ -98,7 +98,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     useWorld(made); mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.aot?.ranSlots().platform ?? [] });
     return made;
   };
   if (typeof location === "undefined") {
@@ -164,8 +164,8 @@ export async function bootWasmTier(): Promise<TierBackend> {
       try { while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
       catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
     },
-    beginAppCode(dexes, roots, shown, status) {
-      asked = { roots, shown, status };
+    beginAppCode(dexes, roots, shown) {
+      asked = { roots, shown };
       // the zygote numbers what earlier processes did (`seen`) unless it needs more, which appCode finds
       if (code || begun || !store || !seen || !dexes.length) return;
       begun = { prefix: JSON.stringify(seen), code: prepare(asked, dexes, seen) };
@@ -187,7 +187,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
-      w.opts.compiler = made.compiler;
+      w.compiler = made.compiler;
       if (made.saved) w.attachApp(made.saved);
       mark(made.hit ? "appCodeSaved" : "appCode");
       made.start(w);

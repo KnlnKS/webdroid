@@ -4,14 +4,14 @@
 import { Compiler, type CallPlan } from "../compiler/j2w.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
-import { COUNT_BASE, COUNT_SLOTS, THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
-import { mid, methodOf } from "../compiler/ids.ts";
-import { HotUnits } from "./hotunits.ts";
+import { THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
+import { COUNT_BASE, COUNT_SLOTS } from "../compiler/consts.ts";
+import { mid, methodOf } from "../compiler/program.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
 import type { Slot } from "./slots.ts";
-import type { UnitHeader } from "./aot.ts";
-import { hasHierarchy, type UnitResult, type UpgradeJob } from "./unit.ts";
+import type { LinkedUnit } from "./units.ts";
+import type { UnitResult, UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
 
 /** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
@@ -38,9 +38,6 @@ export class Tiering {
   private readonly groupOf = new Map<number, number[]>();
   /** each slot's tier state (HOT and the bits beside it), grown as slots are */
   private state = new Uint8Array(1 << 16);
-  private readonly hotUnits = new HotUnits();
-  hotRefreshes = 0;
-  private refreshing = false;
   /** the methods refused a second-tier compile, longest waiting first, with how often */
   private refused = new Map<number, number>();
   /** when the second tier was first asked for, and the time spent compiling it since */
@@ -74,7 +71,7 @@ export class Tiering {
     const s = this.w.slots.at(slot);
     if (!s || s.done) return;
     if (s.k === "ensure") { this.linkEnsure(slot); return; }
-    if (s.k === "method" && this.w.aot?.install(slot) && s.done) return;
+    if (s.k === "method" && this.w.aot?.provide(slot)) return;
     const group = this.compileUnit(slot, false, (cx) => {
       if (s.k !== "method") return { methods: [], built: s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
         : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name)) };
@@ -83,9 +80,9 @@ export class Tiering {
       this.w.ahead.noteRun(batch);
       return { methods: batch, built: cx.buildUnit(batch) };
     })!;
-    if (group.length && this.w.opts.compiler) {
+    if (group.length && this.w.compiler) {
       this.loose.push(group);
-      if (this.loose.length >= this.mergeAt) this.w.opts.compiler.merge(this.w);
+      if (this.loose.length >= this.mergeAt) this.w.compiler.merge(this.w);
     }
   }
   private mergeable(g: number[]): boolean {
@@ -109,14 +106,14 @@ export class Tiering {
     // what is not ready waits for more units to be linked
     if (!refs.units.length) { this.mergeAt = this.loose.length + MERGE_AT / 4; return undefined; }
     this.mergeAt = MERGE_AT;
-    return this.job(refs.units.flat(), [], refs, new Map(), undefined, true);
+    return this.job(refs.units.flat(), [], refs, new Map(), true);
   }
   /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
   private linkEnsure(slot: number): void {
     this.settleInits();
     const cls = this.w.slots.blockClass[this.w.slots.blockOf(slot)], ci = this.w.prog.require(cls).byKey.get("<clinit>()V");
     const at = ci && this.w.slotOf(ci), clinit = at === undefined ? undefined : this.w.slots.at(at);
-    const methods = clinit?.k === "method" && !clinit.done && !(this.w.aot?.install(at!) && clinit.done) ? [clinit.m] : [];
+    const methods = clinit?.k === "method" && !clinit.done && !this.w.aot?.provide(at!) ? [clinit.m] : [];
     this.compileUnit(slot, false, (cx) => ({ methods, built: cx.buildUnit(methods, { ensures: [cls] }) }));
     if (methods.length) this.w.demand.methods.add(methods[0]);
     this.initializing.push([slot, cls, methods.length ? at! : -1]);
@@ -130,7 +127,7 @@ export class Tiering {
       done.push(this.w.table.get(slot) as Function);
       this.w.table.set(slot, this.w.rt.nop);
       const s = at < 0 ? undefined : this.w.slots.at(at);
-      if (s?.k === "method" && s.done && this.unlink(at, s)) this.hotUnits.forget(at);
+      if (s?.k === "method" && s.done) this.unlink(at, s);
       return false;
     });
     if (done.length) this.retire(done);
@@ -138,7 +135,6 @@ export class Tiering {
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   invalidate(slot: number): void {
     const w = this.w;
-    this.hotUnits.forget(slot);
     if (w.helpers.invalidate(slot)) { w.stats.invalidated++; return; }
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       // a slot without state holds compiled code only if a loaded build module installed it
@@ -152,11 +148,8 @@ export class Tiering {
     s.done = false; this.clear(slot, HOT); this.groupOf.delete(slot);
     return true;
   }
-  /** the symbolic site `name` resolved to an initialized target: the hot units that call through it can call the target directly */
-  resolved(name: string): void { this.hotUnits.resolved(name); }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   upgrade(slot: number): void {
-    this.refreshHotUnits();
     const s = this.w.slots.at(slot);
     if (s?.k !== "method" || !s.done || this.is(slot, HOT)) return;
     this.set(slot, REQUESTED);
@@ -184,62 +177,32 @@ export class Tiering {
   }
   /** hands the second-tier compile of the method in `slot` to a compile worker; whether it was taken, or is to be asked for later */
   private offload(slot: number): boolean {
-    const taken = this.w.opts.compiler?.submit(this.w, slot);
+    const taken = this.w.compiler?.submit(this.w, slot);
     if (taken === true) this.set(slot, PENDING);
     return !!taken;
   }
-  /** compiles and installs the second-tier unit of `m` in `slot`, with `members` installed beside it (a refresh's), unless `admit` turns the built unit down */
-  private compileHot(slot: number, m: MethodInfo, members?: MethodInfo[], admit?: (cx: Compiler) => boolean): boolean {
-    const group = this.compileUnit(slot, true, (cx, seq) => {
-      const { installed, copies, plan } = this.w.planner.group(m, members);
+  /** compiles and installs the second-tier unit of `m` in `slot` */
+  private compileHot(slot: number, m: MethodInfo): void {
+    this.compileUnit(slot, true, (cx, seq) => {
+      const { installed, copies, plan } = this.w.planner.group(m);
       return { methods: installed, copies: copies.length, built: cx.buildUnit(installed, { copies, hot: true, plan, seq }) };
-    }, admit);
-    if (group) this.w.stats.upgrades++;
-    return !!group;
+    });
+    this.w.stats.upgrades++;
   }
   /** compiles a unit with `build`, which names the methods it installs (none for a runtime function or a class's ensure()), and installs it: its functions go
-   *  in their slots, or in `slot`; first-tier units share helpers. The slots it installed, or undefined if `admit` turned the built unit down. */
-  compileUnit(slot: number, hot: boolean, build: (cx: Compiler, seq: number) => { methods: MethodInfo[]; copies?: number; built: Built },
-    admit?: (cx: Compiler) => boolean): number[] | undefined {
+   *  in their slots, or in `slot`; first-tier units share helpers. The slots it installed. */
+  compileUnit(slot: number, hot: boolean, build: (cx: Compiler, seq: number) => { methods: MethodInfo[]; copies?: number; built: Built }): number[] {
     const clock = this.w.units.clock(), cx = new Compiler(this.w);
     if (!hot) cx.shareHelpers();
     const { methods, copies = 0, built } = build(cx, this.unitSeq++);
     this.w.stats.units++; this.w.stats.methods += methods.length + copies;
-    const group = methods.map((m) => this.w.slotOf(m)), imports = this.w.units.of(cx);
-    if (admit && !admit(cx)) { this.w.units.account(clock); return undefined; }
-    this.install(group, hot, cx, imports, built, slot, clock);
+    const group = methods.map((m) => this.w.slotOf(m));
+    this.install(group, hot, this.w.units.compiled(cx, this.w.units.of(cx), built, slot), slot, clock);
     return group;
   }
   private upgradeAllowed(now: number): boolean {
     this.hotSince ??= now;
     return this.upgradeMs + UPGRADE_MS <= UPGRADE_SHARE * (now - this.hotSince);
-  }
-  /** Coalesce executed-site readiness at an existing Java entry or promotion boundary. */
-  refreshHotUnits(): void {
-    if (!this.hotUnits.hasPending() || this.refreshing || !this.w.instantiates || this.w.opts.holdUpgrades?.()) return;
-    for (const unit of this.hotUnits.pending()) {
-      const slot = unit.slots[0], s = this.w.slots.peekMethod(slot);
-      if (!this.hotUnits.live(unit, this.w.table) || !s?.done || !this.is(slot, HOT)) { this.hotUnits.forget(slot); continue; }
-      if (this.is(slot, PENDING)) continue;
-      this.refreshing = true;
-      let start: number | undefined;
-      try {
-        if (this.offload(slot)) return;
-        start = performance.now();
-        if (!this.upgradeAllowed(start)) return;
-        const epoch = this.w.epoch, members = unit.slots.map(at => this.w.slots.peekMethod(at)!.m);
-        if (this.compileHot(slot, s.m, members, (cx) => {
-          if (epoch !== this.w.epoch || !this.hotUnits.live(unit, this.w.table)) return false;
-          // A refresh must consume readiness, rather than recompile the same adapter forever.
-          if (![...unit.ready].some(name => !cx.symbolicImports.has(name))) { this.hotUnits.forget(slot); return false; }
-          return true;
-        })) this.hotRefreshes++;
-      } finally {
-        if (start !== undefined) this.upgradeMs += performance.now() - start;
-        this.refreshing = false;
-      }
-      return;
-    }
   }
   /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
   private outermostWaiting(): number | undefined {
@@ -255,18 +218,16 @@ export class Tiering {
   private waits(slot: number): boolean { const s = this.w.slots.at(slot); return s?.k === "method" && s.done && !this.is(slot, HOT | PENDING); }
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
-    const s = this.w.slots.at(slot), hot = this.is(slot, HOT);
-    const refresh = this.hotUnits.get(slot);
-    if (s?.k !== "method" || !s.done || (hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.w.table)))) return undefined;
-    const clock = this.w.units.clock(), members = hot ? refresh!.slots.map(at => this.w.slots.peekMethod(at)!.m) : undefined;
-    const { installed, copies, plan } = this.w.planner.group(s.m, members);
+    const s = this.w.slots.at(slot);
+    if (s?.k !== "method" || !s.done || this.is(slot, HOT)) return undefined;
+    const clock = this.w.units.clock(), { installed, copies, plan } = this.w.planner.group(s.m);
     const refs = this.jobRefs([[...installed, ...copies]]);
     this.w.units.account(clock);
-    return refs.units.length ? this.job(installed, copies, refs, plan, hot ? refresh!.generation : undefined) : undefined;
+    return refs.units.length ? this.job(installed, copies, refs, plan) : undefined;
   }
-  private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, plan: CallPlan, refresh?: number, merge?: boolean): UpgradeJob {
+  private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, plan: CallPlan, merge?: boolean): UpgradeJob {
     this.w.stats.units++;
-    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.unitSeq++, installed: installed.map(mid), copies: copies.map(mid), plan: [...plan].map(([key, ms]) => [key, ms.map(mid)]), long: [...installed, ...copies].map(mid).filter((id) => this.w.longLoops.has(id)) };
+    return { merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.unitSeq++, installed: installed.map(mid), copies: copies.map(mid), plan: [...plan].map(([key, ms]) => [key, ms.map(mid)]), long: [...installed, ...copies].map(mid).filter((id) => this.w.longLoops.has(id)) };
   }
   /** what a compile worker must be told of this World's class loading to compile `units` as it would: the initiating identities their code resolves, and the
    *  hierarchies of those classes. A unit that reaches a class whose definition is not ready is left out */
@@ -309,72 +270,45 @@ export class Tiering {
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
   release(slot: number): void { this.clear(slot, PENDING); }
-  /** A failed optional refresh keeps its hot code and stops tracking that generation. */
-  failedRefresh(slot: number, generation: number): void {
-    const unit = this.hotUnits.get(slot);
-    if (!unit || unit.generation !== generation || !this.hotUnits.live(unit, this.w.table)) return;
-    this.hotUnits.forget(slot);
-  }
-  /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
-   *  is this World's (it was numbered from `result.numbering.from`) */
+  /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here (Tiering.received) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     if (job.merge) return this.adoptMerged(job, result, epoch);
-    const s = this.w.slots.at(slot), head = result.header, clock = this.w.units.clock();
+    const s = this.w.slots.at(slot), clock = this.w.units.clock();
     this.release(slot);
-    const refresh = this.hotUnits.get(slot);
-    if (!this.sound(result, epoch) || s?.k !== "method" || !s.done) return false;
-    if (job.refresh === undefined ? this.is(slot, HOT) : !this.is(slot, HOT) || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.w.table)) return false;
-    if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
-    if (job.refresh !== undefined) {
-      const installed = new Set(job.installed);
-      if (refresh!.slots.some(at => !installed.has(mid(this.w.slots.peekMethod(at)!.m)))) return false;
-      for (const id of job.installed) {
-        const method = methodOf(this.w.prog, id);
-        if (!method) return false;
-        const at = this.w.slotOf(method);
-        if (!refresh!.slots.includes(at) && this.w.slots.peek(at)?.done) return false;
-      }
-      for (const [referrer, name, key] of job.resolved ?? []) if (this.w.prog.initiatedBy(this.w.prog.loaderOf(referrer), name) !== key || !definitionReady(this.w, key)) return false;
-      for (const [key, sup, ifaces] of job.prepared ?? []) if (!definitionReady(this.w, key) || !hasHierarchy(this.w.prog.get(key), sup, ifaces)) return false;
-    }
-    const r = this.received(result);
-    if (!r) return false;
+    if (s?.k !== "method" || !s.done || this.is(slot, HOT)) return false;
+    const u = this.received(result, epoch);
+    if (!u || !this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, u, slot, clock)) return false;
     this.w.stats.methods += job.installed.length + job.copies.length; this.w.stats.upgrades++;
-    this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, r.head, r.imports, r.built, slot, clock);
-    if (job.refresh !== undefined) this.hotRefreshes++;
     return true;
   }
-  /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
-  private sound(result: UnitResult, epoch: number): boolean {
-    const head = result.header;
-    return epoch === this.w.epoch && this.w.units.admits(head);
-  }
-  /** takes the numbering of a worker's unit and links what it names; its module and imports, undefined if the numbering does not follow this World's */
-  private received(result: UnitResult) {
+  /** a worker's unit, if it was made for this World as it is (nothing was added to the Program since `epoch`, its natives are bound here) and the numbering its code
+   *  relies on follows this World's (it was numbered from `result.numbering.from`), which takes it */
+  private received(result: UnitResult, epoch: number): LinkedUnit | undefined {
     const head = result.header, n = result.numbering;
+    if (!this.w.units.admits(head, epoch)) return undefined;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.w.adopt(n)) return undefined;
-    this.w.units.linkHeader(head);
-    const imports = this.w.units.ofHeader(head);
-    this.w.units.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.w.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs,
       inline: t.inline?.map(([m, pc, at]): InlineFrame => [methodOf(this.w.prog, m)!, pc, at]) }));
-    return { head, imports, built: { bytes: result.module, traces } };
+    return { head, module: result.module, traces };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const groups = this.merging, clock = this.w.units.clock();
     this.merging = [];
-    const r = this.sound(result, epoch) ? this.received(result) : undefined;
-    if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
-    const liveGroups = groups.filter((g) => this.mergeable(g)), live = liveGroups.flat(), merged = new Set(live);
+    const u = this.received(result, epoch), liveGroups = groups.filter((g) => this.mergeable(g));
+    if (!u) { this.loose.push(...liveGroups); return false; }
+    const live = liveGroups.flat(), merged = new Set(live);
     if (!live.length) return true;
     // one function of each unit holds its instance, and so its module
-    this.retire(liveGroups.map((g) => this.w.table.get(g[0]) as Function));
+    const units = liveGroups.map((g) => this.w.table.get(g[0]) as Function);
     const kept = job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.w.table.get(at)] as const);
-    this.w.units.instantiate(r.head, r.imports, r.built, live[0], clock, () => {
+    const placed = this.w.units.link(u, () => {
       for (const [at, f] of kept) this.w.table.set(at, f);
       for (const at of live) this.groupOf.set(at, [at]);
-    });
+      return true;
+    }, clock);
+    if (!placed) { this.loose.push(...liveGroups); return false; }
+    this.retire(units);
     this.w.stats.merged += live.length;
     return true;
   }
@@ -394,21 +328,20 @@ export class Tiering {
     this.w.stats.retired += batch.length;
     (this.w.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
   }
-  /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  install(group: number[], hot: boolean, cx: Compiler | UnitHeader, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
+  /** installs unit `u`, putting its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub. Whether it was installed (Units.link) */
+  install(group: number[], hot: boolean, u: LinkedUnit, slot: number, clock: Clock): boolean {
     const s = this.w.slots.at(slot)!;
     const place = (exports: Record<string, any>) => {
       const set = (at: number, name: string) => {
         this.w.slots.at(at)!.done = true;
         this.w.table.set(at, exports[name]);
       };
-      if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return; }
+      if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return true; }
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); if (hot) this.set(x, HOT); else this.clear(x, HOT); if (x < COUNT_SLOTS) this.counts()[x] = 0; }
-      if (hot) this.hotUnits.publish(group, cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name), this.w.table);
-      else group.forEach(at => this.hotUnits.forget(at));
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
+      return true;
     };
-    try { this.w.units.instantiate(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
+    try { return !!this.w.units.link(u, place, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }
@@ -417,14 +350,6 @@ export class Tiering {
     if (this.countView?.buffer !== this.w.mem.buffer) this.countView = new Int32Array(this.w.mem.buffer, COUNT_BASE, COUNT_SLOTS);
     return this.countView;
   }
-  /** the slots whose code from a loaded build module has run here (a method's count restarts once a unit replaces its code), the platform build's and the app
-   *  build's apart: what a later launch has the engine compile ahead (host/warm-worker.ts) */
-  ranBuildSlots(): { platform: number[]; app: number[] } {
-    const aot = this.w.aot, counts = this.counts(), ran = { platform: [] as number[], app: [] as number[] };
-    if (!aot) return ran;
-    const add = (slot: number) => { if (aot.loadedFrom(slot) >= 0) (aot.fromAppBuild(slot) ? ran.app : ran.platform).push(slot); };
-    for (let slot = 0; slot < COUNT_SLOTS; slot++) if (counts[slot]) add(slot);
-    for (const slot of this.groupOf.keys()) if (slot < COUNT_SLOTS && !counts[slot]) add(slot);
-    return ran;
-  }
+  /** the slots whose code a unit installed */
+  unitSlots(): IterableIterator<number> { return this.groupOf.keys(); }
 }

@@ -158,7 +158,7 @@ hostService("jobscheduler", "webdroid/JobSchedulerService", "android/app/job/IJo
     }
     return map;
   }),
-});
+}, { system: true });
 
 // IJobCallback: the scheduler's end of one run
 class JJobCallback extends JObj { job!: ScheduledJob; run!: JobRun; }

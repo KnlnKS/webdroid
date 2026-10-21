@@ -6,7 +6,7 @@ import canvasKitPackage from "canvaskit-wasm/package.json" with { type: "json" }
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { after } from "../jvm/natives/jentry.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
-import { sfntTables, ownBuffer, T_COLR, T_HEAD } from "./sfnt.ts";
+import { colorGlyphClips, ownBuffer } from "./sfnt.ts";
 import { MAX_SAMPLED_PIXELS } from "./hairline.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -88,22 +88,6 @@ function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Flo
     Math.min(width, Math.ceil(right) + 2), Math.min(height, Math.ceil(bottom) + 2)];
 }
 
-function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
-  const tables = sfntTables(new Uint8Array(data), 0), clips = new Map<number, [number, number]>();
-  const font = tables?.dv, head = tables?.at.get(T_HEAD), colr = tables?.at.get(T_COLR);
-  if (!font || !head || !colr || font.getUint16(colr) !== 1) return clips;
-  const units = font.getUint16(head + 18), list = colr + font.getUint32(colr + 22);
-  for (let i = 0, count = font.getUint32(list + 1); i < count; i++) {
-    const record = list + 5 + i * 7;
-    const start = font.getUint16(record), end = font.getUint16(record + 2);
-    const box = list + (font.getUint16(record + 4) << 8) + font.getUint8(record + 6);
-    if (font.getUint8(box) !== 1) continue;
-    const limits: [number, number] = [font.getInt16(box + 7) / units, -font.getInt16(box + 3) / units];
-    for (let glyph = start; glyph <= end; glyph++) clips.set(glyph, limits);
-  }
-  return clips;
-}
-
 /** CanvasKit and the faces it draws bitmap text in, loaded once per realm; text falls back to Canvas2D
  *  without them */
 export function loadSkia(): Promise<void> {
@@ -116,7 +100,7 @@ export function loadSkia(): Promise<void> {
     if (!typeface) throw new Error("Roboto unavailable to Skia");
     face = typeface;
     emojiFace = canvasKit.Typeface.MakeFreeTypeFaceFromData(emojiData);
-    emojiClips = colorGlyphClips(emojiData);
+    emojiClips = colorGlyphClips(new Uint8Array(emojiData));
   }).catch(error => {
     face = emojiFace = null;
     console.warn("[skia] CanvasKit text unavailable; using Canvas2D text", error);

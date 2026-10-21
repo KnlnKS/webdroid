@@ -9,6 +9,7 @@
 
 import { openDb } from "./idb.ts";
 import { hostUi, onNextGesture, type FilePick } from "./host-ui.ts";
+import { gone } from "./diskstore.ts";
 
 // lib.dom types the handles but not the async iteration or the permission calls.
 declare global {
@@ -80,5 +81,5 @@ export async function clearRoots(): Promise<void> {
   // the OPFS stand-in is ours to empty; a directory the user picked is theirs, and stays
   const opfs = await navigator.storage?.getDirectory().catch(() => null);
   if (!opfs) return;
-  for await (const [name] of opfs.entries()) if (name !== COMPILED_CODE_DIR) await opfs.removeEntry(name, { recursive: true }).catch(() => {});
+  for await (const [name] of opfs.entries()) if (name !== COMPILED_CODE_DIR) await opfs.removeEntry(name, { recursive: true }).catch(gone);
 }

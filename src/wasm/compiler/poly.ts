@@ -2,7 +2,7 @@
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { ACC, kindOf, type Kind, typeName } from "./program.ts";
+import { ACC, kindOf, type FieldInfo, type Kind, typeName } from "./program.ts";
 import { elemKindOf } from "./consts.ts";
 import { descToName, varHandleValues } from "../../jvm/abi.ts";
 import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
@@ -103,9 +103,9 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
     cx.emitEnsure(c, field.owner); c.gget(cx.staticGlobal(field.owner, field.name, field.desc));
   } else {
     cx.emitEnsure(c, accessMode); cx.str.literal(c, mode);
-    cx.callMethod(c, cx.prog.resolve(accessMode, "valueFromMethodName", `(Ljava/lang/String;)L${accessMode};`)!);
+    cx.callNamed(c, accessMode, "valueFromMethodName", `(Ljava/lang/String;)L${accessMode};`);
   }
-  cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${accessMode};)Z`)!);
+  cx.callNamed(c, VH, "isAccessModeSupported", `(L${accessMode};)Z`);
   c.lset(match).end();
   c.lget(match).if_();
   const storageParams = coords.concat(values.map(() => variable));
@@ -126,7 +126,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
   const instance = coords.length === 1 && coords[0][0] === "L", array = coords.length === 2 && coords[0][0] === "[" && valueKind(coords[1]) === KI, stat = coords.length === 0;
   if (!instance && !array && !stat) return gap("unrecognized coordinates");
 
-  const nonNull = (read: () => void) => { const local = c.newLocal(T.anyref); read(); c.ltee(local).refIsNull().if_(); cx.callThrower(c, "npe"); c.end().lget(local); };
+  const nonNull = (read: () => void) => { const local = c.newLocal(T.anyref); read(); c.ltee(local); cx.nullCheck(c); c.lget(local); };
   const produces: Kind | null = op === "cas" ? "I" : op === "set" ? null : K;
   const bt: VT | null = produces && cx.vtOf(produces);
   const classCast = () => { c.i32(0).i32(0); cx.callThrower(c, "cce"); };
@@ -144,14 +144,12 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
     // the array must be of the handle's array class (a String[] handle does not take an Object[]), and of the storage the site's element type implies
     c.lget(handleType); c.lget(wrapper); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z"); c.lget(wrapper).refTest(t).raw(OP.i32_and).raw(OP.i32_eqz).if_(); classCast(); c.end();
     c.lget(wrapper).refCast(t).structGet(t, 2).lset(data);
-    read("I", 1); c.lset(idx).lget(idx).lget(data).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
-    c.lget(idx).lget(data).refAsNonNull().arrayLen(); cx.callThrower(c, "aioobe"); c.end();
+    const elements = () => c.lget(data).refAsNonNull(), index = () => c.lget(idx);
+    read("I", 1); c.lset(idx);
+    cx.boundsCheck(c, index, () => elements().arrayLen());
     const vals = readValues();
-    access({ load: () => { c.lget(data).refAsNonNull().lget(idx); if (letter === "B" || letter === "S") c.arrayGetS(d); else if (letter === "Z" || letter === "C") c.arrayGetU(d); else c.arrayGet(d); },
-      store: (v) => {
-        if (ek === "ref") cx.emitStoreCheck(c, wrapper, () => c.lget(v));
-        c.lget(data).refAsNonNull().lget(idx).lget(v).arraySet(d);
-      }, narrow: () => narrowTo(c, letter) }, vals);
+    access({ load: () => { elements(); index(); cx.emitElementLoad(c, letter); },
+      store: (v) => cx.emitElementStore(c, ek, wrapper, elements, index, () => c.lget(v)), narrow: () => narrowTo(c, letter) }, vals);
   } else {
     if (!cx.prog.get(FVH)?.dex) return gap("FieldVarHandle is not in the program");
     const R = stat ? "" : descToName(coords[0]), fvh = cx.structFor(FVH);
@@ -160,11 +158,11 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
       c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
     };
-    const cands: { cn: string; fid: number; fi: number; letter: string }[] = [];
+    const cands: { cn: string; fid: number; f: FieldInfo; fi: number }[] = [];
     for (const cn of stat ? [] : cx.prog.chain(R)) {
       const jc = cx.prog.get(cn);
       if (!jc?.def || jc.isInterface) continue;
-      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f), letter: f.desc[0] }); });
+      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, f, fi: cx.fieldIndex(cn, f) }); });
     }
     if (R === "java/lang/Void") { cx.callThrower(c, "npe"); c.unreachable(); }        // the receiver is the literal null
     else if (cands.length && cands.length <= MAX_CANDIDATES) {
@@ -176,7 +174,8 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       for (const cand of cands) {
         const st = cx.structFor(cand.cn), r = c.newLocal(refNull(st));
         c.lget(fid).i32(cand.fid).raw(OP.i32_eq).if_().lget(recv).refCast(st).lset(r);
-        access({ load: () => c.lget(r).structGet(st, cand.fi), store: (v) => c.lget(r).lget(v).structSet(st, cand.fi), narrow: () => narrowTo(c, cand.letter) }, vals);
+        access({ load: () => c.lget(r).structGet(st, cand.fi), store: (v) => cx.emitFieldStore(c, cand.cn, cand.f, () => c.lget(r), () => c.lget(v)),
+          narrow: () => narrowTo(c, cand.f.desc[0]) }, vals);
         c.br(1).end();
       }
       classCast(); c.unreachable().end();

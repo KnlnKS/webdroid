@@ -6,7 +6,7 @@
 import { rt, awaited, type Gen } from "../jvm/runtime.ts";
 import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
 import { vfs } from "../shell/vfs.ts";
-import { uchar } from "../jvm/natives/jicu.ts";
+import { intProperty } from "../jvm/natives/jicu.ts";
 
 /** HyphenationType */
 export const DONT_BREAK = 0, BREAK_AND_INSERT_HYPHEN = 1, BREAK_AND_INSERT_ARMENIAN_HYPHEN = 2, BREAK_AND_INSERT_UCAS_HYPHEN = 4,
@@ -40,7 +40,6 @@ const typeByScript = (c: number) =>
   is(NO_HYPHEN, c) ? BREAK_AND_DONT_INSERT_HYPHEN : is(ARMENIAN, c) ? BREAK_AND_INSERT_ARMENIAN_HYPHEN : is(UCAS, c) ? BREAK_AND_INSERT_UCAS_HYPHEN : BREAK_AND_INSERT_HYPHEN;
 // ICU's UProperty.JOINING_TYPE and its values
 const JOINING_TYPE = 0x1006, JT_JOIN_CAUSING = 1, JT_DUAL = 2, JT_LEFT = 3, JT_RIGHT = 4, JT_TRANSPARENT = 5;
-export const intProperty = uchar("getIntPropertyValue", "(II)I") as (c: number, property: number) => number | Promise<number>;
 function* joiningType(c: number): Gen<number> { return yield* awaited(intProperty(c, JOINING_TYPE)); }
 /** getHyphTypeForArabic: a ZWJ around the hyphen where the letters on both sides join */
 function* arabicType(word: string, at: number): Gen<number> {

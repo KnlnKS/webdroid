@@ -3,9 +3,8 @@
 // (exc.ts WARM_AT) traps as it is entered, once compiled. The imports come from the module's own bytes: its type section copied into a small module
 // that defines its tags and globals at their defaults, JS functions that throw for its function imports (the Math functions the World passes stay
 // themselves: V8 compiles calls of those differently), and one table and memory for every module of the warming World.
-import { MATH_ARITY } from "../compiler/consts.ts";
+import { MATH_ARITY, COUNT_SLOTS, WARM_AT } from "../compiler/consts.ts";
 import { uleb } from "../compiler/wasmbin.ts";
-import { COUNT_SLOTS, WARM_AT } from "../compiler/exc.ts";
 import { LebReader } from "../link/module.ts";
 
 const K = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, refNull: 0x63, ref: 0x64 } as const;

@@ -1,8 +1,9 @@
-// Walk every method body in the given APKs; histogram opcodes; validate the walker.
+// Walk every method body in the given APKs; histogram opcodes; validate the walker. pnpm opscan <apk|dex> ...
 import { loadDexes } from "./dexes.ts";
 import { OPS, insnLen } from "../src/jvm/opcodes.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import type { DexFile } from "../src/jvm/dex.ts";
+import { cli } from "./args.ts";
 
 const hist = new Map<number, number>();
 const boots = new Map<string, number>();
@@ -20,7 +21,7 @@ function scanCallSites(dex: DexFile) {
     boots.set(key, (boots.get(key) ?? 0) + 1);
   }
 }
-for (const path of process.argv.slice(2)) {
+for (const path of cli("pnpm opscan <apk|dex> ...", {}, { min: 1 }).positionals) {
   for (const dex of loadDexes(path)) {
     const name = dex.name;
     let bodies = 0, units = 0;

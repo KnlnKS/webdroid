@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { brokerCallNames } from "../../src/shell/broker-contract.ts";
 import { Ev } from "../../src/timeline.ts";
+import { cli } from "../args.ts";
 
 /** Ev.Thread's argument for the main thread */
 const MAIN = 1;
@@ -13,7 +14,8 @@ type Mark = [number, number, number];
 const q = (a: number[], p: number) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; };
 const byMethod = new Map<string, { calls: number; windows: Set<string>; trips: number[]; main: number }>(), perWindow: number[] = [], mainPerWindow: number[] = [], waits: number[] = [];
 let windows = 0;
-for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for (const run of JSON.parse(readFileSync(file, "utf8"))) {
+const { values: { windows: byWindow }, positionals: files } = cli("pnpm ts scripts/lat/census.ts <run.json> ... [--windows]", { windows: { type: "boolean" } }, { min: 1 });
+for (const file of files) for (const run of JSON.parse(readFileSync(file, "utf8"))) {
   const steps = [...run.taps.map((t: any) => ({ name: t.m, worker: t.timeline?.raw, page: t.page?.raw })),
     ...(run.fps ?? []).map((f: any) => ({ name: f.m, worker: f.frames?.raw, page: undefined }))];
   for (const step of steps) {
@@ -33,7 +35,7 @@ for (const file of process.argv.slice(2).filter((a) => !a.startsWith("--"))) for
       if (main) { row.main += ms - at; mainSpent += ms - at; }
     }
     perWindow.push(spent); mainPerWindow.push(mainSpent);
-    if (process.argv.includes("--windows") && spent) console.log(`  ${run.scenario} ${step.name}: ${spent.toFixed(1)} ms waiting on broker calls, ${mainSpent.toFixed(1)} on the main thread`);
+    if (byWindow && spent) console.log(`  ${run.scenario} ${step.name}: ${spent.toFixed(1)} ms waiting on broker calls, ${mainSpent.toFixed(1)} on the main thread`);
     const serves = (step.page as Mark[] | undefined ?? []).filter(([, ev]) => ev === Ev.Serve).map(([ms]) => ms);
     let next = 0;
     for (const [ms, ev] of worker) {

@@ -1,6 +1,6 @@
 // One page-owned canvas's pointer/wheel stream. Java dispatch stays behind the injected boundary.
-import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_UP, queuePointer, type PointerSample,
-  type TouchPointer } from "./pointer-queue.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_UP } from "../android/input-codes.ts";
+import { queuePointer, type PointerSample, type TouchPointer } from "./pointer-queue.ts";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number; edgeSlop: number; minScalingSpan: number };
 /** a MotionEvent's action and pointers to the display */
@@ -12,13 +12,11 @@ const MIRROR = -1;
 const attached = new Set<() => void>();
 /** send every canvas's batched finger moves and step its wheel gesture: once per display frame */
 export function drainPointers(): void { for (const drain of attached) drain(); }
-export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
+/** `device` is read as each event needs it, so it follows the display's geometry */
+export function attachPointerInput(canvas: HTMLCanvasElement, device: PointerGeometry,
   dispatch: PointerDispatch, onDown: () => void = () => {}, source: HTMLElement = canvas) {
   const listeners = new AbortController();
   let closed = false;
-  const device = { get width() { return geometry().width; }, get height() { return geometry().height; },
-    get scrollUnit() { return geometry().scrollUnit; }, get touchSlop() { return geometry().touchSlop; },
-    get edgeSlop() { return geometry().edgeSlop; }, get minScalingSpan() { return geometry().minScalingSpan; } };
   function listenOn<K extends keyof HTMLElementEventMap>(name: K, handler: (event: HTMLElementEventMap[K]) => void,
     options: AddEventListenerOptions = {}) {
     source.addEventListener(name, handler, { ...options, signal: listeners.signal });
@@ -109,7 +107,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   }
 
   function cancelWheel() {
-    if (armed) void dispatch(ACTION_CANCEL, last);
+    if (armed) send(ACTION_CANCEL, last);
     hand = null; armed = false;
   }
 
@@ -191,7 +189,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   /**
    * One step of the wheel gesture, once per frame. AOSP drains input in Choreographer's input
    * phase, ahead of animation and layout, and this has to for the same reason: a trackpad fires up
-   * to 120 times a second while dispatchPointer resolves through the serialized main-looper queue,
+   * to 120 times a second while a dispatch resolves through the serialized main-looper queue,
    * so one MOVE per event builds a backlog and the gesture visibly lags the fingers. Accumulate
    * instead, and dispatch where the fingers have reached once the previous one has landed.
    */

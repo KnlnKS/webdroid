@@ -17,7 +17,7 @@ import { relayChain } from "./jrelaycert.ts";
 import { Relay } from "../../shell/relay.ts";
 import { abandonConnection } from "../../native/socket/inet.ts";
 import { deviceFetch } from "../../shell/devicefetch.ts";
-import { nextHop, proxyStatus, type ProxyRequest } from "../../shell/webpage/redirect.ts";
+import { nextHop, readAnswer, type ProxyRequest } from "../../shell/webpage/proxywire.ts";
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {
@@ -457,7 +457,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
   if (!(yield vcall(this.url, "getHost", "()Ljava/lang/String;"))) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
   let hop: ProxyRequest = { url: spec, method: this.method, headers: base,
     body: this.out && this.method !== "GET" && this.method !== "HEAD" ? baosBytes(this.out).slice() : undefined };
-  let r: Response, hdrs: [string, string][], length: string | null;
+  let r: Response, answer: ReturnType<typeof readAnswer>;
   // Redirects are followed here, one proxy hop each, because the process CookieHandler that
   // Android's HttpURLConnection consults around every exchange must see each hop's URL.
   for (let hops = 0; ; hops++) {
@@ -479,22 +479,16 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
       throw rt.mkThrowable("java/io/IOException", String(e));
     } finally { clearTimeout(timer); }
-    // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !r.headers.get("x-wd-final-url")) {
-      const { hostname, port, protocol } = new URL(target), kind = r.headers.get("x-wd-error");
+    answer = readAnswer(r);
+    const kind = answer.error;
+    if (kind) {
+      const { hostname, port, protocol } = new URL(target);
       const detail = (yield* awaited(r.text())).replace(/^proxy error: /, "");
       if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
       if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
       throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
     }
-    hdrs = [];
-    r.headers.forEach((v, k) => {
-      if (k === "x-wd-set-cookie") for (const c of JSON.parse(v) as string[]) hdrs.push(["set-cookie", c]);
-      else if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]);
-    });
-    length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
-    if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
-    if (cookies) yield vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, yield* awaited(headerMap(group(hdrs))));
+    if (cookies) yield vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, yield* awaited(headerMap(group(answer.headers))));
     const next = this.follow ? nextHop(r, hop) : null;
     if (!next) break;
     // OkHttp's MAX_FOLLOW_UPS
@@ -505,9 +499,9 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
   if (hop.url !== spec) this.url = yield newObj("java/net/URL", "(Ljava/lang/String;)V", hop.url);   // getURL() reports where a redirect landed
   const stream = new JHttpInputStream();
   stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-  const status = proxyStatus(r);
+  const { status, statusText: msg, headers: hdrs, length } = answer;
   if (length && hop.method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
-  return (this.res = { status, msg: r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
+  return (this.res = { status, msg, hdrs, stream });
 });
 class JHttpURLConnection extends JObj {
   get url(): unknown { return (this as unknown as Fields)[uc().url]; }

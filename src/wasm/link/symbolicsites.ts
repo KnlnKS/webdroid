@@ -1,11 +1,11 @@
 // Call sites that link at run time (compiler/sites.ts): each calls through a slot of its own, which first holds a resolver and then the operation it resolved to.
-import { symbolicOperationKey, type SymbolicSite } from "../compiler/sites.ts";
+import type { SymbolicSite } from "../compiler/sites.ts";
 import { compileSymbolicSite } from "../compiler/symbolic.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { Code } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import { Compiler } from "../compiler/j2w.ts";
-import { initiatedInstruction, resolveInstruction } from "./resolution.ts";
+import { resolveInstruction } from "./resolution.ts";
 import { decodeInstruction } from "../../jvm/prepared.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
 import type { World } from "./world.ts";
@@ -15,7 +15,6 @@ export class SymbolicSites {
   private readonly w: World;
   constructor(w: World) { this.w = w; }
   symbolicResolutions = 0;
-  private symbolicOperations = new Map<string, Function>();
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
   private readonly symbolicSites = new Map<string, WebAssembly.Global>();
   symbolicStubModules = 0;
@@ -44,12 +43,12 @@ export class SymbolicSites {
       })));
       const imports = this.w.units.of(cx); imports.symbolic = binding;
       this.w.stats.units++;
-      this.w.units.instantiate(cx, imports, built, this.w.slotOf(pending[0].method), clock, (exports) => {
+      this.w.units.link(this.w.units.compiled(cx, imports, built, this.w.slotOf(pending[0].method)), (exports) => {
         for (const { name, slot } of pending) {
           this.symbolicSites.set(name, new WebAssembly.Global({ value: "i32" }, slot));
           this.symbolicTable.set(slot, exports[name] as Function);
         }
-      });
+      }, clock);
       this.symbolicStubModules++;
     }
     for (const [name] of sites) out[name] = this.symbolicSites.get(name)!;
@@ -62,31 +61,9 @@ export class SymbolicSites {
       const owner = this.w.sched.current(), clock = this.w.units.clock(), ins = decodeInstruction(method.dex.code(method.codeOff).insns, pc);
       this.w.units.account(clock);
       const install = () => {
-        const clock = this.w.units.clock();
-        const initiated = initiatedInstruction(this.w, method, ins);
-        let key = initiated ? symbolicOperationKey(method, ins, inputs, output) : undefined;
-        let operation = key === undefined ? undefined : this.symbolicOperations.get(key);
-        if (operation) {
-          this.symbolicOperations.delete(key!);
-          this.w.units.account(clock);
-        }
-        else {
-          const { cx, built } = compileSymbolicSite(this.w, method, ins, inputs, output);
-          this.w.stats.units++;
-          operation = this.w.units.instantiate(cx, this.w.units.of(cx), built, this.w.slotOf(method), clock, (e) => e.m as Function);
-          const mb = cx.mb;
-          if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
-            || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.tags.length || mb.elems.length || mb.datas.length) {
-            key = undefined;
-          }
-        }
-        if (key !== undefined) {
-          // an older initialization guard remains valid: class initialization never reverses, and calls still use the live method table
-          this.symbolicOperations.set(key, operation);
-          if (this.symbolicOperations.size > 2048) this.symbolicOperations.delete(this.symbolicOperations.keys().next().value!);
-        }
-        this.symbolicTable.set(slot, operation);
-        if (initiated) this.w.tiers.resolved(`${method.cls}:${method.index}:${pc}`);
+        const clock = this.w.units.clock(), { cx, built } = compileSymbolicSite(this.w, method, ins, inputs, output);
+        this.w.stats.units++;
+        this.symbolicTable.set(slot, this.w.units.link(this.w.units.compiled(cx, this.w.units.of(cx), built, this.w.slotOf(method)), (e) => e.m as Function, clock)!);
       };
       const ready = resolveInstruction(this.w, method, ins, owner);
       return chain(ready, install);

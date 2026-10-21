@@ -2,8 +2,8 @@
 // window. The server end publishes an event; the client end's receiver gets it as a callback on its
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
-import { rt, getDeclared, type JObj } from "../jvm/runtime.ts";
-import { vcall, newObj } from "../jvm/natives/jentry.ts";
+import { rt, getDeclared, waits, type JObj } from "../jvm/runtime.ts";
+import { after, vcall, newObj } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel.ts";
 import type { NativeLooper } from "./mainloop.ts";
@@ -88,12 +88,14 @@ rt.registerJnis("android/view/InputChannel", {
 const receiverOf = (h: bigint) => deref<{ channel: Channel }>(h);
 rt.registerJnis("android/view/InputEventReceiver", {
   "nativeInit(Ljava/lang/ref/WeakReference;Landroid/view/InputChannel;Landroid/os/MessageQueue;)J":
-    (weak: JObj, input: JObj, queue: JObj) => {
-      const c = channelOf(input);
-      c.receiver = { looper: deref<NativeLooper>(getDeclared<bigint>(queue, "android/os/MessageQueue", "mPtr")), receiver: vcall(weak, "get", "()Ljava/lang/Object;") };
-      deliverFocus(c);
-      return handle({ channel: c });
-    },
+    waits((weak: JObj, input: JObj, queue: JObj) => {
+      const c = channelOf(input), looper = deref<NativeLooper>(getDeclared<bigint>(queue, "android/os/MessageQueue", "mPtr"));
+      return after(vcall(weak, "get", "()Ljava/lang/Object;") as JObj | Promise<JObj>, (receiver) => {
+        c.receiver = { looper, receiver };
+        deliverFocus(c);
+        return handle({ channel: c });
+      });
+    }),
   "nativeDispose(J)V": (h: bigint) => {
     const { channel: c } = receiverOf(h);
     c.receiver = null;

@@ -27,10 +27,11 @@ export class HostFunctions {
     };
   }
   private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
-    const dependent = cx.assumptions.some(a => !a[4]) || cx.absent.some(a => !a[1]);
-    if (slot !== undefined || !dependent) return this.w.units.instantiate(cx, imports, built, slot, clock, (e) => { const raw = e.m as Function; return { get: () => raw, raw }; });
+    const dependent = cx.assumptions.some(([, , , , owner]) => !owner) || cx.absent.some(([, owner]) => !owner);
+    const units = this.w.units;
+    if (slot !== undefined || !dependent) return units.link(units.compiled(cx, imports, built, slot), (e) => { const raw = e.m as Function; return { get: () => raw, raw }; }, clock)!;
     const at = -this.helperSlots.push(undefined);
-    return this.w.units.instantiate(cx, imports, built, at, clock, (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; });
+    return units.link(units.compiled(cx, imports, built, at), (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; }, clock)!;
   }
   private hostRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (slot: number) => Function {
     return slot => this.buildHostFn(name, params, ret, body, prepare, slot).get();
@@ -118,7 +119,6 @@ export class HostFunctions {
       const caller = this.w.stacks.bridge(s), leave = caller.leave;
       const mine = token;
       let p: Promise<unknown>;
-      this.w.tiers.refreshHotUnits();
       try { p = enter(s, mine, ...args); } catch (error) { leave(); throw error; }
       const state = d.value as number;
       if (state !== mine && state !== -mine) {

@@ -83,8 +83,8 @@ const fifos = new WeakMap<VfsFile, Pipe>();
 const remoteFifos = new Map<string, Pipe>();
 /** names the free normalized path `p` a fifo: volatile, as a fifo that outlived a reload would come back a regular file */
 export function nameFifo(p: string): void {
+  vfs.write(p, new Uint8Array(0), false);
   vfs.markVolatile(p);
-  vfs.write(p, new Uint8Array(0));
   fifos.set(vfs.open(p)!, namedPipe());
 }
 export const fifoOf = (file: VfsFile | null | undefined): Pipe | undefined => file ? fifos.get(file) : undefined;

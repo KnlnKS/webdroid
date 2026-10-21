@@ -45,9 +45,9 @@ const DIR_MIME = "vnd.android.document/directory";
 // Document flags: SUPPORTS_WRITE | SUPPORTS_DELETE | SUPPORTS_RENAME (+ DIR_SUPPORTS_CREATE)
 const FILE_FLAGS = 2 | 4 | 64, DIR_FLAGS = FILE_FLAGS | 8;
 
-interface DocRow { id: string; name: string; mime: string; size: number; modified: number; flags: number }
-const DOC_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
-const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified, r.flags];
+/** a document as DocumentsContract.Document's columns hold it */
+type DocRow = { document_id: string; _display_name: string; mime_type: string; _size: number; last_modified: number; flags: number };
+const DOC_COLUMNS: (keyof DocRow)[] = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
 
 /** Loose files (an OPEN_DOCUMENT / CREATE_DOCUMENT result) have no tree above them, so they get
  *  a volume of their own rather than a path. */
@@ -113,11 +113,12 @@ async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
 /** a document's row; null once it is gone, as one another call removed (UniFile renames by copy and
  *  delete) while it was being listed or looked up */
 async function rowOf(id: string, h: FileSystemHandle): Promise<DocRow | null> {
-  if (h.kind === "directory") return { id, name: h.name, mime: DIR_MIME, size: 0, modified: 0, flags: DIR_FLAGS };
+  if (h.kind === "directory") return { document_id: id, _display_name: h.name, mime_type: DIR_MIME, _size: 0, last_modified: 0, flags: DIR_FLAGS };
   let f: File;
   try { f = await (h as FileSystemFileHandle).getFile(); }
   catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; cache.delete(id); return null; }
-  return { id, name: h.name, mime: f.type || mimeOf(h.name) || "application/octet-stream", size: f.size, modified: f.lastModified, flags: FILE_FLAGS };
+  return { document_id: id, _display_name: h.name, mime_type: f.type || mimeOf(h.name) || "application/octet-stream", _size: f.size,
+    last_modified: f.lastModified, flags: FILE_FLAGS };
 }
 
 async function docRow(docId: string): Promise<DocRow | null> {
@@ -197,7 +198,7 @@ async function copyDoc(srcId: string, parentId: string, name: string): Promise<s
   const dst = await docCreate(parentId, src.kind === "directory" ? DIR_MIME : mimeOf(name) ?? "application/octet-stream", name);
   if (!dst) return null;
   if (src.kind === "file") await docWrite(dst, await docRead(srcId));
-  else for (const child of await docChildren(srcId)) await copyDoc(child.id, dst, child.name);
+  else for (const child of await docChildren(srcId)) await copyDoc(child.document_id, dst, child._display_name);
   return dst;
 }
 
@@ -238,7 +239,7 @@ const docQuery = driven(function* (u: string, projection: string[] | null): Gen<
   const id = documentId(u);
   const rows: DocRow[] = isChildrenUri(u) ? yield* awaited(docChildren(id)) : [yield* awaited(docRow(id))].filter((r) => r !== null);
   const cols = projection?.length ? projection : DOC_COLUMNS;
-  return yield* awaited(matrixCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); })));
+  return yield* awaited(matrixCursor(cols, rows));
 });
 const S = "Ljava/lang/String;";
 /** DocumentsProvider.call's document methods, as DocumentsContract sends them: the document in
@@ -262,7 +263,7 @@ const docCall = driven(function* (method: string, _arg: string | null, extras: J
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
   process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER }, {
   query: docQuery,
-  getType: async (u) => (await docRow(documentId(u)))?.mime ?? null,
+  getType: async (u) => (await docRow(documentId(u)))?.mime_type ?? null,
   openFile: (u, mode) => docPfd(documentId(u), mode),
   delete: async (u) => +await docDelete(documentId(u)),
   call: docCall,

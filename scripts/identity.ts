@@ -215,6 +215,6 @@ export async function recordIdentity(url: string, sdk: string): Promise<void> {
   const banner = /Linux version (\S+) \(.*\) (#\d+ [^\n\0]*)/.exec(new TextDecoder("latin1").decode(kernel))!;
   const uname = { sysname: "Linux", nodename: /^\s*hostname (\S+)/m.exec(initRc)![1], release: banner[1], version: banner[2], domainname: /^\s*domainname (\S+)/m.exec(initRc)![1] };
   writeProperties("src/shell/device-properties.ts", "DEVICE_PROPERTIES", properties,
-    ` --identity: the identity of the phone whose factory image is\n${url}\n(sha256 ${sha256}),\nas an app reads it (see recordIdentity), and its kernel's uname but for the machine.`,
+    ` --only identity: the identity of the phone whose factory image is\n${url}\n(sha256 ${sha256}),\nas an app reads it (see recordIdentity), and its kernel's uname but for the machine.`,
     `export const UNAME = ${JSON.stringify(uname, null, 2).replace(/"(\w+)":/g, "$1:")};\n`);
 }

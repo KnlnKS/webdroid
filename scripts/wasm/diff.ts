@@ -6,8 +6,9 @@ import { world } from "./lib.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
 import { descToName } from "../../src/jvm/abi.ts";
 import { insnLen } from "../../src/jvm/opcodes.ts";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
+import { cli } from "../args.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
@@ -28,12 +29,21 @@ const dex = join(out, "classes.dex");
       for (let pc = 0; pc < code.insns.length; pc += insnLen(code.insns, pc)) if ((code.insns[pc] & 0xff) >= 0x0a && (code.insns[pc] & 0xff) <= 0x0c) moves.add(pc);
       const items = m.codeOff + 16 + code.insns.length * 2 + (code.insns.length & 1) * 2;
       code.tries.forEach((t, k) => { if (moves.has(t.end - 1)) view.setUint16(items + k * 8 + 4, t.end - t.start - 1, true); });
+      // ART hands the String a constructor call makes to every copy of its allocation, which d8 never makes: stringAlias copies it, before the call, into
+      // the register n arrived in, and reads the String through the copy
+      if (d.method(m.methodIdx).name === "stringAlias") {
+        const units = Array.from(code.insns), shape = [0x0022, -1, 0x01dd, 0x0701, 0x1123, -1, 0x2070, -1, 0x0010, 0x106e, -1, 0x0000, 0x010a, 0x01da, 0x0201, 0x010f];
+        if (code.regs !== 2 || units.length !== shape.length || shape.some((u, k) => u >= 0 && units[k] !== u)) throw new Error("W.stringAlias: d8 emitted other code");
+        view.setUint16(m.codeOff, 3, true);
+        [0x0022, units[1], 0x01dd, 0x0702, 0x1123, units[5], 0x0207, 0x2070, units[7], 0x0010, 0x106e, units[10], 0x0002, 0x010a, 0x11b0, 0x010f]
+          .forEach((u, k) => view.setUint16(m.codeOff + 16 + 2 * k, u, true));
+      }
     }
   }
   writeFileSync(dex, bytes);
 }
 await mountPlatform(ROOT);
-const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
+const w = world([dex, ...CORE_PATHS]), hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 await startProcess(w);
 const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
@@ -45,12 +55,13 @@ const small: Record<string, number[]> = {
   copy: [0, 1, 3, 8], fieldsInt: [0, 1, 5, 100], fieldsLong: [0, 1, 5], fieldsFloat: [0, 1, 5], fieldsFloatShort: [0, 5], fieldsFloatLong: [0], fieldsDouble: [0, 1, 5], fieldsOther: [0, 1, 5, 100], errWiden: [0], errType: [0], errNull: [0], errReceiver: [0], errRefType: [0], errNullBox: [0], errNarrow: [0], errFinal: [0], forName: [0], direct: [0, 1, 5, 40], directBulk: [0, 1, 5, 40], thread: [0, 3], unicode: [0, 1, 4, 30], refs: [0, 3], cat: [0, 1, 12, 120], mapKeys: [0, 1, 5, 40, 1000], enc: [0, 1, 5, 20], statics: [0, 5], dispatch: [0, 1, 2, 9], map: [0, 1, 5, 40], err: [-1, 0, 2, 3, 4], err2: [-1, 0, 4, 5], err3: [-1, 0, 2, 3, 5],
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
-const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
+const { positionals: [filter] } = cli("pnpm wasm diff [method-name-filter,...]", {});
+const cases = genCases(methods.filter((m) => !filter || filter.split(",").some((f) => m.name.includes(f))), small);
 const jdk = onJdk(out, cases.map(caseLine));
 const suite = checker("diff"), { blocked } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
-  const wide = world([dex, ...CORE_PATHS], { natives });
+  const wide = world([dex, ...CORE_PATHS]);
   const wideEntry = wide.entryAsync.bind(wide);
   const a = wide.idOf("java/util/ArrayList"), b = wide.idOf("java/util/HashMap"), low = wide.selectorId("hashCode()I");
   if (b !== a + 1) throw new Error("full-width dispatch fixture requires adjacent class IDs");

@@ -69,10 +69,14 @@ export const contentValues = (values: JObj | null): Map<string, unknown> => new 
 /** a SQLite value as MatrixCursor holds it: INTEGER a Long, REAL a Double */
 const cell = (v: unknown) => typeof v === "number" ? Number.isInteger(v) ? boxLong(BigInt(v)) : boxDouble(v)
   : typeof v === "bigint" ? boxLong(v) : v instanceof Uint8Array ? i8(v.slice()) : v;
-/** a MatrixCursor over rows in hand */
-export const matrixCursor = driven(function* matrixCursor(columns: string[], rows: unknown[][]): Gen<JObj> {
+/** a MatrixCursor over rows in hand: each one's cells in `columns` order, or a record of them by
+ *  column, which a projection picks from as RowBuilder.add does (a column it lacks is null) */
+export const matrixCursor = driven(function* matrixCursor(columns: string[], rows: readonly (readonly unknown[] | Readonly<Record<string, unknown>>)[]): Gen<JObj> {
   const cursor: JObj = yield newObj("android/database/MatrixCursor", "([Ljava/lang/String;I)V", strArray(columns), rows.length);
-  for (const row of rows) yield vcall(cursor, "addRow", "([Ljava/lang/Object;)V", jarray(row.map(cell)));
+  for (const row of rows) {
+    const cells = Array.isArray(row) ? row : columns.map((column) => (Object.hasOwn(row, column) ? (row as Record<string, unknown>)[column] : null));
+    yield vcall(cursor, "addRow", "([Ljava/lang/Object;)V", jarray(cells.map(cell)));
+  }
   return cursor;
 });
 /** a Bundle holding one Uri, as a call answers a document or a scanned file */

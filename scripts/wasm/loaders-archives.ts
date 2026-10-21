@@ -9,7 +9,6 @@ import { PackedArchive, appArchives, packedArchives, sha256 } from "../../src/sh
 import { openDexes } from "../../src/wasm/host/boot.ts";
 import { world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { natives } from "./harness.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
@@ -17,7 +16,7 @@ import type { Suite } from "./tools.ts";
 export async function archives({ check, fail }: Suite, out: string, app: string, a: string, b: string): Promise<void> {
   const bytes = (path: string) => new Uint8Array(readFileSync(path)), apk = join(out, "ordered.apk");
   writeFileSync(apk, zipSync({ "classes10.dex": bytes(b), "classes2.dex": bytes(a), "classes1000.dex": bytes(b), "classes.dex": bytes(app) }));
-  const ordered = world([apk, ...PLATFORM_PATHS], { natives });
+  const ordered = world([apk, ...PLATFORM_PATHS]);
   check("APK secondary DEX precedence", ordered.entry("Shared", "tag", "()I")(ordered.entry("Shared", "make", "()LShared;")()), 1);
 
   const ownPath = "/data/app/loader-own/base.apk", otherPath = "/data/app/loader-other/base.apk", ownDexes = loadDexes(a);

@@ -11,7 +11,7 @@ import type { ProbeResult } from "./boot-probe-page.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { bundleFor, checker } from "./tools.ts";
 import { fixture } from "../java.ts";
-import { launchBrowser } from "../browser.ts";
+import { launchBrowser } from "../page.ts";
 import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 // the page has no files of its own (harness.ts is given the jars it fetched)

@@ -2,15 +2,13 @@
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { setProcessIdentity, setProcessName } from "../android/os.ts";
 import { onMain } from "../android/mainloop.ts";
-import { applyDeviceConfiguration } from "../android/resources.ts";
-import { initDeviceLocales } from "../android/resnative.ts";
+import { applyDeviceConfiguration, initDeviceLocales } from "../android/configuration.ts";
 import { scall } from "../jvm/natives/jentry.ts";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime.ts";
 import { loadAppCode, loadTier } from "../jvm/tier.ts";
 import { startZygote, setSystemDisplayTarget, useDisplayRotation } from "./device.ts";
 import { connectProcess } from "./process-endpoint.ts";
 import { processBroker } from "./processes.ts";
-import { hostWindowManager } from "../android/server/wm.ts";
 import { loadSystemFontMap } from "../android/fonts.ts";
 import { rt } from "../jvm/runtime.ts";
 import { procIdentity } from "./procfs.ts";
@@ -29,7 +27,6 @@ export function bootSystemOwner(): Promise<void> {
     const broker = processBroker();
     broker.registerSystemServer();
     await loadAppCode();
-    hostWindowManager();
     setSystemDisplayTarget();
     useDisplayRotation();
     await startZygote();
@@ -50,7 +47,7 @@ export async function prepareWorkerInstall(install: import("./install.ts").Insta
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
   const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install.lazyEntries);
-  for (const split of install.splits) if (split.resources) archive.res.arsc?.add(split.resources);
+  for (const split of install.splits) if (split.resources) archive.apk.table?.add(split.resources);
   const record = registerPackage(archive, { source: install.base });
   processBroker().setPackageSplits(record.pkg, install.splits.map(split => split.source));
   return { pkg: record.pkg, label: record.label() };

@@ -13,7 +13,7 @@ import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
 import type { NativeRegion } from "./region.ts";
 import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap.ts";
 import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping.ts";
-import { fontNatives } from "./fonts.ts";
+import { withFonts } from "./fonts.ts";
 import { paintAdvance } from "./minikin.ts";
 import { NativePaint, UNBOUNDED, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
 import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
@@ -342,6 +342,11 @@ function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: 
 }
 /** the text a run names, without a copy for the whole string */
 const run = (s: string, start: number, end: number) => (start === 0 && end === s.length ? s : s.slice(start, end));
+// The text natives draw again once a font they reached has loaded; their char arrays are read first.
+const textAt = (h: bigint, text: string, x: number, y: number, p: bigint) =>
+  withFonts(() => { const nc = drawingCanvas(h); drawText(nc, text, x, y, nc.paint(p)); });
+const textOnPathAt = (h: bigint, text: string, path: bigint, ho: number, vo: number, p: bigint) =>
+  withFonts(() => { const nc = drawingCanvas(h); drawTextOnPath(nc, text, pathAt(path), ho, vo, nc.paint(p)); });
 
 // ── natives ──
 const optPaint = (nc: NativeCanvas, h: bigint) => (h ? nc.paint(h) : null);
@@ -375,27 +380,19 @@ const DRAWS: Record<string, unknown> = {
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
   "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); return drawPath(nc, pathAt(path), nc.paint(p)); },
   "nDrawRegion(JJJ)V": (h: bigint, r: bigint, p: bigint) => { const nc = drawingCanvas(h); drawRegion(nc, deref<NativeRegion>(r), nc.paint(p)); },
-  ...fontNatives({
-  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
-  },
-  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _bidi: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
-  },
+  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _bidi: number, p: bigint) =>
+    textAt(h, run(s, start, end), x, y, p),
+  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _bidi: number, p: bigint) =>
+    textAt(h, charsToString(c, i, n), x, y, p),
   // a run is shaped in its context and drawn from start to end; one direction and one font here
-  "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawText(nc, run(s, start, end), x, y, nc.paint(p));
-  },
-  "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawText(nc, charsToString(c, i, n), x, y, nc.paint(p));
-  },
-  "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V": (h: bigint, s: string, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawTextOnPath(nc, s, pathAt(path), ho, vo, nc.paint(p));
-  },
-  "nDrawTextOnPath(J[CIIJFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) => {
-    const nc = drawingCanvas(h); drawTextOnPath(nc, charsToString(c, i, n), pathAt(path), ho, vo, nc.paint(p));
-  },
-  }),
+  "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, p: bigint) =>
+    textAt(h, run(s, start, end), x, y, p),
+  "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, p: bigint) =>
+    textAt(h, charsToString(c, i, n), x, y, p),
+  "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V": (h: bigint, s: string, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) =>
+    textOnPathAt(h, s, path, ho, vo, p),
+  "nDrawTextOnPath(J[CIIJFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, path: bigint, ho: number, vo: number, _bidi: number, p: bigint) =>
+    textOnPathAt(h, charsToString(c, i, n), path, ho, vo, p),
   "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, p: bigint, canvasDensity: number, _screen: number, bitmapDensity: number) => {
     const nc = drawingCanvas(h); drawBitmapAt(nc, bitmapAt(b), x, y, optPaint(nc, p), canvasDensity, bitmapDensity);
   },

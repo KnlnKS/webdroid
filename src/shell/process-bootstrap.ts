@@ -40,7 +40,7 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
     } else if (!own) {
       const file = new RemoteFile(source);
       archive = await packageArchiveSource(file, snapshot.certificates);
-      base = {zip: archive.res.zip, base: file};
+      base = {zip: archive.apk.zip, base: file};
     } else {
       const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
       archive = packageArchive(zip, snapshot.certificates);
@@ -48,9 +48,9 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
     }
     if (own) {
       boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-      // AssetManager may cache this package before bootApk constructs its resources.
-      for (const split of boot.splits) if (split.resources) archive.res.arsc?.add(split.resources);
-      for (const [name, source] of boot.lazyEntries) archive.res.lazyEntries.set(name, source);
+      // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
+      for (const split of boot.splits) if (split.resources) archive.apk.table?.add(split.resources);
+      for (const [name, source] of boot.lazyEntries) archive.apk.lazyEntries.set(name, source);
     }
     return { snapshot, archive, path, source: base.base };
   }));

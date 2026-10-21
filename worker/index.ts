@@ -1,22 +1,26 @@
-import { bridgeSocket, gzipHeaders, sharedRoute, type ServeHost } from "../src/shell/serve-routes.ts";
+import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from "../src/shell/serve-routes.ts";
 import { WebBridgeSession } from "./bridge.ts";
 import { tcpRelay } from "./tcp.ts";
+import { isPublicHost } from "../src/native/net-address.ts";
 
 export { WebBridgeSession };
 
-async function dnsLookup(name: string): Promise<Response> {
-  try {
+/** whether `name` has an IPv4 or else an IPv6 address, as getaddrinfo finds one; null when the resolver cannot say */
+async function nameExists(name: string): Promise<boolean | null> {
+  for (const [type, code] of [["A", 1], ["AAAA", 28]] as const) {
     const endpoint = new URL("https://cloudflare-dns.com/dns-query");
     endpoint.searchParams.set("name", name);
-    endpoint.searchParams.set("type", "A");
-    const response = await fetch(endpoint, { headers: { accept: "application/dns-json" } });
-    if (!response.ok) return new Response("DNS unavailable", { status: 502 });
-    const result = await response.json() as { Status?: number; Answer?: { type: number; data: string }[] };
-    if (result.Status === 3) return new Response("ENOTFOUND", { status: 404 });
-    if (result.Status !== 0) return new Response("DNS unavailable", { status: 502 });
-    const addresses = (result.Answer ?? []).filter((answer) => answer.type === 1).map((answer) => answer.data);
-    return addresses.length ? Response.json({ addresses }) : new Response("ENODATA", { status: 404 });
-  } catch { return new Response("DNS unavailable", { status: 502 }); }
+    endpoint.searchParams.set("type", type);
+    try {
+      const response = await fetch(endpoint, { headers: { accept: "application/dns-json" } });
+      if (!response.ok) return null;
+      const result = await response.json() as { Status?: number; Answer?: { type: number }[] };
+      if (result.Status === 3) return false;
+      if (result.Status !== 0) return null;
+      if (result.Answer?.some((answer) => answer.type === code)) return true;
+    } catch { return null; }
+  }
+  return false;
 }
 
 /** a file build-prod split into parts, whole or as the byte range the request names */
@@ -62,17 +66,13 @@ async function largeAsset(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), path = url.pathname;
-    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), dnsLookup };
-    const shared = sharedRoute(url, host);
+    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), nameExists, webviewOrigin: () => env.WEBVIEW_ORIGIN || null,
+      proxy: { reachable: isPublicHost } };
+    const shared = sharedRoute(url, host), header = (name: string) => request.headers.get(name);
     if (shared) return shared(request);
-    if (path === "/tcp") return tcpRelay(request, context);
-    if (path === "/webview-origin") {
-      if (!env.WEBVIEW_ORIGIN) return new Response("Configure WEBVIEW_ORIGIN on a separate hostname", { status: 503 });
-      const origin = new URL(env.WEBVIEW_ORIGIN).origin;
-      return origin === url.origin ? new Response("WebView origin must differ", { status: 503 }) : Response.json(origin);
-    }
+    if (path === "/tcp") return ownPage(url, header) ? tcpRelay(request, context) : new Response("forbidden", { status: 403 });
     if (path === "/webview-socket") {
-      const id = bridgeSocket(url, request.headers.get("origin"));
+      const id = bridgeSocket(url, header);
       return id === null ? new Response("bad bridge", { status: 403 }) : host.bridge(request, id);
     }
     if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);

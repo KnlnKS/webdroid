@@ -1,43 +1,23 @@
-// Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
+// Exceptions the compiled code raises itself: the implicit throwers, their messages and stack traces.
 import { T } from "./wasmbin.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import type { Kind, MethodInfo } from "./program.ts";
 import type { Compiler, FnTrace } from "./j2w.ts";
 import { dotName as dotted, oomMessage } from "../../jvm/abi.ts";
 import { prettyType } from "./linkage.ts";
+import { MAX_DEPTH, MAX_UNCOUNTED, SOE_HEADROOM } from "./consts.ts";
 
 /** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
 export function deepStack(limit = 128): Error {
   const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
   try { return new Error(); } finally { Error.stackTraceLimit = prior; }
 }
-/** calls and loop iterations a method runs as first-tier code before it is recompiled (Tiering.upgrade) */
-export const HOT_BUDGET = 5000;
-/** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
-export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
-/** After the counters, a fixed window the host bridge copies arrays through: growing memory during a native would detach the views it holds of its
- *  arguments. Scratch for natives starts after it. */
-export const TRANSFER_BASE = COUNT_BASE + 4 * COUNT_SLOTS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
-/** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: the warm Worker calls methods to have the engine compile them (warmshim.ts). */
-export const WARM_AT = 0;
-/** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is
- *  its size in the engine's baseline code to within 10% (8,700 frames of 1 parameter (weight 11) or 2,030 of 10 parameters and 20 locals (weight 53) fill node's 984 KB stack: about 100,000).
- *  V8 does not let Wasm catch its own stack overflow, so a Java handler for StackOverflowError sees only the one this limit throws; the limit is half of what
- *  the stack holds, and an overflow it still hits is turned into the error at the edge of the Java world (World.boundary) */
-export const MAX_DEPTH = 56000, SOE_HEADROOM = 2000;
-/** the weight of the frames a method may leave out of the depth when it calls only methods that leave theirs out (method.ts) */
-export const MAX_UNCOUNTED = 512;
 /** the weight a thrower adds to the depth, which the handler that catches the exception restores: the frames it builds the exception with may be uncounted */
 const THROWER_WEIGHT = MAX_UNCOUNTED;
-/** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
-export const ALLOC_WINDOW = 8 << 20;
-
 /** Table slots that hold the throwers, bound once the runtime starts; each is a lazy-link stub until first used. */
 export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16, recv: 17, iacc: 18, ftm: 19, fin: 20, ncdfr: 21, nsme: 22, nsfer: 23, icce: 24, ie: 25, imse: 26, nbs: 27, iaet: 28, iarg: 29, iarity: 30 } as const;
 export type Thrower = keyof typeof SLOT;
 export const FIRST_FREE_SLOT = 31;
-/** a class's init word: 0 not started, (strand << 2 | 1) running on that strand, then done or failed (JLS 12.4.2) */
-export const INIT_DONE = 2, INIT_FAILED = 3;
 const L = "java/lang/";
 export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
   npe: { cls: L + "NullPointerException", params: [] },

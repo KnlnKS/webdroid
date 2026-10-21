@@ -12,10 +12,10 @@ export const BOX: Record<string, [string, string, string]> = Object.fromEntries(
 export function box(cx: Compiler, c: Code, desc: string): void {
   const [cls] = BOX[desc];
   cx.emitEnsure(c, cls);
-  cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${desc})L${cls};`)!);
+  cx.callNamed(c, cls, "valueOf", `(${desc})L${cls};`);
 }
 /** replaces the (non-null) wrapper on the stack by its primitive value */
 export function unbox(cx: Compiler, c: Code, desc: string): void {
   const [cls, name, d] = BOX[desc];
-  cx.callMethod(c, cx.prog.resolve(cls, name, d)!);
+  cx.callNamed(c, cls, name, d);
 }

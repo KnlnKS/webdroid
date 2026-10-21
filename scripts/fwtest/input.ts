@@ -1,6 +1,6 @@
 // android.view's input classes against the reference AVD: InputProbe (scripts/InputProbe.java) runs
 // here over our natives and hosted IInputManager, and its output is compared line by line with
-// what it printed on the device (tests/fixtures/input-probe.txt, scripts/input-probe.ts).
+// what it printed on the device (tests/fixtures/input-probe.txt, pnpm gen-framework --only inputProbe).
 import { readFileSync } from "node:fs";
 import { DexFile } from "../../src/jvm/dex.ts";
 import { jarray, mangleStaticField } from "../../src/jvm/abi.ts";

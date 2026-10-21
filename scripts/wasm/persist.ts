@@ -5,29 +5,22 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { APP_VERSION, VERSION } from "../../src/wasm/link/aot.ts";
 import { packModule } from "../../src/wasm/link/aotbuild.ts";
 import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
-import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
-import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
-import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { compileModule } from "../../src/wasm/link/module.ts";
+import type { World } from "../../src/wasm/link/world.ts";
 import { UnitCompiler } from "../../src/wasm/link/unit.ts";
 import { buildApp, buildPart, mergeApp } from "../../src/wasm/link/apps.ts";
-import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
+import type { CompileEnv } from "../../src/wasm/host/compile-serve.ts";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { fetchBundle } from "../../src/wasm/host/bundle.ts";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
-import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { current, fakeAot } from "./lib.ts";
+import { compileEnv, fakeAot, inThreadCompiler, platform, world as harnessWorld } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { worldOptions } from "../../src/wasm/host/boot.ts";
-import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { JAVA, ROOT } from "./paths.ts";
-import { PLATFORM_PATHS } from "../aosp.ts";
 import { checker } from "./tools.ts";
 import { filesIn, fixture } from "../java.ts";
 import type { DexFile } from "../../src/jvm/dex.ts";
@@ -46,39 +39,17 @@ const until = async (what: string, done: () => boolean, ms = 60000) => {
   return true;
 };
 
-const platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
-const platform = new Program(platformDexes); platform.addExterns(externs);
-const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { ...worldOptions(), aot: aotStore, ...opts }));
-/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
-const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => attachHostClasses(world(dexes, opts));
+/** a World as the tab makes one over the platform's Program and `dexes`, with the platform build in WEBDROID_AOT */
+const world = (dexes: DexFile[], opts?: Parameters<typeof harnessWorld>[1]): World => harnessWorld(new Program(dexes, platform()), opts);
 
-// A combined image links the app's default namespace as the Program resolves it.
-{
-  const dexes = loadDexes(join(out, "classes.dex"));
-  const image = world(dexes, { aot: undefined, compileOnly: true, build: { dexes: new Set([...platformDexes, ...dexes]), appDexes: new Set(dexes), dGroup: name => name, cGroup: name => name } });
-  check("combined image retains platform boot ownership", image.prog.loaderOf("java/lang/Object") === image.prog.boot, true);
-  check("combined image retains app root ownership", image.prog.loaderOf("Pst") === image.prog.root, true);
-  const cx = new Compiler(image), bytes = cx.buildUnit([image.prog.resolve("Pst", "chain", "()I")!]).bytes;
-  compileModule(bytes);
-  check("combined image app code links its default namespace statically", cx.symbolicImports.size, 0);
-  const boot = new Compiler(image);
-  boot.buildUnit([image.prog.resolve("java/lang/Object", "hashCode", "()I")!]);
-  check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
-}
-
-const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
+const env = compileEnv(AOT, BASE);
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
-/** a compile worker over a MessageChannel in this thread */
 function spawn(): WorkerPort { return spawnWithEnv(env); }
 function spawnWithEnv(workerEnv: CompileEnv, received?: string[]): WorkerPort {
-  const { port1, port2 } = new MessageChannel();
-  if (received) port2.addEventListener("message", ({ data }) => received.push(data.type));
-  serveCompile(port2 as never, workerEnv);
-  const port: WorkerPort = { postMessage: (m, t) => port1.postMessage(m, t as never), set onmessage(f) { port1.onmessage = f as never; }, get onmessage() { return port1.onmessage as never; },
-    onerror: null, terminate: () => { stopped.add(port); port1.close(); port2.close(); } };
+  const port = inThreadCompiler(workerEnv, received && ((type) => received.push(type))), { terminate } = port;
+  port.terminate = () => { stopped.add(port); terminate(); };
   ports.push(port);
   return port;
 }
@@ -106,7 +77,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
   const producer = world(app, { compileOnly: true });
-  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.platformData(n));
   if (name) {
     const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], synths: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
@@ -192,7 +163,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // ---- second-tier units from the worker
 {
   const w = world(app), beforeSpawn = ports.length, client = new CompileClient(spawn);
-  const hooked = hosted(app, { compiler: client });
+  const hooked = world(app, { compiler: client });
   client.start(hooked, BASE, undefined);
   check("an unused upgrade service creates no worker", ports.length, beforeSpawn);
   hooked.addDexes(late);
@@ -216,10 +187,10 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 {
   const initializing = Promise.withResolvers<void>(), received: string[] = [];
-  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return platformDexes; } }, received));
+  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return env.platform(); } }, received));
   const path = "/data/local/tmp/persist-proxy.dex";
   vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(join(out, "classes.dex")))));
-  const w = hosted(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : undefined });
+  const w = world(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : undefined });
   await startProcess(w);
   await w.entryAsync("Pst", "setupLoader", "(Ljava/lang/String;)V")(path);
   const make = w.entryAsync("Pst", "makeProxy", "(I)I");
@@ -246,8 +217,8 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 {
   const initializing = Promise.withResolvers<void>(), received: string[] = [];
-  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return platformDexes; } }, received));
-  const w = hosted(app, { compiler: client, holdUpgrades: () => true });
+  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return env.platform(); } }, received));
+  const w = world(app, { compiler: client, holdUpgrades: () => true });
   const first = w.prog.newLoader(w.prog.root, null), second = w.prog.newLoader(w.prog.boot, null);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), first);
   w.namespaces.bindLibraries(second, [w.prog.root], []);
@@ -294,7 +265,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 {
   // the numbering of host classes and their hidden halves is the page's: hot code over a World with them is adopted whole
-  const w = world(app), client = new CompileClient(spawn()), hooked = hosted(app, { compiler: client });
+  const w = world(app), client = new CompileClient(spawn()), hooked = world(app, { compiler: client });
   check("host classes exist", hooked.hostClassNames().length > 0, true);
   client.start(hooked, BASE, undefined);
   await until("the worker starts", () => client.ready || !!client.retired);
@@ -312,7 +283,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
     roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } };
   const t0 = performance.now(), first = await prepareApp(request);
   check("no build is saved for the app at first", first.hit, false);
-  first.watch(hosted(app, { app: first.saved, compiler: first.compiler }));
+  first.watch(world(app, { app: first.saved, compiler: first.compiler }));
   const made = await first.made!;
   check("the transferred build retires its worker", stopped.has(ports.at(-1)!), true);
   check("the build is kept", made.kept, true);
@@ -347,6 +318,16 @@ if (saved) {
   check("its modules were loaded", loaded.length > 0, true);
   check("it compiled fewer methods on demand", w.stats.methods < plain.stats.methods, true);
   console.log(`  with the app build: ${w.stats.methods} methods compiled on demand against ${plain.stats.methods}, ${loaded.length} app module(s), ${w.stats.units} units`);
+  // Once the app's loader resolves through Java, app build code linked as the Program resolved is undone, also in slots nothing has asked for yet.
+  {
+    const dyn = world(app, { app: { index, store } });
+    answers(dyn);
+    const unasked = dyn.slots.blockBase.flatMap((base, b) => Array.from({ length: dyn.slots.methodsIn(b) }, (_, i) => base + i)).find((s) => !dyn.slots.peek(s) && dyn.aot!.fromAppBuild(s));
+    check("the app build installed a slot nothing asked for", unasked !== undefined, true);
+    const code = dyn.table.get(unasked!);
+    dyn.namespaces.dynamicRoot();
+    check("a dynamic root undoes it", dyn.table.get(unasked!) !== code, true);
+  }
   // A later override must be honoured without losing sound code from the saved build.
   const later = world(app, { app: { index, store } });
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
@@ -364,6 +345,9 @@ if (saved) {
   // what does not match is not used
   check("other dex files find no build", world(late, { app: { index, store } }).appAttached, false);
   check("a changed base finds none", world(app, { app: { index: { ...index, base: { ...index.base, names: index.base.names + 1 } }, store } }).appAttached, false);
+  // a prefix that does not lead to the base is taken back
+  const unbased = world(app, { app: { index: { ...index, prefix: { ...index.prefix, names: [...index.prefix.names, "Unbased"] } }, store } });
+  check("a prefix that misses the base is not kept", [unbased.appAttached, sameMarks(unbased.numbers.marks(), unbased.aot!.platformMarks)].join(), "false,true");
   check("a changed format finds none", world(app, { app: { index: { ...index, version: index.version + 1 }, store } }).appAttached, false);
   const stale = world(app);
   stale.entry("Pst", "chain", "()I")();
@@ -378,16 +362,16 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, "platform"), persist, spawn,
     roots: { launch: ["Pst"], whole: false, limit: 500 } };
   const first = await prepareApp(request);
-  first.watch(hosted(app, { app: first.saved, compiler: first.compiler }));
+  first.watch(world(app, { app: first.saved, compiler: first.compiler }));
   await first.made!;
-  const second = await prepareApp(request), w = hosted(app, { app: second.saved, compiler: second.compiler });
+  const second = await prepareApp(request), w = world(app, { app: second.saved, compiler: second.compiler });
   check("the first build attaches", w.appAttached, true);
   answers(w);
   check("the launch compiled methods the build lacked", w.demand.methods.size > 0, true);
   check("the classes its code names have modules in the build", (second.saved?.index.dModules ?? 0) > 0 && w.stats.classes < 2, true);
   const built = await second.refine(w, 1);
   check("the build is made again with them", built?.kept, true);
-  const third = await prepareApp(request), w3 = hosted(app, { app: third.saved, compiler: third.compiler });
+  const third = await prepareApp(request), w3 = world(app, { app: third.saved, compiler: third.compiler });
   check("a launch after it finds it", w3.appAttached, true);
   check("answers as without", answers(w3).join(), expected.join());
   check("it compiled fewer methods on demand", w3.stats.methods < w.stats.methods, true);
@@ -401,7 +385,7 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot("https://shipped.invalid/", "platform"), persist, spawn, roots: { launch: ["Pst"] } };
   const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
   const made = await prepareApp({ ...request, persist: origin, aot: fakeAot(BASE, "platform") });
-  made.watch(hosted(app, { app: made.saved, compiler: made.compiler }));
+  made.watch(world(app, { app: made.saved, compiler: made.compiler }));
   await made.made!;
   const files = (await origin.load(key))!, realFetch = globalThis.fetch, requests: string[] = [];
   globalThis.fetch = (async (url: string) => {

@@ -3,10 +3,11 @@ import { rt, JObj } from "../jvm/runtime.ts";
 import { runningApp } from "./apphost.ts";
 import { WEB_INJECT } from "../shell/webinject.ts";
 import { withPageScript, type FrameDocument, type FrameInit } from "../shell/webpage/protocol.ts";
+import { proxyPath } from "../shell/webpage/proxywire.ts";
 
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
 export function srcFor(url: string): string {
-  if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url);
+  if (/^https?:/i.test(url)) return proxyPath({ url, frame: "main" });
   const m = /^file:\/\/\/android_asset\/(.*)$/i.exec(url);
   return m ? "/asset/" + encodeURIComponent(runningApp().assetKey) + "/assets/" + m[1] : url;
 }

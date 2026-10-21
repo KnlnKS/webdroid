@@ -8,16 +8,12 @@ import { vfs, apkPath } from "./vfs.ts";
 import { inflateTree } from "../zip.ts";
 import type { Install } from "./install.ts";
 import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jvmruntime.ts";
-import { Arsc } from "../android/arsc.ts";
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
-import { Resources, nativeRes } from "../android/res.ts";
-import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative.ts";
+import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
-import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources.ts";
-import { registerApk, registerSplit } from "../android/assetmanager.ts";
 import { setManifest } from "../android/pm.ts";
 import { packageConfig, setPackageConfig } from "../android/packageconfig.ts";
 import { asZygote, setProcessIdentity, setProcessName } from "../android/os.ts";
@@ -35,13 +31,14 @@ import { restoreRoots } from "./hostfs.ts";
 import { notePresent } from "../native/cpu.ts";
 import { noteInput } from "../jvm/yield.ts";
 import { appArchives } from "./packedarchive.ts";
-import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm.ts";
+import { dispatchTouch, dispatchKey } from "../android/server/wm.ts";
 import { startActivityThread } from "../android/server/am.ts";
 import { configurationChanged, displayHooks, orientationRequest } from "../android/server/atm.ts";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger.ts";
 import { toThread } from "../jvm/natives/jthrowable.ts";
 import { note, Ev } from "../timeline.ts";
 import type { TouchPointer } from "./pointer-queue.ts";
+import { keyCodes } from "../android/input-codes.ts";
 import { procIdentity } from "./procfs.ts";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
@@ -150,10 +147,10 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
 }
 
 /** boots the app */
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<void> {
+export async function bootApk(install: Install, assetKey = "", processName: string | null = null): Promise<void> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  mark("bootApk"); onStatus("Reading package…");
+  mark("bootApk");
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
@@ -171,7 +168,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the dexes inflate, and the app's code is prepared from them, while the zygote runs
   const dexes = inflateTree(zip, isDexEntry).then(() => {
     const read = dexesOfZip(zip);
-    beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName, onStatus);
+    beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName);
     return read;
   });
   await startZygote();
@@ -189,33 +186,23 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
-  if (install.base instanceof Uint8Array) vfs.write(apkPath(), install.base);
-  else vfs.mount(apkPath(), install.base);
-  for (const sp of install.splits) {
-    if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
-    else vfs.mount(apkPath(sp.name), sp.source);
-  }
-  mark("startZygote"); onStatus("Loading app code…");
+  vfs.place(apkPath(), install.base);
+  for (const sp of install.splits) vfs.place(apkPath(sp.name), sp.bytes ?? sp.source);
+  mark("startZygote");
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
   // a process's files live with the broker, whose prepare creates its app data
   await vfs.prepare(pkg);
 
-  mark("dataReady"); onStatus("Loading resources…");
-  const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
-  for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
-  registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
-  for (const sp of install.splits) registerSplit(apkPath(sp.name));
+  mark("dataReady");
   const { target } = usesSdk(manifest);
-  const jres = await onMain(() => after(javaConfiguration(deviceConfiguration()), (config) => loadResources(apkPath(), config)));
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await onMain(applyDeviceConfiguration);
-  const res = nativeRes(jres);
 
   setAppHost({
-    res, pkg, assetKey, zip,
+    pkg, assetKey, zip,
     splits: install.splits.map((sp) => sp.name),
     setApplicationNightMode: (mode) => setApplicationNightMode(pkg, mode),
     setApplicationLocales: (locales) => setApplicationLocales(pkg, locales),
@@ -227,10 +214,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setManifest(manifest);
   setTargetSdkVersion(target);
 
-  hostWindowManager();
   setDisplayTarget(frame, present);
   useDisplayRotation();
-  mark("resourcesReady"); onStatus("Starting app…");
+  mark("resourcesReady");
   await onMain(() => startActivityThread(!processName));
 }
 
@@ -267,10 +253,9 @@ globalThis.matchMedia?.("(prefers-color-scheme: dark)")
     }).catch(toThread());
   });
 
-const KEYCODE_BACK = 4;
 export function pressBack(): Promise<void> {
   noteInput();
-  return dispatchKey(KEYCODE_BACK);
+  return dispatchKey(keyCodes.get("BACK")!);
 }
 
 /** one frame now, on a vsync outside the display's pacing: a harness stepping a controlled clock.
@@ -285,16 +270,10 @@ export async function testFrame(): Promise<void> {
 /** present the screen again, for a harness sampling it */
 export function redraw(): void { scheduleComposite(); }
 
-let touchDown = 0n;
 /** a touch event to the window under its first pointer, as InputDispatcher delivers it; charged to
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
 export function dispatchTouches(action: number, pointers: readonly TouchPointer[], eventTime = uptimeMillis()): Promise<void> {
   const t0 = performance.now();
   noteInput(); note(Ev.InputIn, action);
-  const now = BigInt(Math.floor(eventTime));
-  if (action === 0) touchDown = now;
-  return dispatchTouch(action, pointers, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
+  return dispatchTouch(action, pointers, BigInt(Math.floor(eventTime))).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
-/** a one-finger touch event */
-export const dispatchPointer = (action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> =>
-  dispatchTouches(action, [{ id: 0, x, y }], eventTime);

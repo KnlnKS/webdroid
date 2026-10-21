@@ -7,8 +7,7 @@ import type { processBroker } from "./processes.ts";
 import type { ParcelData } from "../android/binder.ts";
 import { webData } from "../android/webstorage.ts";
 import { keystoreData } from "../android/keystore.ts";
-import { uriGrantData } from "../android/urigrants.ts";
-import { legacySnapshotData } from "../android/sqlite.ts";
+import { uriGrantData } from "../android/server/urigrants.ts";
 import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
 import { jobData } from "../android/job.ts";
 import { alarmData } from "../android/alarm.ts";
@@ -31,7 +30,7 @@ export type PackageState = {
 };
 /** started in this order and running together: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [
-  alarmData, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, legacyPreferenceData, legacySnapshotData,
+  alarmData, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, legacyPreferenceData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
   broker.files, webData, broker.intents, broker.accounts, exitRecordData, packageConfigData, installData,

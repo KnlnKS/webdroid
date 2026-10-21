@@ -1,20 +1,20 @@
 import { processBroker, type ProcessBroker, type ProcessBootstrap } from "../../../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../../../src/shell/broker-contract.ts";
 import { packages, PackageRecord } from "../../../src/android/packages.ts";
-import { Resources } from "../../../src/android/res.ts";
+import { emptyApk } from "../../../src/android/res.ts";
 import { TV } from "../../../src/android/axml.ts";
 import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
-import { callProxy } from "../../../src/shell/process-port.ts";
+import { callProxy } from "../../../src/shell/rpc.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
 import { ProcessHost, workerControlMethods } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
-import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
+import { visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
@@ -55,7 +55,7 @@ export async function bootstrapOwnership() {
   for (const [i, pkg] of ["test.archive.one", "test.archive.two"].entries()) {
     const path = `/data/app/${pkg}/base.apk`;
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 12000 + i, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), path, 12000 + i, async () => []));
     vfs.mount(path, { size: 64 << 20, read(offset) {
       reads++;
       if (offset === 7) { began(); return new Promise<Uint8Array>(() => {}); }
@@ -118,7 +118,7 @@ export async function endpointOwnership() {
   const names = ["test.endpoint.one", "test.endpoint.two"];
   const entries = names.map((pkg, i) => {
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
     return broker.register(pkg, pkg, 8001 + i);
   });
   let entered!: () => void, killed = false, removed = false;
@@ -195,7 +195,7 @@ export async function cookieOwnership() {
   const broker = processBroker(), pkg = "test.cookies.shared", isolated = "test.cookies.other";
   for (const [i, name] of [pkg, isolated].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
-    packages.set(name, new PackageRecord(root, new Resources(null, {}), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
+    packages.set(name, new PackageRecord(root, emptyApk(), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
   }
   for (const [i, name] of [pkg, pkg, isolated].entries()) broker.register(name, name + ":" + i, 8101 + i);
   const peers = [8102, 8103].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods));
@@ -245,7 +245,7 @@ export async function clockBootstrapOwnership() {
   const broker = processBroker(), pkg = "test.clock.worker", pid = 8201;
   const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   const path = `/data/app/${pkg}/base.apk`;
-  packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
+  packages.set(pkg, new PackageRecord(root, emptyApk(), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
   const clock = createGuestClockPort(pid), start = guestClockControl.now(), wall = wallMillis();
   const { worker, entry } = hosted(broker, pkg, pkg, pid, "clock"), workers = [worker];
@@ -307,11 +307,10 @@ export async function clockBootstrapOwnership() {
 /** a Worker's and its peers' calls on the stores the broker keeps for every process */
 export async function storeOwnership() {
   const broker = processBroker(), pkg = "test.stores.shared", foreign = "test.stores.other";
-  const fileHooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
   broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
-    packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
+    packages.set(name,new PackageRecord(root,emptyApk(),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
   }
   const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.ready(8302,stubEndpoint()); broker.ready(8303,stubEndpoint());
@@ -331,14 +330,14 @@ export async function storeOwnership() {
     const own=await ask("permissions.permissionCheck",pkg,[permission]);
     const foreignDenied=await ask("permissions.permissionGrant",foreign,[permission]) as {error:string};
     const held=packages.get(foreign)!;
-    packages.set(foreign,new PackageRecord(held.root,held.res,held.path,held.uid,held.certificates,{grants:["android.permission.GRANT_RUNTIME_PERMISSIONS"]}));
+    packages.set(foreign,new PackageRecord(held.root,held.apk,held.path,held.uid,held.certificates,{grants:["android.permission.GRANT_RUNTIME_PERMISSIONS"]}));
     await peers[1].endpoint.permissions.permissionGrant(pkg,[extra]);
     const privileged=await ask("permissions.permissionCheck",pkg,[extra]);
     // an older build's preference files become the package's shared_prefs files once, but its platform's
     localStorage.setItem(`wd:prefs:${pkg}:worker`,JSON.stringify({array:["one"],count:{$l:"9"}}));
     localStorage.setItem(`wd:prefs:${pkg}:__system_power`,"{}");
     await ask("files.filePrepare",pkg);
-    const imported=`/data/data/${pkg}/shared_prefs/worker.xml`, xml=new TextDecoder().decode(vfs.files.get(imported));
+    const imported=`/data/data/${pkg}/shared_prefs/worker.xml`, xml=new TextDecoder().decode(vfs.read(imported) ?? undefined);
     const prefs={set:xml.includes('<set name="array"><string>one</string></set>'),long:xml.includes('<long name="count" value="9" />'),
       platform:vfs.exists(`/data/data/${pkg}/shared_prefs/__system_power.xml`),left:localStorage.getItem(`wd:prefs:${pkg}:worker`)};
     vfs.delete(imported);
@@ -352,13 +351,13 @@ export async function storeOwnership() {
     const changedMode = await ask("files.fileSetAttributes",directory,{mode:0o700}) === 0 && ((await peers[0].endpoint.files.fileStat(directory)).value!.mode & 0o7777) === 0o700;
     await broker.files.flush();
     const {PrivateFiles} = await import("../../../src/shell/privatefiles.ts");
-    const restarted = new PrivateFiles(), hooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
+    const restarted = new PrivateFiles();
     let restoredMetadata = false;
     try {
-      vfs.metadata.delete(directory);restarted.attach(8399,vfs);await restarted.prepare(pkg);
+      vfs.rmdir(directory,false);restarted.attach(8399,vfs);await restarted.prepare(pkg);
       const restored = vfs.attributes(directory,true);
       restoredMetadata = restored.uid === packages.get(pkg)!.uid && restored.gid === packages.get(pkg)!.uid && restored.mode === 0o700;
-    } finally {restarted.detach(8399);Object.assign(vfs,hooks);}
+    } finally {restarted.detach(8399);}
     const listed=await ask("files.fileList",`/data/data/${pkg}`) as {value:string[]};
     listed.value.length=0;
     const freshList=await peers[0].endpoint.files.fileList(`/data/data/${pkg}`);
@@ -372,10 +371,10 @@ export async function storeOwnership() {
   }finally{
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
-    for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
+    for(const root of [`/data/data/${pkg}`,`/data/user_de/0/${pkg}`])for(const [path] of [...vfs.entries(root)])vfs.rmdir(path);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
-    await broker.files.flush();Object.assign(vfs,fileHooks);
+    await broker.files.flush();
   }
 }
 
@@ -383,7 +382,7 @@ export async function storeOwnership() {
 export async function pendingDescriptorRights() {
   const broker=processBroker(),pkg="test.pending.rights",pid=8401,path=`/data/data/${pkg}/retained.bin`;
   const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
-  packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
+  packages.set(pkg,new PackageRecord(manifest,emptyApk(),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
   vfs.mkdir("/data/data");
   broker.register(pkg,pkg,pid);
   const {ask,worker}=brokerWorker(broker,pid);
@@ -405,7 +404,7 @@ export async function pointerInputOwnership() {
   const worker=fixtureWorker("pointer"),channel=new MessageChannel(),client=callProxy<PointerCalls>(channel.port1,["pointer","release","samples"]);
   worker.postMessage({port:channel.port2},[channel.port2]);
   const canvases=[1,2].map(()=>{const c=document.createElement("canvas");c.style.cssText="position:fixed;left:0;top:0;width:100px;height:100px";document.body.append(c);return c;});
-  const bindings=canvases.map((canvas,i)=>attachPointerInput(canvas,()=>({width:200,height:200,scrollUnit:128,touchSlop:16,edgeSlop:6,minScalingSpan:40}),
+  const bindings=canvases.map((canvas,i)=>attachPointerInput(canvas,{width:200,height:200,scrollUnit:128,touchSlop:16,edgeSlop:6,minScalingSpan:40},
     (action,pointers)=>client.endpoint.pointer(i+1,action,pointers[0].x,pointers[0].y)));
   const pointer=(i:number,type:string,x:number,y:number)=>canvases[i].dispatchEvent(new PointerEvent(type,{clientX:x,clientY:y,pointerId:i+1}));
   try {
@@ -426,7 +425,7 @@ export async function pointerInputOwnership() {
 export async function workerDiagnosticOwnership() {
   const broker=processBroker(),pkg="test.worker.diagnostics",clients:ReturnType<typeof callProxy>[]=[];
   const root={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
-  packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
+  packages.set(pkg,new PackageRecord(root,emptyApk(),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
   const worker=fixtureWorker("control");
   const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
   try {
@@ -434,14 +433,14 @@ export async function workerDiagnosticOwnership() {
       const entry=broker.register(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
       const client=callProxy<WorkerControl>(channel.port1,workerControlMethods);clients.push(client);
       // a host whose control the fixture Worker serves as `mode` says
-      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
+      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
     const first=await workerSnapshots(broker.processes()),second=await workerSnapshots(broker.processes());
     const profiles=await workerAotProfiles(broker.processes());
     const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
-    const blocked=await visibleWorkerProcesses(broker,30);
+    const blocked=await workerSnapshots([broker.entry(8405)]);
     const stillBlocked=await visibleWorkersAlive(broker,30);
     broker.activities.setForeground(8401);
     const live=await visibleWorkersAlive(broker,1000);
@@ -462,8 +461,8 @@ export async function workerDiagnosticOwnership() {
     const healthy=row(first,8401);
     return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
       phase:failure(first,8404),profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
-      queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
-      retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};
+      queueBlocked:'snapshot' in blocked[0] && !stillBlocked,live,aliveCalls:count.aliveCalls,
+      retained:failure(ended,8401),identity:healthy.snapshot?.identity.pid ?? null};
   } finally {
     broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);

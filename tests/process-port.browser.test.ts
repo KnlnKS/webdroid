@@ -3,7 +3,7 @@ import { chromium } from "playwright";
 import { serveModules } from "./browser.ts";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const server = await serveModules(["src/perf.ts", "src/shell/process-port.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts",
+  const server = await serveModules(["src/perf.ts", "src/shell/rpc.ts", "src/shell/broker-contract.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts",
     "tests/fixtures/browser/fixture-calls.ts"]);
   const browser = await chromium.launch({ headless: true });
   try {
@@ -39,13 +39,14 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     });
     expect(pendingRights).toEqual({pendingRejected:true});
     const result = await page.evaluate(async () => {
-      const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port.ts");
+      const { serveCalls, callError } = await import(location.origin + "/rpc.js") as typeof import("../src/shell/rpc.ts");
+      const { processProxy } = await import(location.origin + "/broker-contract.js") as typeof import("../src/shell/broker-contract.ts");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
       const { fixtureWorker, stubEndpoint } = await import(location.origin + "/fixture-calls.js") as typeof import("./fixtures/browser/fixture-calls.ts");
       const worker = fixtureWorker("parcel");
-      const proxy = processProxy(endpointPorts.port1, fault => fault.javaClass ? Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }) : processError(fault));
+      const proxy = processProxy(endpointPorts.port1, { makeError: fault => fault.javaClass ? Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }) : callError(fault) });
       const empty = { bytes: new Uint8Array(0), objects: [] };
-      const stopCallbacks = serveProcess(callbacks.port1, stubEndpoint({ transact: async () => {
+      const stopCallbacks = serveCalls(callbacks.port1, stubEndpoint({ transact: async () => {
         await proxy.endpoint.cookiesChanged();
         return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
       } }));
@@ -58,7 +59,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
         const failure = await call(3).catch(error => ({ javaClass: error.javaClass, message: error.message }));
         const cloneError = await call(4).catch(error => error.name);
         const hostError = await call(6).catch(error => ({ name:error.name, message:error.message,
-          origin:error.stack.includes("originatingHostFailure"), caller:error.stack.includes("processError") }));
+          origin:error.stack.includes("originatingHostFailure"), caller:error.stack.includes("callError") }));
         const entered = new Promise<void>(resolve => worker.onmessage = () => resolve());
         const pending = call(5).catch(error => error.javaClass);
         await entered;
@@ -77,7 +78,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return endpointOwnership();
     });
     expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true,
-      lifecycle:{read:{pid:3,id:1},dead:{pid:1,id:0},signalOwn:true,signalForeign:true,watcherCleaned:true},
+      lifecycle:{read:{pid:1,id:1},dead:{pid:1,id:0},signalOwn:true,signalForeign:true,watcherCleaned:true},
       fileDescriptors:{opened:true,foreign:-13,written:55,read:{pid:66,id:1},binder:{pid:77,id:1},survivor:{pid:77,id:1}} });
     const cookies = await page.evaluate(async () => {
       const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");

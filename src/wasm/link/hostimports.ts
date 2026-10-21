@@ -1,14 +1,16 @@
 // The functions compiled code imports as "host" (compiler/j2w.ts HOST_IMPORTS): what it asks of the runtime outside Wasm.
 import { MATH_IMPORTS, type HostImport } from "../compiler/j2w.ts";
-import { javaName } from "../compiler/program.ts";
+import { javaName, mid } from "../compiler/program.ts";
 import { SLOT, excMessage, type JavaFrame } from "../compiler/exc.ts";
 import { unresolvedClass } from "../compiler/linkage.ts";
-import { mid } from "../compiler/ids.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
 import { hostInfo } from "./classes.ts";
-import { hostText } from "./members.ts";
+import { hostMembers, hostText } from "./members.ts";
+import { hostReflect } from "./reflect.ts";
+import { hostUnsafe } from "./unsafe.ts";
+import { MInfo, RInfo, UInfo } from "../compiler/info.ts";
 import { hostObject } from "./annotations.ts";
 import { ASYNC } from "./inet.ts";
 import { generateProxy } from "./proxy.ts";
@@ -59,7 +61,8 @@ export function hostImports(w: World): HostImports {
     long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
-    info: (kind: number, a: number, b: number) => hostInfo(w, kind, a, b),
+    info: (kind: number, a: number, b: number) => kind >= MInfo.ExecCount ? hostMembers(w, kind, a, b) : kind >= RInfo.MethodCount ? hostReflect(w, kind, a, b)
+      : kind >= UInfo.FieldGet ? hostUnsafe(w, kind, a, b) : hostInfo(w, kind, a, b),
     text: (kind: number, a: number) => w.javaValue(hostText(w, kind, a)),
     obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(w, a) : w.javaValue(hostObject(w, kind, a, b, filter))),
     annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(w, kind, a, b, filter), null),

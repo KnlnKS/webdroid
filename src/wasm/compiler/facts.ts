@@ -7,7 +7,7 @@ import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts
 import { R as KR } from "./infer.ts";
 import { isFieldAccess, isInstanceInvoke } from "../../jvm/opcodes.ts";
 import { failed } from "./linkage.ts";
-import { STRING } from "./strings.ts";
+import { stringSite } from "./strings.ts";
 import type { MC } from "./method.ts";
 
 const NONE: readonly string[] = [];
@@ -74,7 +74,7 @@ export class MethodFacts {
   }
 
   private analyze(): Facts[] {
-    const mc = this.mc, { instructions, blockAt, first, last, succ } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
+    const mc = this.mc, { instructions, blockAt, first, last, succ, fall: falls } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
     const start = newFacts();
     if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
     entry[0] = start;
@@ -100,7 +100,7 @@ export class MethodFacts {
         for (let i = first[b]; i <= last[b]; i++) this.step(instructions[i], out);
         // a null test (if-eqz, if-nez) refines the facts along its two edges, unless both reach one block
         const test = instructions[last[b]], op = test.op, w = op === 0x38 || op === 0x39 ? mc.typing.use(test.pc, test.a) : -1;
-        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = blockAt[test.pc + test.len];
+        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = falls[b];
         if (taken < 0 || taken === fall) { for (const s of succ[b]) push(s, out); continue; }
         const refined = cloneFacts(out);
         refined.nonNull.add(w);
@@ -121,7 +121,7 @@ export class MethodFacts {
   private ensureTarget(ins: Ins): string | undefined {
     const mc = this.mc;
     if (mc.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) { const name = mc.types.typeName(ins.b); return name === STRING ? undefined : name; }
+    if (ins.op === 0x22) return stringSite(mc.dex, ins) ? undefined : mc.types.typeName(ins.b);
     if (ins.op <= 0x6d) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
@@ -129,7 +129,7 @@ export class MethodFacts {
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {
     const op = ins.op;
-    if (op === 0x22) return this.mc.types.typeName(ins.b) !== STRING; // new-instance
+    if (op === 0x22) return !stringSite(this.mc.dex, ins); // new-instance
     // const-string, const-string/jumbo, const-class, new-array, move-exception
     if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
     // move-object, move-object/from16, move-object/16, check-cast

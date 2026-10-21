@@ -10,6 +10,46 @@ export interface WritableSource extends FileSource {
   truncate(size: number): void;
 }
 export const writable = (source: FileSource | null | undefined): source is WritableSource => !!source && "write" in source;
+/** [start, end) of what a read of `length` at `offset` finds in a source of `size` */
+export const clampRange = (size: number, offset: number, length: number): [number, number] => {
+  const start = Math.max(0, Math.min(size, offset));
+  return [start, Math.min(size, start + Math.max(0, length))];
+};
+
+/** Chunks by key, each loaded once however many read it meanwhile; past `capacity` bytes the least recently
+ *  used go, the newest staying. A chunk deleted while it loads answers that load's readers but is not kept. */
+export class ChunkCache<K> {
+  private readonly held = new Map<K, Uint8Array>();
+  private readonly loading = new Map<K, Promise<Uint8Array>>();
+  private bytes = 0;
+  private readonly capacity: number;
+  constructor(capacity: number) { this.capacity = capacity; }
+  get(key: K, load: () => Promise<Uint8Array>): Promise<Uint8Array> {
+    const held = this.held.get(key);
+    if (held) { this.held.delete(key); this.held.set(key, held); return Promise.resolve(held); }
+    const pending = this.loading.get(key);
+    if (pending) return pending;
+    const loaded: Promise<Uint8Array> = load().then((chunk) => {
+      if (this.loading.get(key) === loaded) { this.loading.delete(key); this.keep(key, chunk); }
+      return chunk;
+    }, (error: unknown) => { if (this.loading.get(key) === loaded) this.loading.delete(key); throw error; });
+    this.loading.set(key, loaded);
+    return loaded;
+  }
+  delete(key: K): void {
+    const held = this.held.get(key);
+    if (held) { this.held.delete(key); this.bytes -= held.length; }
+    this.loading.delete(key);
+  }
+  clear(): void { this.held.clear(); this.loading.clear(); this.bytes = 0; }
+  private keep(key: K, chunk: Uint8Array): void {
+    this.held.set(key, chunk); this.bytes += chunk.length;
+    for (const [old, dropped] of this.held) {
+      if (this.bytes <= this.capacity || old === key) break;
+      this.held.delete(old); this.bytes -= dropped.length;
+    }
+  }
+}
 
 export class BytesFile implements FileSource {
   readonly bytes: Uint8Array;
@@ -21,8 +61,8 @@ export class BytesFile implements FileSource {
   }
 
   read(offset: number, length: number): Uint8Array {
-    const start = Math.max(0, Math.min(this.size, offset));
-    return this.bytes.subarray(start, Math.min(this.size, start + Math.max(0, length)));
+    const [start, end] = clampRange(this.size, offset, length);
+    return this.bytes.subarray(start, end);
   }
 }
 
@@ -36,8 +76,8 @@ export class BlobFile implements FileSource {
   }
 
   async read(offset: number, length: number): Promise<Uint8Array> {
-    const start = Math.max(0, Math.min(this.size, offset));
-    return new Uint8Array(await this.blob.slice(start, start + Math.max(0, length)).arrayBuffer());
+    const [start, end] = clampRange(this.size, offset, length);
+    return new Uint8Array(await this.blob.slice(start, end).arrayBuffer());
   }
 }
 
@@ -51,8 +91,8 @@ export class SliceFile implements FileSource {
   }
 
   read(offset: number, length: number): Uint8Array | Promise<Uint8Array> {
-    const start = Math.max(0, Math.min(this.size, offset));
-    return this.source.read(this.offset + start, Math.min(Math.max(0, length), this.size - start));
+    const [start, end] = clampRange(this.size, offset, length);
+    return this.source.read(this.offset + start, end - start);
   }
 }
 
@@ -84,12 +124,13 @@ export async function readFully(source: FileSource, offset = 0, length = source.
 }
 
 export class RangeFile implements FileSource {
-  readonly url: string; readonly size: number; private readonly chunkSize: number; private readonly maxChunks: number;
-  private readonly chunks = new Map<number, Uint8Array>();
-  private readonly inflight = new Map<number, Promise<Uint8Array>>();
+  readonly url: string; readonly size: number; private readonly chunkSize: number;
+  private readonly chunks: ChunkCache<number>;
   private lastEnd = -1;
 
-  constructor(url: string, size: number, chunkSize = 1 << 20, maxChunks = 32) { this.url = url; this.size = size; this.chunkSize = chunkSize; this.maxChunks = maxChunks; }
+  constructor(url: string, size: number, chunkSize = 1 << 20, maxChunks = 32) {
+    this.url = url; this.size = size; this.chunkSize = chunkSize; this.chunks = new ChunkCache(chunkSize * maxChunks);
+  }
 
   static async open(url: string): Promise<FileSource> {
     const response = await fetch(url, { method: "HEAD" });
@@ -108,8 +149,7 @@ export class RangeFile implements FileSource {
   }
 
   read(offset: number, length: number): Promise<Uint8Array> {
-    const start = Math.max(0, Math.min(this.size, offset));
-    const end = Math.min(this.size, start + Math.max(0, length));
+    const [start, end] = clampRange(this.size, offset, length);
     if (start === end) return Promise.resolve(new Uint8Array(0));
     if (end - start >= this.chunkSize * 8) {
       this.lastEnd = end;
@@ -128,27 +168,10 @@ export class RangeFile implements FileSource {
   }
 
   private chunk(index: number): Promise<Uint8Array> {
-    const cached = this.chunks.get(index);
-    if (cached) {
-      this.chunks.delete(index);
-      this.chunks.set(index, cached);
-      return Promise.resolve(cached);
-    }
-    const pending = this.inflight.get(index);
-    if (pending) return pending;
-    const start = index * this.chunkSize;
-    const end = Math.min(this.size, start + this.chunkSize) - 1;
-    const request = this.range(start, end).then((bytes) => {
-      this.chunks.set(index, bytes);
-      while (this.chunks.size > this.maxChunks) {
-        const oldest = this.chunks.keys().next();
-        if (oldest.done) break;
-        this.chunks.delete(oldest.value);
-      }
-      return bytes;
-    }).finally(() => this.inflight.delete(index));
-    this.inflight.set(index, request);
-    return request;
+    return this.chunks.get(index, () => {
+      const start = index * this.chunkSize;
+      return this.range(start, Math.min(this.size, start + this.chunkSize) - 1);
+    });
   }
 
   private async range(start: number, end: number): Promise<Uint8Array> {

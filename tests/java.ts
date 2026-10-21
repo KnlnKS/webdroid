@@ -1,14 +1,19 @@
 import { readFileSync } from "node:fs";
 import { rt, type JObj } from "../src/jvm/runtime.ts";
-import { classNameOf, scall } from "../src/jvm/natives/jentry.ts";
+import { classNameOf, newObj, scall } from "../src/jvm/natives/jentry.ts";
 import type { AppHost } from "../src/android/apphost.ts";
-import type { Resources } from "../src/android/res.ts";
 
 export { scall } from "../src/jvm/natives/jentry.ts";
 
 /** the Java exception `call` throws, synchronously or as a rejection, as "class: message", or null */
 export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
   .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
+
+/** an AssetFileDescriptor over the whole of a ParcelFileDescriptor served over `bytes` */
+export async function assetFd(bytes: Uint8Array): Promise<JObj> {
+  const { mkPfd } = await import("../src/android/os.ts");
+  return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", await mkPfd(bytes), 0n, BigInt(bytes.length));
+}
 
 /** the JCA engine `cls` (a Cipher, a KeyPairGenerator, ...) for `algo` */
 export const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
@@ -21,9 +26,9 @@ export function fixtureDeadline(ms = 90_000): void {
   }, ms).unref();
 }
 
-/** the AppHost a booted page sets for `pkg`, over its resources */
-export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
-  ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
+/** the AppHost a booted page sets for `pkg` */
+export const testAppHost = ({ pkg }: { pkg: string }): AppHost =>
+  ({ pkg, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */
@@ -45,7 +50,7 @@ export function loadSystemFonts(): Promise<void> {
 /** the device's languages and the text paint classes, as the zygote sets them up: a TS TextView
  *  constructs its TextPaint synchronously */
 async function preloadTextPaint(): Promise<void> {
-  await (await import("../src/android/resnative.ts")).initDeviceLocales();
+  await (await import("../src/android/configuration.ts")).initDeviceLocales();
   await (await import("../src/android/paint.ts")).preloadPaint();
 }
 
@@ -54,9 +59,9 @@ async function preloadTextPaint(): Promise<void> {
  *  TYPE_STRING's data indexing `strings`, which stand in for the package's value pool. */
 export async function fakeStyles(strings: string[], styles: Record<number, [number, number, number][]>) {
   const { Resources, Bag } = await import("../src/android/res.ts");
-  const res = new Resources(null, {});
-  const table = { pkgId: 0x7f, packageIds: () => [0x7f], device: {}, values: { get: (i: number) => strings[i] }, specFlags: () => 0 };
-  res.setApks([{ path: "", table: table as never, zip: {}, lazyEntries: new Map() }]);
+  const { deviceQualifiers } = await import("../src/android/configuration.ts");
+  const table = { pkgId: 0x7f, packageIds: () => [0x7f], values: { get: (i: number) => strings[i] }, specFlags: () => 0 };
+  const res = new Resources([{ table: table as never, zip: {}, lazyEntries: new Map() }], deviceQualifiers());
   for (const [id, entries] of Object.entries(styles)) {
     const sorted = entries.slice().sort((a, b) => a[0] - b[0]);
     res.bagCache.set(+id, new Bag(0, 0, Int32Array.from(sorted, (e) => e[0]), Uint8Array.from(sorted, (e) => e[1]),
@@ -73,18 +78,23 @@ export async function loadPlatform(): Promise<void> {
   globalThis.fetch = (async (url: string) => url === "/vendor/aosp/framework-res.apk"
     ? new Response(readFileSync(new URL("../vendor/aosp/framework-res.apk", import.meta.url))) : fetch(url)) as typeof fetch;
   try { await loadFramework(); } finally { globalThis.fetch = fetch; }
-  const { deviceConfiguration, initDeviceLocales } = await import("../src/android/resnative.ts");
+  const { deviceConfiguration, initDeviceLocales } = await import("../src/android/configuration.ts");
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();
 }
 
-/** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
-export async function appResources(res: import("../src/android/res.ts").Resources, name: string) {
-  const { loadResources, javaConfiguration } = await import("../src/android/resources.ts");
-  const { registerApk } = await import("../src/android/assetmanager.ts");
-  const { deviceConfiguration } = await import("../src/android/resnative.ts");
+/** AOSP's Resources over `archive`, installed at /data/app/`name`.apk beside framework-res, as
+ *  ResourcesManager builds them under the device configuration */
+export async function appResources(archive: import("../src/android/packagearchive.ts").PackageArchive, name: string): Promise<JObj> {
+  const { javaConfiguration } = await import("../src/android/configuration.ts");
+  const { registerPackage } = await import("../src/android/installpackage.ts");
+  const { vcall } = await import("../src/jvm/natives/jentry.ts");
   await loadPlatform();
-  registerApk(`/data/app/${name}.apk`, res);
-  return loadResources(`/data/app/${name}.apk`, await javaConfiguration(deviceConfiguration()));
+  const path = registerPackage(archive, { path: `/data/app/${name}.apk` }).path;
+  const apk = await scall("android/content/res/ApkAssets", "loadFromPath", "(Ljava/lang/String;)Landroid/content/res/ApkAssets;", path);
+  const builder = await newObj("android/content/res/AssetManager$Builder", "()V");
+  await vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
+  return newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
+    await vcall(builder, "build", "()Landroid/content/res/AssetManager;"), await newObj("android/util/DisplayMetrics", "()V"), await javaConfiguration());
 }
 
 type BootedApp = { app: JObj; info: JObj; loaded: JObj };
@@ -97,7 +107,6 @@ let started: Promise<unknown> | null = null;
  *  is asked for. */
 export async function bootApp(record: import("../src/android/packages.ts").PackageRecord, pid = 4321): Promise<JObj> {
   const { packages } = await import("../src/android/packages.ts");
-  const { registerApk } = await import("../src/android/assetmanager.ts");
   const { setProcessIdentity, setProcessName } = await import("../src/android/os.ts");
   const { setAppHost } = await import("../src/android/apphost.ts");
   const { onMain } = await import("../src/android/mainloop.ts");
@@ -108,7 +117,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   let entry = booted.get(record.pkg);
   if (!entry) {
     packages.set(record.pkg, record);
-    registerApk(record.path, record.res);
     // installd's createAppData, as a page's boot does it
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
   }
@@ -119,7 +127,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   if (!started) {
     started = entry = (async () => {
       const { startActivityThread } = await import("../src/android/server/am.ts");
-      const { hostWindowManager } = await import("../src/android/server/wm.ts");
       const { serviceTransport } = await import("../src/android/server/activeservices.ts");
       const { ServiceRecords } = await import("../src/shell/servicerecords.ts");
       // the start state the broker keeps of this realm's services, which no broker holds here
@@ -127,7 +134,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
       serviceTransport.starts = () => starts;
       await loadPlatform();
       await loadSystemFonts();
-      hostWindowManager();
       await onMain(() => startActivityThread(false));
       // bindApplication is a message to the main looper; the Application exists once it ran
       return onMain(async () => {
@@ -168,7 +174,7 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
  *  installed one; its archive is an empty table at /data/app/`pkg`.apk */
 export async function packageRecord(pkg: string, { target = 35, permissions = [] as string[], certificate = 1, application = [] as import("../src/android/axml.ts").XmlNode[] } = {}) {
   const { PackageRecord, packageUid } = await import("../src/android/packages.ts");
-  const { Resources } = await import("../src/android/res.ts");
+  const { emptyApk } = await import("../src/android/res.ts");
   const { TV } = await import("../src/android/axml.ts");
   const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
   const manifest = { name: "manifest", attrs: [attr("package", pkg)], children: [
@@ -176,5 +182,5 @@ export async function packageRecord(pkg: string, { target = 35, permissions = []
     ...permissions.map((name) => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
     { name: "application", attrs: [], children: application },
   ] };
-  return new PackageRecord(manifest, new Resources(null, {}), `/data/app/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
+  return new PackageRecord(manifest, emptyApk(), `/data/app/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
 }

@@ -2,7 +2,7 @@
 // invoke-polymorphic and invoke-custom sites, which box their arguments into an Object[] for the host dispatcher (link/mhandles.ts)
 // and unbox or cast its answer.
 import { T } from "./wasmbin.ts";
-import { ACC, javaName, kindOf, type FieldInfo, type MethodInfo, type Program, descOf, typeName } from "./program.ts";
+import { ACC, javaName, kindOf, descOf, typeName, mid, type FieldInfo, type MethodInfo, type Program } from "./program.ts";
 import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import { BOX, box, unbox } from "./primitives.ts";
 import type { Code } from "./code.ts";
@@ -12,7 +12,6 @@ import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepare
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, canAccess } from "./linkage.ts";
 import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
-import { mid } from "./ids.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
 
 export const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
@@ -42,7 +41,7 @@ export function emitMethodType(cx: Compiler, c: Code, ret: string, params: strin
     cx.constClass(c, typeName(d)); c.arraySet(cx.tData.ref);
   });
   cx.constClass(c, typeName(ret)); c.lget(arr);
-  cx.callMethod(c, cx.prog.resolve(MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`)!);
+  cx.callNamed(c, MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`);
 }
 
 export function emitTypeConstant(mc: MC, index: number): void {
@@ -107,9 +106,9 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
       if (!emitType(cx, c, sig.ret, sig.params, false)) return false;
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
       c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");
-      cx.callMethod(c, prog.resolve("java/lang/invoke/MethodHandles", "lookup", `()L${L};`)!); c.lset(lookup);
+      cx.callNamed(c, "java/lang/invoke/MethodHandles", "lookup", `()L${L};`); c.lset(lookup);
       c.lget(lookup); cx.constClass(c, cls); c.lget(type);
-      cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); return true;
+      cx.callNamed(c, L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`); return true;
     }
     kind = [K.INVOKE_VIRTUAL, K.INVOKE_SUPER, K.INVOKE_DIRECT, K.INVOKE_STATIC, K.INVOKE_INTERFACE][invoke];
     art = BigInt(cx.idOf(m.cls)) << 16n | BigInt(prog.require(m.cls).methods.indexOf(m));
@@ -118,7 +117,7 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
   if (!emitType(cx, c, ret, params, false)) return false;
   const type = c.newLocal(T.anyref), handle = c.newLocal(T.anyref), impl = MH + "Impl";
   c.lset(type); cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(handle).i64(art).i32(kind).lget(type);
-  cx.callMethod(c, prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(handle); return true;
+  cx.callNamed(c, impl, "<init>", `(JIL${MT};)V`); c.lget(handle); return true;
 }
 
 /** Box a DEX polymorphic site for the canonical MethodHandle or VarHandle dispatcher. */

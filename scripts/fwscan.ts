@@ -3,9 +3,10 @@
 import { ACC } from "../src/jvm/dex.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import { loadDexes } from "./dexes.ts";
+import { cli } from "./args.ts";
 import { frameworkSurface } from "./fuzz/catalog.ts";
 
-const [jar = "vendor/aosp/framework.jar", prefix] = process.argv.slice(2);
+const { positionals: [jar = "vendor/aosp/framework.jar", prefix] } = cli("pnpm fwscan [vendor/aosp/framework.jar] [class-name-prefix]", {});
 const dexes = loadDexes(jar);
 
 const surface = frameworkSurface(dexes);

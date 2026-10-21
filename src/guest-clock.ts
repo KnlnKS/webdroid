@@ -1,5 +1,6 @@
 import { processExited } from "./process-exit.ts";
 import { connectClock, serveClock, type ClockBootstrap, type ClockClient } from "./shell/clock-port.ts";
+import { switchValue } from "./switches.ts";
 
 export type GuestTimer = ReturnType<typeof setTimeout> | number;
 
@@ -142,7 +143,7 @@ export class ControlledGuestClock {
 }
 
 const browser = typeof location !== "undefined" && typeof window !== "undefined";
-const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
+const controlledGuestTime = browser && switchValue("testClock") === "controlled";
 const clock = controlledGuestTime
   ? new ControlledGuestClock(performance.now())
   : null;
@@ -158,28 +159,44 @@ let remoteAdvancement = false;
 // HTML timers take a signed 32-bit delay: a longer one (a 30-day retry, a Long.MAX_VALUE wait)
 // would wrap and fire at once, so it waits the longest a timer can instead (~24.8 days)
 export const MAX_TIMER_DELAY = 0x7fffffff;
-export let guestNow = clock ? () => clock.nowMs : realNow;
-// a dead process's timers never fire
-const live = (callback: () => void) => () => { if (!processExited()) callback(); };
-export let setGuestTimeout = clock
-  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(live(callback), delayMs)
-  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(live(callback), Math.min(delayMs, MAX_TIMER_DELAY));
-export let clearGuestTimeout = clock
-  ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
-  : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };
-export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
-/** a timer of the broker's, which plays system_server: no app process's death stops it */
-export const setSystemTimeout = clock
-  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, -1)
-  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
+/** where a realm's guest time and timers come from: the host's clock, the page's controlled one, or a
+ *  Worker's view of the page's over its port */
+type ClockSource = {
+  now(): number; uptime(): number; wall(): number;
+  /** `system`: a timer of the broker's, which plays system_server */
+  schedule(callback: () => void, delayMs: number, system: boolean): GuestTimer;
+  cancel(timer: GuestTimer): void;
+};
 /** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
 export let bootTime = performance.timeOrigin;
+const hostClock: ClockSource = {
+  now: realNow, uptime: () => performance.timeOrigin - bootTime + realNow(), wall: () => Date.now(),
+  schedule: (callback, delayMs) => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY)),
+  cancel: (timer) => realClearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+export let guestNow: () => number;
 /** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */
-export let uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
+export let uptimeMillis: () => number;
 /** CLOCK_REALTIME in milliseconds: the host's, or under a controlled clock the host's at the
  *  clock's start advancing with guest time, as a device's wall clock advances with its uptime */
+export let wallMillis: () => number;
+export let setGuestTimeout: (callback: () => void, delayMs?: number) => GuestTimer;
+/** a timer of the broker's, which plays system_server: no app process's death stops it */
+export let setSystemTimeout: (callback: () => void, delayMs?: number) => GuestTimer;
+export let clearGuestTimeout: (timer: GuestTimer | null | undefined) => void;
+// a dead process's timers never fire
+const live = (callback: () => void) => () => { if (!processExited()) callback(); };
+/** the realm's clock from now on: the exports are the source's own functions, so reading the time costs no more */
+function use(source: ClockSource): void {
+  ({ now: guestNow, uptime: uptimeMillis, wall: wallMillis } = source);
+  setGuestTimeout = (callback, delayMs = 0) => source.schedule(live(callback), delayMs, false);
+  setSystemTimeout = (callback, delayMs = 0) => source.schedule(callback, delayMs, true);
+  clearGuestTimeout = (timer) => { if (timer != null) source.cancel(timer); };
+}
 const wallAtStart = clock ? Date.now() - clock.nowMs : 0;
-export let wallMillis = clock ? () => wallAtStart + clock.nowMs : (): number => Date.now();
+use(clock ? { now: () => clock.nowMs, uptime: () => clock.nowMs, wall: () => wallAtStart + clock.nowMs,
+  schedule: (callback, delayMs, system) => clock.schedule(callback, delayMs, system ? -1 : 0), cancel: (timer) => clock.cancel(Number(timer)) } : hostClock);
+export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
 
 /** The broker transfers data.port with a process bootstrap; process death calls close. */
 export function createGuestClockPort(pid: number): { data: ClockBootstrap; close(): void } {
@@ -198,13 +215,9 @@ export function attachGuestClockPort(data: ClockBootstrap): void {
   remoteAttached = true;
   bootTime = data.bootTime;
   remoteClock = connectClock(data);
-  if (remoteClock) {
-    const client = remoteClock;
-    guestNow = uptimeMillis = () => client.now;
-    wallMillis = () => data.wallAtStart + client.now;
-    setGuestTimeout = (callback, delay = 0) => client.schedule(live(callback), delay);
-    clearGuestTimeout = timer => { if (timer != null) client.cancel(Number(timer)); };
-  }
+  const client = remoteClock;
+  if (client) use({ now: () => client.now, uptime: () => client.now, wall: () => data.wallAtStart + client.now,
+    schedule: (callback, delayMs) => client.schedule(callback, delayMs), cancel: (timer) => client.cancel(Number(timer)) });
 }
 
 const hostYield = (): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, 0));

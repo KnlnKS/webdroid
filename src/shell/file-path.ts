@@ -56,8 +56,8 @@ export function changeFileAttributes(path: string, change: AttributeChange, uid 
     change.gid !== undefined && change.gid !== -1 && change.gid !== current.gid && change.gid !== uid &&
     !(app >= 0 && (change.gid === uid - uid % 100000 + 20000 + app || change.gid === 50000 + app)))) return -E.PERM;
   vfs.setAttributes(p,{...(change.uid !== undefined && change.uid !== -1 ? {uid:change.uid} : {}),
-    ...(change.gid !== undefined && change.gid !== -1 ? {gid:change.gid} : {}),...(change.mode !== undefined ? {mode:change.mode & 0o7777} : {})});
-  if (change.mtime !== undefined) vfs.mtimes.set(p, Math.floor(change.mtime));
+    ...(change.gid !== undefined && change.gid !== -1 ? {gid:change.gid} : {}),...(change.mode !== undefined ? {mode:change.mode & 0o7777} : {}),
+    ...(change.mtime !== undefined ? {mtime:change.mtime} : {})});
   return 0;
 }
 /** fstat(2) of an open file named `path` (null: it has no name now), of st_mode `mode` and `size` bytes */

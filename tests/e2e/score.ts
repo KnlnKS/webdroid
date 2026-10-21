@@ -6,11 +6,11 @@ import { nodeCommand, run } from "../../scripts/node.ts";
 import { loadPng, savePng, hconcat } from "./lib/png.ts";
 import { diffImages } from "./lib/diff.ts";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report.ts";
-import { parseArgs } from "./lib/args.ts";
 import { flowSchemaHash, screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types.ts";
 import { diffTrees } from "./lib/tree.ts";
 import type { FlowRun } from "./capture-webdroid.ts";
-import { E2E_DIR, readJson, runQueue, sha1 } from "./lib/util.ts";
+import { E2E_DIR, readJson, sha1 } from "./lib/util.ts";
+import { runQueue } from "../../scripts/util.ts";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;
@@ -126,7 +126,7 @@ const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
 /** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
  *  loop the other flows' browsers are driven from — and return its printed summary. */
 export async function scoreFlow(app: string): Promise<string> {
-  const { code, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}score.ts`, "--json", app));
+  const { code, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}run.ts`, "--diff", "--json", "--test", app));
   if (code) throw new Error(`scoring ${app} failed: ${stderr || stdout}`);
   return stdout.toString().trimEnd();
 }
@@ -142,9 +142,8 @@ export async function assembleReport(apps: string[], geometry: string): Promise<
   return { out: `${dir}/index.html`, reports };
 }
 
-export async function main(): Promise<void> {
-  const json = process.argv[2] === "--json";
-  const { flows, jobs } = parseArgs(process.argv.slice(json ? 3 : 2), "pnpm e2e --diff");
+/** rescores `flows`' captures, `jobs` at a time, and writes the report; `json`, scores the first in this process and writes its report as JSON */
+export async function score(flows: Flow[], jobs: number, json: boolean): Promise<void> {
   await mkdir(`${E2E_DIR}report`, { recursive: true });
   if (json) {
     const r = await diffFlow(flows[0]);
@@ -158,4 +157,3 @@ export async function main(): Promise<void> {
     console.log(`\nreport: ${out}`);
   }
 }
-if (import.meta.main) await main();

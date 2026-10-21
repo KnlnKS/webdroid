@@ -21,7 +21,7 @@ import { E, ERRSTR, strerror, AT_FDCWD, S_IFMT, S_IFDIR } from "../native/abi.ts
 import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
 import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
-import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
+import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { filePaths, type AttributeChange } from "../shell/file-path.ts";
 import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
 import { javaOpenFd, javaBytesFd, fdFile } from "../native/fs.ts";
@@ -202,8 +202,8 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
   if (!backing || backing.closing) {
     backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, closing: null };
     if (key !== undefined) pfdBackings.set(key, backing);
-    vfs.markVolatile(backing.path);
     vfs.write(backing.path, bytes, false);
+    vfs.markVolatile(backing.path);
   }
   const shared = backing, fd = javaOpenFd(shared.path, 2);
   shared.refs++;
@@ -294,11 +294,10 @@ const timespec = (ms: number): JObj => setDeclared(rt.make("android/system/Struc
   { tv_sec: BigInt(Math.floor(ms / 1000)), tv_nsec: BigInt(Math.round((ms % 1000) * 1e6)) });
 export const FD = "Ljava/io/FileDescriptor;";
 /** a StructStat as libcore's JNI fills one: a file's stat in 4K blocks of 512-byte units, one link */
-function statOf(path: string | null, size: number, mode: number, mtimeMs: number, attributes?: FileAttributes): JObj {
-  const a = attributes ?? (path !== null ? vfs.metadata.get(vfs.norm(path)) : undefined) ?? {...vfs.attributes(path),mode:mode & 0o7777};
+function statOf({ size, mode, mtime: mtimeMs, uid, gid }: FileStat): JObj {
   const seconds = BigInt(Math.floor(mtimeMs / 1000)), time = timespec(mtimeMs);
   return setDeclared(rt.make("android/system/StructStat"), "android/system/StructStat", {
-    st_dev: 0n, st_ino: 0n, st_mode: (mode & ~0o7777) | a.mode, st_nlink: 1n, st_uid: a.uid, st_gid: a.gid, st_size: BigInt(size), st_blksize: 4096n,
+    st_dev: 0n, st_ino: 0n, st_mode: mode, st_nlink: 1n, st_uid: uid, st_gid: gid, st_size: BigInt(size), st_blksize: 4096n,
     st_blocks: (BigInt(size) + 511n) / 512n, st_atime: seconds, st_mtime: seconds, st_ctime: seconds, st_atim: time, st_mtim: time, st_ctim: time,
   });
 }
@@ -324,7 +323,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`fstat(${FD})Landroid/system/StructStat;`]: driven(function* (d: JObj | null): Gen {
       const st = yield* awaited(javaFdStat(fdInt(d)));
       if (!st) throw errno("fstat", E.BADF);
-      return yield* awaited(statOf(st.path, st.size, st.mode, st.mtime, st));
+      return yield* awaited(statOf(st));
     }),
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
       readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target))),
@@ -452,7 +451,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) =>
-      existing("stat", path, (st) => statOf(path, st.size, st.mode, st.mtime, st)),
+      existing("stat", path, (st) => statOf(st)),
     "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
       return after(filePaths(path).fileSetAttributes(path,{mode}), result => { sys("chmod",result); });

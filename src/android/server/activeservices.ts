@@ -10,12 +10,13 @@ import { newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
 import { parceledList, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
-import { appHost } from "../apphost.ts";
+import { runningApp } from "../apphost.ts";
 import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
+import { grantIntentUris$ } from "../urigrants.ts";
 import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
-import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./am.ts";
+import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
 import type { ServiceBinding, ServiceStartAccess } from "../../shell/servicerecords.ts";
 import { procIdentity } from "../../shell/procfs.ts";
@@ -258,6 +259,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
   if (denied) return yield* awaited(mkComponentName("!", denied));
+  yield* grantIntentUris$(t.pkg, intent);
   const bound = yield* withComponent$(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else detached(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground), logUncaught);
@@ -275,7 +277,7 @@ export const activeServiceMethods = {
   "stopService(Landroid/app/IApplicationThread;Landroid/content/Intent;Ljava/lang/String;I)I": driven(function* (_caller: JObj, intent: JObj, resolvedType: string | null) {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return 0;
-    if (yield* denial(t, appHost!.pkg)) return -1;
+    if (yield* denial(t, runningApp().pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
     else { const bound = yield* withComponent$(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
     return 1;

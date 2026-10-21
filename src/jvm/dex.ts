@@ -67,6 +67,22 @@ export interface DexTypes {
   /** annotations for a class_def: the class's own, and per field, method and method PARAMETER; shared, so read-only */
   classAnnotations(def: ClassDef): ClassAnnotations;
 }
+/** the proto and method descriptors of `file`, each built once per proto from the types as `type` spells them */
+export abstract class ProtoTypes implements DexTypes {
+  protected abstract readonly file: DexFile;
+  private descCache: (string | undefined)[] = [];
+  private paramTypeCache: (string[] | undefined)[] = [];
+  private typesCache: ({ params: string[]; ret: string } | undefined)[] = [];
+  abstract type(i: number): string;
+  abstract typeName(i: number): string;
+  abstract classAnnotations(def: ClassDef): ClassAnnotations;
+  protoParamTypes(pi: number): string[] { return this.paramTypeCache[pi] ??= this.file.proto(pi).params.map((t) => this.type(t)); }
+  protoTypes(pi: number): { params: string[]; ret: string } { return this.typesCache[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.file.proto(pi).ret) }; }
+  protoDesc(pi: number): string { return this.descCache[pi] ??= "(" + this.protoParamTypes(pi).join("") + ")" + this.type(this.file.proto(pi).ret); }
+  methodDesc(i: number): string { return this.protoDesc(this.file.methodProto(i)); }
+  methodTypes(i: number): { params: string[]; ret: string } { return this.protoTypes(this.file.methodProto(i)); }
+  methodKey(i: number): string { return this.file.methodName(i) + this.methodDesc(i); }
+}
 
 interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
 
@@ -120,7 +136,7 @@ class PagedCache<T> {
   clear(): void { this.pages.fill(undefined); }
 }
 
-export class DexFile implements DexTypes {
+export class DexFile extends ProtoTypes {
   bytes: Uint8Array; name: string;
   view: DataView;
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
@@ -148,6 +164,7 @@ export class DexFile implements DexTypes {
    *  relative to the CONTAINER, so every dex in one keeps the whole buffer and only the header
    *  moves. That is also why nothing below this constructor needs to know about containers. */
   constructor(bytes: Uint8Array, name = "classes.dex", headerOff = 0) {
+    super();
     this.bytes = bytes; this.name = name;
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const v = this.view;
@@ -309,7 +326,11 @@ export class DexFile implements DexTypes {
     return f;
   }
 
+  protected get file(): DexFile { return this; }
   get methodCount(): number { return this.methodCache.length; }
+  /** method i's proto and name, without keeping a record of the method */
+  methodProto(i: number): number { return this.view.getUint16(this.methodIdsOff + i * 8 + 2, true); }
+  methodName(i: number): string { return this.string(this.view.getUint32(this.methodIdsOff + i * 8 + 4, true)); }
   method(i: number): MethodRef {
     let m = this.methodCache.get(i);
     if (m === undefined) {
@@ -336,31 +357,6 @@ export class DexFile implements DexTypes {
       for (let i = 0; i < this.classDefCount; i++) this.classDefCache.set(this.rawType(this.classDef2Type(i)), i);
     }
     return this.classDefCache.get(descriptor);
-  }
-
-  private descCache: (string | undefined)[] = [];
-  private paramTypeCache: (string[] | undefined)[] = [];
-  methodDesc(i: number): string { return this.protoDesc(this.method(i).proto); }
-  private typesCache: ({ params: string[]; ret: string } | undefined)[] = [];
-  methodTypes(i: number): { params: string[]; ret: string } { return this.protoTypes(this.method(i).proto); }
-  protoTypes(pi: number): { params: string[]; ret: string } {
-    return this.typesCache[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.proto(pi).ret) };
-  }
-  protoDesc(pi: number): string {
-    let d = this.descCache[pi];
-    if (d === undefined) {
-      const p = this.proto(pi);
-      d = this.descCache[pi] = "(" + this.protoParamTypes(pi).join("") + ")" + this.type(p.ret);
-    }
-    return d;
-  }
-  /** without keeping a record of the method */
-  methodKey(i: number): string {
-    const off = this.methodIdsOff + i * 8;
-    return this.string(this.view.getUint32(off + 4, true)) + this.protoDesc(this.view.getUint16(off + 2, true));
-  }
-  protoParamTypes(i: number): string[] {
-    return this.paramTypeCache[i] ??= this.proto(i).params.map((t) => this.type(t));
   }
 
   /** the class_def's header: what the class is, without its members */

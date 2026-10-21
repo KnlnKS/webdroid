@@ -2,11 +2,10 @@
 import { HT, ModuleBuilder, T, ref, refNull, sleb, uleb } from "../compiler/wasmbin.ts";
 import { Code, OP } from "../compiler/code.ts";
 import { methodKinds, type Kinds, type Kind, type JClass, type FieldInfo } from "../compiler/program.ts";
-import { f32bits, f64bits } from "../compiler/consts.ts";
+import { f32bits, f64bits, INIT_DONE, INIT_FAILED } from "../compiler/consts.ts";
 import { Compiler, declareBase, kindVT, type Base } from "../compiler/j2w.ts";
 import { SYSTEM_LOADER } from "./sched.ts";
 import { hasSignatureConstraints } from "./signatures.ts";
-import { INIT_DONE, INIT_FAILED } from "../compiler/exc.ts";
 import { stubKey, kindsType } from "./stubs.ts";
 import type { ClassRt, World } from "./world.ts";
 

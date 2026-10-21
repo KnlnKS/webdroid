@@ -136,4 +136,4 @@ hostService("shortcut", "webdroid/ShortcutService", "android/content/pm/IShortcu
     complete(future, "false"),
   [`createShortcutResultIntent(${S}${SI}I${FUTURE})V`]: (_pkg: string, _si: JObj, _user: number, future: JObj) => complete(future, null),
   ...noops(`enableShortcuts(${S}${LIST}I)V`, `onApplicationActive(${S}I)V`),
-});
+}, { system: true });

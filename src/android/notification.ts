@@ -9,7 +9,7 @@
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, vcall, scall, iof } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
-import { systemResource } from "./resnative.ts";
+import { systemResource } from "./configuration.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
@@ -874,7 +874,7 @@ hostService("notification", "webdroid/NotificationManagerService", "android/app/
     checkCallerIsSameApp(pkg);
     return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");
   },
-}, true);
+}, { system: true, scopedDescriptors: true });
 
 function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");

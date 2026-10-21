@@ -19,7 +19,8 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { bridgeSocket, gzipHeaders, sharedRoute, tcpTarget, type ServeHost } from "./src/shell/serve-routes.ts";
+import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
+import { tcpTarget } from "./src/shell/tcpwire.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
@@ -34,40 +35,19 @@ function proxyTarget(requested: string): string {
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
-/** fetch that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
+/** one exchange that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
 async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
-  for (let hops = 0; ; hops++) {
-    const res = await new Promise<IncomingMessage>((resolve, reject) => {
-      const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
-      if (body) headers["content-length"] ??= String(body.length);
-      const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
-      req.once("error", reject).end(body);
-    });
-    const status = res.statusCode!, location = res.headers.location;
-    if (init.redirect !== "manual" && location && [301, 302, 303, 307, 308].includes(status) && hops < 20) {
-      res.resume();
-      const next = new URL(location, url);
-      if (next.origin !== new URL(url).origin) {
-        // as node's fetch does: credentials stay with the origin they were sent to
-        const headers = new Headers(init.headers);
-        for (const name of ["authorization", "proxy-authorization", "cookie", "host"]) headers.delete(name);
-        init = { ...init, headers };
-      }
-      url = next.href;
-      if (status === 303 || ((status === 301 || status === 302) && init.method === "POST")) {
-        const headers = new Headers(init.headers);
-        for (const name of ["content-length", "content-type", "content-encoding"]) headers.delete(name);
-        init = { ...init, method: "GET", headers, body: undefined };
-      }
-      continue;
-    }
-    const headers = new Headers();
-    for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
-    const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
-    if (empty) res.resume();
-    const response = new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
-    return Object.defineProperty(response, "url", { value: url });
-  }
+  const res = await new Promise<IncomingMessage>((resolve, reject) => {
+    const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
+    if (body) headers["content-length"] ??= String(body.length);
+    const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
+    req.once("error", reject).end(body);
+  });
+  const status = res.statusCode!, headers = new Headers();
+  for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
+  const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
+  if (empty) res.resume();
+  return new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -100,12 +80,6 @@ type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Re
 const ROUTES: [RegExp, Route][] = [
   // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
   [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache" })],
-  [/^\/webview-origin$/, (_, url) => {
-    if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
-    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
-    // a browser resolves every *.localhost name to this loopback server, each its own site
-    return Response.json(`${url.protocol}//*.localhost:${url.port}`);
-  }],
   ...Object.values(WORKER_SCRIPTS).map(({ url, entry }): [RegExp, Route] => [new RegExp(`^${url.replaceAll(".", "\\.")}$`), () => workerScript(entry)]),
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
   // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
@@ -138,10 +112,11 @@ const ROUTES: [RegExp, Route][] = [
 const webRelay = new WebRelay();
 const host: ServeHost = {
   bridge: (request, id) => webRelay.call(request, id),
-  dnsLookup: (name) => dns.lookup(name, { all: true }).then(
-    (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
-    (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 })),
-  proxy: { target: proxyTarget, fetchUpstream: (url, init, encoded) => encoded ? fetchEncoded(url, init) : fetch(url, init) },
+  nameExists: (name) => dns.lookup(name, { all: true }).then(() => true, (e: { code?: string }) => e.code === "ENOTFOUND" || e.code === "ENODATA" ? false : null),
+  // a browser resolves every *.localhost name to this loopback server, each its own site
+  webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
+    ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
+  proxy: { target: proxyTarget, fetchEncoded },
 };
 export function devServer(): Plugin {
   return {
@@ -164,8 +139,9 @@ export function devServer(): Plugin {
         if (!url) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
         // a socket's error (a frame past the size limit) closes it, which its relay ends with
         const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
+        const header = (name: string) => req.headers[name] as string | undefined;
         if (url.pathname === "/webview-socket") {
-          const id = bridgeSocket(url, req.headers.origin);
+          const id = bridgeSocket(url, header);
           if (id === null) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
           return upgrade((ws) => {
             webRelay.open(id, ws);
@@ -173,8 +149,10 @@ export function devServer(): Plugin {
             ws.once("close", () => webRelay.close(id, ws));
           });
         }
+        if (url.pathname !== "/udp" && url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+        // a WebSocket skips CORS: a page of any site open in the browser could otherwise use this machine's network
+        if (!ownPage(url, header)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
         if (url.pathname === "/udp") return upgrade(relayUdp);
-        if (url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
         const target = tcpTarget(url);
         if (typeof target === "string") return void socket.end(`HTTP/1.1 400 Bad Request\r\n\r\n${target}`);
         upgrade((ws) => relayTcp(ws, target));

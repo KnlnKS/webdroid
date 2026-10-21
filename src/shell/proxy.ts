@@ -1,7 +1,8 @@
 import { htmlAttribute, webDocument } from "./webhtml.ts";
 import { webScript } from "./webscript.ts";
 import { isGuestHost } from "../native/net-address.ts";
-import type { BridgeCall } from "./webpage/protocol.ts";
+import type { BridgeCall, BridgeReply, WebResponse } from "./webpage/protocol.ts";
+import { failedAnswer, fromProxyHeaders, parseProxyQuery, writeAnswer } from "./webpage/proxywire.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
@@ -14,10 +15,16 @@ export function sandboxDocument(request: Request, response: Response): Response 
   return response;
 }
 
-interface ProxyOptions {
+export interface ProxyOptions {
   target?: (requested: string) => string;
+  /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
+  reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
-  fetchUpstream?: (url: string, init: RequestInit, encoded: boolean) => Promise<Response>;
+  /** the upstream fetch, which follows a redirect unless told otherwise: the global one by default */
+  fetch?: (url: string, init: RequestInit) => Promise<Response>;
+  /** one exchange whose body stays as the server encoded it, for a device that asked for an encoding and
+   *  decodes it itself; without it (a Worker's fetch decodes), the device gets the body decoded */
+  fetchEncoded?: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 /** The class of an upstream fetch failure, so the Java side can throw what a socket would. */
@@ -37,34 +44,34 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
 
 async function proxied(request: Request, options: ProxyOptions): Promise<Response> {
   if (request.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
-  const query = new URL(request.url).searchParams;
-  const requested = query.get("url"), frame = query.get("frame") === "1";
-  const manual = query.get("manual") === "1", isolated = query.get("webview") === "1";
-  if (!requested || !/^https?:\/\//.test(requested)) return new Response("bad url", { status: 400 });
+  const query = parseProxyQuery(new URL(request.url).searchParams);
+  if (!query) return new Response("bad url", { status: 400 });
+  const { url: requested, manual, bridge, webview: isolated } = query, frame = !!query.frame;
   const url = options.target?.(requested) ?? requested;
   try {
-    const headers = new Headers();
-    request.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });
+    const headers = fromProxyHeaders(request.headers);
     // a media element sets no headers of its own: the device's travel in `headers`, and its Range is the element's
-    for (const [name, value] of JSON.parse(query.get("headers") ?? "[]") as [string, string][]) headers.set(name, value);
+    for (const [name, value] of query.headers ?? []) headers.set(name, value);
     const range = request.headers.get("range");
     if (range && !headers.has("range")) headers.set("range", range);
-    const encoded = !frame && !isolated && headers.has("accept-encoding");
-    const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+    // only a manual answer names the encoding (a media element decodes none), so its redirects are the device's to follow
+    const encoded = manual && !!options.fetchEncoded && !frame && !isolated && headers.has("accept-encoding");
+    const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
     /** the WebView's process answering `call`: its WebResourceResponse, or null for none */
     const bridged = async (call: BridgeCall): Promise<Response | null> => {
       const response = await options.bridgeCall(new Request(new URL(`/webview-call?id=${encodeURIComponent(bridge!)}`, request.url), {
         method: "POST", signal: request.signal, body: JSON.stringify(call),
       }));
       if (!response.ok) throw new Error("WebView request callback unavailable");
-      const reply = await response.json() as { error?: string; value?: { body: string; status: number; reason: string; headers: Record<string, string> } };
-      if (reply.error) throw new Error(reply.error);
-      if (!reply.value) return null;
-      const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
+      const reply = await response.json() as BridgeReply<WebResponse | null>;
+      if ("error" in reply) throw new Error(reply.error);
+      const value = "value" in reply ? reply.value : null;
+      if (!value) return null;
+      const empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
       return new Response(empty ? null : Uint8Array.fromBase64(value.body), { status: value.status, statusText: value.reason, headers: value.headers });
     };
-    let intercepted = bridge && query.get("intercept") === "1"
-      ? await bridged({ kind: "request", url, method: request.method, main: frame && query.get("sub") !== "1", headers: Object.fromEntries(headers) }) : null;
+    let intercepted = bridge && query.intercept
+      ? await bridged({ kind: "request", url, method: request.method, main: query.frame === "main", headers: Object.fromEntries(headers) }) : null;
     // the device's own address: the WebView's process serves it, and nothing else unless a remap
     // (adb reverse's role) names a host server
     if (!intercepted && url === requested && isGuestHost(new URL(url).hostname)) {
@@ -72,13 +79,14 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
         body: body && new Uint8Array(body).toBase64() }) : null;
       if (!intercepted) throw new Error(`ECONNREFUSED: nothing listens at ${new URL(url).host}`);
     }
+    if (!intercepted && options.reachable && !options.reachable(new URL(url).hostname)) throw new Error(`ECONNREFUSED: ${new URL(url).host} is not reachable from this server`);
     const init: RequestInit = {
       method: request.method, headers,
       // buffered: a redirect (307/308) must replay the body, which a stream cannot
       body,
       redirect: manual ? "manual" : "follow",
     };
-    const upstream = intercepted ?? await (options.fetchUpstream?.(url, init, encoded) ?? fetch(url, init));
+    const upstream = intercepted ?? await (encoded ? options.fetchEncoded! : options.fetch ?? fetch)(url, init);
     const contentType = upstream.headers.get("content-type") ?? "";
     const html = !!(frame && upstream.body && /^text\/html/i.test(contentType));
     const script = !!(isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(contentType));
@@ -87,23 +95,12 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       if (name === "content-length" && (upstream.headers.has("content-encoding") || html || script)) return;
       if (!DROP.test(name) && !(frame && DROP_FRAME.test(name))) out.set(name, value);
     });
-    // A server may drop Content-Length from a streamed response; URLConnection restores this value.
-    if (out.has("content-length")) out.set("x-wd-content-length", out.get("content-length")!);
-    out.set("access-control-allow-origin", "*");
-    out.set("x-wd-final-url", upstream.url || url);
-    // a browser hides Set-Cookie from fetch, so the values travel under our own name
-    const cookies = upstream.headers.getSetCookie();
-    if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
-    if (manual) {
-      out.set("x-wd-status", String(upstream.status));
-      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-        out.set("x-wd-status-text", upstream.statusText);
-        out.delete("content-length");
-        out.delete("x-wd-content-length");
-        return new Response(null, { headers: out });
-      }
-    }
-    if (encoded && upstream.headers.has("content-encoding")) out.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
+    // the client's fetch would follow a redirect itself (or, told not to, see an opaque one): a manual one is an empty answer
+    const redirect = manual && [301, 302, 303, 307, 308].includes(upstream.status);
+    if (redirect) out.delete("content-length");
+    writeAnswer(out, { finalUrl: upstream.url || url, setCookie: upstream.headers.getSetCookie(), status: manual ? upstream.status : undefined,
+      statusText: redirect ? upstream.statusText : undefined, length: out.get("content-length"), encoding: encoded ? upstream.headers.get("content-encoding") : null });
+    if (redirect) return new Response(null, { headers: out });
     if (html) {
       out.set("content-type", "text/html; charset=utf-8");
       if (isolated) { out.delete("etag"); out.delete("last-modified"); }
@@ -118,7 +115,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
   } catch (error) {
     if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${htmlAttribute(String(error))}">`,
       { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
-    return new Response(`proxy error: ${error}`, { status: 502, headers: { "x-wd-error": failureKind(error) } });
+    return failedAnswer(failureKind(error), String(error));
   }
 }
 

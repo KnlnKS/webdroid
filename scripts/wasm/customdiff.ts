@@ -2,7 +2,7 @@
 // MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: pnpm wasm customdiff
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { ACC, Program } from "../../src/wasm/compiler/program.ts";
@@ -159,7 +159,7 @@ const loop = { ...hostLoop, due: () => (forceAdmission && admissionTurns < 32) |
   if (forceAdmission && admissionTurns < 32) admissionTurns++;
   return hostLoop.yield(soon);
 } };
-const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
+const w = world([dex, ...jars], { loop }), hit: string[] = [];
 const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m => decodeInstructions(m.dex.code(m.codeOff).insns));
 const kinds = new Set(constants.filter(i => i.name === "const-method-handle").map(i => w.prog.require("Mc").dex!.methodHandle(i.b).type));
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
@@ -177,7 +177,7 @@ const dyn = w.prog.require("Dyn").methods.find(m => m.name === "constants")!;
 const customIndex = decodeInstructions(dyn.dex.code(dyn.codeOff).insns).find(i => i.name.startsWith("invoke-custom"))!.b;
 if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,methodType,class,methodType,handle") throw new Error("bootstrap reference ordering changed");
 {
-  const probe = world([dex, ...jars], { natives }), fields = probe.prog.require("Vh").fields, id = probe.idOf("Vh");
+  const probe = world([dex, ...jars]), fields = probe.prog.require("Vh").fields, id = probe.idOf("Vh");
   const info = probe.host.info;
   let calls = 0;
   probe.host.info = (...args: [number, number, number]) => { calls++; return info(...args); };
@@ -245,7 +245,7 @@ if (bridgeCounts.inst !== 0 || !bridgeCounts.tDirectAdapt || !bridgeCounts.tDire
 console.log(`direct bridge calls: ${JSON.stringify(bridgeCounts)} (work counts, no timing claim)`);
 // Actual DEX definitions in sibling namespaces must keep their Class identities through constants and polymorphic calls.
 {
-  const tier = world(new Program([], program(jars)), { natives, loop });
+  const tier = world(new Program([], program(jars)), { loop });
   await startProcess(tier);
   const loaders = [tier.prog.newLoader(tier.prog.boot, null), tier.prog.newLoader(tier.prog.boot, null)];
   for (const loader of loaders) tier.addDexes(loadDexes(dex), loader);
@@ -331,7 +331,7 @@ async function checkDeferredSignatures(): Promise<void> {
   vfs.mount(signaturePath, new BytesFile(new Uint8Array(readFileSync(dex))));
   {
     let loads = 0;
-    const tier = world(new Program(loadDexes(dex), program(jars)), { natives, dexes: async path => {
+    const tier = world(new Program(loadDexes(dex), program(jars)), { dexes: async path => {
       if (path !== signaturePath) return undefined;
       loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
     } });

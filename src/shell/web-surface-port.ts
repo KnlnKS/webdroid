@@ -1,6 +1,6 @@
 import { domWebSurface, type WebSurface, type SurfaceStyle, type FrameAnnouncement } from "./web-surface.ts";
 import type { RendererReady, RendererTask } from "./webpage/protocol.ts";
-import { callProxy, duplex, methodsOf, processError, serveCalls } from "./process-port.ts";
+import { callProxy, duplex, methodsOf, serveCalls } from "./rpc.ts";
 
 /** a surface's DOM as the process it belongs to drives it, naming frames by the ids their announcements gave */
 type SurfaceCalls = { style(value: SurfaceStyle): void; load(url: string): void; watch(bridge: string): void; unwatch(bridge: string): void;
@@ -15,7 +15,7 @@ function remoteSurface(port: MessagePort, retired: () => void): WebSurface {
   const watches = new Map<string,(event:FrameAnnouncement)=>void>();
   let closed = false;
   const owner = duplex<SurfaceView, SurfaceCalls>(port, { ready: event => { if (event.data.bridge) watches.get(event.data.bridge)?.(event); } },
-    surfaceMethods, surfaceMethods, () => { closed = true; watches.clear(); retired(); }, { open: (...args) => [args[4]] });
+    surfaceMethods, { notifications: surfaceMethods, onClose: () => { closed = true; watches.clear(); retired(); }, transfer: { open: (...args) => [args[4]] } });
   const send = <K extends keyof SurfaceCalls>(method: K, ...args: Parameters<SurfaceCalls[K]>) => {
     if (!closed) (owner.endpoint[method] as (...args: Parameters<SurfaceCalls[K]>) => void)(...args);
   };
@@ -38,8 +38,8 @@ function remoteSurface(port: MessagePort, retired: () => void): WebSurface {
 export function sendWebSurfaces(port: MessagePort) {
   let closed = false;
   const surfaces = new Set<WebSurface>();
-  const page = callProxy<SurfacesCalls>(port, ["create"], ["create"], processError,
-    () => { closed = true; for (const surface of surfaces) surface.remove(); }, { create: surface => [surface] });
+  const page = callProxy<SurfacesCalls>(port, ["create"], { notifications: ["create"],
+    onClose: () => { closed = true; for (const surface of surfaces) surface.remove(); }, transfer: { create: surface => [surface] } });
   function create(): WebSurface {
     if (closed) throw new Error("WebView process owner closed");
     const channel = new MessageChannel();
@@ -79,11 +79,11 @@ function receiveSurface(port: MessagePort, layer: HTMLElement, retired: () => vo
       else surface.open(frame.frame, origin, bridge, task, answer);
     },
     replace(id, url) { const frame = frames.get(id); if (frame) surface.replace(frame.frame, url); },
-  }, ["ready"], ["ready"], () => {
+  }, ["ready"], { notifications: ["ready"], onClose: () => {
     closed = true;
     for (const end of watches.values()) end();
     watches.clear(); frames.clear(); surface.remove(); retired();
-  });
+  } });
   return app.close;
 }
 

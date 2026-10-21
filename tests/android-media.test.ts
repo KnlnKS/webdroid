@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "vite-plus/test";
 import { readFileSync } from "node:fs";
-import { bootApp, packageRecord, thrown } from "./java.ts";
+import { assetFd, bootApp, packageRecord, thrown } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
 import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
@@ -8,7 +8,6 @@ import { newObj, scall, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry
 import { lambda } from "../src/jvm/natives/jlambda.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { onMain } from "../src/android/mainloop.ts";
-import { mkAssetFd } from "../src/android/resnative.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { useAudioOut, type AudioOut } from "../src/android/audio-output.ts";
 import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec.ts";
@@ -178,7 +177,7 @@ describe("sound-pool", () => {
     const pool = await newObj("android/media/SoundPool", "(III)V", 4, 3, 0);
     const listener = loadListener();
     await vcall(pool, "setOnLoadCompleteListener", "(Landroid/media/SoundPool$OnLoadCompleteListener;)V", listener);
-    const id = await vcallAsync(pool, "load", "(Landroid/content/res/AssetFileDescriptor;I)I", await mkAssetFd(new Uint8Array(7)), 1);
+    const id = await vcallAsync(pool, "load", "(Landroid/content/res/AssetFileDescriptor;I)I", await assetFd(new Uint8Array(7)), 1);
     expect(id).toBeGreaterThan(0);
     await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
     expect(decoded).toEqual([7]);

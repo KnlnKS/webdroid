@@ -75,4 +75,6 @@ public class W {
     Object[] os = new Object[2]; s += os[0] == null ? 1 : 0;
     return s + a[n - 1];
   }
+  // diff.ts rewrites it to read the String through a copy of its allocation made before the constructor call
+  public static int stringAlias(int n) { return new String(new char[n & 7]).length() * 2; }
 }

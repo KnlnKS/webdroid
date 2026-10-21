@@ -1,12 +1,14 @@
 // Self and inclusive time per function in a V8 CPU profile, optionally for one tap:
-//   pnpm ts scripts/lat/profsum.ts <file.cpuprofile> [top=40] [tap=<n> window=<ms> [marks=<page.cpuprofile>] | from=<ms>] [until=<ms>]
-// A tap window starts at the n-th __wdMarkUp sample (pnpm lat --cpuprofile) and lasts `window` ms; a Worker's
-// profile takes its marks from the page's (`marks`), as both count time on the renderer's one clock;
-// `from` and `until` keep the profile between those ms, such as a launch up to its first frame.
+//   pnpm ts scripts/lat/profsum.ts <file.cpuprofile> [--top 40] [--tap <n> --window <ms> [--marks <page.cpuprofile>] | --from <ms>] [--until <ms>]
+// A tap window starts at the n-th __wdMarkUp sample (pnpm lat --cpuprofile) and lasts --window ms; a Worker's
+// profile takes its marks from the page's (--marks), as both count time on the renderer's one clock;
+// --from and --until keep the profile between those ms, such as a launch up to its first frame.
 import { readFileSync } from "node:fs";
 import type { Profiler } from "node:inspector";
-const [file, ...rest] = process.argv.slice(2);
-const opt = Object.fromEntries(rest.map((a) => a.split("=")));
+import { cli } from "../args.ts";
+const s = { type: "string" } as const;
+const { values: opt, positionals: [file] } = cli("pnpm ts scripts/lat/profsum.ts <file.cpuprofile> [--top 40] [--tap <n> --window <ms> [--marks <page.cpuprofile>] | --from <ms>] [--until <ms>]",
+  { top: s, tap: s, window: s, marks: s, from: s, until: s }, { min: 1 });
 const load = (path: string) => {
   const prof: Profiler.Profile = JSON.parse(readFileSync(path, "utf8"));
   const times: number[] = [];

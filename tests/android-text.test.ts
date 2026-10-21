@@ -7,7 +7,7 @@ import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { newPaint, paintOf } from "../src/android/paint.ts";
 import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res.ts";
 import { TV } from "../src/android/axml.ts";
-import type { TextStyle } from "../src/android/minikin.ts";
+import type { ShapeStyle } from "../src/android/shaping.ts";
 import { withFonts } from "../src/android/fonts.ts";
 
 beforeAll(loadSystemFonts);
@@ -238,7 +238,7 @@ describe("minikin", () => {
       const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size, hyphenated } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
       if (hyphenated) continue; // hyphenation points are measured with their hyphens: textcmp compares these
       // line breaking reads only the size, scale and spacing of a run's style
-      const style = { size, scaleX: 1, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0 } as TextStyle;
+      const style = { size, scaleX: 1, letterSpacing: Math.fround(+spacing * Math.fround(0.05) * size), wordSpacing: 0 } as ShapeStyle;
       const breaks: number[] = [];
       // StaticLayout breaks each paragraph, its newline included, on its own
       for (let start = 0; start < text.length;) {
@@ -256,7 +256,7 @@ describe("minikin", () => {
   });
 
   test("Paint's advances are the reference device's", async () => {
-    const { styleOf, advances } = await import("../src/android/minikin.ts");
+    const { advances } = await import("../src/android/minikin.ts"), { shapeStyle } = await import("../src/android/shaping.ts");
     const rows = readFileSync(new URL("fixtures/textlayout-device.txt", import.meta.url), "utf8").trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => r.split("\t")).map(([, text, , size]) => ({ text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), size: +size }));
     const paint = await newPaint("android/text/TextPaint"), mismatches: string[] = [];
@@ -265,8 +265,8 @@ describe("minikin", () => {
       await vcall(paint, "setTextSize", "(F)V", size);
       await vcall(paint, "setLetterSpacing", "(F)V", Math.fround(+spacing * 0.05));
       const out = new Float32Array(text.length), native = await paintOf(paint);
-      await withFonts(() => advances(styleOf(native), text, 0, text.length, out));
-      out.forEach((a, k) => { if (Math.abs(a - +device[k]) > 0.01) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
+      await withFonts(() => advances(shapeStyle(native), text, 0, text.length, out));
+      out.forEach((a, k) => { if (a !== Math.fround(+device[k])) mismatches.push(`${i} ${spacing} @${k}: ${a} device ${device[k]}`); });
     }
     expect(mismatches).toEqual([]);
   });

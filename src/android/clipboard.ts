@@ -54,4 +54,4 @@ hostService("clipboard", "webdroid/ClipboardService", "android/content/IClipboar
   [`getPrimaryClipSource(${P})Ljava/lang/String;`]: () => null,
   // the platform default: an app reading the clipboard is announced
   "areClipboardAccessNotificationsEnabledForUser(I)Z": () => 1,
-});
+}, { system: true });

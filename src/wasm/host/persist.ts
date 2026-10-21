@@ -1,7 +1,7 @@
 // Compiled app code persisted across launches: the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, header, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot.ts";
+import { APP_VERSION, header, parseAotFile, VERSION, type AotStore, type AppIndex, type UnitHeader } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { compileBytes } from "../link/module.ts";
 import type { DexFile } from "../../jvm/dex.ts";
@@ -131,7 +131,7 @@ export class LaunchRecord {
   /** adds the platform modules among `loaded` and the slots a launch ran of build `id`, and keeps the record if that is more; slots of another build are dropped */
   add(loaded: string[], id: number, ran: number[]): void {
     const before = this.ran(id) ?? new Int32Array(), had = new Set(before), known = new Set(this.files);
-    const modules = loaded.filter((f) => /^[cd]\d+\.wasm$/.test(f)), slots = ran.filter((s) => !had.has(s));
+    const modules = loaded.filter((f) => { const kind = parseAotFile(f)?.kind; return kind === "c" || kind === "d"; }), slots = ran.filter((s) => !had.has(s));
     if (modules.every((f) => known.has(f)) && !slots.length) return;
     const files = [...new Set([...modules, ...this.files])], next = new Int32Array(1 + before.length + slots.length);
     next[0] = id; next.set(before, 1); next.set(slots, 1 + before.length);

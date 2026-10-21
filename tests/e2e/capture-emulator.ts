@@ -8,15 +8,9 @@
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as emu from "./drivers/emulator.ts";
-import { parseArgs } from "./lib/args.ts";
 import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types.ts";
 import { E2E_DIR, readJson, sleep } from "./lib/util.ts";
 import { device as profile } from "../../src/shell/config.ts";
-
-const startup = process.argv.includes("--startup");
-const { flows } = parseArgs(process.argv.slice(2).filter((arg) => arg !== "--startup"), "pnpm e2e --record");
-if (startup && (flows.length !== 1 || flows[0]?.clock !== "live"))
-  throw new Error("--startup requires one selected live flow");
 
 async function ensureDevice(flow: Flow) {
   const devices = (await emu.sh(["devices"], { quiet: true })).split("\n").filter((l) => /\tdevice$/.test(l));
@@ -66,7 +60,7 @@ async function setDeviceClock(flow: Flow): Promise<number> {
   return ms;
 }
 
-async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
+async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>, startup: boolean) {
   const steps = startup ? flow.steps.slice(0, 1) : flow.steps;
   console.log(`\n=== recording ${flow.app} (${steps.length} steps) ===`);
   const clockMs = await setDeviceClock(flow);
@@ -173,7 +167,7 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
   await writeFile(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
 }
 
-async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
+async function recordFlow(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>, startup: boolean) {
   const dir = `${E2E_DIR}golden/${flow.app}`;
   if (startup && existsSync(`${dir}/manifest.json`)) {
     const previous: Manifest = await readJson(`${dir}/manifest.json`);
@@ -182,7 +176,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
   const staged = await mkdtemp(`${dir}.record-`);
   const previous = `${staged}.previous`;
   try {
-    await recordInto(staged, flow, device);
+    await recordInto(staged, flow, device, startup);
     if (existsSync(dir)) await rename(dir, previous);
     try {
       await rename(staged, dir);
@@ -197,13 +191,18 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
   console.log(`  -> ${dir}`);
 }
 
-const device = await ensureDevice(flows[0]!);
-console.log(`device: ${device.width}x${device.height} @${device.densityDpi}dpi  sdk=${device.sdk}`);
-const clock = (await emu.shell("date -u +%s")).trim();
-const drift = Math.abs(+clock * 1000 - PINNED_CLOCK_MS);
-if (drift > 86_400_000 && flows.some((f) => f.clock === "controlled")) {
-  console.warn(`WARN: device clock is ${new Date(+clock * 1000).toISOString()}, not the pinned ` +
-    `${new Date(PINNED_CLOCK_MS).toISOString()}. Re-run boot-emulator.sh or date-bearing screens will drift.`);
+/** records the goldens of `flows` on the attached emulator; `startup`, only the launch of one live flow */
+export async function record(flows: Flow[], startup: boolean): Promise<void> {
+  if (startup && (flows.length !== 1 || flows[0]?.clock !== "live"))
+    throw new Error("--startup requires one selected live flow");
+  const device = await ensureDevice(flows[0]!);
+  console.log(`device: ${device.width}x${device.height} @${device.densityDpi}dpi  sdk=${device.sdk}`);
+  const clock = (await emu.shell("date -u +%s")).trim();
+  const drift = Math.abs(+clock * 1000 - PINNED_CLOCK_MS);
+  if (drift > 86_400_000 && flows.some((f) => f.clock === "controlled")) {
+    console.warn(`WARN: device clock is ${new Date(+clock * 1000).toISOString()}, not the pinned ` +
+      `${new Date(PINNED_CLOCK_MS).toISOString()}. Re-run boot-emulator.sh or date-bearing screens will drift.`);
+  }
+  for (const [index, flow] of flows.entries()) await recordFlow(flow, index === 0 ? device : await ensureDevice(flow), startup);
+  console.log("\ndone. Review the goldens, then commit tests/e2e/golden/.");
 }
-for (const [index, flow] of flows.entries()) await record(flow, index === 0 ? device : await ensureDevice(flow));
-console.log("\ndone. Review the goldens, then commit tests/e2e/golden/.");

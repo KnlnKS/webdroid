@@ -16,6 +16,7 @@ import "../src/natives.ts";
 import { loadDexes } from "./dexes.ts";
 import { corpusApks } from "./apk-corpus.ts";
 import { hasPlatformJars } from "./aosp.ts";
+import { cli } from "./args.ts";
 import { platformDefs } from "./desccheck.ts";
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
@@ -159,8 +160,9 @@ export function overrideBypasses(skipped: Map<string, string[]>, overrides: Reco
 
 if (import.meta.main) {
   if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: pnpm gen-framework");
+  const { values: opts } = cli("pnpm ts scripts/bypass.ts [--corpus] [--write-baseline]", { corpus: { type: "boolean" }, "write-baseline": { type: "boolean" } });
   const defs = platformDefs(), skipped = selfCallsSkipped(defs);
-  if (process.argv.includes("--corpus")) {
+  if (opts.corpus) {
     // an override counts at the class that declares the skipped call and every subclass with a spec
     const wanted = new Map<string, Set<string>>();
     for (const [method, sigs] of skipped) {
@@ -171,7 +173,7 @@ if (import.meta.main) {
   }
   const overrides = JSON.parse(readFileSync(OVERRIDES, "utf8"));
   const found = overrideBypasses(skipped, overrides);
-  if (process.argv.includes("--write-baseline")) writeFileSync(BASELINE, JSON.stringify(found, null, 1) + "\n");
+  if (opts["write-baseline"]) writeFileSync(BASELINE, JSON.stringify(found, null, 1) + "\n");
   for (const line of found) {
     const [method, sig] = line.split(" → "), cls = method.slice(0, method.lastIndexOf(".", method.indexOf("(")));
     console.log(`${line}  (${overrides[cls][sig]} apps)`);

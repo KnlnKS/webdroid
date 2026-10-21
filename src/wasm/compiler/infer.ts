@@ -47,6 +47,8 @@ interface WebAnalysis {
   /** instructions the fixpoint reached (an unreachable one has no operand webs) */
   reached: Uint8Array;
   ranges(visit: (node: number, instruction: number) => void): void;
+  /** the node register `reg` holds before instruction i, -1 for none */
+  holds(i: number, reg: number): number;
 }
 
 /** analysis of the method, or why it was skipped */
@@ -198,7 +200,14 @@ function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boole
       for (const successor of succ[b]) for (const r of liveList[successor]) touch(st[r], last[b]);
     }
   };
-  return { pcToIdx: prepared.indexAt, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges };
+  const holds = (i: number, reg: number) => {
+    let j = i;
+    while (prepared.blockAt[ins[j].pc] < 0) j--;
+    let node = inState[prepared.blockAt[ins[j].pc]]?.[reg] ?? -1;
+    for (; j < i; j++) { const e = effs[j]; if (e.d === reg || e.d + 1 === reg && e.dm & WIDE) node = defNode[j]; }
+    return node;
+  };
+  return { pcToIdx: prepared.indexAt, mask, vreg, used, find, defNode, useNode, useAt, useSlot, paramNode, links, reached, ranges, holds };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -228,6 +237,8 @@ export interface Typing {
   def(pc: number): number;
   /** the web of the parameter held in `reg` on entry, -1 if it is never read */
   param(reg: number): number;
+  /** the web register `reg` holds where the instruction at `pc` starts, -1 for none that is ever read */
+  holds(pc: number, reg: number): number;
 }
 /** Webs by lowest kind bit left in their component: an unconstrained int/float/null constant is an int. Throws when the code cannot be typed. */
 export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, prepared: PreparedMethod): Typing {
@@ -258,7 +269,47 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
     use(pc, reg) { const i = idxOfPc[pc], k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[a.useAt[i] + k]); },
     def(pc) { return web(a.defNode[idxOfPc[pc]]); },
     param(reg) { return web(a.paramNode[reg]); },
+    holds(pc, reg) { return web(a.holds(idxOfPc[pc], reg)); },
   };
+}
+
+/** by the pc of each constructor call `site` names "init": the registers besides the receiver that hold the object it initializes, copies made after the
+ *  allocation `site` names "alloc" (ART's verifier types them as that allocation until the call; running the allocation again makes another) */
+export function uninitAliases(dex: DexFile, code: CodeItem, prepared: PreparedMethod, site: (x: PreparedInstruction) => "alloc" | "init" | undefined): Map<number, number[]> {
+  const { instructions: ins, first, last, succ, hsucc } = prepared, n = code.regs, out = new Map<number, number[]>();
+  // by block: the allocation (its instruction index) each register holds on entry, -1 for none; a handler starts with none
+  const entry: (Int32Array | undefined)[] = new Array(first.length), none = new Int32Array(n).fill(-1), st = new Int32Array(n);
+  const queue = [0], queued = new Uint8Array(first.length);
+  entry[0] = none.slice(); queued[0] = 1;
+  const join = (b: number, from: Int32Array) => {
+    const cur = entry[b];
+    let changed = !cur;
+    if (!cur) entry[b] = from.slice();
+    else for (let r = 0; r < n; r++) if (cur[r] >= 0 && cur[r] !== from[r]) { cur[r] = -1; changed = true; }
+    if (changed && !queued[b]) { queued[b] = 1; queue.push(b); }
+  };
+  const forget = (p: number) => { for (let r = 0; r < n; r++) if (st[r] === p) st[r] = -1; };
+  while (queue.length) {
+    const b = queue.pop()!; queued[b] = 0; st.set(entry[b]!);
+    for (let i = first[b]; i <= last[b]; i++) {
+      const x = ins[i], kind = site(x);
+      if (kind === "alloc") { forget(i); st[x.a] = i; continue; }
+      if (kind === "init") {
+        const p = st[x.regs[0]], copies: number[] = [];
+        if (p < 0) continue;
+        for (let r = 0; r < n; r++) if (st[r] === p && r !== x.regs[0]) copies.push(r);
+        if (copies.length) out.set(x.pc, copies); else out.delete(x.pc);
+        forget(p);
+        continue;
+      }
+      if (x.op >= 0x07 && x.op <= 0x09) { st[x.a] = st[x.b]; continue; } // move-object
+      const { d, dm } = effect(dex, x, i ? ins[i - 1] : null, 0);
+      if (d >= 0) { st[d] = -1; if (dm & WIDE && d + 1 < n) st[d + 1] = -1; }
+    }
+    for (const h of hsucc[b]) join(h, none);
+    for (const s of succ[b]) join(s, st);
+  }
+  return out;
 }
 
 /** the operand and result kinds of each unary op, neg-int (0x7b) to int-to-short (0x8f) */

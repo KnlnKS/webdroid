@@ -3,7 +3,7 @@
 // memory's type (shared or not) is declared by a module made when it is used, never by precompiled code.
 import { Code, OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { SIZE, copyFn, copySwapFn } from "../compiler/copy.ts";
+import { SIZE, copyFn, copySwapFn } from "./copy.ts";
 import { rt } from "../compiler/rtfns.ts";
 import type { ElemKind } from "../compiler/consts.ts";
 import type { Compiler } from "../compiler/j2w.ts";

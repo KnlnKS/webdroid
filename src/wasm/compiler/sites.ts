@@ -1,32 +1,19 @@
 import { registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
-import { Invoke, Pool, invokeKind, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
+import { Pool, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
+import { stringSite } from "./strings.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 /** the name of the symbolic site of `ins` in `m` */
 export const siteKey = (m: MethodInfo, ins: PreparedInstruction): string => `${m.cls}:${m.index}:${ins.pc}`;
 
-export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: SymbolicSite[5]): string {
-  const roles = new Map<number, number>();
-  for (const reg of registersOf(ins)) if (!roles.has(reg)) roles.set(reg, roles.size);
-  const a = roles.get(ins.a), b = roles.get(ins.b);
-  const operands = ins.fmt === "22c" ? [a, b, ins.c]
-    : ins.fmt === "35c" || ins.fmt === "3rc" ? [ins.a, ins.b, ins.regs.map(r => roles.get(r))]
-    : [a, ins.b, ins.c];
-  // The defining caller fixes the DEX references, loader and access context;
-  // normalized register roles preserve aliases and the caller's input order.
-  return JSON.stringify([m.cls, ins.op, operands, output, inputs.map(([reg, kind]) => [roles.get(reg), kind])]);
-}
-
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
-  const op = ins.op, pool = referenceOf(op), dex = m.dex;
-  if (pool < Pool.Type || pool === Pool.CallSite) return false;
-  if (op === 0x22) return dex.rawType(ins.b) !== "Ljava/lang/String;";
-  return !(pool === Pool.Method && invokeKind(op) === Invoke.Direct && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;");
+  const pool = referenceOf(ins.op);
+  return pool >= Pool.Type && pool !== Pool.CallSite && !stringSite(m.dex, ins);
 }
 
 function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): { inputs: SymbolicSite[4]; output: SymbolicSite[5] } {
@@ -59,8 +46,7 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
 
 export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void {
   for (const m of methods) {
-    if (cx.w.aot?.building && !cx.w.opts.build?.appDexes?.has(m.dex)) continue;
-    if (!m.codeOff || cx.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
+    if (!m.codeOff || cx.w.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
     const { prepared, typing } = cx.analysis(m);
     for (const ins of prepared.instructions) {
       if (!typing.reached(ins.pc) || !cx.w.needsSymbolicSite(m, ins)) continue;

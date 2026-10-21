@@ -281,6 +281,7 @@ function textPath(p: NativePaint, bidi: number, text: string, x: number, y: numb
   return after(shapeTextRun(text, 0, text.length, 0, text.length, isRtl(bidi, text), p), (layout) =>
     layoutOutlines(layout, p, x - (p.textAlignN === 1 ? layout.advance / 2 : p.textAlignN === 2 ? layout.advance : 0), y, dst));
 }
+// minikin.ts registers the natives that measure text
 rt.registerJnis(PAINT, {
   "nInit()J": () => handle(new NativePaint()),
   "nInitWithPaint(J)J": (h: bigint) => { const p = new NativePaint(); copyPaint(paintAt(h), p); return handle(p); },

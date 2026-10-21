@@ -9,7 +9,6 @@ import { newObj, vcall, vcallAsync, mainThread, iof, staticField } from "../src/
 import { getDeclared, type JObj } from "../src/jvm/runtime.ts";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { vfs } from "../src/shell/vfs.ts";
-import { mkAssetFd } from "../src/android/resnative.ts";
 import { E } from "../src/native/abi.ts";
 import { Cpu, setA64 } from "../src/native/cpu.ts";
 import { defineHost, lookupHost } from "../src/native/host.ts";
@@ -23,9 +22,9 @@ import { FdScope } from "../src/android/fd-scope.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
-import { scall } from "./java.ts";
+import { assetFd, scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
 import { canonicalFilePaths, renamePath, makeFifo, usePathOwner, type FilePaths } from "../src/shell/file-path.ts";
@@ -523,7 +522,7 @@ describe("file-descriptor", () => {
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");
     const pfd = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(input, "getFD", FD));
     expect(await vcall(pfd, "getFd", "()I")).toBeGreaterThanOrEqual(0);
-    const entry = await mkAssetFd(new Uint8Array([1, 2, 3, 4]));
+    const entry = await assetFd(new Uint8Array([1, 2, 3, 4]));
     const dup = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(entry, "getFileDescriptor", FD));
     const end = await scall("android/system/Os", "lseek", "(Ljava/io/FileDescriptor;JI)J", await vcall(dup, "getFileDescriptor", FD), 0n, 2);
     expect(end).toBe(4n);
@@ -575,7 +574,7 @@ describe("file-input-descriptor", () => {
 
   test("descriptor streams serialize lazy reads and reject invalid input", async () => {
     const path = "/input-descriptor-lazy", bytes = Uint8Array.of(5, 6, 7, 8);
-    vfs.lazyFiles.set(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
+    vfs.mount(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
     const fd = await mkFd(javaOpenFd(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
@@ -720,9 +719,10 @@ describe("rename", () => {
       expect(vfs.read("/data/t/a.txt")).toBeNull();
       expect([...vfs.read("/data/t/b.txt")!]).toEqual([1, 2, 3]);
 
-      vfs.mount("/data/t/lazy.bin", new BytesFile(new Uint8Array([9])));
+      const lazy = new BytesFile(new Uint8Array([9]));
+      vfs.mount("/data/t/lazy.bin", lazy);
       expect(renamePath("/data/t/lazy.bin", "/data/t/moved.bin")).toBe(0);
-      expect(vfs.lazyFiles.has("/data/t/moved.bin")).toBe(true);
+      expect(vfs.node("/data/t/moved.bin")?.content).toBe(lazy);
       expect(vfs.exists("/data/t/lazy.bin")).toBe(false);
     });
 

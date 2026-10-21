@@ -1,11 +1,26 @@
-// Unit modules: what a unit imports, instantiating it, and recording what its code relies on. A unit made elsewhere (a build's module, a worker's) says what it needs in
-// its header (aot.ts UnitHeader); one compiled here, in its Compiler.
+// Unit modules: what a unit imports, instantiating it, and recording what its code relies on. Every unit is described by its header (aot.ts UnitHeader): a unit made
+// elsewhere (a build's module, a worker's) carries it, and one compiled here has it made from its Compiler, whose imports are made from what its compile linked.
 import type { FunctionType } from "../compiler/wasmbin.ts";
-import { Compiler } from "../compiler/j2w.ts";
-import { methodOf } from "../compiler/ids.ts";
+import type { Compiler, FnTrace } from "../compiler/j2w.ts";
+import { methodOf } from "../compiler/program.ts";
 import type { HostContext } from "./hostapi.ts";
 import { VERSION, type UnitHeader } from "./aot.ts";
+import { compiledHeader } from "./aotbuild.ts";
 import type { Built, Clock, World } from "./world.ts";
+
+/** a unit to install (Units.link): what its code needs and relies on, and its module */
+export interface LinkedUnit {
+  head: UnitHeader;
+  module: Uint8Array | WebAssembly.Module;
+  /** the stack traces of its functions, where its module does not hold them (AotRuntime.trace) */
+  traces?: readonly FnTrace[];
+  /** a unit compiled here: its imports (Units.of) and the helpers it defines for first-tier units to share */
+  local?: { imports: Record<string, any>; shared: readonly (readonly [string, FunctionType])[] };
+  /** the modules a unit made elsewhere imports whole that are loaded already (a code module's data modules) */
+  modules?: Record<string, WebAssembly.Exports>;
+  /** the runtime functions whose code it holds, which its slots are not linked for */
+  defines?: (synth: string) => boolean;
+}
 
 export class Units {
   private readonly w: World;
@@ -22,31 +37,42 @@ export class Units {
     const stats = this.w.stats;
     stats.compileMs += performance.now() - clock.start - (stats.compileMs - clock.accounted);
   }
-  /** instantiates a built unit, has `place` put its functions where they are called, then records what their code relies on */
-  instantiate<T>(cx: Compiler | UnitHeader, imports: Record<string, any>, built: Built, slot: number | undefined, clock: Clock, place: (exports: Record<string, any>) => T): T {
+  /** whether a module made elsewhere can run here: made by this version, with every native it imports bound, and, for a unit compiled against this World's Program
+   *  (a worker's), with nothing added to the Program since `epoch` */
+  admits(head: { version?: number; natives?: readonly string[] }, epoch?: number): boolean {
+    return head.version === VERSION && (epoch === undefined || epoch === this.w.epoch) && (!head.natives || head.natives.every((id) => this.bound(id)));
+  }
+  /** installs unit `u`, which `admits` lets in where it was made elsewhere: links what its code names, makes its imports and its instance, has `place` put its
+   *  functions where they are called, and records what its code relies on. Undefined, with nothing instantiated, while a class global it imports is not made yet
+   *  (a class whose module is being built names it); `clock` charges the work to compiling */
+  link<T>(u: LinkedUnit, place: (exports: WebAssembly.Exports) => T, clock?: Clock): T | undefined {
+    const head = u.head, w = this.w;
+    let imports = u.local?.imports;
+    if (!imports) {
+      this.linkHeader(head, u.defines);
+      imports = Object.assign(this.imports(head.natives, head.symbols ?? []), u.modules);
+      if (!this.classImports(head.classImports, imports)) return undefined;
+    }
     // Imports can compile nested units; charge that work once, to its own unit.
-    this.account(clock);
-    const exports = this.w.instantiate(built.bytes, imports).exports;
-    if (cx instanceof Compiler) for (const [key, sig] of cx.sharedOut) if (!this.sharedHelpers.has(key)) { this.sharedHelpers.set(key, sig); this.sharedFns[key] = exports[key] as Function; }
+    if (clock) this.account(clock);
+    const exports = w.instantiate(u.module, imports).exports;
+    if (u.local) for (const [key, sig] of u.local.shared) if (!this.sharedHelpers.has(key)) { this.sharedHelpers.set(key, sig); this.sharedFns[key] = exports[key] as Function; }
     const placed = place(exports);
-    for (const t of built.traces) if (t.m) this.w.stacks.traces.set(t.name, t);
-    if (cx instanceof Compiler) this.w.assumptions.record(cx, slot); else this.recordHeader(cx);
+    if (u.traces) for (const t of u.traces) if (t.m) w.stacks.traces.set(t.name, t);
+    for (const cls of head.allocs) w.allocated.add(cls);
+    w.assumptions.record(head);
     return placed;
   }
-  /** links what the code of a unit made elsewhere names, before it runs: the classes it touches (their modules), and its synthetic functions but those `own` holds */
-  linkHeader(head: Pick<UnitHeader, "touch" | "synth">, own?: (name: string) => boolean): void {
+  /** unit `built`, compiled here by `cx` with `imports` (Units.of): `slot` owns what its code relies on that no method of it does */
+  compiled(cx: Compiler, imports: Record<string, any>, built: Built, slot?: number): LinkedUnit {
+    return { head: compiledHeader(this.w, cx, slot), module: built.bytes, traces: built.traces, local: { imports, shared: cx.sharedOut } };
+  }
+  /** links what the code of a module made elsewhere names, before it runs: the classes it touches (their modules), and its synthetic functions but those it `defines` */
+  linkHeader(head: Pick<UnitHeader, "touch" | "synth">, defines?: (name: string) => boolean): void {
     const w = this.w;
     for (const id of head.touch) if (!w.aot?.touch(id)) w.link(w.nameOf(id));
-    for (const s of head.synth) if (!own?.(s)) w.synthSlot(s);
+    for (const s of head.synth) if (!defines?.(s)) w.synthSlot(s);
   }
-  /** records what the code of a unit made elsewhere relies on, once it is in its slots */
-  recordHeader(head: Pick<UnitHeader, "allocs" | "assumptions" | "missing" | "held">): void {
-    for (const cls of head.allocs) this.w.allocated.add(cls);
-    this.w.assumptions.recordHeader(head);
-  }
-
-  /** whether a unit made elsewhere can run here: made by this version, with every native it imports bound */
-  admits(head: Pick<UnitHeader, "version" | "natives">): boolean { return head.version === VERSION && head.natives.every((id) => this.bound(id)); }
   /** the imports of a unit compiled here */
   of(cx: Compiler): Record<string, any> {
     const imports = this.imports([...cx.nativeImports.keys()], [...cx.symbolicImports.values()].map((v) => v.site));
@@ -54,21 +80,23 @@ export class Units {
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
-  /** the imports of a unit made elsewhere, but for the class globals (`classImports`) */
-  ofHeader(head: Pick<UnitHeader, "natives" | "symbols">): Record<string, any> { return this.imports(head.natives, head.symbols ?? []); }
   private imports(natives: Iterable<string>, symbols: NonNullable<UnitHeader["symbols"]>): Record<string, any> {
     return { rt: this.w.rtImports(), host: this.w.host, n: this.natives(natives), symbolic: this.w.symbolic.symbolicImports(symbols) };
   }
-  /** the class globals compiled code imports from modules the caller has not named: each comes from the module of the class whose id starts its name (code made by another World,
-   *  an app build's or a worker's, names classes only by id) */
-  classImports(required: Iterable<readonly [string, string]>, imports: Record<string, Record<string, unknown>>): void {
+  /** the class globals compiled code imports from modules the caller has not given: each comes from the module of the class whose id starts its name (code made
+   *  by another World, an app build's or a worker's, names classes only by id); whether every one is made */
+  private classImports(required: Iterable<readonly [string, string]>, imports: Record<string, Record<string, unknown>>): boolean {
     const w = this.w, given = new Set(Object.keys(imports));
+    let made = true;
     for (const [module, name] of required) {
       if (given.has(module)) continue;
+      let into = imports[module];
       // module c<id> names one class linked on demand: its holder's exports serve all of it
-      if (module[0] === "c") { imports[module] = w.link(w.nameOf(+module.slice(1))).exports; given.add(module); continue; }
-      (imports[module] ??= {})[name] = w.link(w.nameOf(+name.slice(0, name.indexOf(":")))).exports[name];
+      if (module[0] === "c") into ??= imports[module] = w.link(w.nameOf(+module.slice(1))).exports;
+      else (into ??= imports[module] = {})[name] = w.link(w.nameOf(+name.slice(0, name.indexOf(":")))).exports[name];
+      if (into[name] === undefined) made = false;
     }
+    return made;
   }
   /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
   private bound(id: string): boolean {

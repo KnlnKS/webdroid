@@ -9,7 +9,6 @@ import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
 import { boxLong } from "../jvm/natives/jbox.ts";
 import { installTime } from "./packages.ts";
 import { onMain } from "./mainloop.ts";
-import { runningApp } from "./apphost.ts";
 import { rendererOrigin, rendererStorage } from "../shell/webrenderer.ts";
 import type { StorageOp } from "../shell/webpage/protocol.ts";
 import type { PackageState } from "../shell/packagedata.ts";
@@ -34,7 +33,10 @@ export type WebStorageCalls = {
   webRenderer(origin: string): Promise<string>;
   webStorage(op: StorageOp, origin?: string): Promise<[string, {usage:number;quota:number}|null][]>;
 };
-export const webStorageTransport: {calls:(()=>WebStorageCalls)|null} = {calls:null};
+/** the package's WebView data, which the broker holds */
+export const webStorageTransport: { calls: () => WebStorageCalls } = {
+  calls: () => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); },
+};
 /** Bound to the registered process package, never an identity supplied by a renderer. */
 export function canonicalWebStorage(pkg:string): WebStorageCalls {
   return {
@@ -48,8 +50,7 @@ export function canonicalWebStorage(pkg:string): WebStorageCalls {
     }),
   };
 }
-/** this process's WebView data: its broker's, or its own package's when it holds it */
-const storageCalls = () => webStorageTransport.calls?.() ?? canonicalWebStorage(runningApp().pkg);
+const storageCalls = () => webStorageTransport.calls();
 /** the renderer origin this process's pages of `webOrigin` render on */
 export const webRenderer = (webOrigin: string): Promise<string> => storageCalls().webRenderer(webOrigin);
 

@@ -3,7 +3,7 @@ import { build } from "vite/rolldown";
 import { serve, type Served } from "../scripts/serve.ts";
 
 /** `entries` (from the repository root) bundled for a browser with their shared chunks, each at "/" and its file name
- *  (src/shell/process-port.ts at /process-port.js); what `route` answers comes first, an empty page anywhere else */
+ *  (src/shell/rpc.ts at /rpc.js); what `route` answers comes first, an empty page anywhere else */
 export async function serveModules(entries: string[], route: (request: Request, path: string) => Response | undefined = () => undefined): Promise<Served> {
   const { output } = await build({ input: entries, platform: "browser", write: false, logLevel: "warn" });
   const modules = new Map(output.flatMap((out) => out.type === "chunk" ? [["/" + out.fileName, out.code]] : []));

@@ -1,5 +1,5 @@
 // Records the reference AVD's answers for MotionEvent, VelocityTracker, KeyEvent, KeyCharacterMap
-// and InputDevice (scripts/input-probe.ts); fwtest runs the same dex against our natives.
+// and InputDevice (pnpm gen-framework --only inputProbe); fwtest runs the same dex against our natives.
 import android.view.*;
 import android.graphics.Matrix;
 import android.os.Parcel;

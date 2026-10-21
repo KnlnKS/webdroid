@@ -97,7 +97,7 @@ hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$
   "hasScheduleExactAlarm(Ljava/lang/String;I)Z": (pkg: string) => +canScheduleExact(pkg),
   // no alarm clock is set on this device
   "getNextAlarmClock(I)Landroid/app/AlarmManager$AlarmClockInfo;": () => null,
-});
+}, { system: true });
 // a listener alarm's completion: nothing waits on it here, as no wake lock is held for delivery
 rt.register({ name: "webdroid/AlarmCompleteListener", ctor: class extends JObj {}, sup: "android/app/IAlarmCompleteListener$Stub", methods: {
   "alarmComplete(Landroid/os/IBinder;)V": () => {},

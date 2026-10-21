@@ -197,10 +197,6 @@ export class CompileClient implements CompileService {
     this.busy = undefined;
     if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
     if (m.type === "failed") {
-      if (busy.job.refresh !== undefined) {
-        if (!this.queue.includes(busy.slot)) w.tiers.release(busy.slot);
-        w.tiers.failedRefresh(busy.slot, busy.job.refresh);
-      }
       // the method stays on its first-tier code and does not ask again; a worker that keeps failing has lost track of the numbering
       if (++this.stats.failed > MAX_FAILURES) this.stop(m.message); else this.pump();
       return;

@@ -6,17 +6,18 @@ import { receiveForegroundNotification } from "../android/notification.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
+import { uriGrantCommands } from "../android/server/urigrants.ts";
 import { createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
 import { rt } from "../jvm/runtime.ts";
-import { permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
+import { brokerMethods, permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
-import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
-import { serveCalls } from "./process-port.ts";
+import { hostUi } from "./host-ui.ts";
+import { serveCalls } from "./rpc.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { procIdentity } from "./procfs.ts";
 
@@ -24,10 +25,16 @@ type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };
 /** `calls`, each failing once process `pid` is dead */
 const live = <T extends object>(broker: ProcessBroker, pid: number, calls: T): T => Object.fromEntries(Object.entries(calls as Methods).map(([name, call]) =>
   [name, typeof call !== "function" ? live(broker, pid, call) : (...args: never[]) => { broker.entry(pid); return call.apply(calls, args); }])) as T;
+/** `names` of the object `of` resolves from each call's first argument */
+const forward = <T, N extends keyof T & string>(of: (first: never) => T, names: readonly N[]): Pick<T, N> =>
+  Object.fromEntries(names.map(name => [name, (...args: never[]) => {
+    const target = of(args[0]);
+    return (target[name] as (...args: never[]) => unknown).apply(target, args);
+  }])) as Pick<T, N>;
 
 /** Process `pid`'s command port; every call fails once the process is dead. */
 export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: MessagePort; close(): void } {
-  const caller = broker.entry(pid), { callers } = caller.session, { port1, port2 } = new MessageChannel();
+  const caller = broker.entry(pid), { callers } = caller, { port1, port2 } = new MessageChannel();
   // root and system act for any uid, as checkComponentPermission grants them
   const privileged = caller.uid === 0 || caller.uid === 1000;
   const permissions = canonicalPermissionCommands(broker.permissions, pkg => {
@@ -49,11 +56,10 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const watches = new Map<number, () => void>();
   const calls: Answers<BrokerCalls> = {
     process: {
-      processAlive: target => target === 0 || broker.alive(target),
+      processAlive: target => broker.alive(target),
       processSignal: (target, signal) => broker.signal(pid, target, signal),
       processWatch: (target, token) => {
         watches.get(token)?.(); watches.delete(token);
-        if (target === 0) return;
         watches.set(token, broker.watch(target, () => {
           watches.delete(token);
           if (broker.alive(pid)) unawaited(broker.request(broker.entry(pid), endpoint => endpoint.processDied(token)));
@@ -61,29 +67,17 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       },
       processUnwatch: token => { watches.get(token)?.(); watches.delete(token); },
     },
-    starts: {
-      created: (cls, intent) => starts(cls).created(cls, intent),
-      destroyed: cls => starts(cls).destroyed(cls),
-      start: (cls, intent) => starts(cls).start(cls, intent),
-      deliver: cls => starts(cls).deliver(cls),
-      requested: cls => starts(cls).requested(cls),
-      stop: cls => starts(cls).stop(cls),
-      stopSelf: (cls, id) => starts(cls).stopSelf(cls, id),
-      done: (cls, id, result) => starts(cls).done(cls, id, result),
-      foreground: (cls, on) => starts(cls).foreground(cls, on),
-    },
+    starts: forward(starts, brokerMethods.starts),
     // Intent.filterEquals and replaceExtras are Android framework operations on serialized
     // Intents; the canonical Java owner keeps extras parcelled instead of borrowing a VM.
     pending: {
       create: (pkg, kind, code, flags, intent, intents) => broker.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
       cancel: id => broker.cancelPending(pid, id),
       send: (id, fill) => broker.intents.send(id, fill),
-      operation: id => broker.takePending(pid, id),
-      kind: id => broker.intents.get(id)?.kind ?? null,
-      flags: id => broker.intents.get(id)?.flags ?? 0,
-      creator: id => {
+      take: id => broker.takePending(pid, id),
+      peek: id => {
         const operation = broker.intents.get(id);
-        return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+        return operation && { pkg: operation.pkg, uid: operation.uid, kind: operation.kind, flags: operation.flags };
       },
     },
     files: {
@@ -98,12 +92,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     descriptors: broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid),
     webStorage: canonicalWebStorage(caller.pkg),
     permissions,
-    settings: {
-      get: (table, name) => broker.settings.get(table, name),
-      entries: table => broker.settings.entries(table),
-      put: (table, name, value) => broker.settings.put(table, name, value),
-      ssaidKey: () => broker.settings.ssaidKey(),
-    },
+    settings: forward(() => broker.settings, brokerMethods.settings),
     // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
     // would hold the launching main job while that same process is asked to pause.
     activity: {
@@ -113,11 +102,11 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       finish: (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
       presentation: translucent => broker.activities.presentation(pid, translucent),
     },
-    ui: Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
-      (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
+    uriGrants: uriGrantCommands(() => caller.uid),
+    ui: forward(hostUi, brokerMethods.ui),
     serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
     systemService: async name => {
-      if (!SYSTEM_SERVICES.includes(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+      if (!SYSTEM_SERVICES.has(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
       const handle = await asSystem(() => ownedSystemService(name));
       broker.entry(pid);
       return handle;
@@ -164,7 +153,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       broker.fail(pid, `Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`, deathOf(canonical), canonical);
     },
     displayOrientation: landscape => broker.activities.orientation(pid, landscape),
-    sqlite: request => (caller.session.sqlite ??= createSQLiteSession()).call(request),
+    sqlite: request => (caller.sqlite ??= createSQLiteSession()).call(request),
     transact: request => broker.transact(pid, request),
     service: (pkg, process, request) => broker.service(pid, pkg, process, request),
     contentProvider: (pkg, process, authority) => broker.contentProvider(pid, pkg, process, authority),

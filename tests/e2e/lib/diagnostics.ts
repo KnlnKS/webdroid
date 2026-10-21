@@ -3,7 +3,8 @@ import type { StepRun } from "../capture-webdroid.ts";
 
 const expectedError = (flow: Flow, message: string) => (flow.expectedErrors ?? []).some((part) => message.includes(part));
 
-export function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: string[] } {
+/** a flow's failures and the gaps it observed: its steps' and processes' findings, and `browserErrors` (the driver's), a live flow's as gaps */
+export function diagnostics(flow: Flow, runs: StepRun[], browserErrors: string[] = []): { errors: string[]; gaps: string[] } {
   const errors: string[] = [];
   const gaps: string[] = [];
   const live = flow.clock === "live";
@@ -40,11 +41,7 @@ export function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; ga
       }
     }
   }
+  for (const error of browserErrors) if (!expectedError(flow, error)) (live ? gaps : errors).push(`browser: ${error.slice(0, 300)}`);
   return { errors, gaps };
-}
-
-export function browserFailures(flow: Flow, errors: string[]): string[] {
-  return errors.filter((error) => !expectedError(flow, URL.canParse(error) ? new URL(error).searchParams.get("msg") ?? error : error))
-    .map((error) => `browser: ${error.slice(0, 300)}`);
 }
 

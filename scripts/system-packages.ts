@@ -8,6 +8,7 @@ import { centralDir, entryBytes, localStart } from "../src/zip.ts";
 import { parsePackageArchive } from "../src/android/packagearchive.ts";
 import { verifyApkSignature } from "../src/android/apksignature.ts";
 import { SYSTEM_PACKAGES, SYSTEM_PACKAGE_RELEASE } from "../src/shell/system-packages.ts";
+import { cli } from "./args.ts";
 import type { PackedArchiveIndex } from "../src/shell/packedarchive.ts";
 import { isDexEntry } from "../src/jvm/dex.ts";
 import { writeWhole } from "./generated.ts";
@@ -86,4 +87,4 @@ export async function prepareSystemPackages(
     console.log("[system packages] prepared", spec.pkg);
   }
 }
-if (import.meta.main) await prepareSystemPackages(process.argv[2]);
+if (import.meta.main) await prepareSystemPackages(cli("node scripts/system-packages.ts [cache-dir]", {}).positionals[0]);

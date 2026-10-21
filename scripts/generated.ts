@@ -8,6 +8,7 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
+import { cli } from "./args.ts";
 
 const run = promisify(execFile);
 const mtime = (p: string) => { try { return statSync(p).mtimeMs; } catch { return -1; } };
@@ -75,4 +76,4 @@ export async function ensureGenerated(force = false): Promise<void> {
     (force || !sqlJsBuilt()) && buildSqlJs(),
   ]);
 }
-if (import.meta.main) await ensureGenerated(process.argv.includes("--force"));
+if (import.meta.main) await ensureGenerated(!!cli("node scripts/generated.ts [--force]", { force: { type: "boolean" } }).values.force);

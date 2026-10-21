@@ -51,6 +51,26 @@ type Files = (path: string) => Uint8Array | null;
 /** AOSP's screen size class for a smallest-width in dp */
 export const sizeClass = (swdp: number): number => swdp >= 720 ? 4 : swdp >= 480 ? 3 : swdp >= 320 ? 2 : 1;
 
+/** the configuration a lookup selects under, on ResTable_config's axes */
+export interface Qualifiers {
+  density: number; sdk: number; orientation: number; night: number; wdp: number; hdp: number; swdp: number;
+  lang: string; region: string; size: number; dir: number; uiType: number;
+}
+/** the qualifiers a Configuration's fields select under (AssetManager.setConfiguration's arguments) */
+export function qualifiers(locale: string | null, orientation: number, density: number, swdp: number, wdp: number, hdp: number,
+  screenLayout: number, uiMode: number, sdk: number): Qualifiers {
+  const [lang = "", ...rest] = (locale ?? "").split("-");
+  const region = rest.find((p) => /^[A-Z]{2}$|^\d{3}$/.test(p)) ?? "";
+  return {
+    lang: lang === "und" ? "" : lang, region, orientation, density, swdp, wdp, hdp,
+    size: (screenLayout & 0x0f) || sizeClass(swdp), dir: screenLayout & 0xc0,
+    uiType: uiMode & 0x0f, night: (uiMode & 0x30) === 0x20 ? 1 : 0, sdk,
+  };
+}
+/** what a name lookup reads of the qualifiers: names resolve over one language's chunks */
+type NameScope = Pick<Qualifiers, "lang" | "dir">;
+const DEFAULT_SCOPE: NameScope = { lang: "", dir: 0 };
+
 /** a NUL-terminated UTF-16 field of up to `max` units */
 function utf16z(view: DataView, at: number, max: number): string {
   let s = "";
@@ -70,9 +90,6 @@ export class Arsc {
   /** overlayable name → actor, per package name (ResTable_overlayable_header) */
   readonly overlayables = new Map<string, Map<string, string>>();
   locales = new Set<string>();
-  device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
-    wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang, region: dev.region,
-    size: sizeClass(dev.smallestWidthDp), dir: 0x40, uiType: 1 };
   private profiles = new Map<string, ResourceProfile>();
   private active: ResourceProfile | null = null;
 
@@ -241,8 +258,7 @@ export class Arsc {
     chunk.load = undefined;
   }
 
-  private profile() {
-    const { lang, dir } = this.device;
+  private profile({ lang, dir }: NameScope) {
     if (this.active?.lang !== lang || this.active.dir !== dir) {
       const key = lang + ":" + dir;
       let profile = this.profiles.get(key);
@@ -264,8 +280,8 @@ export class Arsc {
     return undefined;
   }
 
-  private chunksFor(typeId: number, pkgId = this.pkgId): TypeChunk[] {
-    const profile = this.profile();
+  private chunksFor(typeId: number, pkgId: number, scope: NameScope): TypeChunk[] {
+    const profile = this.profile(scope);
     const key = (pkgId << 8) | typeId;
     let chunks = profile.types.get(key);
     if (!chunks) {
@@ -276,11 +292,11 @@ export class Arsc {
     return chunks;
   }
 
-  typeName(typeId: number, entryIdx?: number, pkgId = this.pkgId): string {
-    if (entryIdx === undefined) return this.chunksFor(typeId, pkgId)[0]?.name ?? "?";
-    const names = this.profile().typeNames, id = (pkgId << 24 | typeId << 16 | entryIdx) >>> 0;
+  typeName(typeId: number, entryIdx?: number, pkgId = this.pkgId, scope = DEFAULT_SCOPE): string {
+    if (entryIdx === undefined) return this.chunksFor(typeId, pkgId, scope)[0]?.name ?? "?";
+    const names = this.profile(scope).typeNames, id = (pkgId << 24 | typeId << 16 | entryIdx) >>> 0;
     let name = names.get(id);
-    if (name === undefined) names.set(id, name = this.chunksFor(typeId, pkgId).find((chunk) => chunk.entries.has(entryIdx))?.name ?? "?");
+    if (name === undefined) names.set(id, name = this.chunksFor(typeId, pkgId, scope).find((chunk) => chunk.entries.has(entryIdx))?.name ?? "?");
     return name;
   }
 
@@ -296,72 +312,40 @@ export class Arsc {
 
   /** values a device overlay replaces in every configuration, as fabricated overlays do */
   private overlaid = new Map<number, ResEntry>();
-  overlay(resId: number, value: { type: number; data: number }): void {
-    const key = this.entry(resId)?.key;
-    if (key !== undefined) this.overlaid.set(resId, { key, value });
-  }
+  overlay(resId: number, key: string, value: { type: number; data: number }): void { this.overlaid.set(resId, { key, value }); }
 
-  entry(resId: number, selected?: { density: number }, density = this.device.density): ResEntry | null {
+  /** the entry `resId` selects under `q`, with the density of the configuration that answered in `selected` */
+  entry(resId: number, q: Qualifiers, selected?: { density: number }, density = q.density): ResEntry | null {
     const overlaid = this.overlaid.get(resId);
     if (overlaid) return overlaid;
     const pkgId = resId >>> 24;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
-    const chunks = this.chunksFor(typeId, pkgId);
+    const chunks = this.chunksFor(typeId, pkgId, q);
     let best: ResEntry | null = null;
     let bestScore = -1;
     for (const ch of chunks) {
       const e = ch.entries.get(entryIdx);
       if (!e) continue;
-      const s = this.configScore(ch.config, density);
+      const s = configScore(ch.config, q, density);
       if (s > bestScore) { bestScore = s; best = e; if (selected) selected.density = ch.config.density; }
     }
     return best;
   }
 
-  /** Static parse-time rejection. Night and display axes can both change while the table lives. */
+  /** Static parse-time rejection: what this display selects in neither rotation. Night, locale and
+   *  orientation can change while the table lives. */
   private skipAtParse(c: Config): boolean {
-    const d = this.device;
-    const fitsEitherAxis = (c.wdp <= d.wdp && c.hdp <= d.hdp) || (c.wdp <= d.hdp && c.hdp <= d.wdp);
-    return c.sdk > d.sdk
-      || c.swdp > d.swdp || !fitsEitherAxis
-      || c.size > d.size || (c.uiType !== 0 && c.uiType !== d.uiType);
-  }
-
-  /** Match the current Configuration. Unlike parse-time viability, the current axes are exact. */
-  private skipCurrent(c: Config): boolean {
-    const d = this.device;
-    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || (!!c.region && c.region !== d.region) || (!!c.orientation && c.orientation !== d.orientation)
-      || c.swdp > d.swdp || c.wdp > d.wdp || c.hdp > d.hdp
-      || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
-  }
-
-  private configScore(c: Config, density: number): number {
-    const d = this.device;
-    if (this.skipCurrent(c)) return -1;
-    if (c.night !== 0 && c.night !== (d.night ? 1 : -1)) return -1;
-    let s = 0;
-    if (c.lang) s += 1 << 20;
-    if (c.region) s += 1 << 18;
-    if (c.dir) s += 1 << 19;
-    if (c.swdp) s += (1 << 14) + c.swdp;
-    if (c.wdp || c.hdp) s += (1 << 13) + c.wdp;
-    if (c.size) s += 1 << 12;
-    if (c.orientation) s += 1 << 12;
-    if (c.night !== 0) s += 1 << 10;
-    if (c.uiType) s += 1 << 9;
-    if (c.density) {
-      // prefer closest density ≥ device, then closest below
-      const diff = c.density === density ? 4096 : c.density > density ? 2048 - (c.density - density) / 8 : 1024 - (density - c.density) / 8;
-      s += (1 << 11) + diff / 4096 * 1023;
-    }
-    if (c.sdk) s += c.sdk;
-    return s;
+    const w = Math.round(dev.width / dev.density), h = Math.round(dev.height / dev.density);
+    const fitsEitherAxis = (c.wdp <= w && c.hdp <= h) || (c.wdp <= h && c.hdp <= w);
+    return c.sdk > dev.sdk
+      || c.swdp > dev.smallestWidthDp || !fitsEitherAxis
+      || c.size > sizeClass(dev.smallestWidthDp) || (c.uiType !== 0 && c.uiType !== 1);
   }
 
   /** every entry name of a type → its id, built once per type */
-  names(typeName: string, pkgId = this.pkgId): Map<string, number> {
-    const names = this.profile().names;
+  names(typeName: string, pkgId = this.pkgId, scope = DEFAULT_SCOPE): Map<string, number> {
+    const names = this.profile(scope).names;
     const key = pkgId + ":" + typeName;
     let m = names.get(key);
     if (m) return m;
@@ -370,7 +354,7 @@ export class Arsc {
     // staging type id, which is allocated high. Ascending type id, first name wins, so the
     // finalized id is the one a name resolves to.
     for (const tid of [...(this.packageTypes(pkgId)?.keys() ?? [])].sort((a, b) => a - b)) {
-      for (const ch of this.chunksFor(tid, pkgId)) {
+      for (const ch of this.chunksFor(tid, pkgId, scope)) {
         if (ch.name !== typeName) continue;
         for (const [idx, e] of ch.entries) if (!m.has(e.key)) m.set(e.key, (pkgId << 24) | (tid << 16) | idx);
       }
@@ -379,5 +363,34 @@ export class Arsc {
   }
 
   /** find resource id by type name + entry name */
-  findId(typeName: string, key: string, pkgId = this.pkgId): number { return this.names(typeName, pkgId).get(key) ?? 0; }
+  findId(typeName: string, key: string, pkgId = this.pkgId, scope = DEFAULT_SCOPE): number { return this.names(typeName, pkgId, scope).get(key) ?? 0; }
+}
+
+/** Match the selecting configuration. Unlike parse-time viability, its axes are exact. */
+function skipCurrent(c: Config, d: Qualifiers): boolean {
+  return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || (!!c.region && c.region !== d.region) || (!!c.orientation && c.orientation !== d.orientation)
+    || c.swdp > d.swdp || c.wdp > d.wdp || c.hdp > d.hdp
+    || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
+}
+
+function configScore(c: Config, d: Qualifiers, density: number): number {
+  if (skipCurrent(c, d)) return -1;
+  if (c.night !== 0 && c.night !== (d.night ? 1 : -1)) return -1;
+  let s = 0;
+  if (c.lang) s += 1 << 20;
+  if (c.region) s += 1 << 18;
+  if (c.dir) s += 1 << 19;
+  if (c.swdp) s += (1 << 14) + c.swdp;
+  if (c.wdp || c.hdp) s += (1 << 13) + c.wdp;
+  if (c.size) s += 1 << 12;
+  if (c.orientation) s += 1 << 12;
+  if (c.night !== 0) s += 1 << 10;
+  if (c.uiType) s += 1 << 9;
+  if (c.density) {
+    // prefer closest density ≥ device, then closest below
+    const diff = c.density === density ? 4096 : c.density > density ? 2048 - (c.density - density) / 8 : 1024 - (density - c.density) / 8;
+    s += (1 << 11) + diff / 4096 * 1023;
+  }
+  if (c.sdk) s += c.sdk;
+  return s;
 }

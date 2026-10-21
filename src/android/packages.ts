@@ -1,5 +1,6 @@
 import { attr, attrStr, TV, type XmlNode } from "./axml.ts";
-import { normRV, resString, type Resources } from "./res.ts";
+import { Resources, resString, resolved, type Apk } from "./res.ts";
+import { deviceQualifiers } from "./configuration.ts";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
@@ -51,7 +52,7 @@ function requestedPermissions(root: XmlNode, target: number): Set<string> {
 /** what provisioning gives a system package: its grants and the signatures it presents in place of its own */
 export type Provisioned = { system?: boolean; grants?: Iterable<string>; signatures?: Uint8Array[] | null };
 export class PackageRecord {
-  readonly root: XmlNode; readonly res: Resources; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
+  readonly root: XmlNode; readonly apk: Apk; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
   readonly pkg: string;
   readonly application: XmlNode | null;
   readonly components: Record<ComponentKind, Map<string, XmlNode>> = {
@@ -63,9 +64,9 @@ export class PackageRecord {
   readonly grants: ReadonlySet<string>;
   readonly compatibilityCertificates: Uint8Array[] | null;
 
-  constructor(root: XmlNode, res: Resources, path: string,
+  constructor(root: XmlNode, apk: Apk, path: string,
     uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null }: Provisioned = {}) {
-    this.root = root; this.res = res; this.path = path; this.uid = uid; this.certificates = certificates;
+    this.root = root; this.apk = apk; this.path = path; this.uid = uid; this.certificates = certificates;
     this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures;
     this.pkg = attrStr(root, "package") ?? "";
     this.application = root.children.find((n) => n.name === "application") ?? null;
@@ -76,6 +77,17 @@ export class PackageRecord {
       if (name) this.components[kind].set(qualifyComponent(name, this.pkg), node);
     }
     this.requested = requestedPermissions(root, usesSdk(root).target);
+  }
+
+  private resources: Resources | null = null;
+  /** the package's resources over the framework's, under the device configuration, which
+   *  PackageParser reads the manifest's references through */
+  get res(): Resources {
+    const framework = packages.get("android")?.apk ?? this.apk, q = deviceQualifiers();
+    const r = this.resources ??= new Resources(framework === this.apk ? [this.apk] : [framework, this.apk], q);
+    if (r.apks[0] !== framework) r.setApks([framework, this.apk]);
+    if (r.qualifiers !== q) r.configure(q);
+    return r;
   }
 
   process(node: XmlNode): string {
@@ -93,7 +105,7 @@ export class PackageRecord {
   flag(node: XmlNode | null | undefined, name: string, def: boolean): boolean {
     const value = node ? attr(node, name) : undefined;
     if (!value) return def;
-    return (value.type === TV.REFERENCE ? this.res.resolveRefs(normRV({ t: value.type, d: value.data })).d : value.data) !== 0;
+    return (value.type === TV.REFERENCE ? resolved(this.res, value.type, value.data).d : value.data) !== 0;
   }
   get enabled(): boolean { return this.flag(this.application, "enabled", true); }
   get sdk(): { min: number; target: number } { return usesSdk(this.root); }

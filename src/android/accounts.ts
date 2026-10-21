@@ -11,9 +11,9 @@ import { boxInt } from "../jvm/natives/jbox.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { packages, qualifyComponent, ownedBy, uidPackages } from "./packages.ts";
 import type { AccountKey, AccountStore, StoredAccount } from "../shell/accounts.ts";
-import { attr, attrStr, parseAXML } from "./axml.ts";
+import { attr, attrStr, parseAXML, TV } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
-import { resString } from "./res.ts";
+import { resolved, resString } from "./res.ts";
 import { asSystem, callingIdentity, hostService, type Caller } from "./binder.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
 import { mkComponentName, newIntent } from "./intent.ts";
@@ -27,7 +27,8 @@ function authenticators(): Authenticator[] {
     if (!owner.enabled || attr(node, "enabled")?.data === 0) continue;
     const meta = node.children.find((md) => md.name === "meta-data" && attrStr(md, "name") === "android.accounts.AccountAuthenticator");
     const id = meta && attr(meta, "resource")?.data;
-    const bytes = id ? owner.res.fileOf(id)?.bytes : null;
+    const file = id ? resolved(owner.res, TV.REFERENCE, id) : null;
+    const bytes = file?.t === TV.STRING ? owner.res.tbl(file.pkg << 24)?.files(owner.res.string(file)!) : null;
     if (!bytes) continue;
     const n = parseAXML(bytes), ref = (name: string) => attr(n, name)?.data ?? 0;
     out.push({
@@ -282,7 +283,7 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
     const s = owned(account), renamed = changed(s, (s) => { s.previousName = s.name; s.name = name; });
     yield reply(response, yield* bundle(renamed ? { authAccount: name, accountType: s!.type } : {}));
   }),
-});
+}, { system: true });
 
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
   if (owned(account)) return 0;

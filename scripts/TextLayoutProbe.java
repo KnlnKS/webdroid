@@ -16,7 +16,7 @@ import java.util.Locale;
  *  hyphen edit ends, and "advances case spacing a0 a1 ..." with each character's advance, measured
  *  per paragraph as StaticLayout measures. With args[1], each "weight size" line of that file gives
  *  "widths weight size hinting w0 w1 ..." with getTextWidths of printable ASCII in the default
- *  family at that weight, hinting on and off. Run by `pnpm textcmp --record`. */
+ *  family at that weight, hinting on and off. Run by `pnpm gen-framework --only textLayout`. */
 public class TextLayoutProbe {
   public static void main(String[] args) throws Exception {
     android.os.Looper.prepareMainLooper();

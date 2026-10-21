@@ -1,14 +1,14 @@
 // What a unit is made of: the methods a first call compiles beside the one asked for (`batch`), and the callees and guarded implementations a hot
 // method's second-tier unit takes in (`group`), chosen by how often the first tier saw them run.
-import { ACC, type MethodInfo } from "../compiler/program.ts";
+import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
 import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
-import { mid } from "../compiler/ids.ts";
 import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
-import { HOT_BUDGET } from "../compiler/exc.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
+import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
+import { HOT_BUDGET } from "../compiler/consts.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
 const BATCH = 32;
@@ -20,7 +20,9 @@ const MEGAMORPHIC = 32;
 
 export class Planner {
   private readonly w: World;
-  constructor(w: World) { this.w = w; }
+  /** what the methods' first tier has done, which planning reads */
+  private readonly tiers: Pick<Tiering, "pending" | "asked" | "count">;
+  constructor(w: World, tiers: Pick<Tiering, "pending" | "asked" | "count">) { this.w = w; this.tiers = tiers; }
   /** the implementations of virtual calls are found again: classes were added or the namespace changed */
   forgetImplementations(): void { this.implemented.clear(); this.allocatedIndex = undefined; }
   /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
@@ -36,7 +38,7 @@ export class Planner {
         const t = invokeSite(this.w.prog, c, ins.b, invokeKind(ins.op)).target;
         if (t === "clone" || failed(t) || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
-        if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.install(at) && ts.done) continue;
+        if (ts?.k !== "method" || ts.done || this.tiers.pending(at) || this.w.aot?.provide(at)) continue;
         out.push(t);
       }
     }
@@ -53,8 +55,8 @@ export class Planner {
   }
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
-  group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[]; plan: CallPlan } {
-    const out = [...members], installed = [...members], copies: MethodInfo[] = [], ids = new Set(out.map(mid)), plan = new Map<string, MethodInfo[]>();
+  group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[]; plan: CallPlan } {
+    const out = [m], installed = [m], copies: MethodInfo[] = [], ids = new Set(out.map(mid)), plan = new Map<string, MethodInfo[]>();
     if (!m.codeOff || this.w.intrinsic(m)) return { installed, copies, plan };
     this.noteAllocations(m);
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
@@ -82,8 +84,8 @@ export class Planner {
   private ran(t: MethodInfo): number {
     const slot = this.w.slotOf(t), sl = this.w.slots.method(slot)!;
     // a method that has asked for the second tier has used up a budget, whatever its count since
-    if (this.w.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
-    return sl.done ? this.w.tiers.count(slot) : 0;
+    if (this.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    return sl.done ? this.tiers.count(slot) : 0;
   }
   /** a method's call sites, and the classes it allocates and refers to */
   private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();

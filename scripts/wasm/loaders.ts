@@ -8,9 +8,7 @@ import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { Program, ACC, PlainClass, javaName } from "../../src/wasm/compiler/program.ts";
-import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/exc.ts";
-import { mid } from "../../src/wasm/compiler/ids.ts";
+import { Program, ACC, PlainClass, javaName, mid } from "../../src/wasm/compiler/program.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
 import { jniInit, deref, javaVM } from "../../src/native/jni.ts";
 import { useJniVm, vm as priorJniVm } from "../../src/native/jnivm.ts";
@@ -27,7 +25,7 @@ import type { Code } from "../../src/wasm/compiler/code.ts";
 import { St } from "../../src/wasm/compiler/hostcalls.ts";
 import { HOSTED } from "../../src/wasm/link/hostapi.ts";
 import { wasmEntry } from "../../src/wasm/host/entry.ts";
-import { mountPlatform, natives } from "./harness.ts";
+import { mountPlatform } from "./harness.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { checker } from "./tools.ts";
@@ -35,29 +33,38 @@ import { androidFixture, java, javac, tempDir } from "../java.ts";
 import { archives } from "./loaders-archives.ts";
 import { defaults } from "./loaders-defaults.ts";
 import { nativePaths } from "./loaders-paths.ts";
+import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/consts.ts";
 
 const out = tempDir();
-/** compiles `sources` (against the Android API and `classpath`) and dexes the classes; answers the dex */
-const build = (dir: string, sources: string[], classpath: string[] = []) => {
+/** compiles `sources` (against the Android API and `classpath`), adds the class files `classes` makes, and dexes the classes for `minApi`; answers the dex */
+const build = (dir: string, sources: string[], classpath: string[] = [], { minApi = 26, classes: made = {} }: { minApi?: number; classes?: Record<string, () => Uint8Array> } = {}) => {
   const to = join(out, dir);
   javac(to, sources.map((s) => join(JAVA, s)), { release: 11, classpath, android: true });
-  if (dir === "b") {
-    const p = new Pool(), type = (name: string, descriptor: string) => method(p, 9, name, "()Ljava/lang/invoke/MethodType;", [0x13, ...u2(p.methodType(descriptor)), 0xb0], { stack: 1, locals: 0 });
-    writeFileSync(join(to, "TypeSite.class"), classFile(p, { name: "TypeSite", methods: [type("value", "(LShared;)LShared;"), type("missing", "()LAbsentOptional;")] }));
-  }
-  const classes = readdirSync(to, { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
-  return join(androidFixture({ out: to, classpath, minApi: dir === "b" ? 34 : 26, classes }), "classes.dex");
+  for (const [name, bytes] of Object.entries(made)) writeFileSync(join(to, `${name}.class`), bytes());
+  const classes = readdirSync(to, { recursive: true, encoding: "utf8" })
+    .filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
+  return join(androidFixture({ out: to, classpath, minApi, classes }), "classes.dex");
+};
+/** TypeSite, whose methods load MethodType constants (which javac does not emit): one over Shared, one naming AbsentOptional, which the dex leaves out */
+const typeSite = () => {
+  const p = new Pool(), type = (name: string, descriptor: string) =>
+    method(p, 9, name, "()Ljava/lang/invoke/MethodType;", [0x13, ...u2(p.methodType(descriptor)), 0xb0], { stack: 1, locals: 0 });
+  return classFile(p, { name: "TypeSite", methods: [type("value", "(LShared;)LShared;"), type("missing", "()LAbsentOptional;")] });
 };
 const app = build("app", ["Ldr.java", "Tag.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], [join(out, "app")]);
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], [join(out, "app")]), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")]);
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java",
+  "members1/MemberContract.java", "members1/MemberType.java"], [join(out, "app")]);
+const b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java",
+  "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"],
+  [join(out, "app"), join(out, "a")], { minApi: 34, classes: { TypeSite: typeSite } });
 const suite = checker("loaders"), { check, fail } = suite;
 await archives(suite, out, app, a, b);
 // the files the loaders open: libcore finds them through the file system, the World reads their dex
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 await mountPlatform(ROOT);
-const w = world([app, ...PLATFORM_PATHS], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_PATHS], { dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -162,7 +169,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
   check("executed catch loader", caught, 31);
   console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
   {
-    const boot = world(new Program([], program([...PLATFORM_PATHS, common, b])), { natives });
+    const boot = world(new Program([], program([...PLATFORM_PATHS, common, b])));
     if (boot.prog.loaderOf("Shared") !== boot.prog.boot) fail("catch fixture is not boot-defined");
     const select = boot.entry("Shared", "catchOnly", "(Z)I");
     if (select(0) !== 7 || boot.prog.initiatedBy(boot.prog.boot, "CatchOnly")) fail("untaken boot catch resolved its type");
@@ -208,10 +215,10 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
     if (table.get(slot)!() !== 42) fail("accounted symbolic operation failed");
-    if (w.stats.units !== stub.units || w.stats.bytes !== stub.bytes || w.stats.compileMs <= stub.compileMs) fail("shared symbolic operation rebuilt code or lost resolution accounting");
+    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs) fail("symbolic operation compilation unaccounted");
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) fail("warm symbolic operation compiled again");
-    console.log("symbolic accounting: new stub recorded; resolved operation shared without compilation; warm execution unchanged");
+    console.log("symbolic accounting: stub and operation each recorded one unit and bytes; warm execution unchanged");
     const later = "fixture/HelperLater", helperBody = (cx: Compiler, c: Code) => {
       const failure = typeFailure(cx.w.prog, `L${later};`);
       if (failure) cx.linkError(c, failure); else c.i32(42);
@@ -235,7 +242,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
       if (helper() !== 42 || await waitingHelper(resumed) !== 42 || w.stats.units !== units) fail("warm helper recompiled");
     } finally { resumed.end(); }
     console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
-    const accountingWorld = world(w.prog, { natives }), initial = { ...accountingWorld.stats };
+    const accountingWorld = world(w.prog, { hostClasses: false }), initial = { ...accountingWorld.stats };
     const throwable = accountingWorld.helpers.makeThrowable("java/lang/IllegalStateException", "accounted helper");
     if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs) fail("throwable helper compilation unaccounted");
     const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.helpers.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
@@ -262,7 +269,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
         Compiler.prototype.buildSynthetics = emit;
       }
       const collect = (globalThis as typeof globalThis & { gc: () => void }).gc;
-      check("symbolic lifetime probe compilers (shared operations are not rebuilt)", compilers.length, 1);
+      check("symbolic lifetime probe compilers (the stubs' and each operation's)", compilers.length, 33);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
       const retainedStubs = stubs.filter(ref => ref.deref()).length;
@@ -317,7 +324,7 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
 
 {
   const p = new Program(loadDexes(a), program([...PLATFORM_PATHS, app]));
-  const cache = world(p, { natives }), child = p.newLoader(p.root, null);
+  const cache = world(p), child = p.newLoader(p.root, null);
   cache.addDexes(loadDexes(b), child);
   const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
   const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
@@ -341,7 +348,7 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
 }
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_PATHS, common]);
-  const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { natives, dexes: path => {
+  const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { dexes: path => {
     const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
   } });
@@ -412,7 +419,7 @@ for (const asynchronous of [false, true]) {
   if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") fail("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
-  const resolver = world([app, ...PLATFORM_PATHS], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  const resolver = world([app, ...PLATFORM_PATHS], { dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {

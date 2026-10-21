@@ -8,17 +8,16 @@ import { vfs } from "../shell/vfs.ts";
 import { PackedArchive, packedArchives } from "../shell/packedarchive.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 
-/** a package's manifest and resources, with its signing certificates or how to read them */
-type PackageContents = Pick<PackageArchive, "root" | "res"> & { certificates: Uint8Array[] | (() => Promise<Uint8Array[]>) };
+/** a package's manifest and apk, with its signing certificates or how to read them */
+type PackageContents = Pick<PackageArchive, "root" | "apk"> & { certificates: Uint8Array[] | (() => Promise<Uint8Array[]>) };
 /** a package the package manager knows, its base apk at `path` (`source`'s bytes, when given) */
-export function registerPackage({ root, res, certificates }: PackageContents, { path, uid, source, ...provisioned }: Provisioned &
+export function registerPackage({ root, apk, certificates }: PackageContents, { path, uid, source, ...provisioned }: Provisioned &
   { path?: string; uid?: number; source?: Uint8Array | FileSource } = {}): PackageRecord {
   const pkg = attrStr(root, "package") ?? "";
   path ??= installedPath(pkg);
-  if (source instanceof Uint8Array) vfs.write(path, source);
-  else if (source) vfs.mount(path, source);
+  if (source) vfs.place(path, source);
   if (source instanceof PackedArchive) packedArchives.set(path, source);
-  const record = new PackageRecord(root, res, path, uid ?? packageUid(pkg), typeof certificates === "function" ? certificates : () => Promise.resolve(certificates), provisioned);
+  const record = new PackageRecord(root, apk, path, uid ?? packageUid(pkg), typeof certificates === "function" ? certificates : () => Promise.resolve(certificates), provisioned);
   packages.set(pkg, record);
   return record;
 }

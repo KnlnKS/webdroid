@@ -1,6 +1,6 @@
-// Rebuild in a temporary directory with javac --release 9, then Android build-tools 35 d8
-// --min-api 26 --lib "$ANDROID_HOME/platforms/android-35/android.jar" --output <dir> <dir>/*.class.
-// Copy classes.dex to JvmTierProbe.dex; tests need neither Java nor the Android SDK.
+// JvmTierProbe.dex is this class built by `pnpm ts scripts/probes.ts JvmTierProbe`, committed so that the
+// tests need neither Java nor the Android SDK.
+
 public final class JvmTierProbe {
     public static final class Host {
         public static native int call(int mode, int value);

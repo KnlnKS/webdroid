@@ -8,6 +8,10 @@ import { ndkInit, nativeWindowFor } from "./libandroid.ts";
 import { eglInit } from "./egl.ts";
 import { mem } from "./mem.ts";
 import type { GlSurface } from "../android/glsurface.ts";
+import { Resources } from "../android/res.ts";
+import { handle } from "../android/handles.ts";
+import { deviceQualifiers } from "../android/configuration.ts";
+import { BytesFile } from "../shell/lazyfile.ts";
 
 test("Java and NDK code share one thread looper without preparing unrelated threads", async () => {
   setA64(true); ndkInit();
@@ -38,4 +42,23 @@ test("buffer geometry sizes EGL buffers while the window keeps its default size"
     await call("eglQuerySurface", "libEGL.so", [1, egl, 0x3056, out + 4]);
     expect([mem.ld32(out), mem.ld32(out + 4)]).toEqual([900, 450]);
   } finally { mem.free(out); cpu.dispose(); setA64(false); }
+});
+
+test("NDK assets open as AssetManager2 opens them: from the last apk holding the path, a directory listing its regular files", async () => {
+  setA64(true); ndkInit();
+  const cpu = new Cpu(new JThread(), "asset-test"), text = (s: string) => new TextEncoder().encode(s);
+  const res = new Resources([
+    { table: null, zip: { "assets/b.txt": text("base"), "assets/fonts/x.ttf": text("") }, lazyEntries: new Map() },
+    { table: null, zip: {}, lazyEntries: new Map([["assets/b.txt", new BytesFile(text("split"))], ["assets/a.txt", new BytesFile(text("a"))]]) },
+  ], deviceQualifiers());
+  const call = (name: string, args: number[]) => cpu.call(lookupHost(name, "libandroid.so")!, args);
+  const am = Number(handle(res)), path = mem.strdup("b.txt"), root = mem.strdup(""), out = mem.malloc(8);
+  try {
+    const asset = await call("AAssetManager_open", [am, path, 0]);
+    expect(await call("AAsset_read", [asset, out, 8])).toBe(5);
+    expect(new TextDecoder().decode(mem.bytes(out, 5))).toBe("split");
+    const dir = await call("AAssetManager_openDir", [am, root]), names: string[] = [];    for (let name; (name = await call("AAssetDir_getNextFileName", [dir])); ) names.push(mem.cstr(name));
+    expect(names).toEqual(["a.txt", "b.txt"]);
+    await call("AAssetDir_close", [dir]); await call("AAsset_close", [asset]);
+  } finally { mem.free(path); mem.free(root); mem.free(out); cpu.dispose(); setA64(false); }
 });

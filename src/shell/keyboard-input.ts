@@ -2,7 +2,7 @@
 // Escape and the browser's Back key as the phone's Back.
 import { dispatchKey, hasFocusedWindow } from "../android/server/wm.ts";
 import { imeActive } from "../android/ime.ts";
-import { keyCodeOfDom, keyCodes } from "../android/keycodes.ts";
+import { keyCodeOfDom, keyCodes } from "../android/input-codes.ts";
 import { onProcessExit } from "../process-exit.ts";
 
 const BACK = keyCodes.get("BACK")!;

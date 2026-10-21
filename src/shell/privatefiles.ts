@@ -32,7 +32,7 @@ function decodeRecord(value: unknown): FileValue | null {
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
   /** the vfs of the process whose writes persist: system_server's, until it dies */
-  private bound: { pid: number; view: typeof vfs } | null = null;
+  private bound: { pid: number; view: typeof vfs; release: (() => void)[] } | null = null;
   private loaded = new Map<string, Promise<void>>();
   private pending = new Map<string, FileValue | null>();
   private database: Promise<IDBDatabase> | null = null;
@@ -45,13 +45,8 @@ export class PrivateFiles {
   private orphans = new Set<string>();
 
   attach(pid: number, view: typeof vfs): void {
-    const bound = this.bound = { pid, view };
-    for (const [path, value] of this.values) this.install(view, path, value);
-    view.prepare = (pkg) => this.prepare(pkg);
-    view.flush = () => this.flush();
-    view.onWrite = (path, change) => {
-      // a process that has died writes nothing more
-      if (this.bound !== bound) return;
+    if (this.bound) this.detach(this.bound.pid);
+    const release = [view.useOwner({ prepare: pkg => this.prepare(pkg), flush: () => this.flush() }), view.watch((path, change) => {
       const app = appPath(path);
       if (!app && !sharedPath(path)) return;
       const cache = !!app && /^(?:cache|code_cache)(?:\/|$)/.test(app.within);
@@ -60,21 +55,29 @@ export class PrivateFiles {
       if (cache) return;
       this.pending.set(path, value);
       this.schedule();
-    };
+    })];
+    this.bound = { pid, view, release };
+    for (const [path, value] of this.values) this.install(view, path, value);
   }
-  detach(pid: number): void { if (this.bound?.pid === pid) this.bound = null; }
+  /** a process that has died writes nothing more */
+  detach(pid: number): void {
+    if (this.bound?.pid !== pid) return;
+    for (const release of this.bound.release) release();
+    this.bound = null;
+  }
   /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
   private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
-    const backing = view.lazyFiles.get(path), bytes = view.files.get(path), mtime = view.mtimes.get(path);
-    const attributes = {...view.attributes(path,view.dirs.has(path))};
-    if (bytes && streamed && bytes.length >= SPILL_BYTES) {
+    const node = view.node(path);
+    if (!node) return null;
+    const { content, mtime } = node, attributes = { ...view.attributes(path, content === null) };
+    if (content instanceof Uint8Array && streamed && content.length >= SPILL_BYTES) {
       const disk = this.disk.create();
-      disk.write(0, bytes.slice());
-      return { kind: "disk", id: disk.id, size: disk.size, mtime,attributes };
+      disk.write(0, content.slice());
+      return { kind: "disk", id: disk.id, size: disk.size, mtime, attributes };
     }
-    if (bytes) return { kind: "file", bytes, mtime,attributes };
-    if (backing instanceof DiskFile) return { kind: "disk", id: backing.id, size: backing.size, mtime,attributes };
-    return view.dirs.has(path) ? { kind: "directory", mtime,attributes } : null;
+    if (content instanceof Uint8Array) return { kind: "file", bytes: content, mtime, attributes };
+    if (content instanceof DiskFile) return { kind: "disk", id: content.id, size: content.size, mtime, attributes };
+    return content === null ? { kind: "directory", mtime, attributes } : null;
   }
   /** A burst of writes (a download's chunks) settles into one transaction, and a steady stream
    *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
@@ -93,18 +96,8 @@ export class PrivateFiles {
     }, delay);
   }
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
-    // the writing view already holds these bytes; reinstalling would trim its open file's
-    // spare capacity, so every append would copy the whole file
-    if (value?.kind === "file" && view.files.get(path) === value.bytes) {
-      if (value.attributes) view.setAttributes(path,value.attributes,false);
-      return;
-    }
-    view.dirs.delete(path);
-    if (value?.kind === "file") view.write(path, value.bytes, false);
-    else if (value?.kind === "disk") view.adopt(path, this.disk.file(value.id, value.size));
-    else { view.delete(path, false); if (value) view.dirs.add(path); }
-    if (value?.mtime !== undefined) view.mtimes.set(path, value.mtime);
-    if (value?.attributes) view.setAttributes(path,value.attributes,false);
+    view.restore(path, value && { content: value.kind === "file" ? value.bytes : value.kind === "disk" ? this.disk.file(value.id, value.size) : null,
+      mtime: value.mtime, attributes: value.attributes });
   }
   private update(path: string, value: FileValue | null): void {
     const previous = this.values.get(path);

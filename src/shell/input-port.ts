@@ -2,7 +2,8 @@
 // port, and the IME state it tells the page's text control on another.
 import type { ImeState } from "../android/ime.ts";
 import type { TouchPointer } from "./pointer-queue.ts";
-import { callProxy, methodsOf, serveCalls } from "./process-port.ts";
+import { callProxy, methodsOf, serveCalls } from "./rpc.ts";
+import { attachPointerInput, type PointerDispatch, type PointerGeometry } from "./pointer-input.ts";
 
 type ImeCalls = {
   input(generation: number, text: string, start: number, end: number, composing: boolean): Promise<void>;
@@ -19,11 +20,11 @@ export type ImeView = { state(state: ImeState): void };
  * again when its main-looper job runs, not merely when the message arrives. */
 export async function serveInput(input: MessagePort, view: MessagePort): Promise<() => void> {
   const [ime, { dispatchTouches }] = await Promise.all([import("../android/ime.ts"), import("./device.ts")]);
-  const page = callProxy<ImeView>(view, ["state"], ["state"]);
+  const page = callProxy<ImeView>(view, ["state"], { notifications: ["state"] });
   const changed = (state: ImeState) => page.endpoint.state(state);
   ime.imeTransport.changed = changed;
   const close = serveCalls<InputCalls>(input, {
-    pointer: async (action, pointers) => { await dispatchTouches(action, pointers); },
+    pointer: dispatchTouches,
     input: (generation, text, start, end, composing) => ime.imeInput(text, start, end, composing, generation),
     selection: (generation, start, end) => ime.imeSelection(start, end, generation),
     finish: generation => ime.imeFinishComposition(generation),
@@ -99,4 +100,17 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
   return { close, focus() { mirror(); if (!input.disabled) input.focus(); }, input,
     /** whether its canvas shows */
     show(visible: boolean) { if (shown === visible) return; shown = visible; mirror(); if (state.active && shown) input.focus(); } };
+}
+
+/** `canvas`'s input to one realm, served on `input` and `view`: its pointers go to `dispatch`, the realm's
+ *  by default, and a press focuses the text control once the press's own focus change is done */
+export function attachRealmInput(canvas: HTMLCanvasElement, geometry: PointerGeometry, input: MessagePort, view: MessagePort,
+  { dispatch, kbd, source }: { dispatch?: PointerDispatch; kbd?: HTMLTextAreaElement; source?: HTMLElement } = {}) {
+  const calls = callProxy<InputCalls>(input, inputMethods), text = receiveIme(view, canvas, calls.endpoint, kbd);
+  let focusTimer: ReturnType<typeof setTimeout> | undefined;
+  const pointers = attachPointerInput(canvas, geometry, dispatch ?? calls.endpoint.pointer, () => {
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(text.focus, 0);
+  }, source);
+  return { ...text, close() { clearTimeout(focusTimer); pointers.close(); text.close(); calls.close(); } };
 }

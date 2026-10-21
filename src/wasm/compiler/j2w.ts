@@ -2,21 +2,19 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { mid } from "./ids.ts";
-import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
+import { ACC, kindOf, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
+import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
-import { rtfns } from "./rtfns.ts";
+import { rtfns, type RtName } from "./rtfns.ts";
 import type { LinkFailure } from "./linkage.ts";
-import { FUEL } from "./hostcalls.ts";
-import { SLOT, INIT_DONE, THROWERS, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
+import { SLOT, THROWERS, type Thrower } from "./exc.ts";
 import { STRING, StructStrings } from "./strings.ts";
-import { helpers as HELPERS } from "./helpers.ts";
+import { helpers as HELPERS, type HelperName } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -101,9 +99,12 @@ const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
-  | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
-  | "needsSymbolicSite" | "guestShared" | "units">;
+export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "allocated" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
+  | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized" | "needsSymbolicSite" | "guestShared"> & {
+  opts: Pick<World["opts"], "build" | "guest" | "intrinsics">; hosts: Pick<World["hosts"], "mayReach" | "takes">;
+  stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
+  classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
+};
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
@@ -132,9 +133,9 @@ function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
 }
 /** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
  *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
-export function staticallyBound(w: Pick<LinkEnv, "prog" | "aot">, kind: Invoke, decl: string, target: MethodInfo): boolean {
+export function staticallyBound(w: Pick<LinkEnv, "prog" | "hosts">, kind: Invoke, decl: string, target: MethodInfo): boolean {
   if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
-  return !!w.aot && finalDispatch(w.prog, decl, target) && !w.aot.hostDispatch(decl, target);
+  return finalDispatch(w.prog, decl, target) && !w.hosts.mayReach(decl, target);
 }
 export class Compiler implements Base {
   w: LinkEnv;
@@ -213,7 +214,6 @@ export class Compiler implements Base {
     return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? f >= this.fixedImports || RUNS_JAVA.has(f) : methods.has(f)));
   }
   get natives() { return this.w.natives; }
-  intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }
   /** the linear memory natives copy arrays through, and its allocation top */
   scratch(): number {
     if (!this.memory) { this.mb.importMemory("rt", "mem", 1); this.memory = true; }
@@ -363,8 +363,7 @@ export class Compiler implements Base {
   /** whether the Java method being compiled may hold code of `m`'s, which must be the method's own and not one the host may take: a World without a build knows
    *  none of them, and code without a Java method (a symbolic site, a synthetic body) has no slot to undo with `m` (dependsOn) */
   private mayHold(m: MethodInfo): boolean {
-    const a = this.w.aot;
-    return !!this.owner && !!a && !a.overriddenAt(this.w.slotOf(m));
+    return !!this.owner && !this.w.hosts.takes(m);
   }
   /** the method being compiled holds code of `m`'s, a direct call or its body run in place (inline.ts): undoing `m`'s code undoes the installed method it
    *  counts against (Assumptions.undoCode) */
@@ -382,7 +381,7 @@ export class Compiler implements Base {
     if (this.install) this.dependsOn(m);
   }
   /** whether a call of `m` may run its bytecode in place (inline.ts): the code is the method's, not an intrinsic's or the host's */
-  inlines(m: MethodInfo): boolean { return !this.intrinsic(m) && this.mayHold(m); }
+  inlines(m: MethodInfo): boolean { return !this.w.intrinsic(m) && this.mayHold(m); }
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
    *  class, a dex) may implement it, even for a frame that is already running */
   devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
@@ -454,8 +453,9 @@ export class Compiler implements Base {
   }
   idOf(name: string): number { return this.w.idOf(name); }
   /** calls the runtime function `name` (see rtfns.ts) with its arguments already pushed */
-  callRt(c: Code, name: string): void {
-    const d = rtfns.get(name)!;
+  callRt(c: Code, name: RtName): void {
+    const d = rtfns.get(name);
+    if (!d) throw new Error(`runtime function ${name} is not registered: the link module that defines it is not loaded`);
     c.i32(this.w.synthSlot(name, d)).callIndirect(this.sig(d.params, d.ret));
     if (d.pure) c.indirect--;
   }
@@ -480,7 +480,7 @@ export class Compiler implements Base {
     const local = c.newLocal(T.anyref);
     this.emitEnsure(c, cls); this.emitNew(c, cls); c.ltee(local);
     if (message !== undefined) this.str.literal(c, message);
-    this.callMethod(c, this.prog.resolve(cls, "<init>", message === undefined ? "()V" : "(Ljava/lang/String;)V")!); c.lget(local).throw_(this.tag);
+    this.callNamed(c, cls, "<init>", message === undefined ? "()V" : "(Ljava/lang/String;)V"); c.lget(local).throw_(this.tag);
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {
@@ -492,18 +492,60 @@ export class Compiler implements Base {
     }, true)).unreachable();
   }
 
+  // ---------- Java operations, as compiled methods and the bodies link generates lower them
+  /** replaces the vtable on the stack with the table slot that a virtual or interface call of `key` through `decl` runs: a class's vtable slot, Object's for
+   *  a method Object declares, else the interface method table's (`vt` gives the local the probe keeps the vtable in) */
+  emitDispatchSlot(c: Code, decl: string, key: string, vt = () => c.newLocal(ref(this.tVT))): void {
+    const d = this.prog.get(decl);
+    const owner = d && !d.isInterface ? decl : this.prog.get("java/lang/Object")!.byKey.has(key) ? "java/lang/Object" : undefined;
+    if (owner) { c.i32(this.w.dispatch.vslot(owner, key)).arrayGet(this.tVT); return; }
+    const sel = this.w.selectorId(key), s = sel % H.IMT_N, l = vt();
+    // vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
+    c.lset(l).lget(l).i32(H.IMT + 2 * s).arrayGet(this.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
+      .lget(l).i32(H.IMT + 2 * s + 1).arrayGet(this.tVT).else_().lget(l).i32(sel).call(this.helper("imtslow")).end();
+  }
+  /** stores what `value` pushes into instance field `f` of the object `obj` pushes as `decl`'s struct; the object takes over a native handle stored into a
+   *  field that holds one (World.claims) */
+  emitFieldStore(c: Code, decl: string, f: FieldInfo, obj: () => void, value: () => void): void {
+    obj(); value(); c.structSet(this.structFor(decl), this.fieldIndex(decl, f));
+    if (this.w.claims(f)) { obj(); c.externConvertAny(); value(); c.call(this.imp.claim); }
+  }
+  /** throws NullPointerException when the reference on the stack, which it takes, is null */
+  nullCheck(c: Code): void { c.refIsNull().if_(); this.callThrower(c, "npe"); c.end(); }
+  /** throws ArrayIndexOutOfBoundsException unless the index `index` pushes is below the length `length` pushes */
+  boundsCheck(c: Code, index: () => void, length: () => void): void {
+    index(); length(); c.raw(OP.i32_ge_u).if_(); index(); length(); this.callThrower(c, "aioobe"); c.end();
+  }
+  /** replaces an element array and an index on the stack with the element of an array of `letter`'s type (a descriptor's first letter), extended as Java's
+   *  byte, short, char and boolean are */
+  emitElementLoad(c: Code, letter: string): void {
+    const d = this.tData[elemKindOf("[" + letter)];
+    if (letter === "B" || letter === "S") c.arrayGetS(d); else if (letter === "Z" || letter === "C") c.arrayGetU(d); else c.arrayGet(d);
+  }
+  /** stores what `value` pushes at the index `index` pushes into the element array `data` pushes, of the array in local `arr`; a reference passes the store
+   *  check first */
+  emitElementStore(c: Code, ek: ElemKind, arr: number, data: () => void, index: () => void, value: () => void): void {
+    if (ek === "ref") this.emitStoreCheck(c, arr, value);
+    data(); index(); value(); c.arraySet(this.tData[ek]);
+  }
+  /** call the method of `cls` that `name` and `desc` resolve to */
+  callNamed(c: Code, cls: string, name: string, desc: string): void {
+    const m = this.prog.resolve(cls, name, desc);
+    if (!m) throw new Error(`${cls}.${name}${desc} does not resolve`);
+    this.callMethod(c, m);
+  }
+
   // ---------- allocation
-  private allocBytes(c: Code, add: () => void): void {
+  /** counts the bytes `add` pushes against the allocation window, and calls allocSlow once it is used up */
+  allocBytes(c: Code, add: () => void): void {
     const g = this.global("rt", "alloc", T.i32, true);
     c.gget(g); add(); c.raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
   }
   /** push the Class of `name` */
   constClass(c: Code, name: string): void { c.i32(this.idOf(name)); this.callRt(c, "classOf"); }
-  /** call the method of `cls` that `name` and `desc` resolve to */
-  callNamed(c: Code, cls: string, name: string, desc: string): void { this.callMethod(c, this.prog.resolve(cls, name, desc)!); }
   /** the element array of the array object on the stack */
   arrayData(c: Code, ek: ElemKind = "ref"): Code { return c.refCast(this.tArr[ek]).structGet(this.tArr[ek], 2); }
-  /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+  /** the class id of the (anyref) object on the stack */
   vtId(c: Code): Code { return c.call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT); }
   /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
   emitStoreCheck(c: Code, arr: number, value: () => void): void {
@@ -572,12 +614,10 @@ export class Compiler implements Base {
   }
 
   // ---------- module-local helpers, defined on first use
-  helper(name: string): number {
+  helper(name: HelperName): number {
     const f = this.helpers.get(name);
     if (f !== undefined) return f;
-    const make = HELPERS.get(name);
-    if (!make) throw new Error("unknown helper " + name);
-    const { params, results, body } = make(this);
+    const { params, results, body } = HELPERS.get(name)!(this);
     return this.defineFn(name, params, results, body, true);
   }
 

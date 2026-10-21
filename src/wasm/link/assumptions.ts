@@ -1,10 +1,10 @@
 // What compiled code relies on that classes defined later can falsify: class-hierarchy decisions, sites that fail because a class is not loaded, and the code
 // of other methods it holds (a build's direct calls, bodies run in place). Each is undone by putting the lazy-link stub back in the slots whose code relied on it
 // (World.invalidate), so the next call compiles against what is there now. A decision is the compiled code's own, so undoing it leaves the code that holds the
-// method's alone; any other undoing takes that code too (undoCode).
+// method's alone; any other undoing takes that code too (undoCode). The hierarchy decisions are made against (World.cha) changes only through here.
 import { ACC, type MethodInfo } from "../compiler/program.ts";
 import { failed } from "../compiler/linkage.ts";
-import type { Compiler } from "../compiler/j2w.ts";
+import type { DexFile } from "../../jvm/dex.ts";
 import type { World } from "./world.ts";
 import type { UnitHeader } from "./aot.ts";
 
@@ -23,15 +23,8 @@ export class Assumptions {
   private holders = new Map<number, Set<number>>();
   constructor(w: World) { this.w = w; }
 
-  /** records what the code of a unit compiled here relies on: `slot` owns what no method of the unit does */
-  record(cx: Pick<Compiler, "assumptions" | "absent" | "held">, slot?: number): void {
-    const late = this.lateFor(cx.assumptions);
-    for (const [decl, name, desc, target, owner] of cx.assumptions) this.decide(decl, name, desc, target?.cls ?? "", target?.key ?? "", this.owner(owner, slot), late);
-    for (const [name, owner] of cx.absent) this.absentAt(name, this.owner(owner, slot));
-    this.hold(cx.held);
-  }
-  /** records what the code of a unit made elsewhere relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
-  recordHeader(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
+  /** records what the code of a unit relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
+  record(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
     const late = this.lateFor(head.assumptions);
     for (const [decl, name, desc, tc, tk, at] of head.assumptions) this.decide(decl, name, desc, tc, tk, at, late);
     for (const [name, at] of head.missing) if (this.w.prog.get(name)) this.undoCode(at); else this.absentAt(name, at);
@@ -40,11 +33,6 @@ export class Assumptions {
   // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
   private lateFor(decisions: readonly (readonly [string, ...unknown[]])[]): Map<string, string[]> | undefined {
     return this.w.cha.late.size && decisions.length ? this.lateBy(new Set(decisions.map(([decl]) => decl)), this.w.cha.late) : undefined;
-  }
-  private owner(owner: MethodInfo | undefined, slot: number | undefined): number {
-    const at = owner ? this.w.slotOf(owner) : slot;
-    if (at === undefined) throw new Error("compiled code relies on something with no invalidation owner");
-    return at;
   }
   /** code in slot `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
   private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: number, late: Map<string, string[]> | undefined): void {
@@ -72,8 +60,11 @@ export class Assumptions {
   absentAt(name: string, slot: number): void {
     (this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!).add(slot);
   }
-  /** undoes the code that failed sites for the classes `added` defines */
-  loaded(added: string[]): void {
+  /** classes `added` were defined: undoes the decisions they falsify and the code that failed sites for their absence. The classes of `deferred` dexes (a loader's
+   *  other than the app's and the boot class path's) join the hierarchy only as they are linked (admit) */
+  added(added: string[], deferred?: DexFile[]): void {
+    const cha = this.w.cha;
+    if (deferred) cha.defer(deferred); else this.joined(cha.index(added));
     if (this.absent.size) for (const name of added) {
       const slots = this.absent.get(name);
       if (!slots) continue;
@@ -81,8 +72,10 @@ export class Assumptions {
       this.absent.delete(name);
     }
   }
+  /** class `name` is about to be linked: the classes of deferred dexes among it and its supertypes join the hierarchy, undoing the decisions they falsify */
+  admit(name: string): void { const late = this.w.cha.admit(name); if (late) this.joined(late); }
   /** undoes the decisions a concrete class among `reached`, which joining the class hierarchy made reachable, falsifies */
-  joined(reached: Set<string>): void {
+  private joined(reached: Set<string>): void {
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl that has one becomes reachable
     const now = this.lateBy(this.decls(), reached);
     for (const [key, a] of this.decisions) {
@@ -101,10 +94,12 @@ export class Assumptions {
     }
     return out;
   }
-  /** after a namespace change: undoes every decision whose target or declaration resolves differently than `before`, or that the concrete subtypes of its
-   *  declaring class the change can affect falsify (`affects`, by whether the change names a type of its descriptor), and every site that failed for an absent class */
+  /** after a namespace change: indexes the hierarchy again, and undoes every decision whose target or declaration resolves differently than `before`, or that the
+   *  concrete subtypes of its declaring class the change can affect falsify (`affects`, by whether the change names a type of its descriptor), and every site that
+   *  failed for an absent class */
   rebound(before: Resolved, affects: (desc: string) => (name: string) => boolean): void {
     const w = this.w, prog = w.prog;
+    w.cha.reindex();
     let lateBy: Map<string, string[]> | undefined;
     const subtypes = new Map<(name: string) => boolean, Map<string, string[]>>();
     for (const [key, a] of this.decisions) {

@@ -6,7 +6,7 @@ import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants.ts";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/server/urigrants.ts";
 import { mkUri } from "../src/android/net.ts";
 import { packages, PackageRecord } from "../src/android/packages.ts";
 import { registerPackage } from "../src/android/installpackage.ts";
@@ -20,7 +20,8 @@ import { FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { notConnected, unconnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
-import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
+import { Resources, NativeTheme, newSV, emptyApk } from "../src/android/res.ts";
+import { deviceQualifiers } from "../src/android/configuration.ts";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
 import { mkComponentName, newIntent } from "../src/android/intent.ts";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc.ts";
@@ -32,10 +33,11 @@ import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
 import { removeAlarm, setOperationAlarm, useAlarmIntents } from "../src/android/alarm.ts";
-import { callProxy } from "../src/shell/process-port.ts";
+import { callProxy } from "../src/shell/rpc.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord, loadPlatform } from "./java.ts";
+import { scall, bootApp, packageRecord, loadPlatform, thrown } from "./java.ts";
+import { procIdentity } from "../src/shell/procfs.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -150,9 +152,18 @@ describe("package-installer", () => {
   test("a session stages what AOSP's Session writes, and abandoning it drops the file", async () => {
     const installer = await vcall(await hostedService("package"), "getPackageInstaller", "()Landroid/content/pm/IPackageInstaller;");
     const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
-    const id = await vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, "test.installer", null, 0);
-    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V",
-      await vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id));
+    const create = (name: string) => vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, name, null, 0);
+    const openSession = (id: number) => vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id);
+    packages.set("test.installer", { uid: procIdentity.uid } as PackageRecord);
+    expect(await thrown(() => create("test.other"))).toBe(`java/lang/SecurityException: Package test.other does not belong to ${procIdentity.uid}`);
+    const id = await create("test.installer");
+    // another app's uid, as a transaction from it carries
+    const self = await scall("android/os/Binder", "clearCallingIdentity", "()J");
+    await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", 10077n << 32n | 4242n);
+    try {
+      expect(await thrown(() => openSession(id))).toBe(`java/lang/SecurityException: Caller has no access to session ${id}`);
+    } finally { await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", self); }
+    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V", await openSession(id));
     const out = await vcall(session, "openWrite", "(Ljava/lang/String;JJ)Ljava/io/OutputStream;", "base.apk", 0n, -1n);
     await vcall(out, "write", "([B)V", Int8Array.of(1, 2, 3));
     await vcall(session, "fsync", "(Ljava/io/OutputStream;)V", out);
@@ -164,6 +175,7 @@ describe("package-installer", () => {
     await vcall(session, "abandon", "()V");
     expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toBeNull();
     expect(await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id)).toBeNull();
+    packages.delete("test.installer");
   });
 });
 
@@ -177,7 +189,7 @@ describe("package-game-info", () => {
         { name: "isGame", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 1 },
       ], children: [] },
     ] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-game.apk", 12345, async () => [], { system: true }));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), "/test-game.apk", 12345, async () => [], { system: true }));
     try {
       const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
       const APP = "android/content/pm/ApplicationInfo";
@@ -202,7 +214,7 @@ describe("package-intent-filters", () => {
       // the first group whose filters all match decides; none matching is no match
       { name: "uri-relative-filter-group", attrs: [], children: [{ name: "data", attrs: [a("pathPrefix", "/")], children: [] }] }]),
     ] }] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), "/test-filters.apk", 12346, async () => []));
     try {
       const pms = await hostedService("package");
       const resolve = async (url: string) => {
@@ -234,7 +246,7 @@ describe("package-permissions", () => {
       // requested only through API 28
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
-    const register = (grants: string[]) => packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => [], { grants }));
+    const register = (grants: string[]) => packages.set(pkg, new PackageRecord(root, emptyApk(), "/test.apk", 12345, async () => [], { grants }));
     register([]);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
@@ -263,16 +275,14 @@ describe("packagearchive", () => {
     } }, baseline.certificates);
     expect(archive.root).toEqual(baseline.root);
     expect(archive.certificates).toEqual(baseline.certificates);
-    expect(archive.res.zip["resources.arsc"]).toEqual(baseline.res.zip["resources.arsc"]);
+    expect(archive.apk.zip["resources.arsc"]).toEqual(baseline.apk.zip["resources.arsc"]);
     expect(readBytes).toBeLessThan(bytes.length);
-    const pool = archive.res.arsc!.values;
-    for (let i = 0; i < pool.length; i++) {
-      const name = pool.get(i);
-      if (Object.hasOwn(baseline.res.zip, name)) expect(archive.res.arsc!.files(name)).toEqual(baseline.res.zip[name]);
-    }
-    expect(archive.res.lazyEntries.has("classes.dex")).toBe(true);
-    const metadataBytes = readBytes, residentBytes = Object.values(archive.res.zip).reduce((sum, data) => sum + data.length, 0);
-    expect(await readFully(archive.res.lazyEntries.get("classes.dex")!)).toEqual(baseline.res.zip["classes.dex"]);
+    expect(Object.keys(archive.apk.zip).sort()).toEqual(["AndroidManifest.xml", "resources.arsc"]);
+    const metadataBytes = readBytes, residentBytes = Object.values(archive.apk.zip).reduce((sum, data) => sum + data.length, 0);
+    // a file resource, named in the table's pool, is read when opened
+    const pool = archive.apk.table!.values, entry = Array.from({ length: pool.length }, (_, i) => pool.get(i)).find((name) => Object.hasOwn(baseline.apk.zip, name))!;
+    expect(await readFully(archive.apk.lazyEntries.get(entry)!)).toEqual(baseline.apk.zip[entry]);
+    expect(await readFully(archive.apk.lazyEntries.get("classes.dex")!)).toEqual(baseline.apk.zip["classes.dex"]);
     console.log(JSON.stringify({ apkBytes: bytes.length, metadataBytes, residentBytes }));
   });
 
@@ -332,7 +342,7 @@ describe("pending-intents", () => {
     broker.register(PKG, PKG + ":sibling", 7702);
     broker.register(foreign.pkg, foreign.pkg, 7703);
     const clients = [7701,7702,7703].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods,
-      [], error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass})));
+      { makeError: error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass}) }));
     const [creator,sibling,other] = clients.map(client => client.endpoint);
     const encoded = async (extra: string) => {
       const intent = await newIntent("org.webdroid.test.PENDING");
@@ -364,9 +374,9 @@ describe("pending-intents", () => {
       const id = (await creator.pending.create(PKG,"activity",7,0,data))!;
       const denied = await other.pending.create(PKG,"activity",8,0,data).catch(error => error.javaClass);
       expect(denied).toBe("java/lang/SecurityException");
-      expect(await creator.pending.creator(id)).toEqual({pkg:PKG,uid:owner.uid});
+      expect(await creator.pending.peek(id)).toEqual({pkg:PKG,uid:owner.uid,kind:"activity",flags:0});
       expect(await sibling.pending.create(PKG,"activity",7,0x8000000,await encoded("updated"))).toBe(id);
-      const operation = (await sibling.pending.operation(id))!;
+      const operation = (await sibling.pending.take(id))!;
       expect(operation.process).toBe(PKG + ":owner");
       expect(await vcall(await decodeIntent(operation.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
       operation.intent.bytes.fill(0);
@@ -382,13 +392,14 @@ describe("pending-intents", () => {
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
-      expect(await sibling.pending.kind(id)).toBe("activity");
+      expect((await sibling.pending.peek(id))?.kind).toBe("activity");
       removeAlarm(id);
       await sibling.pending.cancel(id);
-      expect(await sibling.pending.creator(id)).toBeNull();
+      expect(await sibling.pending.peek(id)).toBeNull();
       const single = (await sibling.pending.create(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
-      expect((await sibling.pending.operation(single))!.kind).toBe("broadcast");
-      expect(await sibling.pending.operation(single)).toBeNull();
+      expect((await sibling.pending.peek(single))!.kind).toBe("broadcast");
+      expect((await sibling.pending.take(single))!.kind).toBe("broadcast");
+      expect(await sibling.pending.take(single)).toBeNull();
     } finally {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
@@ -431,6 +442,14 @@ describe("pending-intents", () => {
       expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
       expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
       expect(await vcall(foreground, "isService", "()Z")).toBe(0);
+      // startIntentSender sends a one-shot broadcast sender once
+      const served: string[] = [];
+      broker.ready(pid, { ...createProcessEndpoint(), service: async request => { served.push(request.kind); return null; } });
+      const once = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 2, intent, 0x44000000);
+      const start = async () => vcall(await hostedService("activity_task"), "startActivityIntentSender",
+        "(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I",
+        null, await vcall(once, "getTarget", "()Landroid/content/IIntentSender;"), null, null, null, null, null, 0, 0, 0, null);
+      expect([await start(), await start(), served]).toEqual([0, -96, ["pending"]]);
       const alarm = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "alarm");
       await vcall(alarm, "set", "(IJLandroid/app/PendingIntent;)V", 2, 1000000000000n, broadcast);
       await vcall(alarm, "cancel", "(Landroid/app/PendingIntent;)V", broadcast);
@@ -546,19 +565,10 @@ describe("resource-type-id-offset", () => {
     return bytes;
   }
 
-  test("a file resource resolves to a reference to itself, once", async () => {
-    const zip = zipTree(new Uint8Array(readFileSync("apks/FitNotes.apk")));
-    const table = new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null), res = new Resources(table, zip, undefined, true);
-    const id = table.findId("layout", "activity_main"), ref = res.ref(id);
-    expect(ref).toMatchObject({ t: TV.REFERENCE, d: id });
-    expect(res.resolveRefs(ref)).toBe(ref);
-    expect(rvString(res, { t: TV.REFERENCE, d: id })).toBe(res.fileOf(id)!.path);
-  });
-
   test("package type ID offsets apply to resource lookup", () => {
     const resources = new Arsc(resourceTable(packageChunk("id", "item", 0, 1, 9)));
     expect(resources.findId("id", "item")).toBe(0x7f0a0000);
-    expect(resources.entry(0x7f0a0000)?.key).toBe("item");
+    expect(resources.entry(0x7f0a0000, deviceQualifiers())?.key).toBe("item");
   });
 
   test("resource names use the type pool of each package chunk", () => {
@@ -577,8 +587,8 @@ describe("resource-type-id-offset", () => {
       packageChunk("drawable", "feature", 0, 1, 0, 0x53),
     ));
     expect(resources.pkgId).toBe(0x7f);
-    expect(resources.entry(0x7f010000)?.key).toBe("font");
-    expect(resources.entry(0x4f010000)?.key).toBe("library");
+    expect(resources.entry(0x7f010000, deviceQualifiers())?.key).toBe("font");
+    expect(resources.entry(0x4f010000, deviceQualifiers())?.key).toBe("library");
     expect(resources.typeName(1, 0)).toBe("integer");
     expect(resources.typeName(1, 0, 0x53)).toBe("drawable");
     expect(resources.findId("style", "library")).toBe(0);
@@ -594,7 +604,7 @@ describe("resource-value-density", () => {
   test("resource values retain selected density and resolved reference identity", async () => {
     const table = new Arsc(Uint8Array.of(2, 0, 8, 0, 8, 0, 0, 0));
     const config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
-    table.device.density = 480;
+    (table as never as { packages: Map<number, unknown> }).packages.set(0x7f, { name: "", types: table.types });
     table.types.set(1, [
       { id: 1, name: "integer", config, entries: new Map([
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 1 } }],
@@ -605,7 +615,7 @@ describe("resource-value-density", () => {
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 3 } }],
       ]) },
     ]);
-    const res = new Resources(table, {});
+    const res = new Resources([{ table, zip: {}, lazyEntries: new Map() }], { ...deviceQualifiers(), density: 480 });
     for (const [id, resolve, expected] of [
       [0x7f010000, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
       [0x7f010001, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
@@ -620,11 +630,9 @@ describe("resource-value-density", () => {
     const theme = new NativeTheme(res), attr = 0x7f020000;
     theme.entries.set(attr, { t: TV.REFERENCE, d: 0x7f010000, pkg: 0x7f, flags: 0 });
     const selected = theme.resolvedAttribute(attr);
-    const other = new Resources(null, {}, undefined, true);
-    other.setApks([]);
     expect(theme.resolvedAttribute(attr)).toBe(selected);
-    config.density = table.device.density = 160;
-    res.invalidate();
+    config.density = 160;
+    res.configure({ ...res.qualifiers, density: 160 });
     expect(theme.resolvedAttribute(attr)).toMatchObject({ d: 1, density: 160 });
   });
 });

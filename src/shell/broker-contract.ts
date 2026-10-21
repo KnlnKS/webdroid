@@ -4,6 +4,7 @@
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
 import type { PermissionAccess } from "../android/permissions.ts";
+import type { UriGrantCalls } from "../android/urigrants.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
 import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";
@@ -24,7 +25,7 @@ import { checkPermission } from "../android/permissions.ts";
 import { queryReceivers } from "../android/pm.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import { hostUiMethods } from "./host-ui.ts";
-import { methodsOf, qualified, type MethodTree } from "./process-port.ts";
+import { callError, callProxy, methodsOf, qualified, type CallFailure, type MethodTree, type ProxyOptions } from "./rpc.ts";
 
 /** an access interface's methods, called across a port */
 export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
@@ -51,6 +52,7 @@ export type BrokerCalls = CookieCalls & {
   permissions: Calls<PermissionAccess>;
   settings: Calls<SettingsAccess>;
   activity: ActivityCalls;
+  uriGrants: Calls<UriGrantCalls>;
   ui: HostUi;
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   systemService: (name: string) => Promise<BinderHandle | null>;
@@ -78,13 +80,14 @@ export const brokerMethods = {
   process: methodsOf<ProcessLifeCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch"]),
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
-  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "operation", "kind", "flags", "creator"]),
+  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "take", "peek"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),
   permissions: methodsOf<PermissionAccess>()(["permissionCheck", "permissionGrant"]),
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
   ui: hostUiMethods,
+  uriGrants: methodsOf<UriGrantCalls>()(["check", "grant", "revoke"]),
 } satisfies MethodTree & { [D in Domains<BrokerCalls>]: readonly (keyof BrokerCalls[D])[] };
 export const brokerCallNames = qualified(brokerMethods);
 
@@ -109,6 +112,12 @@ export type ProcessEndpoint = {
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
 };
+const processMethods = methodsOf<ProcessEndpoint>()(["processDied", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast",
+  "cookiesChanged", "storageChanged", "packageRemoved", "kill"]);
+/** a failure as this realm's exception: a Java exception is rebuilt in this VM */
+export const javaFailure = (error: CallFailure): unknown => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : callError(error);
+export const processProxy = (port: MessagePort, options: Pick<ProxyOptions<ProcessEndpoint>, "makeError" | "onClose"> = {}) =>
+  callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options });
 
 export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;

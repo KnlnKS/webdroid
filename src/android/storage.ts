@@ -4,10 +4,11 @@
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
-import { newObj, scall, linkInit } from "../jvm/natives/jentry.ts";
-import { systemResource } from "./resnative.ts";
+import { newObj, scall, vcall, linkInit } from "../jvm/natives/jentry.ts";
+import { systemResource } from "./configuration.ts";
 import { newFile } from "../jvm/natives/jio.ts";
-import { hostService } from "./binder.ts";
+import { callingIdentity, hostService, serviceContext } from "./binder.ts";
+import { uidCacheBytes } from "./storagestats.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { uuidDefault } from "./os.ts";
 import { packages } from "./packages.ts";
@@ -72,7 +73,12 @@ hostService("mount", "webdroid/StorageManagerService", "android/os/storage/IStor
     throw yield newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", failed);
   }),
   "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).total / 20); }),
-  "getCacheSizeBytes(Ljava/lang/String;I)J": () => 0n,
+  // StorageManagerService asks StorageStatsManager.queryStatsForUid, as itself
+  "getCacheSizeBytes(Ljava/lang/String;I)J": driven(function* (_volume: string | null, uid: number): Gen {
+    if (uid !== callingIdentity().uid) yield vcall(yield* awaited(serviceContext()), "enforceCallingPermission",
+      "(Ljava/lang/String;Ljava/lang/String;)V", "android.permission.STORAGE_INTERNAL", "StorageManagerService");
+    return uidCacheBytes(uid);
+  }),
   "fixupAppDir(Ljava/lang/String;)V": fixupAppDir,
   // vold creates an app's own external data, obb and media directories for it, and nothing else
   "mkdirs(Ljava/lang/String;Ljava/lang/String;)V": (pkg: string, path: string) => {
@@ -82,6 +88,6 @@ hostService("mount", "webdroid/StorageManagerService", "android/os/storage/IStor
     for (let i = SHARED.length; i >= 0; i = dir.indexOf("/", i + 1)) vfs.mkdir(dir.slice(0, i));
     vfs.mkdir(dir);
   },
-});
+}, { system: true });
 // android_os_storage_StorageManager: the vfs keeps no project quotas, so FS_IOC_FSGETXATTR fails
 rt.registerJni("android/os/storage/StorageManager", "setQuotaProjectId(Ljava/lang/String;J)Z", () => 0);

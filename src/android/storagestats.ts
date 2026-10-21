@@ -4,8 +4,8 @@
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
 import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
-import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { packages } from "./packages.ts";
+import { vfs, contentSize, storageEstimate } from "../shell/vfs.ts";
+import { packages, uidPackages } from "./packages.ts";
 import { mimeOf } from "../mime.ts";
 import { callingIdentity, hostService, serviceContext } from "./binder.ts";
 
@@ -13,19 +13,23 @@ import { callingIdentity, hostService, serviceContext } from "./binder.ts";
 function bytesUnder(dirs: string[], keep: (path: string) => boolean = () => true): bigint {
   let total = 0;
   const count = (path: string, size: number) => { if (dirs.some((dir) => path.startsWith(dir)) && keep(path)) total += size; };
-  for (const [path, bytes] of vfs.files) count(path, bytes.length);
-  for (const [path, source] of vfs.lazyFiles) count(path, source.size);
+  for (const [path, { content }] of vfs.entries()) if (content) count(path, contentSize(content));
   return BigInt(total);
 }
 const apkBytes = (pkgs: string[]) => pkgs.reduce((sum, pkg) => {
   const path = packages.get(pkg)?.path ?? "";
-  return sum + BigInt(vfs.files.get(path)?.length ?? vfs.lazyFiles.get(path)?.size ?? 0);
+  return sum + BigInt(vfs.stat(path)?.size ?? 0);
 }, 0n);
+/** StorageStats.cacheBytes: the packages' cache and code_cache, and their external cache */
+const cacheBytes = (pkgs: string[]) =>
+  bytesUnder(pkgs.flatMap((pkg) => [`/data/data/${pkg}/cache/`, `/data/data/${pkg}/code_cache/`, `/sdcard/Android/data/${pkg}/cache/`]));
+const packagesOf = (uid: number) => uidPackages(uid).map((record) => record.pkg);
+/** the cache bytes queryStatsForUid reports for `uid` */
+export const uidCacheBytes = (uid: number): bigint => cacheBytes(packagesOf(uid));
 function storageStats(pkgs: string[]): JObj | Promise<JObj> {
   const own = (sub: string) => pkgs.flatMap((pkg) => [`/data/data/${pkg}/${sub}`, `/sdcard/Android/data/${pkg}/${sub}`]);
   return after(newObj("android/app/usage/StorageStats"), (stats) => setDeclared(stats, "android/app/usage/StorageStats", {
-    codeBytes: apkBytes(pkgs), dataBytes: bytesUnder(own("")),
-    cacheBytes: bytesUnder([...own("cache/"), ...pkgs.map((pkg) => `/data/data/${pkg}/code_cache/`)]),
+    codeBytes: apkBytes(pkgs), dataBytes: bytesUnder(own("")), cacheBytes: cacheBytes(pkgs),
     externalCacheBytes: bytesUnder(pkgs.map((pkg) => `/sdcard/Android/data/${pkg}/cache/`)),
   }));
 }
@@ -52,7 +56,6 @@ function* enforceStats(pkg: string): Gen<void> {
   const denial = yield* statsDenial(callingIdentity().uid, pkg);
   if (denial) throw rt.mkThrowable("java/lang/SecurityException", denial);
 }
-const uidPackages = (uid: number) => [...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg);
 const S = "Ljava/lang/String;";
 hostService("storagestats", "webdroid/StorageStatsService", "android/app/usage/IStorageStatsManager$Stub", {
   [`getTotalBytes(${S}${S})J`]: () => after(storageEstimate(), (e) => BigInt(Math.floor(e.total))),
@@ -71,7 +74,7 @@ hostService("storagestats", "webdroid/StorageStatsService", "android/app/usage/I
   }),
   [`queryStatsForUid(${S}I${S})Landroid/app/usage/StorageStats;`]: driven(function* (_volume: string | null, uid: number, caller: string) {
     if (uid !== callingIdentity().uid) yield* enforceStats(caller);
-    return storageStats(uidPackages(uid));
+    return storageStats(packagesOf(uid));
   }),
   [`queryStatsForUser(${S}I${S})Landroid/app/usage/StorageStats;`]: driven(function* (_volume: string | null, _user: number, caller: string) {
     yield* enforceStats(caller);

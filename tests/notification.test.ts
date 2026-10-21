@@ -5,7 +5,7 @@ import { classNameOf, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentr
 import { stringHash } from "../src/jvm/abi.ts";
 import { packageUid } from "../src/android/packages.ts";
 import { grantPermissions } from "../src/android/permissions.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandle } from "../src/android/binder.ts";
 import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
 import { vfs } from "../src/shell/vfs.ts";

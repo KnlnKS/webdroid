@@ -5,23 +5,15 @@ import net from "node:net";
 import tls from "node:tls";
 import type { RawData, WebSocket } from "ws";
 import { parseIpv4 } from "./src/native/net-address.ts";
-import { tcpReady, type TcpTarget } from "./src/shell/serve-routes.ts";
+import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, type TcpTarget } from "./src/shell/tcpwire.ts";
 
-const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
-
-// Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
-// ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.
-// Java sockets can ask the relay to terminate TLS; native stacks pass their own TLS bytes
-// through the same relay unchanged.
-// A text control frame means connected and carries the relay's local endpoint; a close before
-// that means the connect failed. A plain "ok" (worker/tcp.ts, local address unparsed) also means connected.
+// Raw TCP over a WebSocket (tcpwire.ts). A page cannot open a socket, but every Java networking stack
+// ultimately wants one, so the dev server lends it ours. Java sockets can ask the relay to terminate
+// TLS; native stacks pass their own TLS bytes through the same relay unchanged.
 //
-// This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
-// as the dev server's /proxy, and the same reason both are dev-server-only: bound to loopback,
-// never meant to face a network.
-/** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
-const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
-
+// Like /proxy, this is an outbound proxy for whatever the emulated app asks for, so the server opens it
+// only to its own origin's pages (ownPage) and listens on loopback. It reaches this machine's network,
+// as the developer's device would; the deployed Worker's relay (worker/tcp.ts) refuses private addresses.
 export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget): void {
   let ready = false, connected = false, shut = false;
   const pending: Buffer[] = [];
@@ -41,9 +33,8 @@ export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget)
   socket.on("data", (chunk) => ws.send(chunk));
   socket.once("close", () => ws.close());
   socket.on("error", (e: NodeJS.ErrnoException) => {
-    // the errno code leads, for the guest's connect(2) to report
-    if (!connected) ws.close(4000, closeReason(`${e.code ?? ""} ${String(e)}`.trim()));
-    else if (!ready) ws.close(4001, closeReason(String(e)));
+    if (!connected) ws.close(TCP_CONNECT_FAILED, closeReason(`${e.code ?? ""} ${String(e)}`.trim()));
+    else if (!ready) ws.close(TCP_HANDSHAKE_FAILED, closeReason(String(e)));
     else ws.close();
   });
   ws.on("message", (data: RawData, binary: boolean) => {
@@ -52,7 +43,7 @@ export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget)
     if (shut) return;
     const chunk = data as Buffer;
     if (ready) socket.write(chunk); else pending.push(chunk);
-    if (socket.writableLength + pending.reduce((n, c) => n + c.length, 0) > MAX_PENDING_TCP_BYTES) ws.close(4002, "TCP upstream is too slow");
+    if (socket.writableLength + pending.reduce((n, c) => n + c.length, 0) > MAX_PENDING_TCP_BYTES) ws.close(TCP_TOO_SLOW, "TCP upstream is too slow");
   });
   ws.once("close", () => { pending.length = 0; socket.end(() => socket.destroy()); });
 }

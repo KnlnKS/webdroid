@@ -7,17 +7,16 @@
 import { Code, OP } from "../compiler/code.ts";
 import { T, type VT } from "../compiler/wasmbin.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
-import { ACC, kindOf, type MethodInfo } from "../compiler/program.ts";
+import { ACC, kindOf, mid, type MethodInfo } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { KINDS, valueKind } from "../compiler/infer.ts";
-import { mid } from "../compiler/ids.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
 import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
 import { Bridge } from "./bridge.ts";
 import { adaptImport, mayWait, reportSuspended, reportSuspendError, waitsAlways } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
-import { SIZE, copyFn } from "../compiler/copy.ts";
+import { SIZE, copyFn } from "../link/copy.ts";
 import { emitSave, emitRestored, ROOT } from "../compiler/hostcalls.ts";
 import { crossings } from "./stats.ts";
 

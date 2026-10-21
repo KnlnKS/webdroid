@@ -53,7 +53,7 @@ export function handleSignatureTypes(referrer: MethodInfo, index: number, field?
 const FRAME = "dalvik/system/EmulatedStackFrame";
 export const handleIntrinsics = new Map<string, Intrinsic>([
   [`${MH}.invokeExactWithFrame(L${FRAME};)V`, (cx, _m, c) => {
-    c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    c.lget(1); cx.nullCheck(c);
     emitInvokeImport(cx, c, () => c.lget(0), () => c.lget(1), "", InvokeMode.Frame); c.drop();
   }],
 ]);
@@ -161,16 +161,16 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
   const method = w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)], mode = method.name;
   const accessMode = (cx: Compiler, c: Code) => {
     cx.emitEnsure(c, AM); cx.str.literal(c, mode);
-    cx.callMethod(c, cx.prog.resolve(AM, "valueFromMethodName", `(Ljava/lang/String;)L${AM};`)!);
+    cx.callNamed(c, AM, "valueFromMethodName", `(Ljava/lang/String;)L${AM};`);
   };
   const type = handleThunk(w, `mh:varHandleType:${mode}`, ["L"], "L", (cx, c, arg) => {
-    arg(0); accessMode(cx, c); cx.callMethod(c, cx.prog.resolve(VH, "accessModeType", `(L${AM};)L${MT};`)!);
+    arg(0); accessMode(cx, c); cx.callNamed(c, VH, "accessModeType", `(L${AM};)L${MT};`);
   }, parent)(handle) as object | Promise<object>;
   return chain(type, type => {
     const actual = signatureOf(w, type), match = ret === actual.ret && params.length === actual.params.length + 1 && actual.params.every((p, i) => p === params[i + 1]);
     if (exact && !match) w.raise("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(actual.params, actual.ret)} but was ${prettySig(params.slice(1), ret)}`);
     const supported = handleThunk(w, `mh:varHandleSupported:${mode}`, ["L"], "I", (cx, c, arg) => {
-      arg(0); accessMode(cx, c); cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${AM};)Z`)!);
+      arg(0); accessMode(cx, c); cx.callNamed(c, VH, "isAccessModeSupported", `(L${AM};)Z`);
     }, parent)(handle) as number | Promise<number>;
     return chain(supported, supported => {
       if (!supported) w.raise("java/lang/UnsupportedOperationException", null);
@@ -179,7 +179,7 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
           const impl = "java/lang/invoke/MethodHandleImpl", local = c.newLocal(T.anyref);
           cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(local).i64(art).i32(s.kinds.INVOKE_VAR_HANDLE_EXACT);
           emitMethodType(cx, c, actual.ret, [`L${VH};`, ...actual.params]);
-          cx.callMethod(c, cx.prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(local);
+          cx.callNamed(c, impl, "<init>", `(JIL${MT};)V`); c.lget(local);
         }, parent)() as object | Promise<object>;
         return chain(normalized, normalized => mhInvoke(w, normalized, args, `(${params.join("")})${ret}`, InvokeMode.Invoke, parent));
       }
@@ -207,17 +207,16 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
   return handleThunk(w, `mh:${put ? "put" : "get"}:${id}`, [...stat ? [] : ["L" as const], ...put ? ["L" as const] : []], put ? "V" : "L", (cx, c, arg) => {
     const st = cx.structFor(jc.name), at = stat ? -1 : cx.fieldIndex(jc.name, f), value = stat ? 0 : 1;
     if (stat) cx.emitEnsure(c, jc.name);
-    else { arg(0); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); }
+    else { arg(0); cx.nullCheck(c); }
     const target = () => { arg(0); c.refCast(st); };
     if (!put) {
       if (stat) c.gget(cx.staticGlobal(jc.name, f.name, f.desc)); else { target(); c.structGet(st, at); }
       if (BOX[f.desc]) box(cx, c, f.desc);
       return;
     }
-    if (!stat) target();
-    arg(value);
-    if (BOX[f.desc]) unbox(cx, c, f.desc);
-    if (stat) c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); else c.structSet(st, at);
+    const unboxed = () => { arg(value); if (BOX[f.desc]) unbox(cx, c, f.desc); };
+    if (!stat) cx.emitFieldStore(c, jc.name, f, target, unboxed);
+    else { unboxed(); c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); }
   }, parent) as never;
 }
 
@@ -225,21 +224,21 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
 function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret: boolean): number {
   const name = `${FRAME}$StackFrame${write ? "Writer" : "Reader"}`, base = `${FRAME}$StackFrameAccessor`, local = c.newLocal(T.anyref);
   cx.construct(c, cx.prog.resolve(name, "<init>", "()V")!); c.lset(local);
-  c.lget(local); frame(); cx.callMethod(c, cx.prog.resolve(base, "attach", `(L${FRAME};)L${base};`)!); c.drop();
-  if (ret) { c.lget(local); cx.callMethod(c, cx.prog.resolve(base, "makeReturnValueAccessor", "()V")!); }
+  c.lget(local); frame(); cx.callNamed(c, base, "attach", `(L${FRAME};)L${base};`); c.drop();
+  if (ret) { c.lget(local); cx.callNamed(c, base, "makeReturnValueAccessor", "()V"); }
   return local;
 }
 function readFrame(cx: Compiler, c: Code, reader: number, desc: string): void {
   const name = `${FRAME}$StackFrameReader`;
   c.lget(reader);
-  if (BOX[desc]) { cx.callMethod(c, cx.prog.resolve(name, "next" + PRIMS[desc].title, `()${desc}`)!); box(cx, c, desc); }
-  else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`)!); }
+  if (BOX[desc]) { cx.callNamed(c, name, "next" + PRIMS[desc].title, `()${desc}`); box(cx, c, desc); }
+  else { cx.constClass(c, typeName(desc)); cx.callNamed(c, name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`); }
 }
 function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: () => void): void {
   const name = `${FRAME}$StackFrameWriter`;
   c.lget(writer); value();
-  if (BOX[desc]) { unbox(cx, c, desc); cx.callMethod(c, cx.prog.resolve(name, "putNext" + PRIMS[desc].title, `(${desc})V`)!); }
-  else { cx.constClass(c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
+  if (BOX[desc]) { unbox(cx, c, desc); cx.callNamed(c, name, "putNext" + PRIMS[desc].title, `(${desc})V`); }
+  else { cx.constClass(c, typeName(desc)); cx.callNamed(c, name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`); }
 }
 function signatureOf(w: World, type: object): { params: string[]; ret: string } {
   const s = states.get(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));
@@ -268,7 +267,7 @@ function transform(w: World, mh: object, args: object, params: string[], ret: st
   const sig = `(${params.join("")})${ret}`;
   const frame = handleThunk(w, `mh:newFrame:${sig}`, ["L"], "L", (cx, c, arg) => {
     emitMethodType(cx, c, ret, params);
-    cx.emitEnsure(c, FRAME); cx.callMethod(c, cx.prog.resolve(FRAME, "create", `(L${MT};)L${FRAME};`)!);
+    cx.emitEnsure(c, FRAME); cx.callNamed(c, FRAME, "create", `(L${MT};)L${FRAME};`);
     const local = c.newLocal(T.anyref); c.lset(local);
     const writer = accessor(cx, c, () => c.lget(local), true, false);
     params.forEach((p, i) => writeFrame(cx, c, writer, p, () => { arg(0); cx.arrayData(c).i32(i).arrayGet(cx.tData.ref); }));

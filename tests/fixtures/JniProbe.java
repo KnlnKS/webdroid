@@ -1,5 +1,5 @@
-// Rebuild in a temporary directory with javac --release 11 against Android API 35's android.jar, then Android build-tools d8
-// --min-api 26 --output <dir> <dir>/*.class. Copy classes.dex to JniProbe.dex; tests need neither Java nor the Android SDK.
+// JniProbe.dex is this class built by `pnpm ts scripts/probes.ts JniProbe`, committed so that the tests need
+// neither Java nor the Android SDK.
 import dalvik.annotation.optimization.CriticalNative;
 import dalvik.annotation.optimization.FastNative;
 import java.nio.ByteBuffer;

@@ -1,25 +1,13 @@
-// Resources: the app's resource table and the android: one, addressed by the package byte of a
-// resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
+// Resources: AssetManager2, the resource tables of the loaded apks addressed by the package byte of a
+// resource id, with its themes and the attribute-resolution cascade (XML → style → defStyle → theme).
 
-import type { Arsc } from "./arsc.ts";
+import type { Arsc, Qualifiers } from "./arsc.ts";
 import { TV, type XmlNode, type XmlAttr } from "./axml.ts";
 import { getDeclared } from "../jvm/runtime.ts";
 import { deref } from "./handles.ts";
 import { intBitsToFloat } from "../jvm/abi.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 
-let fwPkg: Arsc | null = null;
-export function setFramework(a: Arsc): void { fwPkg = a; }
-
-
-/** r: the resource whose entry a resolved value came from — what getResourceId still reports */
-export interface RV { t: number; d: number; s?: string; r?: number }
-const NULL_RV: RV = { t: TV.NULL, d: 0 };
-/** binary Res_value → RV with FLOAT bits decoded to a JS number */
-export function normRV(v: RV): RV {
-  if (v.t === TV.FLOAT) return { t: TV.FLOAT, d: intBitsToFloat(v.d), s: v.s };
-  return v;
-}
 /**
  * A value as AssetManager2 selects it (its SelectedValue): the Res_value, the package id of the
  * table its entry came from (-1 for an XML attribute's own value, AOSP's kInvalidCookie), the
@@ -50,131 +38,51 @@ export class Bag {
     return -1;
   }
 }
-/** resource types a reference to stays a reference: the caller loads them by id */
-const LOADED_BY_ID = new Set(["drawable", "layout", "style", "anim", "xml", "menu", "mipmap", "raw", "font", "id", "transition", "interpolator", "animator"]);
 const SEL = { density: 0 };
 
-const allResources: Resources[] = [];
-/** Re-resolve entries under changed qualifiers in every live resource table. */
-function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
-  for (const r of allResources) {
-    r.invalidate();
-    if (r.arsc) Object.assign(r.arsc.device, qualifiers);
-  }
-  if (fwPkg) Object.assign(fwPkg.device, qualifiers);
-}
-export const setResourceNight = (night: boolean): void => setDeviceQualifiers({ night: night ? 1 : 0 });
-export const setResourceLocale = (lang: string, dir: number): void => setDeviceQualifiers({ lang, dir });
-export const setResourceOrientation = (orientation: number, wdp: number, hdp: number, swdp: number): void =>
-  setDeviceQualifiers({ orientation: orientation as Arsc["device"]["orientation"], wdp, hdp, swdp });
-
-
 /** the native half of an ApkAssets: one archive and its resource table */
-export interface Apk {
-  path: string; table: Arsc | null;
-  zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource>;
-}
+export interface Apk { table: Arsc | null; zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource> }
+export const emptyApk = (): Apk => ({ table: null, zip: {}, lazyEntries: new Map() });
 
-/** AssetManager2: the tables of the loaded packages, addressed by the package byte of an id. */
+/** AssetManager2: its apks' tables by package id, selecting under one configuration. */
 export class Resources {
-  arsc: Arsc | null;
-  zip: Record<string, Uint8Array>;
-  lazyEntries: Map<string, FileSource>;
   bagCache = new Map<number, Bag | null>();
   /** Selection changes invalidate this AssetManager's bags and its themes' resolved values. */
   generation = 0;
-  private framework: Arsc | null | undefined;
-  /** an AssetManager's apks in cookie order; null for a package's own tables */
-  apks: Apk[] | null = null;
-  private cookies: Int8Array | null = null;
-  private qualifiers: Partial<Arsc["device"]> = {};
+  /** the apks in cookie order */
+  apks: Apk[] = [];
+  qualifiers: Qualifiers;
+  /** by package id: the table that defines it and the 1-based cookie of that table's apk, -1 for none */
+  private tables: (Arsc | undefined)[] = [];
+  private cookies = new Int8Array(256);
 
-  constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>, lazyEntries = new Map<string, FileSource>(), scoped = false) {
-    this.arsc = arsc;
-    this.zip = zip;
-    this.lazyEntries = lazyEntries;
-    if (!scoped) allResources.push(this);
-  }
+  constructor(apks: Apk[], qualifiers: Qualifiers) { this.qualifiers = qualifiers; this.setApks(apks); }
 
   invalidate(): void { this.bagCache.clear(); this.generation++; }
 
-  /** AssetManager2::SetApkAssets: the last package that is not the framework is the app's */
+  /** AssetManager2::SetApkAssets: a package id belongs to the first apk that defines it */
   setApks(apks: Apk[]): void {
     this.apks = apks;
-    const app = appApk(apks);
-    this.zip = app?.zip ?? {};
-    this.lazyEntries = app?.lazyEntries ?? new Map();
-    const cookies = this.cookies = new Int8Array(256).fill(-1);
-    apks.forEach((a, i) => { if (a.table) for (const id of a.table.packageIds()) if (cookies[id] < 0) cookies[id] = i + 1; });
-    this.configure(this.qualifiers);
-  }
-  /** AssetManager2::SetConfigurations: select under these qualifiers from now on */
-  configure(qualifiers: Partial<Arsc["device"]>): void {
-    this.qualifiers = qualifiers;
-    const apks = this.apks ?? [];
-    this.arsc = scopeTable(appApk(apks)?.table ?? null, qualifiers);
-    this.framework = scopeTable(apks.find((a) => a.table?.pkgId === 0x01)?.table ?? null, qualifiers);
+    const cookies = this.cookies.fill(-1), tables: (Arsc | undefined)[] = this.tables = [];
+    apks.forEach(({ table }, i) => { if (table) for (const id of table.packageIds()) if (cookies[id] < 0) { cookies[id] = i + 1; tables[id] = table; } });
     this.invalidate();
   }
+  /** AssetManager2::SetConfigurations: select under these qualifiers from now on */
+  configure(qualifiers: Qualifiers): void { this.qualifiers = qualifiers; this.invalidate(); }
   /** the Java cookie of the apk a package id's table came from: 1-based, -1 for none */
-  cookieOf(pkg: number): number {
-    return pkg < 0 ? -1 : this.cookies![pkg];
-  }
+  cookieOf(pkg: number): number { return pkg < 0 ? -1 : this.cookies[pkg]; }
 
-  /** the table a resource id belongs to: package 0x01 is the framework, anything else the app */
-  tbl(resId: number): Arsc | null { return resId >>> 24 === 0x01 ? (this.framework === undefined ? fwPkg : this.framework) : this.arsc; }
-
-  /** the archive path a file resource names, the package that owns it, the id the reference
-   *  chain ended on and the density of the configuration it came from — everything but the
-   *  bytes, which cost an inflate */
-  pathOf(resId: number, depth = 0, selected: { density: number } = { density: 0 }): { path: string; id: number; arsc: Arsc; density: number } | null {
-    const a = this.tbl(resId);
-    const e = a?.entry(resId, selected);
-    if (!e?.value) return null;
-    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected);
-    if (e.value.type !== TV.STRING) return null;
-    return { path: a!.values.get(e.value.data), id: resId, arsc: a!, density: selected.density };
-  }
-
-  /** the archive entry a file resource names, out of the package that owns it */
-  fileOf(resId: number): { path: string; bytes: Uint8Array; density: number } | null {
-    const f = this.pathOf(resId);
-    const bytes = f && f.arsc.files(f.path);
-    return bytes ? { path: f!.path, bytes, density: f!.density } : null;
-  }
-
-  /** id by type and name; a package name picks a table, otherwise the app is searched first */
-  idFor(type: string, name: string, pkg = ""): number {
-    if (pkg && pkg === fwPkg?.pkgName) return fwPkg.findId(type, name);
-    if (pkg) {
-      const id = this.arsc?.packageId(pkg);
-      return id === undefined ? 0 : this.arsc!.findId(type, name, id);
-    }
-    return this.arsc?.findId(type, name) || fwPkg?.findId(type, name) || 0;
-  }
-
-  idType(resId: number): string {
-    const a = this.tbl(resId);
-    return a ? a.typeName((resId >> 16) & 0xff, resId & 0xffff, resId >>> 24) : "?";
-  }
-
-  /** simple value for resId (no bag). */
-  value(resId: number, selected?: { density: number }): RV {
-    if (!resId) return NULL_RV;
-    const a = this.tbl(resId);
-    const e = a?.entry(resId, selected);
-    if (!e?.value) return NULL_RV;
-    const v: RV = { t: e.value.type, d: e.value.data };
-    if (v.t === TV.STRING) v.s = a!.values.get(e.value.data);
-    return normRV(v);
-  }
+  /** the table a resource id's package belongs to */
+  tbl(resId: number): Arsc | undefined { return this.tables[resId >>> 24]; }
+  /** the entry `resId` selects */
+  entry(resId: number) { return this.tbl(resId)?.entry(resId, this.qualifiers) ?? null; }
 
   /** AssetManager2::GetResource into `out`; false when `resid` names nothing, or a bag and
    *  `mayBeBag` is false. A bag reads back as a reference to itself. */
   getResource(resid: number, mayBeBag: boolean, out: SV, density = 0): boolean {
     const a = this.tbl(resid);
     SEL.density = 0;
-    const e = a?.entry(resid, SEL, density || undefined);
+    const e = a?.entry(resid, this.qualifiers, SEL, density || undefined);
     if (!e) return false;
     if (e.bag) {
       if (!mayBeBag) return false;
@@ -198,48 +106,8 @@ export class Resources {
     }
   }
 
-  /** a table value as RV, strings out of the package's pool */
-  rawRV(t: number, d: number, pkg: number): RV {
-    if (t === TV.STRING) return { t, d, s: this.tbl(pkg << 24)?.values.get(d) };
-    return t === TV.FLOAT ? { t, d: intBitsToFloat(d) } : { t, d };
-  }
-
-  /** A selected value as RV. Files, styles and ids are loaded by id, so a value that came out of
-   *  one stays a reference to it. */
-  toRV(v: SV): RV | null {
-    const t = v.t;
-    if (t === TV.NULL || t === TV.ATTRIBUTE) return null;
-    if (v.pkg < 0) return normRV({ t, d: v.d });
-    if (v.resid) {
-      const type = this.idType(v.resid);
-      if (LOADED_BY_ID.has(type) || (t === TV.STRING && type === "color")) {
-        const rv: RV = { t: TV.REFERENCE, d: v.resid };
-        if (t === TV.STRING) rv.s = this.tbl(v.pkg << 24)?.values.get(v.d);
-        return rv;
-      }
-    }
-    const rv = this.rawRV(t, v.d, v.pkg);
-    if (v.resid) rv.r = v.resid;
-    return rv;
-  }
-
-  /** the resolved value behind resource id `id` — value(id) with its REFERENCE chain followed */
-  ref(id: number): RV { return this.resolveRefs({ t: TV.REFERENCE, d: id }); }
-
-  /** resolve REFERENCE chains (not ATTRIBUTE) */
-  resolveRefs(v: RV): RV {
-    if (v.t !== TV.REFERENCE || !v.d) return v;
-    const sv = SCRATCH;
-    sv.t = TV.REFERENCE; sv.d = v.d; sv.pkg = -1; sv.flags = 0; sv.resid = 0; sv.density = 0;
-    this.resolveReference(sv);
-    // a reference to itself (a bag) or one that did not resolve stays the value it was
-    if (sv.t === TV.REFERENCE && sv.d === v.d) return v;
-    const rv = this.toRV(sv);
-    // a file resource reads back as a reference to its own id: resolving it again must answer the
-    // same object, or a caller that resolves until nothing changes (rvString) never stops
-    if (!rv || (rv.t === TV.REFERENCE && rv.d === v.d && (v.s !== undefined || rv.s === undefined))) return v;
-    return rv;
-  }
+  /** a TYPE_STRING value out of its package's pool; null for an XML attribute's own string or another type */
+  string(v: SV): string | null { return v.t === TV.STRING && v.pkg >= 0 ? this.tbl(v.pkg << 24)?.values.get(v.d) ?? null : null; }
 
   /** the bag `resId` names with its parents merged in, or null (AssetManager2::GetBag) */
   bag(resId: number): Bag | null {
@@ -251,7 +119,7 @@ export class Resources {
 
   private computeBag(resId: number, chain: number[]): Bag | null {
     const a = this.tbl(resId);
-    const e = a?.entry(resId);
+    const e = a?.entry(resId, this.qualifiers);
     if (!e?.bag) return null;
     const own = e.bag.map, flags = a!.specFlags(resId), parentId = e.bag.parent;
     // a parent already on the chain is a cycle, and a bag in one inherits nothing
@@ -281,15 +149,6 @@ export class Resources {
     }
     return new Bag(parentId, flags | (parent?.flags ?? 0), keys.subarray(0, k), types.subarray(0, k), data.subarray(0, k), styles.subarray(0, k));
   }
-}
-const SCRATCH = newSV();
-/** the app's apk: the last whose package is not the framework's */
-function appApk(apks: Apk[]): Apk | undefined {
-  for (let i = apks.length - 1; i >= 0; i--) if (apks[i].table && apks[i].table!.pkgId !== 0x01) return apks[i];
-  return undefined;
-}
-function scopeTable(table: Arsc | null, qualifiers: Partial<Arsc["device"]>): Arsc | null {
-  return table && Object.assign(Object.create(table), { device: { ...table.device, ...qualifiers } });
 }
 
 interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
@@ -464,25 +323,21 @@ export function resolveAttributes(
   if (outIndices) outIndices[0] = found;
 }
 
-/** the string resource `id` names, "" when it is not one */
-export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
-/** a com.android.internal string, as the platform's own UI labels things, through the booted app's
- *  Resources (the framework package is an Arsc, not one of these, so the most recent is the app's) */
-export function frameworkString(name: string): string | null {
-  const res = allResources.at(-1), id = res?.idFor("string", name, "android");
-  return id ? rvString(res!, res!.ref(id)) : null;
+const RESOLVED = newSV();
+/** a value with its references followed through `res`, as a TypedArray reads an XML attribute; the
+ *  result is scratch, read before the next call */
+export function resolved(res: Resources, t: number, d: number): SV {
+  const v = RESOLVED;
+  v.t = t; v.d = d; v.pkg = -1; v.flags = 0; v.resid = 0; v.density = 0;
+  res.resolveReference(v);
+  return v;
 }
-export function rvString(res: Resources, v: RV | null): string | null {
-  if (!v || v.t === TV.NULL) return null;
-  if (v.s !== undefined && v.t === TV.STRING) return v.s;
-  if (v.t === TV.REFERENCE) {
-    const rv = res.resolveRefs(v);
-    if (rv !== v) return rvString(res, rv);
-    return res.value(v.d).s ?? null;
-  }
-  if (v.t === TV.FLOAT) return String(v.d);
-  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return String(v.d);
-  return v.s ?? null;
+/** the string resource `id` names, "" when it is none: a file resource names its path, a number reads in decimal */
+export function resString(res: Resources, id: number): string {
+  const v = resolved(res, TV.REFERENCE, id);
+  if (v.t === TV.STRING) return res.string(v) ?? "";
+  if (v.t === TV.FLOAT) return String(intBitsToFloat(v.d));
+  return v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 ? String(v.d) : "";
 }
 /** the AssetManager2 behind AOSP's Resources */
 export function nativeRes(jres: unknown): Resources {
@@ -493,4 +348,3 @@ export function nativeRes(jres: unknown): Resources {
 export function nativeAssets(am: unknown): Resources {
   return deref<Resources>(getDeclared(am, "android/content/res/AssetManager", "mObject"));
 }
-

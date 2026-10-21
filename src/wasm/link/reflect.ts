@@ -7,7 +7,6 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
@@ -107,7 +106,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
   // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
   if (!ctor && !m.isStatic) {
-    c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    c.lget(0); cx.nullCheck(c);
     if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
@@ -143,12 +142,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
     c.lget(0).call(cx.helper("vtab"));
-    if (!decl.isInterface) c.i32(cx.w.dispatch.vslot(m.cls, m.key)).arrayGet(cx.tVT);
-    else {
-      const sel = cx.w.selectorId(m.key), s = sel % H.IMT_N, vt = c.newLocal(refNull(cx.tVT));
-      c.lset(vt).lget(vt).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-        .lget(vt).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_().lget(vt).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
-    }
+    cx.emitDispatchSlot(c, m.cls, m.key);
     c.callIndirect(sig);
   }
   if (m.ret === "V") c.anyNull();

@@ -1,7 +1,7 @@
 import type { PackedArchiveIndex } from "./packedarchive.ts";
 import type { RemoteFileData } from "./remote-file.ts";
 import type { Rotation } from "./config.ts";
-import { closePort } from "./process-port.ts";
+import { closePort } from "./rpc.ts";
 
 /** Installed config/feature splits are loaded only by their owning package. */
 type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;

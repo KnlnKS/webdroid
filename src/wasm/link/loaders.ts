@@ -268,7 +268,7 @@ export const loaderIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => loaderIntrinsics.set(key, (cx, m, c) => f(cx, c));
 
 def("dalvik/system/DexFile.openDexFileNative(Ljava/lang/String;Ljava/lang/String;ILjava/lang/ClassLoader;[Ldalvik/system/DexPathList$Element;)Ljava/lang/Object;", (cx, c) => {
-  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0); cx.nullCheck(c);
   emitRestored(cx, c, [], [T.anyref], () => {
     c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen);
     emitSettled(cx, c);
@@ -284,7 +284,7 @@ def("dalvik/system/DexFile.openInMemoryDexFilesNative([Ljava/nio/ByteBuffer;[[B[
 // the classes of an opened dex are in the Program already: defining one is finding it among the cookie's
 def("dalvik/system/DexFile.defineClassNative(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Object;Ldalvik/system/DexFile;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
-  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0); cx.nullCheck(c);
   emitRestored(cx, c, [], [T.anyref], () => {
     c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Cookie); c.call(cx.imp.classByName).lset(id);
     emitClassAnswer(cx, c, id);
