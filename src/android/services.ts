@@ -10,22 +10,10 @@ import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { appHost } from "./apphost.ts";
-import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
 import { systemResource } from "./resnative.ts";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostService, parceledList } from "./binder.ts";
 import { packages, ownedBy } from "./packages.ts";
-import { broadcastQueueMethods } from "./server/broadcastqueue.ts";
-import { activityManagerMethods } from "./server/am.ts";
-import { activityTaskMethods } from "./server/atm.ts";
-import { activeServiceMethods } from "./server/activeservices.ts";
-
-// IActivityManager and IActivityTaskManager, whose methods come from the server/ modules that
-// implement them; those import one another, so only a module outside that cycle can read their
-// tables as it loads
-hostService("activity", "webdroid/ActivityManagerService", "android/app/IActivityManager$Stub",
-  { ...activityManagerMethods, ...intentSenderMethods, ...activeServiceMethods, ...broadcastQueueMethods });
-hostService("activity_task", "webdroid/ActivityTaskManagerService", "android/app/IActivityTaskManager$Stub", { ...activityTaskMethods, ...intentSenderTaskMethods });
 
 // ITrustManager: the keyguard is never shown and has no secure lock, as on the reference AVD
 hostService("trust", "webdroid/TrustManagerService", "android/app/trust/ITrustManager$Stub", {

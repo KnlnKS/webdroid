@@ -95,6 +95,7 @@ import "./android/mediastore.ts";
 import "./android/provider.ts";
 import "./android/notification.ts";
 import "./android/services.ts";
+import "./android/server/am.ts";
 import "./android/connectivity.ts";
 import "./android/power.ts";
 import "./android/display.ts";

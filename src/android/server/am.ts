@@ -1,66 +1,47 @@
 // ActivityManagerService for AOSP's ActivityThread: a process attaches, the service binds its
 // application (ApplicationInfo and the process's providers from the package manager, the device
 // configuration) and, for the package's own process, starts its launcher activity, as the home
-// screen's launch would.
+// screen's launch would. IActivityManager's services, receivers and PendingIntents are answered
+// by ActiveServices, the broadcast queue and PendingIntentController.
 import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime.ts";
-import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry.ts";
+import { newObj, vcall, scall, linkInit, after } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
-import { hostedService } from "../binder.ts";
 import { PROCESS_PID, PROCESS_UID, processName, totalMemory, freeMemory } from "../os.ts";
 import { jarray } from "../../jvm/abi.ts";
 import { appHost } from "../apphost.ts";
 import { configurations } from "./wm.ts";
-import { startMainActivity } from "./atm.ts";
+import { startMainActivity, startOperation$ } from "./atm.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { systemProviderHolder } from "../systemproviders.ts";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants.ts";
 import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, processImportance, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
-import { callingIdentity, newStub, parceledList } from "../binder.ts";
+import { callingIdentity, hostService, newStub, parceledList, type ParcelData } from "../binder.ts";
 import { packages, ownedBy, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
 import { clearUserData } from "../appdata.ts";
 import { COMPAT_CHANGES } from "../compat-changes.ts";
+import { newIntent, putExtra } from "../intent.ts";
+import { decodeIntent } from "../intentipc.ts";
+import { fillIn$, intentSenderMethods } from "../pendingintent.ts";
+import type { PendingOperation } from "../../shell/pendingintents.ts";
+import { activeServiceMethods, startService } from "./activeservices.ts";
+import { broadcastIntent, broadcastQueueMethods } from "./broadcastqueue.ts";
+import { STOCK_PM_FLAGS, compatInfo, pms, processRecord, thisApp } from "./process.ts";
 
-/** ActivityManagerService.STOCK_PM_FLAGS, what its package queries ask for */
-export const STOCK_PM_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES);
 /** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
  *  MATCH_DIRECT_BOOT_AUTO, without meta-data (a provider asks for its own) */
 const APP_PROVIDER_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES | GET_URI_PERMISSION_PATTERNS | MATCH_DIRECT_BOOT_AUTO);
-/** the package manager, as system_server's services reach it */
-export const pms = () => hostedService("package") as Promise<JObj>;
-/** a component of `pkg` in `process` runs in this process */
-export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === processName();
-
-let appThread: JObj | null = null, launcher = false;
-/** whether this is the app the user launched, whose launcher activity starts with it */
-export const userLaunched = (): boolean => launcher;
-export const attached = (): boolean => appThread !== null;
-/** this process's IApplicationThread, once it attached */
-export function thisApp(): JObj {
-  if (!appThread) throw rt.mkThrowable("java/lang/IllegalStateException", "Process has not attached");
-  return appThread;
-}
-let lane: Promise<unknown> = Promise.resolve();
-/** a call on this process's IApplicationThread after those made before it, as the system server's
- *  calls reach a process in order; arguments may be pending */
-export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): Promise<void> {
-  const thread = curThread;
-  const call = lane.then(() => Promise.all(args)).then((ready) => callOn(thread, () => vcall(thisApp(), name, desc, ...ready)));
-  lane = call.catch(() => {});
-  return call;
-}
 /** PlatformCompat.getDisabledChanges: the changes the device disables for an app targeting `target`,
  *  sorted, as AppCompatCallbacks binary-searches them */
 const disabledChanges = (target: number) =>
   BigInt64Array.from(Object.entries(COMPAT_CHANGES).flatMap(([id, since]) => target < since ? [BigInt(id)] : [])).sort();
-export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 const bind = driven(function* (app: JObj): Gen<void> {
   const pkg = appHost!.pkg, process = processName();
-  appThread = app;
+  processRecord.thread = app;
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, STOCK_PM_FLAGS, 0);
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
@@ -78,7 +59,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
     yield newObj("android/os/Bundle", "()V"), "unknown", null, null,
     disabledChanges(getDeclared(info, APP_INFO, "targetSdkVersion")), new BigInt64Array(0), yield* systemFontMap(), now, now);
-  if (launcher) yield startMainActivity(app, pkg);
+  if (processRecord.userLaunched) yield startMainActivity(app, pkg);
 });
 
 // ContentProviders this process published, by authority. ActivityThread finds its own before it
@@ -145,7 +126,7 @@ function fillProc(info: JObj): JObj {
 }
 const checkPidPermission = (name: string, _pid: number, uid: number) => checkUidPermission(name, uid);
 /** IActivityManager's methods but those of ActiveServices, BroadcastQueue and PendingIntentController */
-export const activityManagerMethods = {
+const activityManagerMethods = {
   "attachApplication(Landroid/app/IApplicationThread;J)V": (app: JObj) => bind(app),
   "finishAttachApplication(JJ)V": () => {},
   "publishContentProviders(Landroid/app/IApplicationThread;Ljava/util/List;)V": (_app: JObj, holders: JObj) => publishProviders(holders),
@@ -228,6 +209,18 @@ export const activityManagerMethods = {
   // AMS records it to kill this process when that package changes; no package changes under a running app
   "addPackageDependency(Ljava/lang/String;)V": () => {},
 };
+hostService("activity", "webdroid/ActivityManagerService", "android/app/IActivityManager$Stub",
+  { ...activityManagerMethods, ...intentSenderMethods, ...activeServiceMethods, ...broadcastQueueMethods });
+
+/** PendingIntentRecord.sendInner, in the creator's process with its identity */
+export const executePendingIntent = driven(function* (operation: PendingOperation, fill: ParcelData | null, alarmCount: number): Gen<void> {
+  const supplied = fill || alarmCount ? yield* awaited(fill ? decodeIntent(fill) : newIntent()) : null;
+  if (supplied && alarmCount) yield putExtra(supplied, "android.intent.extra.ALARM_COUNT", alarmCount, "I");
+  const intent = yield* fillIn$(operation, supplied);
+  if (operation.kind === "broadcast") yield broadcastIntent(intent, [], false);
+  else if (operation.kind === "activity") yield* startOperation$(thisApp(), operation, intent);
+  else yield startService(intent, null, operation.kind === "foreground-service", operation.pkg);
+});
 const CRASH_INFO = "android/app/ApplicationErrorReport$CrashInfo", EXIT_INFO = "android/app/ApplicationExitInfo";
 const DUMP = "android.permission.DUMP", CLEAR_APP_USER_DATA = "android.permission.CLEAR_APP_USER_DATA";
 /** ActivityManagerService's limit on a process state summary */
@@ -255,7 +248,7 @@ rt.register({ name: "webdroid/TombstoneRetriever", ctor: JTombstoneRetriever, su
  *  the application and, for the app the user launched, its launcher activity. A process started
  *  for another's component runs just that. The main looper is already running. */
 export const startActivityThread = driven(function* (launched: boolean): Gen<void> {
-  launcher = launched;
+  processRecord.userLaunched = launched;
   const AT = "android/app/ActivityThread";
   yield scall(AT + "$AndroidOs", "install", "()V");
   yield scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);

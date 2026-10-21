@@ -9,7 +9,7 @@ import { PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";
 import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
-import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./am.ts";
+import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };

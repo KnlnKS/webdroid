@@ -10,11 +10,14 @@ import { once } from "../../jvm/suspend.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
 import { notifyDisplayChanged } from "../display.ts";
-import { asSystem, systemToken } from "../binder.ts";
+import { asSystem, hostService, systemToken } from "../binder.ts";
 import { appHost } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
 import { grantResultUris } from "../urigrants.ts";
-import { attached, thisApp, userLaunched, pms, runsHere } from "./am.ts";
+import { pms, processRecord, runsHere, thisApp } from "./process.ts";
+import { decodeIntent } from "../intentipc.ts";
+import { fillIn$, pendingTransport, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
+import type { PendingOperation } from "../../shell/pendingintents.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
 import { deviceConfiguration } from "../resnative.ts";
 import { GL_ES_VERSION } from "../pm.ts";
@@ -137,7 +140,7 @@ export const displayHooks: { requestOrientation?: (request: number | null) => bo
 export const configurationChanged = driven(function* (): Gen<void> {
   notifyDisplayChanged();
   // a process yet to attach reads the configuration as it binds
-  if (attached()) {
+  if (processRecord.thread) {
     const { global } = yield* awaited(configurations());
     yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
   }
@@ -340,6 +343,12 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     return START_SUCCESS;
   } finally { transitions--; }
 });
+/** a PendingIntent's activity start: the intents before its last, then the last on top */
+export function* startOperation$(caller: JObj, operation: PendingOperation, intent: JIntent, resolvedType: string | null = null, resultTo: JObj | null = null,
+  resultWho: string | null = null, requestCode = -1): Gen<number> {
+  for (const data of operation.intents?.slice(0, -1) ?? []) yield startActivityFor(caller, yield* awaited(decodeIntent(data)));
+  return yield* awaited(startActivityFor(caller, intent, resolvedType, resultTo, resultWho, requestCode));
+}
 /** ActivityStartController.startActivities: each intent resolved, then started in order, the last on top */
 const startActivities = driven(function* (app: JObj, intents: JObj[], resolvedTypes: (string | null)[] | null, resultTo: JObj | null): Gen<number> {
   transitions++;
@@ -390,7 +399,7 @@ export const startActivityInProcess = driven(function* (component: string, inten
  *  ActivityRecord.makeActiveIfNeeded does. */
 export const taskVisibility = driven(function* (phase: "pause" | "stop" | "resume" | "visible"): Gen<void> {
   const top = stack.at(-1), pkg = appHost!.pkg;
-  if (!top) { if (phase === "resume" && userLaunched()) yield startMainActivity(thisApp(), pkg); return; }
+  if (!top) { if (phase === "resume" && processRecord.userLaunched) yield startMainActivity(thisApp(), pkg); return; }
   if (phase === "pause") yield pause(top);
   else if (phase === "stop") for (const r of [...stack]) yield* stop(r);
   else if (phase === "resume" && top.state !== "resumed") yield* resume(top);
@@ -549,8 +558,8 @@ rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "andro
 } });
 const appTask = once(() => newObj("webdroid/AppTask"));
 
-/** IActivityTaskManager's methods but PendingIntentController's */
-export const activityTaskMethods = {
+/** IActivityTaskManager */
+const activityTaskMethods = {
   "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => after(newObj("android/content/pm/ConfigurationInfo"), (info) => {
     const config = deviceConfiguration();
     return setDeclared(info, "android/content/pm/ConfigurationInfo", { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
@@ -567,4 +576,14 @@ export const activityTaskMethods = {
   "startActivities(Landroid/app/IApplicationThread;Ljava/lang/String;Ljava/lang/String;[Landroid/content/Intent;[Ljava/lang/String;Landroid/os/IBinder;Landroid/os/Bundle;I)I":
     (app: JObj, _pkg: string, _feature: string, intents: JObj[], resolvedTypes: (string | null)[] | null, resultTo: JObj | null) =>
       startActivities(app, intents, resolvedTypes, resultTo),
+  // Activity.startIntentSenderForResult: an activity sender starts for the caller's result; any
+  // other kind is an ordinary send, which the peek leaves to consume a one-shot sender
+  "startActivityIntentSender(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I":
+    driven(function* (caller: JObj, target: JObj, _token: unknown, fill: JIntent | null, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number): Gen {
+      const id = yield* senderId$(target), info = yield* awaited(pendingTransport.peek(id));
+      if (info?.kind !== "activity") return info && (yield* sendPending$(id, fill)) ? 0 : START_CANCELED;
+      const operation = yield* awaited(pendingTransport.take(id));
+      return operation ? yield* startOperation$(caller, operation, yield* fillIn$(operation, fill), resolvedType, resultTo, resultWho, requestCode) : START_CANCELED;
+    }),
 };
+hostService("activity_task", "webdroid/ActivityTaskManagerService", "android/app/IActivityTaskManager$Stub", activityTaskMethods);

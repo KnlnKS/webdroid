@@ -16,7 +16,7 @@ import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
 import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
-import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./am.ts";
+import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
 import type { ServiceBinding, ServiceStartAccess } from "../../shell/servicerecords.ts";
 

@@ -5,7 +5,7 @@ import { remoteProcessLife } from "./process-life.ts";
 import { usePathOwner } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore } from "../android/accounts.ts";
-import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
+import { pendingTransport } from "../android/pendingintent.ts";
 import { useAlarmScheduler } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
@@ -19,7 +19,7 @@ import { hostedServices, remoteServiceConnected, serviceTransport } from "../and
 import { vfs } from "./vfs.ts";
 import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue.ts";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm.ts";
-import { publishedProvider, providerProcesses } from "../android/server/am.ts";
+import { executePendingIntent, publishedProvider, providerProcesses } from "../android/server/am.ts";
 import { usePermissionStore, usePermissionAccess } from "../android/permissions.ts";
 import { sqliteTransport } from "../android/sqlite.ts";
 import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
