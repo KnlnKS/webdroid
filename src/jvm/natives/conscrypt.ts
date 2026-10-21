@@ -4,7 +4,7 @@
 // holds is owned by it and freed when the NativeRef is collected. TLS stays at the relay (jnet.ts),
 // so the SSL natives are not implemented.
 
-import { rt, declaredField, waits, type JObj } from "../runtime.ts";
+import { rt, peerField, waits, type JObj } from "../runtime.ts";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles.ts";
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "../../crypto/digest.ts";
 import { aes, des, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "../../crypto/ciphers.ts";
@@ -25,12 +25,11 @@ const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
 rt.claimNativeLib("javacrypto");
 
-let addressProp: string | undefined;
+const address = peerField<bigint>("com/android/org/conscrypt/NativeRef", "address");
 /** the native pointer a NativeRef holds */
 export function ptr<T>(ref: JObj | null): T {
   if (!ref) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const h = (ref as unknown as Record<string, bigint>)[addressProp ??= declaredField("com/android/org/conscrypt/NativeRef", "address")];
-  const o = deref<T>(h);
+  const o = deref<T>(address(ref));
   if (!o) throw rt.mkThrowable("java/lang/NullPointerException", "address == 0");
   return o;
 }

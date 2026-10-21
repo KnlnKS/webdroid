@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { awaited, rt, JObj, type NativeSpec, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
+import { awaited, rt, JObj, type NativeSpec, driven, instanceField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
 import { newArrayList, toJsArray } from "./jcoll.ts";
 import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry.ts";
 import { checkFromIndexSize } from "./jlang.ts";
@@ -314,14 +314,13 @@ function cookieURI(target: string): unknown {
 let followRedirects = 1;
 // URLConnection is libcore's; its fields are what this transport reads
 const UC = "java/net/URLConnection";
-let ucFields: Record<"url" | "doInput" | "doOutput" | "connected" | "connectTimeout" | "readTimeout" | "ifModifiedSince", string> | null = null;
-const uc = () => ucFields ??= Object.fromEntries(["url", "doInput", "doOutput", "connected", "connectTimeout", "readTimeout", "ifModifiedSince"]
-  .map((n) => [n, declaredField(UC, n)])) as NonNullable<typeof ucFields>;
+const uc = { url: instanceField<unknown>(UC, "url"), doInput: instanceField<number>(UC, "doInput"), doOutput: instanceField<number>(UC, "doOutput"),
+  connected: instanceField<number>(UC, "connected"), connectTimeout: instanceField<number>(UC, "connectTimeout"),
+  readTimeout: instanceField<number>(UC, "readTimeout"), ifModifiedSince: instanceField<bigint>(UC, "ifModifiedSince") };
 /** URLConnection(URL), the constructor HttpURLConnection(URL) runs */
 function initConnection(c: JObj, url: unknown): void {
   linkClass(UC).special("<init>", "(Ljava/net/URL;)V")(c, url);
 }
-type Fields = Record<string, unknown>;
 /** the exchange, redirects followed: a driven native, so the CookieHandler and every other Java
  *  call after a fetch runs on the thread that connected, not on whatever the event loop resumed */
 const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> {
@@ -396,15 +395,15 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
   return (this.res = { status, msg: r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
 });
 class JHttpURLConnection extends JObj {
-  get url(): unknown { return (this as unknown as Fields)[uc().url]; }
-  set url(u: unknown) { (this as unknown as Fields)[uc().url] = u; }
-  get doIn(): number { return (this as unknown as Fields)[uc().doInput] as number; }
-  get doOut(): number { return (this as unknown as Fields)[uc().doOutput] as number; }
-  get connected(): number { return (this as unknown as Fields)[uc().connected] as number; }
-  set connected(v: number) { (this as unknown as Fields)[uc().connected] = v; }
-  get cto(): number { return (this as unknown as Fields)[uc().connectTimeout] as number; }
-  get rto(): number { return (this as unknown as Fields)[uc().readTimeout] as number; }
-  get ifMod(): bigint { return (this as unknown as Fields)[uc().ifModifiedSince] as bigint; }
+  get url(): unknown { return uc.url.get(this); }
+  set url(u: unknown) { uc.url.set(this, u); }
+  get doIn(): number { return uc.doInput.get(this); }
+  get doOut(): number { return uc.doOutput.get(this); }
+  get connected(): number { return uc.connected.get(this); }
+  set connected(v: number) { uc.connected.set(this, v); }
+  get cto(): number { return uc.connectTimeout.get(this); }
+  get rto(): number { return uc.readTimeout.get(this); }
+  get ifMod(): bigint { return uc.ifModifiedSince.get(this); }
   method = "GET"; follow = followRedirects;
   responseCode = -1; responseMessage: string | null = null; chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n;
   req: [string, string][] = [];
