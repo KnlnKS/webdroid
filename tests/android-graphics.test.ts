@@ -12,7 +12,6 @@ import { currentContext } from "../src/native/gl-context.ts";
 import { NativeRenderNode } from "../src/android/rendernode.ts";
 import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix.ts";
 import { Transform } from "../src/android/recording.ts";
-import { rt } from "../src/jvm/runtime.ts";
 import { newObj, linkInit, vcall, iof, staticField, curThread } from "../src/jvm/natives/jentry.ts";
 import { parsePackageArchive } from "../src/android/packagearchive.ts";
 import { appResources, loadSystemFonts, scall, thrown } from "./java.ts";
@@ -41,6 +40,7 @@ describe("egl14-query-context", () => {
   test("EGL14 queries the created context's client version", async () => {
     const egl = await linkInit("android/opengl/EGL14");
     const display = await scall("android/opengl/EGL14", "eglGetDisplay", "(I)Landroid/opengl/EGLDisplay;", 0);
+    await scall("android/opengl/EGL14", "eglInitialize", "(Landroid/opengl/EGLDisplay;[II[II)Z", display, new Int32Array(1), 0, new Int32Array(1), 0);
     const configs: unknown[] = [null];
     const count = new Int32Array(1);
     expect(await scall("android/opengl/EGL14", "eglChooseConfig", "(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z",
@@ -59,9 +59,15 @@ describe("egl14-query-context", () => {
 });
 
 describe("egl10", () => {
-  test("EGL10 returns configurations with their declared Java type", async () => {
-    const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
+  // framework.jar's EGLImpl, which EGLContext.getEGL() answers, over a display it has initialized
+  const eglImpl = async () => {
+    const egl = await newObj("com/google/android/gles_jni/EGLImpl", "()V");
     const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
+    expect(await vcall(egl, "eglInitialize", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I)Z", display, new Int32Array(2))).toBe(1);
+    return { egl, display };
+  };
+  test("EGL10 returns configurations with their declared Java type", async () => {
+    const { egl, display } = await eglImpl(), configs = [null], count = new Int32Array(1);
     expect(await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null)).toBe(display);
     expect(iof(display, "javax/microedition/khronos/egl/EGLDisplay")).toBe(true);
     expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", display, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
@@ -69,26 +75,23 @@ describe("egl10", () => {
     expect(iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(true);
   });
 
-  test("EGL11 rejects the no-display handle", async () => {
-    const egl = rt.make("javax/microedition/khronos/egl/EGL11");
+  test("EGL10 rejects the no-display handle", async () => {
+    const { egl } = await eglImpl();
     const noDisplay = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_DISPLAY");
     const configs = [null], count = new Int32Array([-1]);
     expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", noDisplay, new Int32Array([0x3038]), configs, 1, count)).toBe(0);
-    expect([configs[0], count[0]]).toEqual([null, -1]);
-    expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
-    expect(await vcall(egl, "eglSwapInterval", "(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z", noDisplay, 0)).toBe(0);
+    expect([configs[0], count[0]]).toEqual([null, 0]);
     expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
   });
 
   test("EGL10 reports its no-context handle until a context is bound", async () => {
-    const egl = rt.make("javax/microedition/khronos/egl/EGL10");
-    const none = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_CONTEXT");
-    const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
+    const { egl, display } = await eglImpl();
+    const none = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_CONTEXT"), noSurface = await staticField("javax/microedition/khronos/egl/EGL10", "EGL_NO_SURFACE");
     expect(none).not.toBeNull();
     expect(iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(true);
     expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
     expect(currentContext(curThread)).toBeNull();
-    expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, null, null, none)).toBe(1);
+    expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, noSurface, noSurface, none)).toBe(1);
     expect(currentContext(curThread)).toBeNull();
   });
 });
