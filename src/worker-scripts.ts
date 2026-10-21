@@ -4,4 +4,5 @@ export const WORKER_SCRIPTS = {
   compile: { url: "/wasm-compile-worker.js", entry: "src/wasm/host/compile-worker.ts" },
   warm: { url: "/wasm-warm-worker.js", entry: "src/wasm/host/warm-worker.ts" },
   process: { url: "/process-worker.js", entry: "src/process-worker.ts" },
+  disk: { url: "/disk-worker.js", entry: "src/shell/disk-worker.ts" },
 } as const;

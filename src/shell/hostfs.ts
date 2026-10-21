@@ -9,6 +9,7 @@
 
 import { openDb } from "./idb.ts";
 import { hostUi, onNextGesture, type FilePick } from "./host-ui.ts";
+import { gone } from "./diskstore.ts";
 
 // lib.dom types the handles but not the async iteration or the permission calls.
 declare global {
@@ -71,8 +72,6 @@ export async function restoreRoots(): Promise<void> {
   }
 }
 
-/** an entry already removed is what its removal wanted */
-const gone = (error: unknown): void => { if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error; };
 /** the OPFS directory of the Wasm tier's compiled app code (src/wasm/host/persist.ts): not user data, so a reset keeps it */
 export const COMPILED_CODE_DIR = "wd-wasm-apps";
 
