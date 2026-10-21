@@ -2,7 +2,7 @@
 // or one marked where it is registered (`waits`) is a Suspending import: the Wasm stack that called it waits for the Promise and other strands run
 // meanwhile. Every other native is a plain import, since a Suspending import suspends even when its function answers a value (about 50 ns against 4).
 // A plain native that answers a Promise anyway parks its strand (natives.ts `parkable`), and is reported; its arrays are views of linear memory, which may grow
-// (detaching them) while it waits, so a native with arrays that may wait has to be declared.
+// (detaching them) while it waits, so a native with arrays that may wait has to be declared: `waits`, or `retries` when it can simply be called again.
 // The rule JSPI imposes is that no JS frame may sit between the `promising` entry of a strand and the import that suspends: a native on the
 // Wasm side of an import must not call Java through a plain call and expect that Java to block.
 import type { HostContext, HostFn } from "../link/hostapi.ts";

@@ -301,3 +301,7 @@ type Driven<T> = unknown extends T ? unknown : T | Promise<T>;
  *  or `awaited` result): the Wasm tier imports it as Suspending rather than parking the strand that called it. */
 export const waits = <F extends Function>(fn: F): F => Object.assign(fn, { $waits: true });
 export const isWaiting = (fn: Function): boolean => (fn as { $waits?: boolean }).$waits === true;
+/** Marks native `fn`, which answers a Promise only while something it reads loads (a font), having had no other effect: the Wasm tier
+ *  imports it plainly, over views of its arrays, and calls it again over fresh views once the Promise settles. */
+export const retries = <F extends Function>(fn: F): F => Object.assign(fn, { $retries: true });
+export const isRetrying = (fn: Function): boolean => (fn as { $retries?: boolean }).$retries === true;

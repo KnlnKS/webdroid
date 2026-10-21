@@ -25,10 +25,17 @@ export interface Axis { tag: number; value: number }
 export class FontPending { readonly wait: Promise<unknown>; constructor(wait: Promise<unknown>) { this.wait = wait; } }
 /** `f()`, again once any font it reached has loaded; `f` must have no effect before it reads fonts.
  *  A native over a primitive array reads it into a value before it gets here, so a wait holds no view
- *  of linear memory; one that writes an array after the fonts is declared to wait (`waits`). */
+ *  of linear memory; one that writes an array after the fonts takes `fontsOrRetry` and `retries`. */
 export function withFonts<T>(f: () => T): T | Promise<T> {
   try { return f(); } catch (e) {
     if (e instanceof FontPending) return e.wait.then(() => withFonts(f));
+    throw e;
+  }
+}
+/** f's answer or, while a font it reads loads, a Promise that settles once it has: for a native that `retries`, called again then */
+export function fontsOrRetry<T>(f: () => T): T | Promise<unknown> {
+  try { return f(); } catch (e) {
+    if (e instanceof FontPending) return e.wait;
     throw e;
   }
 }

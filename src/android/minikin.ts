@@ -11,7 +11,7 @@
 //     their hyphens as MeasuredText and the greedy breaker measure them.
 // Glyph bounds are not known, so no run overhangs.
 
-import { awaited, rt, driven, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, driven, waits, retries, type Gen } from "../jvm/runtime.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { isLead, isTrail } from "../jvm/natives/jstring.ts";
@@ -19,7 +19,7 @@ import { intProperty } from "../jvm/natives/jicu.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { perf } from "../perf.ts";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint.ts";
-import { withFonts } from "./fonts.ts";
+import { fontsOrRetry, withFonts } from "./fonts.ts";
 import {
   type Hyphenator, hyphenatorFor, hyphenate, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
@@ -756,7 +756,7 @@ const textRunCursor = (h: bigint, text: string, start: number, count: number, of
   }
 });
 /** how many characters fit in maxWidth, scanning forwards or back, and how wide they are */
-const breakText = (h: bigint, text: string, forwards: boolean, maxWidth: number, measured: Float32Array | null) => withFonts(() => {
+const breakText = (h: bigint, text: string, forwards: boolean, maxWidth: number, measured: Float32Array | null) => fontsOrRetry(() => {
   const adv = measure(h, text, 0, text.length);
   let width = 0, fit = 0;
   for (let i = 0; i < text.length; i++) {
@@ -770,7 +770,7 @@ const breakText = (h: bigint, text: string, forwards: boolean, maxWidth: number,
 });
 /** doRunAdvance: the advance to `offset` of text[start, start+count) in its context `text`, with each
  *  character's into out[at...] */
-const runAdvanceOf = (h: bigint, text: string, start: number, count: number, offset: number, out: Float32Array | null, at: number) => withFonts(() => {
+const runAdvanceOf = (h: bigint, text: string, start: number, count: number, offset: number, out: Float32Array | null, at: number) => fontsOrRetry(() => {
   const adv = measure(h, text, start, count);
   if (offset === start + count && !out) return sum(adv);
   const result = runAdvance(adv, text, start, count, offset);
@@ -787,7 +787,7 @@ const metricsForText = (h: bigint, text: string, start: number, count: number, f
   const [ascent, descent] = extent(extents, 0, count);
   setFontMetrics(fm, true, Math.floor(Math.min(ascent, fontTop(p))), Math.round(ascent), Math.round(descent), Math.ceil(Math.max(descent, fontBottom(p))), 0);
 });
-const textAdvances = (h: bigint, text: string, start: number, count: number, out: Float32Array | null, at: number) => withFonts(() => {
+const textAdvances = (h: bigint, text: string, start: number, count: number, out: Float32Array | null, at: number) => fontsOrRetry(() => {
   if (!count) return 0;
   const adv = measure(h, text, start, count);
   if (out) out.set(adv, at);
@@ -799,15 +799,15 @@ rt.registerJnis("android/graphics/Paint", {
     metricsForText(h, charsToString(c, 0, c.length), start, count, fm),
   "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, s: string, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
     metricsForText(h, s, start, count, fm),
-  "nGetTextAdvances(J[CIIIII[FI)F": waits((h: bigint, c: Uint16Array, index: number, count: number, cs: number, cc: number, _bidi: number, out: Float32Array | null, at: number) =>
+  "nGetTextAdvances(J[CIIIII[FI)F": retries((h: bigint, c: Uint16Array, index: number, count: number, cs: number, cc: number, _bidi: number, out: Float32Array | null, at: number) =>
     textAdvances(h, charsToString(c, cs, cc), index - cs, count, out, at)),
-  "nGetTextAdvances(JLjava/lang/String;IIIII[FI)F": waits((h: bigint, s: string, start: number, end: number, cs: number, ce: number, _bidi: number, out: Float32Array | null, at: number) =>
+  "nGetTextAdvances(JLjava/lang/String;IIIII[FI)F": retries((h: bigint, s: string, start: number, end: number, cs: number, ce: number, _bidi: number, out: Float32Array | null, at: number) =>
     textAdvances(h, s.slice(cs, ce), start - cs, end - start, out, at)),
-  "nGetRunAdvance(J[CIIIIZI)F": (h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number) =>
-    runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, null, 0),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": waits((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
+  "nGetRunAdvance(J[CIIIIZI)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number) =>
+    runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, null, 0)),
+  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
     runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, out, at)),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": waits((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
+  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
     runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, out, at)),
   "nGetOffsetForAdvance(J[CIIIIZF)I": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, ce: number, _rtl: number, advance: number) =>
     offsetFor(h, charsToString(c, 0, ce), start, end - start, advance),
@@ -815,8 +815,8 @@ rt.registerJnis("android/graphics/Paint", {
     textRunCursor(h, charsToString(c, 0, cs + count), cs, count, offset, opt),
   "nGetTextRunCursor(JLjava/lang/String;IIIII)I": (h: bigint, s: string, cs: number, ce: number, _dir: number, offset: number, opt: number) =>
     textRunCursor(h, s, cs, ce - cs, offset, opt),
-  "nBreakText(JLjava/lang/String;ZFI[F)I": waits((h: bigint, s: string, forwards: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
+  "nBreakText(JLjava/lang/String;ZFI[F)I": retries((h: bigint, s: string, forwards: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
     breakText(h, s, !!forwards, maxWidth, measured)),
-  "nBreakText(J[CIIFI[F)I": waits((h: bigint, c: Uint16Array, index: number, count: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
+  "nBreakText(J[CIIFI[F)I": retries((h: bigint, c: Uint16Array, index: number, count: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
     breakText(h, charsToString(c, index, Math.abs(count)), count >= 0, maxWidth, measured)),
 });

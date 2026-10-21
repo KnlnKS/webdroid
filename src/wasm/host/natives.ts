@@ -12,6 +12,7 @@ import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { KINDS, valueKind } from "../compiler/infer.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
 import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
+import { isRetrying } from "../../jvm/runtime.ts";
 import { Bridge } from "./bridge.ts";
 import { adaptImport, mayWait, reportSuspended, reportSuspendError, waitsAlways } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
@@ -78,6 +79,8 @@ interface Plan {
   suspends: boolean;
   /** whether it always does, which leaves the Suspending import alone */
   always: boolean;
+  /** whether a Promise it answers only says to call it again once settled (`retries`) */
+  retry: boolean;
   /** whether it takes and answers Java values as they are (HostFn.javaValues): its references are all opaque */
   raw: boolean;
   /** the class whose statics a `static ()V` native fills in, which the Bridge copies into the Wasm class */
@@ -128,7 +131,7 @@ export class Natives implements NativeBinder {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = opaque(ctor ? STRING : m.ret), ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && mayWait(fn), always: !!fn && waitsAlways(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && mayWait(fn), always: !!fn && waitsAlways(fn), retry: !!fn && isRetrying(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
     this.byMethod.set(m, p);
     return p;
   }
@@ -344,7 +347,7 @@ export class Natives implements NativeBinder {
         reportSuspended(id);
         ctx.gap(`${id}: native suspended (answers a Promise)`);
         return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });
-      }, view, put, ctx.bridge, parkable(abiPlan) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { reportSuspended(id); ctx.sched.parkNative(promise); }, owes: () => ctx.sched.owes(), yield: (promise) => ctx.sched.parkNative(promise) } : aux, suspending);
+      }, view, put, ctx.bridge, parkable(abiPlan) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { if (!p.retry) reportSuspended(id); ctx.sched.parkNative(promise); }, owes: () => ctx.sched.owes(), yield: (promise) => ctx.sched.parkNative(promise) } : aux, suspending);
       cache.set(ctx, out[key] = adaptImport(planned, ctx, waits));
     }
     return out;
@@ -372,7 +375,7 @@ const makers = new Map<string, Maker>();
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
   const parked = parkable(p), objects = p.args.map((d) => !p.raw && isRef(d) && d !== STRING && !isPrimArray(d)), // a native that takes a long may be handed the address of a Java array: it reaches the array by `deref` (a copy of its own), which is stored back when the native returns
   bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null || (!p.raw && p.args.includes("J"));
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + parked + (p.ret ?? "v") + p.raw + p.args.includes("J");
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + parked + p.retry + (p.ret ?? "v") + p.raw + p.args.includes("J");
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];
@@ -393,7 +396,10 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const settle = `(v)=>{${resume}${done}},(e)=>{${resume}${scope[1]};return raise(e)}`;
-    const park = `if(r instanceof Promise){if(!X.canWait())return suspended();${hold}X.park(r.then(${settle}));return ${zero}}if(X.owes()){${hold}X.yield(Promise.resolve(r).then(${settle}));return ${zero}}`;
+    // a native that retries is called again over fresh views, its scope taken up for the call and set aside again if it waits once more
+    const fail = `(e)=>{${resume}${scope[1]};return raise(e)}`;
+    const again = `const again=()=>{${resume}try{r=${call}}catch(e){${scope[1]};return raise(e)}if(r instanceof Promise){${hold}return r.then(again,${fail})}try{${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}};`;
+    const park = `if(r instanceof Promise){if(!X.canWait())return suspended();${hold}${p.retry ? `${again}X.park(r.then(again,${fail}))` : `X.park(r.then(${settle}))`};return ${zero}}if(X.owes()){${hold}X.yield(Promise.resolve(r).then(${settle}));return ${zero}}`;
     const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
     const returned = lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result;
     // a Suspending native answers a Promise only when it waits: a value answered at once leaves the strand on its stack
