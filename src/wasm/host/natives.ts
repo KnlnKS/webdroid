@@ -17,7 +17,7 @@ import { Bridge } from "./bridge.ts";
 import { adaptImport, mayWait, reportSuspended, reportSuspendError, waitsAlways } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
-import { SIZE, copyFn } from "../compiler/copy.ts";
+import { SIZE, copyFn } from "../link/copy.ts";
 import { emitSave, emitRestored, ROOT } from "../compiler/hostcalls.ts";
 import { crossings } from "./stats.ts";
 

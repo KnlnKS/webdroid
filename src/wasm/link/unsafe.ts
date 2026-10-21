@@ -9,7 +9,7 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { kindOf, type Kind } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
-import { SIZE } from "../compiler/copy.ts";
+import { SIZE } from "./copy.ts";
 import { PRIMS } from "../../jvm/abi.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";

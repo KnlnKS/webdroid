@@ -13,7 +13,7 @@ import type { World } from "../link/world.ts";
 import { TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/exc.ts";
 import type { Strand } from "../link/sched.ts";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
-import { copyFn } from "../compiler/copy.ts";
+import { copyFn } from "../link/copy.ts";
 import { handleViews } from "../../android/handles.ts";
 import { count } from "./stats.ts";
 import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio.ts";
