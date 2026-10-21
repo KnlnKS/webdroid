@@ -537,8 +537,9 @@ function packageRecord(pkg: string): PackageRecord | Promise<PackageRecord | nul
 }
 async function installedPackages(): Promise<PackageRecord[]> {
   await restorePackages();
-  for (const path of vfs.files.keys()) {
-    if (!/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
+  // a persisted install is restored as bytes; a mounted one registered when it was mounted
+  for (const [path, { content }] of vfs.entries("/data/app/")) {
+    if (!(content instanceof Uint8Array) || !/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
     const archive = await readArchive(path);
     if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
   }

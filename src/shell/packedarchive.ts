@@ -1,5 +1,5 @@
 import { zipTree } from "../zip.ts";
-import type { FileSource } from "./lazyfile.ts";
+import { ChunkCache, clampRange, type FileSource } from "./lazyfile.ts";
 import { isDexEntry } from "../jvm/dex.ts";
 
 type PackedFile = { file: string; size: number; sha256: string };
@@ -39,9 +39,7 @@ export class PackedArchive implements FileSource {
   readonly size: number;
   readonly zip: Record<string, Uint8Array> = {};
   private pending = new Map<string, Promise<Uint8Array>>();
-  private raw = new Map<string, Uint8Array>();
-  private rawPending = new Map<string, Promise<Uint8Array>>();
-  private resident = 0;
+  private raw = new ChunkCache<string>(32 << 20);
 
   constructor(index: PackedArchiveIndex, base: string) { this.index = index; this.base = base; this.size = index.size; }
   async prepare(code = false): Promise<void> {
@@ -71,28 +69,17 @@ export class PackedArchive implements FileSource {
     }
     return pending;
   }
-  private async original(file: string): Promise<Uint8Array> {
-    const cached = this.raw.get(file);
-    if (cached) { this.raw.delete(file); this.raw.set(file, cached); return cached; }
-    let pending = this.rawPending.get(file);
-    if (!pending) {
-      pending = fetch(this.base + file + "?raw=1").then(async (response) => {
-        if (!response.ok) throw new Error("Packed source unavailable: " + file);
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (await sha256(bytes) !== file.split(".")[0]) throw new Error("Packed source digest mismatch: " + file);
-        this.raw.set(file, bytes); this.resident += bytes.length;
-        while (this.resident > 32 * 1024 * 1024 && this.raw.size > 1) {
-          const oldest = this.raw.entries().next().value!;
-          this.raw.delete(oldest[0]); this.resident -= oldest[1].length;
-        }
-        return bytes;
-      }).finally(() => this.rawPending.delete(file));
-      this.rawPending.set(file, pending);
-    }
-    return pending;
+  private original(file: string): Promise<Uint8Array> {
+    return this.raw.get(file, async () => {
+      const response = await fetch(this.base + file + "?raw=1");
+      if (!response.ok) throw new Error("Packed source unavailable: " + file);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (await sha256(bytes) !== file.split(".")[0]) throw new Error("Packed source digest mismatch: " + file);
+      return bytes;
+    });
   }
   async read(offset: number, length: number): Promise<Uint8Array> {
-    const start = Math.max(0, Math.min(this.size, offset)), end = Math.min(this.size, start + Math.max(0, length));
+    const [start, end] = clampRange(this.size, offset, length);
     const out = new Uint8Array(end - start), spans = this.index.spans;
     let lo = 0, hi = spans.length;
     while (lo < hi) { const mid = (lo + hi) >>> 1; if (spans[mid][0] + spans[mid][1] <= start) lo = mid + 1; else hi = mid; }

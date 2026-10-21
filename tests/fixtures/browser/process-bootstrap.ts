@@ -7,14 +7,14 @@ import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
-import { callProxy } from "../../../src/shell/process-port.ts";
+import { callProxy } from "../../../src/shell/rpc.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
 import { ProcessHost, workerControlMethods } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
-import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
+import { visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
@@ -307,7 +307,6 @@ export async function clockBootstrapOwnership() {
 /** a Worker's and its peers' calls on the stores the broker keeps for every process */
 export async function storeOwnership() {
   const broker = processBroker(), pkg = "test.stores.shared", foreign = "test.stores.other";
-  const fileHooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
   broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
@@ -358,13 +357,13 @@ export async function storeOwnership() {
     const changedMode = await ask("files.fileSetAttributes",directory,{mode:0o700}) === 0 && ((await peers[0].endpoint.files.fileStat(directory)).value!.mode & 0o7777) === 0o700;
     await broker.files.flush();
     const {PrivateFiles} = await import("../../../src/shell/privatefiles.ts");
-    const restarted = new PrivateFiles(), hooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
+    const restarted = new PrivateFiles();
     let restoredMetadata = false;
     try {
-      vfs.metadata.delete(directory);restarted.attach(8399,vfs);await restarted.prepare(pkg);
+      vfs.rmdir(directory,false);restarted.attach(8399,vfs);await restarted.prepare(pkg);
       const restored = vfs.attributes(directory,true);
       restoredMetadata = restored.uid === packages.get(pkg)!.uid && restored.gid === packages.get(pkg)!.uid && restored.mode === 0o700;
-    } finally {restarted.detach(8399);Object.assign(vfs,hooks);}
+    } finally {restarted.detach(8399);}
     const listed=await ask("files.fileList",`/data/data/${pkg}`) as {value:string[]};
     listed.value.length=0;
     const freshList=await peers[0].endpoint.files.fileList(`/data/data/${pkg}`);
@@ -378,11 +377,11 @@ export async function storeOwnership() {
   }finally{
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
-    for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
+    for(const root of [`/data/data/${pkg}`,`/data/user_de/0/${pkg}`])for(const [path] of [...vfs.entries(root)])vfs.rmdir(path);
     broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
-    await broker.files.flush();Object.assign(vfs,fileHooks);
+    await broker.files.flush();
   }
 }
 
@@ -441,14 +440,14 @@ export async function workerDiagnosticOwnership() {
       const entry=broker.register(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
       const client=callProxy<WorkerControl>(channel.port1,workerControlMethods);clients.push(client);
       // a host whose control the fixture Worker serves as `mode` says
-      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
+      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
     const first=await workerSnapshots(broker.processes()),second=await workerSnapshots(broker.processes());
     const profiles=await workerAotProfiles(broker.processes());
     const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
-    const blocked=await visibleWorkerProcesses(broker,30);
+    const blocked=await workerSnapshots([broker.entry(8405)]);
     const stillBlocked=await visibleWorkersAlive(broker,30);
     broker.activities.setForeground(8401);
     const live=await visibleWorkersAlive(broker,1000);
@@ -469,8 +468,8 @@ export async function workerDiagnosticOwnership() {
     const healthy=row(first,8401);
     return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
       phase:failure(first,8404),profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
-      queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
-      retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};
+      queueBlocked:'snapshot' in blocked[0] && !stillBlocked,live,aliveCalls:count.aliveCalls,
+      retained:failure(ended,8401),identity:healthy.snapshot?.identity.pid ?? null};
   } finally {
     broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);

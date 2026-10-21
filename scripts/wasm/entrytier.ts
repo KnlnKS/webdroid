@@ -15,7 +15,7 @@ import { checker, recorded, unlike } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
 import { canonicalFilePaths, usePathOwner } from "../../src/shell/file-path.ts";
-import { callProxy, serveCalls } from "../../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../../src/shell/rpc.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
 const expected = recorded(join(JAVA, "E.expected.txt"));

@@ -5,7 +5,7 @@ import { procIdentity, procList, procText } from "./procfs.ts";
 import type { SharedMaps } from "../native/mappings.ts";
 import { utf8 } from "../jvm/abi.ts";
 import { knownUid } from "../android/packages.ts";
-import { packageOfPath } from "./file-path.ts";
+import { packageOfPath, type AttributeChange } from "./file-path.ts";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -16,7 +16,24 @@ export type FileAttributes = { uid: number; gid: number; mode: number };
  *  `sharedMaps` are MAP_SHARED copies of its pages (Java and native), told of every
  *  write and flushed before a read */
 export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes; ashmem?: { prot: number } }
+/** one path of the tree: a file's bytes or lazy source, or (content null) a directory. A directory
+ *  without a node is implicit: it has entries under it. */
+export interface VfsNode {
+  content: Uint8Array | FileSource | null;
+  /** the last modification, epoch ms: when its bytes last changed or it appeared */
+  mtime: number;
+  /** the creator's default owner until a change sets them */
+  attributes?: FileAttributes;
+  /** a fifo's or a descriptor backing's name: none of its changes persist */
+  volatile?: boolean;
+  /** the one open file of its name, which every descriptor on it shares */
+  open?: VfsFile;
+}
+export type VfsChange = "modify" | "write" | "create" | "delete";
+/** what persists the tree's changes: it loads a package's data before the package runs, and flushes on fsync */
+export type FileOwner = { prepare(pkg: string): Promise<void>; flush(): Promise<void> };
 export const EMPTY = new Uint8Array(0);
+export const contentSize = (content: Uint8Array | FileSource): number => content instanceof Uint8Array ? content.length : content.size;
 /** room for `size` bytes, doubling so appends stay linear */
 function reserve(file: VfsFile, size: number) {
   if (size <= file.data.length) return;
@@ -24,14 +41,57 @@ function reserve(file: VfsFile, size: number) {
   grown.set(file.data.subarray(0, file.len));
   file.data = grown;
 }
-const openFiles = new Map<string, VfsFile>();
-const volatileFiles = new Set<string>();
+const nodes = new Map<string, VfsNode>(["/data", "/data/local", "/data/local/tmp", "/sdcard"].map(path => [path, { content: null, mtime: 0 }]));
+let watchers: readonly ((path: string, change: VfsChange) => void)[] = [];
+const notify = (path: string, change: VfsChange) => { for (const watcher of watchers) watcher(path, change); };
+const UNOWNED: FileOwner = { prepare: () => Promise.resolve(), flush: () => Promise.resolve() };
+let owner = UNOWNED;
 /** stores through native shared mappings of an open file reach its bytes before they are read */
-const flushMapped = (path: string) => openFiles.get(path)?.sharedMaps?.flush();
+const flushMapped = (node: VfsNode | undefined) => node?.open?.sharedMaps?.flush();
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
   return text === null ? null : utf8.enc.encode(text);
 };
+function defaultAttributes(path: string | null, directory: boolean): FileAttributes {
+  const pkg = path === null ? undefined : packageOfPath(path)?.pkg;
+  const uid = path !== null && /^\/(?:system|apex|vendor|product|dev)(?:\/|$)/.test(path) ? 0 : (pkg ? knownUid(pkg) : undefined) ?? procIdentity.uid;
+  return { uid, gid: uid, mode: directory ? 0o755 : 0o644 };
+}
+const created = (path: string, content: Uint8Array | FileSource | null): VfsNode =>
+  ({ content, mtime: Date.now(), attributes: defaultAttributes(path, content === null) });
+/** `node`'s content is now `content`; its open file follows it there */
+function fill(node: VfsNode, content: Uint8Array | FileSource): void {
+  node.content = content; node.mtime = Date.now();
+  const file = node.open;
+  if (!file) return;
+  if (content instanceof Uint8Array) { file.data = content; file.len = content.length; file.source = undefined; }
+  else { file.data = EMPTY; file.len = content.size; file.source = content; }
+}
+/** descriptors open on `node` keep a file without a name */
+function detach(node: VfsNode): void {
+  if (node.open) { node.open.path = null; node.open = undefined; }
+}
+function drop(path: string, node: VfsNode): void { nodes.delete(path); detach(node); }
+/** `node` named `to` now, in place of anything there */
+function move(from: string, to: string, node: VfsNode): void {
+  const there = nodes.get(to);
+  if (there) drop(to, there);
+  nodes.delete(from); nodes.set(to, node);
+  if (node.open) node.open.path = to;
+  if (!node.volatile) { notify(from, "delete"); notify(to, "create"); }
+}
+function under(p: string): boolean {
+  const dir = p.endsWith("/") ? p : p + "/";
+  for (const path of nodes.keys()) if (path.startsWith(dir)) return true;
+  return false;
+}
+function publish(file: VfsFile) {
+  const node = file.path === null ? undefined : nodes.get(file.path);
+  if (!node || node.open !== file) return;
+  node.mtime = Date.now();
+  if (!file.source) node.content = file.data.subarray(0, file.len);
+  if (!node.volatile) notify(file.path!, "modify");
+}
 /** the space every path's filesystem reports (one backs everything here): the browser's storage estimate */
 export async function storageEstimate(): Promise<{ total: number; free: number }> {
   try {
@@ -40,34 +100,44 @@ export async function storageEstimate(): Promise<{ total: number; free: number }
   } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
 }
 export const vfs = {
-  files: new Map<string, Uint8Array>(),
-  lazyFiles: new Map<string, FileSource>(),
-  dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
-  /** each path's last modification, epoch ms: when its bytes last changed or it appeared */
-  mtimes: new Map<string, number>(),
-  metadata: new Map<string, FileAttributes>(),
-  mtime(p: string): number { return this.mtimes.get(this.norm(p)) ?? 0; },
-  attributes(p: string | null, directory?: boolean): FileAttributes {
-    directory ??= p !== null && this.isDir(p);
-    const path = p === null ? null : this.norm(p), stored = path === null ? undefined : this.metadata.get(path);
-    if (stored) return stored;
-    const pkg = path === null ? undefined : packageOfPath(path)?.pkg;
-    const uid = path !== null && /^\/(?:system|apex|vendor|product|dev)(?:\/|$)/.test(path) ? 0 : (pkg ? knownUid(pkg) : undefined) ?? procIdentity.uid;
-    const attributes = {uid, gid:uid, mode:directory ? 0o755 : 0o644};
-    if (path !== null && this.exists(path)) this.metadata.set(path,attributes);
-    return attributes;
+  node(p: string): Readonly<VfsNode> | undefined { return nodes.get(this.norm(p)); },
+  /** each node at or under `prefix`, a directory's path with its trailing slash */
+  *entries(prefix = "/"): Generator<[string, Readonly<VfsNode>]> {
+    for (const entry of nodes) if (entry[0].startsWith(prefix)) yield entry;
   },
-  setAttributes(p: string, change: Partial<FileAttributes>, notify = true): void {
+  mtime(p: string): number { return nodes.get(this.norm(p))?.mtime ?? 0; },
+  attributes(p: string | null, directory?: boolean): FileAttributes {
+    const path = p === null ? null : this.norm(p), node = path === null ? undefined : nodes.get(path);
+    return node?.attributes ?? defaultAttributes(path, directory ?? (node ? node.content === null : path !== null && this.isDir(path)));
+  },
+  /** a change of `p`'s owner, mode or time; an implicit directory becomes a node that keeps them */
+  setAttributes(p: string, { mtime, ...change }: AttributeChange, notifies = true): void {
     const path = this.norm(p);
-    if (this.isDir(path)) this.dirs.add(path);
-    Object.assign(this.attributes(path,this.isDir(path)),change);
-    if (notify) this.onWrite(path,"modify");
+    let node = nodes.get(path);
+    if (!node) {
+      if (!under(path)) return;
+      nodes.set(path, node = { content: null, mtime: 0 });
+    }
+    if (node.attributes) Object.assign(node.attributes, change);
+    else node.attributes = { ...defaultAttributes(path, node.content === null), ...change };
+    if (mtime !== undefined) node.mtime = Math.floor(mtime);
+    if (notifies && !node.volatile) notify(path, "modify");
+  },
+  /** `watch` hears each change from now on, until the returned function stops it */
+  watch(watch: (path: string, change: VfsChange) => void): () => void {
+    watchers = [...watchers, watch];
+    return () => { watchers = watchers.filter(w => w !== watch); };
+  },
+  /** `next` persists this realm's files until the returned function hands them back */
+  useOwner(next: Partial<FileOwner>): () => void {
+    const previous = owner, used = owner = { ...UNOWNED, ...next };
+    return () => { if (owner === used) owner = previous; };
   },
   /** the package's app data loaded from its owner */
-  prepare: (_pkg: string): Promise<void> => Promise.resolve(),
-  flush: (): Promise<void> => Promise.resolve(),
-  onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
-  markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
+  prepare(pkg: string): Promise<void> { return owner.prepare(pkg); },
+  flush(): Promise<void> { return owner.flush(); },
+  /** the existing file `p` is volatile: none of its changes persist */
+  markVolatile(p: string) { const node = nodes.get(this.norm(p)); if (node) node.volatile = true; },
   norm(p: string): string {
     // already normal: absolute, with no empty, "." or ".." segment
     if (p.charCodeAt(0) !== 47 || /\/\.{0,2}(?:\/|$)/.test(p)) {
@@ -83,43 +153,35 @@ export const vfs = {
   },
   canonical(p: string): string { return this.norm(p).replace(/^\/sdcard(?=\/|$)/,"/storage/emulated/0"); },
   read(p: string): Uint8Array | null {
-    const path = this.norm(p); flushMapped(path);
-    return this.files.get(path) ?? procBytes(path);
+    const path = this.norm(p), node = nodes.get(path);
+    flushMapped(node);
+    return node?.content instanceof Uint8Array ? node.content : procBytes(path);
   },
   readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
-    const path = this.norm(p);
-    flushMapped(path);
-    const bytes = this.files.get(path);
-    if (bytes) return bytes;
-    const source = this.lazyFiles.get(path);
-    return source ? readFully(source) : procBytes(path);
+    const path = this.norm(p), node = nodes.get(path), content = node?.content;
+    flushMapped(node);
+    return content instanceof Uint8Array ? content : content ? readFully(content) : procBytes(path);
   },
   source(p: string): FileSource | null {
-    const path = this.norm(p);
-    flushMapped(path);
-    const bytes = this.files.get(path) ?? procBytes(path);
-    return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
+    const path = this.norm(p), node = nodes.get(path), content = node?.content;
+    flushMapped(node);
+    if (content) return content instanceof Uint8Array ? new BytesFile(content) : content;
+    const bytes = procBytes(path);
+    return bytes ? new BytesFile(bytes) : null;
   },
   stat(p: string): { size: number; source: FileSource } | null {
     const source = this.source(p);
     return source ? { size: source.size, source } : null;
   },
   open(p: string): VfsFile | null {
-    const path = this.norm(p), data = this.files.get(path), source = data ? undefined : this.lazyFiles.get(path);
-    if (!data && !source) return null;
-    let file = openFiles.get(path);
-    if (!file) { file = { path, data: data ?? EMPTY, len: data?.length ?? source!.size, source, attributes:this.attributes(path) }; openFiles.set(path, file); }
-    return file;
+    const path = this.norm(p), node = nodes.get(path), content = node?.content;
+    if (!node || !content) return null;
+    const bytes = content instanceof Uint8Array;
+    return node.open ??= { path, data: bytes ? content : EMPTY, len: contentSize(content), source: bytes ? undefined : content, attributes: node.attributes };
   },
   /** before reading an open file's bytes directly */
   sync(file: VfsFile) { file.sharedMaps?.flush(); },
-  opened(p: string): VfsFile | null { return openFiles.get(this.norm(p)) ?? null; },
-  publish(file: VfsFile) {
-    if (file.path === null || openFiles.get(file.path) !== file) return;
-    this.mtimes.set(file.path, Date.now());
-    if (!file.source) this.files.set(file.path, file.data.subarray(0, file.len));
-    if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
-  },
+  opened(p: string): VfsFile | null { return nodes.get(this.norm(p))?.open ?? null; },
   /** write into an open file at `off`, zero-filling any gap past its end */
   writeAt(file: VfsFile, off: number, bytes: Uint8Array) {
     const end = off + bytes.length;
@@ -131,104 +193,104 @@ export const vfs = {
     }
     file.len = Math.max(file.len, end);
     file.sharedMaps?.wrote(off, bytes);
-    this.publish(file);
+    publish(file);
   },
   resize(file: VfsFile, size: number) {
     if (writable(file.source)) file.source.truncate(size);
     else if (size > file.len) { reserve(file, size); file.data.fill(0, file.len, size); }
     file.len = size;
-    this.publish(file);
+    publish(file);
   },
   /** the file's bytes now live in `source`; descriptors already open on it follow them there */
   adopt(p: string, source: FileSource) {
-    const path = this.norm(p), file = openFiles.get(path);
-    this.files.delete(path);
-    this.lazyFiles.set(path, source);
-    this.attributes(path);
-    this.mtimes.set(path, Date.now());
-    if (file) { file.data = EMPTY; file.len = source.size; file.source = source; }
+    const path = this.norm(p), node = nodes.get(path);
+    if (node) fill(node, source); else nodes.set(path, created(path, source));
   },
-  write(p: string, data: Uint8Array, notify = true) {
-    const path = this.norm(p);
-    const existed = this.files.has(path) || this.lazyFiles.has(path);
-    const file = openFiles.get(path);
-    this.lazyFiles.delete(path); this.files.set(path, data);
-    this.attributes(path);
-    this.mtimes.set(path, Date.now());
-    if (file) { file.len = data.length; file.data = data; file.source = undefined; }
-    if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
+  write(p: string, data: Uint8Array, notifies = true) {
+    const path = this.norm(p), node = nodes.get(path), existed = !!node?.content;
+    if (node) fill(node, data); else nodes.set(path, created(path, data));
+    if (notifies && !node?.volatile) notify(path, existed ? "write" : "create");
   },
+  /** a new file at `p` over `source`, unheard; descriptors open on what was there keep it */
   mount(p: string, source: FileSource) {
-    const path = this.norm(p);
-    this.delete(path, false);
-    this.lazyFiles.set(path, source);
-    this.attributes(path);
-    this.mtimes.set(path, Date.now());
+    const path = this.norm(p), node = nodes.get(path);
+    if (node) drop(path, node);
+    nodes.set(path, created(path, source));
   },
-  under(p: string): boolean {
-    if (this.dirs.has(p)) return true;
-    const dir = p.endsWith("/") ? p : p + "/";
-    for (const d of this.dirs) if (d.startsWith(dir)) return true;
-    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
-    return false;
+  /** `content` at `p`: bytes written, a source mounted */
+  place(p: string, content: Uint8Array | FileSource) {
+    if (content instanceof Uint8Array) this.write(p, content); else this.mount(p, content);
+  },
+  /** `p` as the owner of its persisted state has it, unheard: content null is a directory, and no entry removes it.
+   *  A file's open descriptors follow new content; content it holds already stays, as refilling its open file
+   *  would trim the spare capacity that keeps appends linear. */
+  restore(p: string, entry: { content: Uint8Array | FileSource | null; mtime?: number; attributes?: FileAttributes } | null) {
+    const path = this.norm(p);
+    let node = nodes.get(path);
+    if (!entry) { if (node) drop(path, node); return; }
+    const { content, mtime, attributes } = entry;
+    if (!node) nodes.set(path, node = created(path, content));
+    else if (node.content !== content) {
+      if (content) fill(node, content);
+      else { detach(node); node.content = null; }
+    }
+    if (attributes) { if (node.attributes) Object.assign(node.attributes, attributes); else node.attributes = { ...attributes }; }
+    if (mtime !== undefined) node.mtime = mtime;
   },
   exists(p: string): boolean {
     p = this.norm(p);
-    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null || procList(p) !== null;
+    return nodes.has(p) || under(p) || procText(p) !== null || procList(p) !== null;
   },
   isDir(p: string): boolean {
     p = this.norm(p);
-    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p) || procList(p) !== null;
+    const node = nodes.get(p);
+    return (node ? node.content === null : under(p)) || procList(p) !== null;
   },
-  delete(p: string, notify = true): boolean {
-    const path = this.norm(p);
-    const volatile = volatileFiles.delete(path);
-    const file = openFiles.get(path);
-    if (file) { file.path = null; openFiles.delete(path); }
-    const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    this.mtimes.delete(path);
-    this.metadata.delete(path);
-    if (removed && notify && !volatile) this.onWrite(path, "delete");
-    return removed;
+  delete(p: string, notifies = true): boolean {
+    const path = this.norm(p), node = nodes.get(path);
+    if (!node?.content) return false;
+    drop(path, node);
+    if (notifies && !node.volatile) notify(path, "delete");
+    return true;
   },
   rename(from: string, to: string): boolean {
     from = this.norm(from); to = this.norm(to);
-    if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
-    if (from === to) return true;
-    this.delete(to, false);
-    for (const files of [this.files, this.lazyFiles, this.mtimes, this.metadata]) {
-      const value = files.get(from);
-      if (value) { files.delete(from); files.set(to, value as never); }
+    const node = nodes.get(from);
+    if (!node?.content) return false;
+    if (from !== to) {
+      // what a volatile file replaces is gone once the page reloads
+      if (node.volatile) this.delete(to);
+      move(from, to, node);
     }
-    const file = openFiles.get(from);
-    if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
-    this.onWrite(from, "delete"); this.onWrite(to, "create");
     return true;
   },
   /** directory `from` and everything under it, moved to `to` with their times and attributes */
   renameDir(from: string, to: string) {
     from = this.norm(from); to = this.norm(to);
-    const prefix = from + "/", dest = (p: string) => to + p.slice(from.length);
-    for (const m of [this.files, this.lazyFiles]) for (const k of [...m.keys()]) if (k.startsWith(prefix)) this.rename(k, dest(k));
-    this.dirs.add(from);
-    for (const d of [...this.dirs]) if (d === from || d.startsWith(prefix)) {
-      const moved = dest(d), attributes = this.attributes(d, true), mtime = this.mtimes.get(d);
-      this.dirs.delete(d); this.metadata.delete(d); this.mtimes.delete(d);
-      this.dirs.add(moved); this.metadata.set(moved, attributes);
-      if (mtime !== undefined) this.mtimes.set(moved, mtime);
-      this.onWrite(d, "delete"); this.onWrite(moved, "create");
-    }
+    const prefix = from + "/";
+    if (!nodes.has(from)) nodes.set(from, { content: null, mtime: 0, attributes: defaultAttributes(from, true) });
+    for (const [path, node] of [...nodes]) if (path === from || path.startsWith(prefix)) move(path, to + path.slice(from.length), node);
   },
-  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.attributes(path,true); this.mtimes.set(path, Date.now()); this.onWrite(path, "create"); } },
-  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.metadata.delete(path); this.onWrite(path, "delete"); } return removed; },
+  mkdir(p: string, notifies = true) {
+    const path = this.norm(p);
+    if (nodes.has(path)) return;
+    nodes.set(path, created(path, null));
+    if (notifies) notify(path, "create");
+  },
+  rmdir(p: string, notifies = true): boolean {
+    const path = this.norm(p), node = nodes.get(path);
+    if (!node || node.content !== null) return false;
+    nodes.delete(path);
+    if (notifies) notify(path, "delete");
+    return true;
+  },
   list(p: string): string[] {
     p = this.norm(p);
     const proc = procList(p);
     if (proc) return proc;
     const dir = p === "/" ? "/" : p + "/";
     const names = new Set<string>();
-    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
-    for (const d of this.dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
+    for (const path of nodes.keys()) if (path.startsWith(dir)) names.add(path.slice(dir.length).split("/")[0]);
     names.delete("");
     return [...names];
   },

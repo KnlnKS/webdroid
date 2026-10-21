@@ -11,7 +11,7 @@ import { mkUri, uriText, type JUri } from "../src/android/net.ts";
 import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
 import type { SettingsAccess } from "../src/shell/settings.ts";
 import type { Calls } from "../src/shell/broker-contract.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { systemProvider } from "../src/android/systemproviders.ts";
 import { bootApp, packageRecord, thrown } from "./java.ts";
 import { DEVICE_PROPERTIES } from "../src/shell/device-properties.ts";

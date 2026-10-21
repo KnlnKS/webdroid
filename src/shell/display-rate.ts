@@ -1,9 +1,10 @@
 import { device } from "./config.ts";
+import { switchValue } from "../switches.ts";
 
 let measured: Promise<void> | undefined;
 /** The host display's rate, from rAF spacing: skipped frames only lengthen intervals, so the
  *  lower quartile is the frame period even while page startup keeps the thread busy. */
-export const displayRate = (): Promise<void> => measured ??= new URLSearchParams(location.search).has("hz") || document.hidden ? Promise.resolve() : new Promise<void>((resolve) => {
+export const displayRate = (): Promise<void> => measured ??= switchValue("hz") !== undefined || document.hidden ? Promise.resolve() : new Promise<void>((resolve) => {
   const stamps: number[] = [];
   const sample = (time: number) => {
     stamps.push(time);

@@ -1,5 +1,5 @@
 // The browser fixtures' Worker halves: each Worker plays the role its URL names (fixture-calls.ts).
-import { callProxy, serveCalls, serveProcess, processProxy } from "../../../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../../../src/shell/rpc.ts";
 import { remoteProcessLife } from "../../../src/shell/process-life.ts";
 import { attachGuestClockPort, bootTime, guestClockControl, setGuestTimeout, uptimeMillis, wallMillis } from "../../../src/guest-clock.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "../../../src/shell/worker-bootstrap.ts";
@@ -9,7 +9,7 @@ import { existingAotProfile } from "../../../src/shell/aot-profile.ts";
 import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
 import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
-import type { BrokerCalls } from "../../../src/shell/broker-contract.ts";
+import type { BrokerCalls, ProcessEndpoint } from "../../../src/shell/broker-contract.ts";
 import type { ImeView } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
@@ -68,7 +68,7 @@ const roles: Record<string, () => (data: never) => void> = {
       48: async () => ({ pid: deaths, id: +await life.alive(8001) }),
       49: async () => { await life.signal(8001, 9); await life.signal(8003, 9); return { pid: deaths, id: 1 }; },
     };
-    serveProcess(port, stubEndpoint({
+    serveCalls(port, stubEndpoint({
       transact: () => new Promise(() => {}),
       service: async request => {
         const intent = "intent" in request ? request.intent : null, step = intent && steps[intent.bytes[0]];
@@ -135,7 +135,7 @@ const roles: Record<string, () => (data: never) => void> = {
       page.state({ generation, text, start, end, active, hasAction: false });
     return (data: { input: MessagePort; view: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
       if ("input" in data) {
-        page = callProxy<ImeView>(data.view, ["state"], ["state"]).endpoint;
+        page = callProxy<ImeView>(data.view, ["state"], { notifications: ["state"] }).endpoint;
         serveCalls(data.input, {
           input: async (edit: number, text: string, start: number, end: number) => {
             if (edit !== generation) return;
@@ -155,9 +155,9 @@ const roles: Record<string, () => (data: never) => void> = {
   },
   /** a process whose transactions exercise Parcel copies, a reentrant callback and each failure kind */
   parcel: () => ({ endpoint, callback }: { endpoint: MessagePort; callback: MessagePort }) => {
-    const peer = processProxy(callback);
+    const peer = callProxy<Pick<ProcessEndpoint, "transact">>(callback, ["transact"]);
     let notices = 0;
-    serveProcess(endpoint, stubEndpoint({
+    serveCalls(endpoint, stubEndpoint({
       cookiesChanged: async () => { notices++; },
       transact: async (request, caller) => {
         if (request.code === 1) { request.data.bytes[0] = 99; return { handled: caller.uid, data: request.data }; }

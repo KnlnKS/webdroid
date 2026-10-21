@@ -197,7 +197,7 @@ test("open files and mappings retain their identity through rename and unlink", 
 test("descriptor bytes retain shared positions and read lazy files through short reads", async () => {
   const path = "/descriptor-bytes", bytes = Uint8Array.of(1, 2, 3, 4, 5);
   for (const lazy of [false, true]) {
-    if (lazy) vfs.lazyFiles.set(path, { size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
+    if (lazy) vfs.mount(path, { size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
     else vfs.write(path, bytes);
     const fd = javaOpenFd(path, 0), dup = javaDupFd(fd);
     try {
@@ -248,8 +248,9 @@ test("inotify waits on a real descriptor and reports completed file writes", asy
 test("fts walks directories in pre- and postorder", async () => {
   setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "fts-test"), path = mem.strdup("/fts-test"), argv = mem.malloc(16);
-  vfs.mkdir("/fts-test"); vfs.mkdir("/fts-test/sub");
-  vfs.write("/fts-test/a", Uint8Array.of(1)); vfs.write("/fts-test/sub/b", Uint8Array.of(2));
+  // a directory lists its entries in the order they were made
+  vfs.mkdir("/fts-test"); vfs.write("/fts-test/a", Uint8Array.of(1));
+  vfs.mkdir("/fts-test/sub"); vfs.write("/fts-test/sub/b", Uint8Array.of(2));
   stp(argv, path); stp(argv + 4, 0);
   const open = lookupHost("fts_open", "libc.so")!, read = lookupHost("fts_read", "libc.so")!, close = lookupHost("fts_close", "libc.so")!;
   try {
@@ -308,5 +309,10 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
     javaCloseFd(file);
     vfs.delete("/fifo-test");
     expect(await call("mkfifo", path, 0o600)).toBe(0);
+    // a renamed fifo stays volatile, and leaves its old name to a file that persists
+    const heard: string[] = [], stop = vfs.watch(name => heard.push(name));
+    try { vfs.rename("/fifo-test", "/fifo-moved"); vfs.write("/fifo-test", Uint8Array.of(1)); }
+    finally { stop(); vfs.delete("/fifo-moved"); }
+    expect(heard).toEqual(["/fifo-test"]);
   } finally { vfs.delete("/fifo-test"); mem.free(path); mem.free(buf); cpu.dispose(); setA64(false); }
 });

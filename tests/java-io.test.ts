@@ -24,7 +24,7 @@ import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
 import { assetFd, scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
 import { canonicalFilePaths, renamePath, makeFifo, usePathOwner, type FilePaths } from "../src/shell/file-path.ts";
@@ -574,7 +574,7 @@ describe("file-input-descriptor", () => {
 
   test("descriptor streams serialize lazy reads and reject invalid input", async () => {
     const path = "/input-descriptor-lazy", bytes = Uint8Array.of(5, 6, 7, 8);
-    vfs.lazyFiles.set(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
+    vfs.mount(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
     const fd = await mkFd(javaOpenFd(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
@@ -719,9 +719,10 @@ describe("rename", () => {
       expect(vfs.read("/data/t/a.txt")).toBeNull();
       expect([...vfs.read("/data/t/b.txt")!]).toEqual([1, 2, 3]);
 
-      vfs.mount("/data/t/lazy.bin", new BytesFile(new Uint8Array([9])));
+      const lazy = new BytesFile(new Uint8Array([9]));
+      vfs.mount("/data/t/lazy.bin", lazy);
       expect(renamePath("/data/t/lazy.bin", "/data/t/moved.bin")).toBe(0);
-      expect(vfs.lazyFiles.has("/data/t/moved.bin")).toBe(true);
+      expect(vfs.node("/data/t/moved.bin")?.content).toBe(lazy);
       expect(vfs.exists("/data/t/lazy.bin")).toBe(false);
     });
 

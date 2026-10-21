@@ -1,5 +1,5 @@
 import type { Database } from "sql.js";
-import { vfs } from "../shell/vfs.ts";
+import { vfs, contentSize } from "../shell/vfs.ts";
 import { mimeOf, MIME_EXT } from "../mime.ts";
 import { sqliteStore } from "./sqlite.ts";
 import { clipUris } from "./net.ts";
@@ -46,8 +46,7 @@ function mediaType(mime: string | null): number {
 }
 function mediaFiles(): Map<string, { source: object; size: number }> {
   const files = new Map<string, { source: object; size: number }>();
-  for (const [path, bytes] of vfs.files) if (path.startsWith("/sdcard/")) files.set(path, { source: bytes, size: bytes.length });
-  for (const [path, source] of vfs.lazyFiles) if (path.startsWith("/sdcard/")) files.set(path, { source, size: source.size });
+  for (const [path, { content }] of vfs.entries("/sdcard/")) if (content) files.set(path, { source: content, size: contentSize(content) });
   return files;
 }
 const INSERT = `INSERT INTO media (${columns.map((c) => `"${c}"`).join(",")}) VALUES (${columns.map(() => "?").join(",")})`;

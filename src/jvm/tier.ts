@@ -14,7 +14,7 @@ export interface TierBackend {
   /** `dex` joins the realm's classes; `platform`: the boot class path's, which a harness's World takes and a page's has from its build */
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are read while the zygote runs: begin preparing its compiled code; `shown` when the process was launched to show the app */
-  beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void;
+  beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean): void;
   /** the app's dex files are all loaded: prepare the compiled code beginAppCode asked for (a build an earlier launch saved) before Java first runs */
   appCode(): Promise<void>;
   /** the app has shown its first frame */
@@ -51,7 +51,7 @@ export async function useTierPorts(ports: TierPorts): Promise<void> {
 }
 
 /** the Wasm tier begins preparing the app's code from its dex files before they are loaded */
-export function beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean, status?: (text: string) => void): void { backend?.beginAppCode(dexes, roots, shown, status); }
+export function beginAppCode(dexes: DexFile[], roots: AppRoots, shown: boolean): void { backend?.beginAppCode(dexes, roots, shown); }
 /** the Wasm tier's compiled app code, once the app's dex files are loaded; a process that began none (a system one) waits for the platform's modules */
 export async function loadAppCode(): Promise<void> { await backend?.appCode(); }
 /** settles once the Wasm tier can run Java */

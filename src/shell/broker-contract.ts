@@ -28,7 +28,7 @@ import { installedPath, queryReceivers } from "../android/pm.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import { hostUiMethods } from "./host-ui.ts";
 import { packedArchives } from "./packedarchive.ts";
-import { methodsOf, qualified, type MethodTree } from "./process-port.ts";
+import { callError, callProxy, methodsOf, qualified, type CallFailure, type MethodTree, type ProxyOptions } from "./rpc.ts";
 import { vfs } from "./vfs.ts";
 
 /** an access interface's methods, called across a port */
@@ -118,6 +118,12 @@ export type ProcessEndpoint = {
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
 };
+const processMethods = methodsOf<ProcessEndpoint>()(["processDied", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast",
+  "cookiesChanged", "storageChanged", "packageRemoved", "kill"]);
+/** a failure as this realm's exception: a Java exception is rebuilt in this VM */
+export const javaFailure = (error: CallFailure): unknown => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : callError(error);
+export const processProxy = (port: MessagePort, options: Pick<ProxyOptions<ProcessEndpoint>, "makeError" | "onClose"> = {}) =>
+  callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options });
 
 export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;

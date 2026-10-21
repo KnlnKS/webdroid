@@ -21,7 +21,7 @@ export type ProcessDiagnostics = {
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 /** the log lines that are errors: the page's console.error, uncaught errors and unhandled rejections (a Worker's
- *  console.error, its logcat, carries no prefix) */
+ *  console.error is its logcat, labelled so) */
 export const ERROR_LINE = /^(error|window\.error|unhandledrejection):/;
 /** the page realm's diagnostics, evaluated in the page: `errorLine` is ERROR_LINE's source */
 export function pageDiagnostics(errorLine: string) {

@@ -2,10 +2,9 @@
 // ends of its surfaces and its control port. The broker (processes.ts) registers the process and
 // answers the host's bootstrap; the Worker itself is process-worker.ts.
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import { callProxy, methodsOf, processError, type ProcessFailure } from "./process-port.ts";
+import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
 import type { WorkerControl } from "./worker-control.ts";
-import type { WorkerTerminal } from "./worker-diagnostics.ts";
-import { attachPointerInput } from "./pointer-input.ts";
+import type { ProcessRecord } from "./processes.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
@@ -16,24 +15,25 @@ import { displayRate } from "./display-rate.ts";
 import { device, formatScreen } from "./config.ts";
 import type { ClockBootstrap } from "./clock-port.ts";
 import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
-import { inputMethods, receiveIme, type InputCalls } from "./input-port.ts";
+import { attachRealmInput } from "./input-port.ts";
 import { receiveMedia } from "./media-port.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
+import { switches } from "../switches.ts";
 
 /** what the page posts a process Worker: its prestart once spawned, the display's rate once
  *  measured, and its one start */
 export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts }
   | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 /** what a process Worker posts the page once its start succeeds or fails */
-export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
+export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: CallFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
 export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
 function workerUrl(pid: number, wide: boolean): string {
-  const params = new URLSearchParams(location.search);
+  const params = switches();
   params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
   if (!wide) params.set("abi", "32");
   return new URL(WORKER_SCRIPTS.process.url + "?" + params, location.href).href;
@@ -98,19 +98,15 @@ export class ProcessHost {
   readonly presented = Promise.withResolvers<void>();
   readonly control: WorkerControl;
   display: FrameReceiver | undefined;
-  ime: ReturnType<typeof receiveIme> | undefined;
+  ime: ReturnType<typeof attachRealmInput> | undefined;
   private web: HTMLElement | undefined;
-  /** how the process ended, which diagnostics report once its Worker is gone */
-  ended: { error: string; terminal: WorkerTerminal } | null = null;
+  /** the process it runs, once started */
+  private record: ProcessRecord | undefined;
   private readonly spare: SpareWorker;
   private readonly hosts: ProcessHosts;
   private readonly endpoint = new MessageChannel();
   private readonly controlPorts = new MessageChannel();
   private readonly ends: (() => void)[] = [];
-  private closed = false;
-  private published = false;
-  private transferred = false;
-  private focusTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly pagehide = () => this.fail("Process page closed");
 
   constructor(spare: SpareWorker, pkg: string, hosts: ProcessHosts) {
@@ -120,17 +116,18 @@ export class ProcessHost {
     canvas.hidden = true;
     canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1;touch-action:none";
     (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
-    const client = callProxy<WorkerControl>(this.controlPorts.port1, workerControlMethods, [], processError,
-      error => this.fail(error.message ?? "Process Worker control closed"));
+    const client = callProxy<WorkerControl>(this.controlPorts.port1, workerControlMethods,
+      { onClose: error => this.fail(error.message ?? "Process Worker control closed") });
     this.control = client.endpoint;
     this.ends.push(client.close);
     window.addEventListener("pagehide", this.pagehide, { once: true });
     worker.onerror = event => this.fail(event.message);
     worker.onmessageerror = () => this.fail("Invalid process Worker message");
     worker.onmessage = ({ data }: MessageEvent<ProcessWorkerStatus>) => {
-      if (this.closed) return;
-      if (data.kind === "ready" && !this.published) {
-        try { hosts.owner.ready(this.pid, this.endpoint.port2); this.published = true; }
+      // the endpoint is the Worker's to publish once, while its process starts
+      if (this.record?.state.kind !== "starting") return;
+      if (data.kind === "ready") {
+        try { hosts.owner.ready(this.pid, this.endpoint.port2); }
         catch (error) { this.fail(String(error)); }
       } else if (data.kind === "failed") {
         for (const log of data.logs) console.error("[process Worker]", log);
@@ -139,16 +136,16 @@ export class ProcessHost {
     };
     hosts.live.add(this);
   }
-  /** sends the Worker its process's bootstrap, once the broker has registered the process */
-  start(): void {
+  /** sends the Worker the bootstrap of `record`, which the broker has registered */
+  start(record: ProcessRecord): void {
+    this.record = record;
     void (async () => {
       if (this.spare.error) throw new Error(this.spare.error);
       const data = await this.hosts.owner.bootstrap(this.pid);
-      if (this.closed) { closeProcessBootstrap(data); return; }
+      if (record.dead) { closeProcessBootstrap(data); return; }
       try {
         post(this.spare.worker, { kind: "start", bootstrap: data, endpoint: this.endpoint.port1, control: this.controlPorts.port2 },
           [...bootstrapTransfers(data), this.endpoint.port1, this.controlPorts.port2]);
-        this.transferred = true;
       } catch (error) { closeProcessBootstrap(data); throw error; }
     })().catch(error => this.fail(String(error)));
   }
@@ -158,14 +155,10 @@ export class ProcessHost {
     const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
     const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
     if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
-    const calls = callProxy<InputCalls>(input.port1, inputMethods), text = this.ime = receiveIme(ime.port1, canvas, calls.endpoint);
-    const pointers = attachPointerInput(canvas, () => device, calls.endpoint.pointer, () => {
-      clearTimeout(this.focusTimer);
-      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
-    });
+    const text = this.ime = attachRealmInput(canvas, () => device, input.port1, ime.port1);
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
-    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), surfaces.close);
+    this.ends.push(text.close, frames.close, receiveMedia(media.port1), surfaces.close);
     return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
   }
   /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
@@ -174,15 +167,14 @@ export class ProcessHost {
     this.canvas.style.pointerEvents = interactive ? "auto" : "none";
     this.ime?.show(z !== null);
   }
-  private fail(message: string): void { if (!this.closed) this.hosts.owner.failed(this.pid, message); }
+  private fail(message: string): void { this.hosts.owner.failed(this.pid, message); }
+  /** its process's death ends the Worker and what the page holds of it: a port posted to the Worker is detached
+   *  here, and the broker closes the endpoint it took first, so closing either again does nothing */
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    clearTimeout(this.focusTimer); window.removeEventListener("pagehide", this.pagehide);
+    window.removeEventListener("pagehide", this.pagehide);
     for (const close of this.ends) close();
     this.spare.worker.terminate(); this.spare.release();
-    if (!this.published) this.endpoint.port2.close();
-    if (!this.transferred) { this.endpoint.port1.close(); this.controlPorts.port2.close(); }
+    this.endpoint.port1.close(); this.endpoint.port2.close(); this.controlPorts.port2.close();
     this.presented.resolve(); this.canvas.remove(); this.hosts.live.delete(this);
   }
 }

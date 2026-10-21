@@ -1,6 +1,6 @@
 // What the browser fixtures' page side (process-bootstrap.ts) and their Workers (process-worker-fixture.ts) share.
 import type { ProcessEndpoint } from "../../../src/shell/broker-contract.ts";
-import type { MethodTree } from "../../../src/shell/process-port.ts";
+import type { MethodTree } from "../../../src/shell/rpc.ts";
 
 /** a process endpoint that answers as an idle process does, but for `overrides` */
 export const stubEndpoint = (overrides: Partial<ProcessEndpoint> = {}): ProcessEndpoint => ({

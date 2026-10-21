@@ -35,14 +35,12 @@ let hooked = false;
 /** the VFS's changes reach the watches from now on */
 export function hookInotify(): void {
   if (hooked) return;
-  const priorOnWrite = vfs.onWrite;
-  vfs.onWrite = (path, change = "modify") => {
-    priorOnWrite(path, change);
+  vfs.watch((path, change) => {
     if (change === "write") { notifyInotify(path, IN_MODIFY); notifyInotify(path, IN_CLOSE_WRITE); }
     else if (change === "create") notifyInotify(path, IN_CREATE, IN_CREATE);
     else if (change === "delete") notifyInotify(path, IN_DELETE_SELF, IN_DELETE);
     else notifyInotify(path, IN_MODIFY);
-  };
+  });
   hooked = true;
 }
 

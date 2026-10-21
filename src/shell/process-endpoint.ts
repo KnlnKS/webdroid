@@ -26,17 +26,16 @@ import { sqliteTransport } from "../android/sqlite.ts";
 import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
 import { useNotificationStore, notificationTransport } from "../android/notification.ts";
 import { useSettingsStore, useSettingsAccess } from "../android/settings.ts";
-import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, driven, type Gen } from "../jvm/runtime.ts";
 import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
 import { useGeolocation } from "../android/locationmanager.ts";
 import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
-import { asBroker, brokerMethods, forgetRemoved, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { asBroker, brokerMethods, forgetRemoved, javaFailure, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import type { ProcessBroker } from "./processes.ts";
-import type { ServiceRequest } from "./servicerecords.ts";
-import { callProxy, closePort, processError, processFailure } from "./process-port.ts";
+import { callProxy, closePort } from "./rpc.ts";
 import { note, Ev } from "../timeline.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
@@ -45,7 +44,7 @@ const life = remoteProcessLife(() => brokerCalls().process, logUncaught);
 /** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
  *  and lives, SQLite, cookies, WebView storage, PendingIntents, service starts and package data changes */
 function connectCommandTransports(broker: BrokerCalls): void {
-  const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(pkg, process, request));
+  const service = broker.service;
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
     yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
   });
@@ -55,12 +54,12 @@ function connectCommandTransports(broker: BrokerCalls): void {
   serviceTransport.peek = driven(function* (owner, process, intent) {
     return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
   });
-  providerProcesses.get = (pkg, process, authority) => after(remote(broker.contentProvider(pkg, process, authority)), importBinder);
+  providerProcesses.get = (pkg, process, authority) => after(broker.contentProvider(pkg, process, authority), importBinder);
   broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
     const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
-    return yield* awaited(broadcastResult(yield* awaited(remote(broker.broadcast(data, targets, permissions, ordered, from)))));
+    return yield* awaited(broadcastResult(yield* awaited(broker.broadcast(data, targets, permissions, ordered, from))));
   });
-  binderTransport.transact = request => remote(broker.transact(request));
+  binderTransport.transact = broker.transact;
   sqliteTransport.call = broker.sqlite;
   cookieTransport.calls = brokerCalls;
   webStorageTransport.calls = () => broker.webStorage;
@@ -79,7 +78,7 @@ function connectRemoteStores(broker: BrokerCalls): void {
   notificationTransport.foreground = broker.notificationForeground;
   useSettingsAccess(broker.settings);
   usePathOwner(broker);
-  vfs.prepare = broker.files.filePrepare;
+  releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   useHostUi(() => broker.ui);
   usePreferenceAccess(broker.prefs);
   usePermissionAccess(broker.permissions);
@@ -87,9 +86,11 @@ function connectRemoteStores(broker: BrokerCalls): void {
   exitRecordTransport.publish = broker.processExited;
   Object.assign(uriGrantTransport, broker.uriGrants);
 }
+let releaseFiles = () => {};
 export function closeProcessBrokerPort(): void {
   calls?.close();
   life.close();
+  releaseFiles();
   activityResults.clear();
   // its presence routes system providers to system_server, which a closed port no longer reaches
   systemProviderTransport.lookup = undefined;
@@ -116,8 +117,7 @@ function connectActivityCommands({ activity }: BrokerCalls): void {
  *  holds behind it, or the page's own */
 export function attachProcessBrokerPort(port: MessagePort, remoteStores = true): BrokerCalls {
   if (calls) { closePort(port); throw new Error("Process command port already attached"); }
-  calls = callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
-    error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
+  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure });
   const broker = calls.endpoint;
   connectCommandTransports(broker);
   connectActivityCommands(broker);
@@ -132,13 +132,6 @@ const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<Broadca
 /** whether this process's windows are on screen, which its display loop follows */
 export const processPresentation = { visible: true };
 function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
-async function remote<T>(pending: Promise<T>): Promise<T> {
-  try { return await pending; } catch (error) {
-    const failure = processFailure(error);
-    if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);
-    throw error;
-  }
-}
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */
 export function connectProcess(broker: ProcessBroker): ProcessEndpoint {

@@ -44,7 +44,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   const wd = globalThis.wd;
   // the realm whose window takes a point, or the focused field's keys
   const tap = (x: number, y: number): Promise<void> => wd.control(x, y).tap(x, y);
-  const sleep = input.controlled && wd.guestClock?.controlled
+  const sleep: (ms: number) => Promise<unknown> = input.controlled && wd.guestClock?.controlled
     ? (ms: number) => wd.guestClock.advanceBy(ms)
     : (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const run = (operation: Promise<unknown>) => withDeadline(

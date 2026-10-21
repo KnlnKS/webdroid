@@ -36,8 +36,6 @@ export interface AppCodeRequest {
   warm?(request: WarmRequest, transfer?: Transferable[]): void;
   /** the process was launched to show the app, whose taps wait on its code */
   shown?: boolean;
-  /** says what the launch waits for */
-  status?(text: string): void;
 }
 /** a merge waits this long at most for the warm Worker */
 const WARM_WAIT_MS = 1000;
@@ -131,7 +129,6 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   // build covers too little of its launch to wait for (TikTok waited 14 s for its roots' closure and still compiled 60k methods on demand)
   const found = await findBuild(req, key, stored, () => {
     if (!req.shown || !roots.whole) return undefined;
-    req.status?.("Optimizing app…");
     return builder.build(NO_DEMAND, undefined, undefined, shardCount(refs));
   });
   const saved = found?.saved, source = found?.source ?? "none", persisted = found?.persisted ?? Promise.resolve(false);

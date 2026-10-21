@@ -1,5 +1,5 @@
 import { releaseRights, type ParcelData } from "../android/binder.ts";
-import type { DescriptorRights, FileDescriptors, RetainedDescriptor } from "./file-descriptors.ts";
+import { mapRights, type DescriptorRights, type FileDescriptors, type RetainedDescriptor } from "./file-descriptors.ts";
 
 export class StoredParcelError extends Error {}
 
@@ -11,44 +11,37 @@ export class StoredParcel {
   private closing:Promise<void>|undefined;
   private constructor(kernel:FileDescriptors,data:ParcelData) { this.kernel = kernel; this.data = data; }
   static async retain(kernel:FileDescriptors,pid:number,data:ParcelData): Promise<StoredParcel> {
-    const stored=new StoredParcel(kernel,{bytes:data.bytes.slice(),objects:[]});
-    const positions=new Set<number>();
+    const stored=new StoredParcel(kernel,data),positions=new Set<number>();
     try {
-      for (const [at,object] of data.objects) {
+      stored.data=await mapRights(data,async (object,at)=>{
         if (positions.has(at)) throw new StoredParcelError("Duplicate retained Parcel object position");
         positions.add(at);
-        if (object && "descriptor" in object) {
-          const right=await kernel.retain(pid,object.descriptor);
-          if (!right) throw new StoredParcelError("Invalid retained Parcel descriptor");
-          stored.rights.set(at,right);stored.data.objects.push([at,null]);
-        } else {
-          if (object && "bytes" in object) throw new StoredParcelError("Snapshot descriptors cannot be retained as shared rights");
-          stored.data.objects.push([at,object && {...object}]);
-        }
-      }
+        if (object && "bytes" in object) throw new StoredParcelError("Snapshot descriptors cannot be retained as shared rights");
+        if (!object || !("descriptor" in object)) return object && {...object};
+        const right=await kernel.retain(pid,object.descriptor);
+        if (!right) throw new StoredParcelError("Invalid retained Parcel descriptor");
+        stored.rights.set(at,right);
+        return null;
+      },()=>stored.close());
       return stored;
-    } catch (error) {await stored.close();throw error;}
-    finally {await releaseRights(data,kernel.rights(pid),true);}
+    } finally {await releaseRights(data,kernel.rights(pid),true);}
   }
   async replay(pid:number): Promise<ParcelData> {
-    if (this.closed) throw new Error("Stored Parcel has been released");
+    const live=()=>{if (this.closed) throw new Error("Stored Parcel has been released");};
+    live();
     this.kernel.ensureReceiver(pid);
-    const data:ParcelData={bytes:this.data.bytes.slice(),objects:[]};
-    try {
-      for (const [at,object] of this.data.objects) {
-        if (this.closed) throw new Error("Stored Parcel has been released");
-        const right=this.rights.get(at);
-        if (!right) {data.objects.push([at,object && {...object}]);continue;}
-        const token=await this.kernel.replay(right,pid);
-        if (token < 0) throw new Error("Cannot replay retained Parcel descriptor");
-        data.objects.push([at,{descriptor:token}]);
-      }
-      if (this.closed) throw new Error("Stored Parcel has been released");
-      return data;
-    } catch (error) {
-      await releaseRights(data,this.kernel.rights(pid),false);
-      throw error;
-    }
+    const rights=this.kernel.rights(pid);
+    const data=await mapRights(this.data,async (object,at)=>{
+      live();
+      const right=this.rights.get(at);
+      if (!right) return object && {...object};
+      const token=await this.kernel.replay(right,pid);
+      if (token < 0) throw new Error("Cannot replay retained Parcel descriptor");
+      return {descriptor:token};
+    },partial=>releaseRights(partial,rights,false));
+    if (this.closed) await releaseRights(data,rights,false);
+    live();
+    return data;
   }
   /** `read` of a replay to `pid`, whose rights it may take; the rest are discarded */
   async readLocal<T>(pid: number, read: (data: ParcelData, rights: DescriptorRights) => T | Promise<T>): Promise<T> {

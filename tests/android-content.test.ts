@@ -32,7 +32,7 @@ import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
 import { useAlarmScheduler } from "../src/android/alarm.ts";
-import { callProxy } from "../src/shell/process-port.ts";
+import { callProxy } from "../src/shell/rpc.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { scall, bootApp, packageRecord, thrown } from "./java.ts";
@@ -341,7 +341,7 @@ describe("pending-intents", () => {
     broker.register(PKG, PKG + ":sibling", 7702);
     broker.register(foreign.pkg, foreign.pkg, 7703);
     const clients = [7701,7702,7703].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods,
-      [], error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass})));
+      { makeError: error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass}) }));
     const [creator,sibling,other] = clients.map(client => client.endpoint);
     const encoded = async (extra: string) => {
       const intent = await newIntent("org.webdroid.test.PENDING");

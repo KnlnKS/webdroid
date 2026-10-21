@@ -16,7 +16,7 @@ import { deliverBroadcast } from "../../src/android/server/broadcastqueue.ts";
 import { startMainLooper } from "../../src/android/mainloop.ts";
 import { serviceTransport } from "../../src/android/server/activeservices.ts";
 import { ServiceRecords } from "../../src/shell/servicerecords.ts";
-import { serveCalls,callProxy } from "../../src/shell/process-port.ts";
+import { serveCalls,callProxy } from "../../src/shell/rpc.ts";
 console.warn = () => {};
 fixtureDeadline();
 // Exercise the real Java lifecycle with delayed owner replies, not a synchronous replica.

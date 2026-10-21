@@ -13,22 +13,28 @@ import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
 import { rt } from "../jvm/runtime.ts";
-import { permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
+import { brokerMethods, permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
-import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
-import { serveCalls } from "./process-port.ts";
+import { hostUi } from "./host-ui.ts";
+import { serveCalls } from "./rpc.ts";
 import type { ProcessBroker } from "./processes.ts";
 
 type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };
 /** `calls`, each failing once process `pid` is dead */
 const live = <T extends object>(broker: ProcessBroker, pid: number, calls: T): T => Object.fromEntries(Object.entries(calls as Methods).map(([name, call]) =>
   [name, typeof call !== "function" ? live(broker, pid, call) : (...args: never[]) => { broker.entry(pid); return call.apply(calls, args); }])) as T;
+/** `names` of the object `of` resolves from each call's first argument */
+const forward = <T, N extends keyof T & string>(of: (first: never) => T, names: readonly N[]): Pick<T, N> =>
+  Object.fromEntries(names.map(name => [name, (...args: never[]) => {
+    const target = of(args[0]);
+    return (target[name] as (...args: never[]) => unknown).apply(target, args);
+  }])) as Pick<T, N>;
 
 /** Process `pid`'s command port; every call fails once the process is dead. */
 export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: MessagePort; close(): void } {
-  const caller = broker.entry(pid), { callers } = caller.session, { port1, port2 } = new MessageChannel();
+  const caller = broker.entry(pid), { callers } = caller, { port1, port2 } = new MessageChannel();
   // root and system act for any uid, as checkComponentPermission grants them
   const privileged = caller.uid === 0 || caller.uid === 1000;
   const permissions = canonicalPermissionCommands(broker.permissions, pkg => {
@@ -70,17 +76,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       },
       processUnwatch: token => { watches.get(token)?.(); watches.delete(token); },
     },
-    starts: {
-      created: (cls, intent) => starts(cls).created(cls, intent),
-      destroyed: cls => starts(cls).destroyed(cls),
-      start: (cls, intent) => starts(cls).start(cls, intent),
-      deliver: cls => starts(cls).deliver(cls),
-      requested: cls => starts(cls).requested(cls),
-      stop: cls => starts(cls).stop(cls),
-      stopSelf: (cls, id) => starts(cls).stopSelf(cls, id),
-      done: (cls, id, result) => starts(cls).done(cls, id, result),
-      foreground: (cls, on) => starts(cls).foreground(cls, on),
-    },
+    starts: forward(starts, brokerMethods.starts),
     // Intent.filterEquals and replaceExtras are Android framework operations on serialized
     // Intents; the canonical Java owner keeps extras parcelled instead of borrowing a VM.
     pending: {
@@ -106,12 +102,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     webStorage: canonicalWebStorage(caller.pkg),
     prefs: { ...preferences, preferenceFiles: pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); } },
     permissions,
-    settings: {
-      get: (table, name) => broker.settings.get(table, name),
-      entries: table => broker.settings.entries(table),
-      put: (table, name, value) => broker.settings.put(table, name, value),
-      ssaidKey: () => broker.settings.ssaidKey(),
-    },
+    settings: forward(() => broker.settings, brokerMethods.settings),
     // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
     // would hold the launching main job while that same process is asked to pause.
     activity: {
@@ -122,8 +113,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       presentation: translucent => broker.activities.presentation(pid, translucent),
     },
     uriGrants: uriGrantCommands(() => caller.uid),
-    ui: Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
-      (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
+    ui: forward(hostUi, brokerMethods.ui),
     serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
     systemService: async name => {
       if (!SYSTEM_SERVICES.has(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
@@ -173,7 +163,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       broker.fail(pid, `Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`, deathOf(canonical), canonical);
     },
     displayOrientation: landscape => broker.activities.orientation(pid, landscape),
-    sqlite: request => (caller.session.sqlite ??= createSQLiteSession()).call(request),
+    sqlite: request => (caller.sqlite ??= createSQLiteSession()).call(request),
     transact: request => broker.transact(pid, request),
     service: (pkg, process, request) => broker.service(pid, pkg, process, request),
     contentProvider: (pkg, process, authority) => broker.contentProvider(pid, pkg, process, authority),

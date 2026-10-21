@@ -145,10 +145,10 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
 }
 
 /** boots the app */
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<void> {
+export async function bootApk(install: Install, assetKey = "", processName: string | null = null): Promise<void> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  mark("bootApk"); onStatus("Reading package…");
+  mark("bootApk");
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
@@ -166,7 +166,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the dexes inflate, and the app's code is prepared from them, while the zygote runs
   const dexes = inflateTree(zip, isDexEntry).then(() => {
     const read = dexesOfZip(zip);
-    beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName, onStatus);
+    beginAppCode(read, { profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch }, !processName);
     return read;
   });
   await startZygote();
@@ -184,20 +184,16 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
-  if (install.base instanceof Uint8Array) vfs.write(apkPath(), install.base);
-  else vfs.mount(apkPath(), install.base);
-  for (const sp of install.splits) {
-    if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
-    else vfs.mount(apkPath(sp.name), sp.source);
-  }
-  mark("startZygote"); onStatus("Loading app code…");
+  vfs.place(apkPath(), install.base);
+  for (const sp of install.splits) vfs.place(apkPath(sp.name), sp.bytes ?? sp.source);
+  mark("startZygote");
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
   // a process's files live with the broker, whose prepare creates its app data
   await vfs.prepare(pkg);
 
-  mark("dataReady"); onStatus("Loading resources…");
+  mark("dataReady");
   const { target } = usesSdk(manifest);
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
@@ -218,7 +214,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
 
   setDisplayTarget(frame, present);
   useDisplayRotation();
-  mark("resourcesReady"); onStatus("Starting app…");
+  mark("resourcesReady");
   await onMain(() => startActivityThread(!processName));
 }
 
