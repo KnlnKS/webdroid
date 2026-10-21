@@ -1,3 +1,5 @@
+import { within } from "./rpc.ts";
+
 export interface AotProfile {
   key: string;
   wanted: string[];
@@ -9,13 +11,8 @@ type FetchStore = {key:string;wanted:Iterable<string>;worlds:Iterable<() => {lin
 export async function existingAotProfile(): Promise<AotProfile | null> {
   const opened: Promise<FetchStore | undefined> | undefined = globalThis.__wdAot;
   if (!opened) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const store = await Promise.race([opened,new Promise<never>((_,reject) => {
-      timer = setTimeout(() => reject(new Error("AOT profile owner timeout")),4000);
-    })]);
-    return store ? {key:store.key,wanted:[...store.wanted],worlds:[...store.worlds].map(read => {
-      const usage = read();return {linked:usage.linked.slice(),called:usage.called.slice()};
-    })} : null;
-  } finally {clearTimeout(timer);}
+  const store = await within(opened, 4000, () => { throw new Error("AOT profile owner timeout"); });
+  return store ? {key:store.key,wanted:[...store.wanted],worlds:[...store.worlds].map(read => {
+    const usage = read();return {linked:usage.linked.slice(),called:usage.called.slice()};
+  })} : null;
 }

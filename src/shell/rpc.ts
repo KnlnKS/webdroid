@@ -157,6 +157,12 @@ export function callProxy<C extends object>(port: MessagePort, names: readonly (
   return { close, endpoint: endpoint as C };
 }
 
+/** p, or late()'s result once `ms` pass first: a call's answer within a deadline */
+export function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }).then(late)]).finally(() => clearTimeout(timer));
+}
+
 /** `endpoint` served and `names` called over one port, so that messages keep one order both ways; either
  *  side's close closes both */
 export function duplex<S extends Contract, C extends Contract>(port: MessagePort, endpoint: S, names: readonly (keyof C & string)[],

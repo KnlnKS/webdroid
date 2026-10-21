@@ -1,7 +1,7 @@
 // Files too large to keep in memory, stored in the origin private file system by the disk Worker
 // (disk-worker.ts), which runs requests in arrival order: a read queued after a write sees it,
 // which lets writes return before the Worker has run them.
-import type { WritableSource } from "./lazyfile.ts";
+import { ChunkCache, clampRange, type WritableSource } from "./lazyfile.ts";
 import { callProxy, methodsOf } from "./rpc.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 
@@ -25,8 +25,8 @@ const CHUNK = 1 << 20, CACHE_CHUNKS = 64;
 export class DiskStore {
   private calls: DiskCalls | null = null;
   private readonly files = new Map<string, DiskFile>();
-  /** recently read chunks of every file, least recently used first */
-  readonly cache = new Map<string, Uint8Array>();
+  /** recently read chunks of every file */
+  readonly cache = new ChunkCache<string>(CACHE_CHUNKS * CHUNK);
 
   /** the disk Worker, started on first use */
   get disk(): DiskCalls {
@@ -61,18 +61,12 @@ export class DiskFile implements WritableSource {
   private readonly store: DiskStore; readonly id: string; size: number;
   constructor(store: DiskStore, id: string, size: number) { this.store = store; this.id = id; this.size = size; }
   read(offset: number, length: number): Promise<Uint8Array> {
-    const start = Math.max(0, Math.min(this.size, offset)), end = Math.min(this.size, start + Math.max(0, length));
+    const [start, end] = clampRange(this.size, offset, length);
     if (start === end) return Promise.resolve(new Uint8Array(0));
     const index = Math.floor(start / CHUNK), within = start - index * CHUNK;
-    return this.chunk(index).then((chunk) => chunk.subarray(within, Math.min(chunk.length, within + end - start)));
-  }
-  private async chunk(index: number): Promise<Uint8Array> {
-    const key = this.id + ":" + index, cache = this.store.cache, cached = cache.get(key);
-    if (cached) { cache.delete(key); cache.set(key, cached); return cached; }
-    const bytes = await this.store.disk.read(this.id, index * CHUNK, CHUNK);
-    cache.set(key, bytes);
-    if (cache.size > CACHE_CHUNKS) cache.delete(cache.keys().next().value!);
-    return bytes;
+    // a write forgets the chunks it overlaps, a read of them in flight included
+    return this.store.cache.get(this.id + ":" + index, () => this.store.disk.read(this.id, index * CHUNK, CHUNK))
+      .then((chunk) => chunk.subarray(within, Math.min(chunk.length, within + end - start)));
   }
   /** queued in order behind earlier requests; `bytes` is transferred, so callers pass a copy */
   write(offset: number, bytes: Uint8Array): void {

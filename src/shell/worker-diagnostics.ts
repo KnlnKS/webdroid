@@ -4,6 +4,7 @@ import { copyExitRecord, REASON_EXIT_SELF, REASON_USER_REQUESTED, type ExitRecor
 import type { ProcessHost } from "./process-host.ts";
 import type { ProcessRecord, ProcessBroker } from "./processes.ts";
 import type { WorkerControl } from "./worker-control.ts";
+import { within } from "./rpc.ts";
 
 export type WorkerTerminal = { expected: boolean; cause: string; record: ExitRecord | null };
 type WorkerIdentity = { pid: number; pkg: string; process: string; url: string };
@@ -12,11 +13,6 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
   { snapshot: Snapshot; terminal?: never; error?: never } |
   { error: string; terminal?: WorkerTerminal } | { terminal: WorkerTerminal; error?: never });
 
-/** p, or late()'s result once `ms` pass first */
-export function within<T>(p: Promise<T>, ms: number, late: () => T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }).then(late)]).finally(() => clearTimeout(timer));
-}
 /** one in-flight read per Worker, shared by concurrent callers */
 function shared<T>(reads: WeakMap<ProcessHost, Promise<T>>, host: ProcessHost, start: () => Promise<T>): Promise<T> {
   let read = reads.get(host);

@@ -1,6 +1,6 @@
 import { readFully } from "./lazyfile.ts";
 import type { Install } from "./install.ts";
-import { EXT_MIME } from "../mime.ts";
+import { mimeOf } from "../mime.ts";
 
 interface LocalAssetSession { key: string; install: Install }
 let active: LocalAssetSession | null = null;
@@ -19,7 +19,5 @@ export async function localAsset(path: unknown): Promise<{ status: number; bytes
   const source = active.install.lazyEntries.get(entry);
   const bytes = active.install.zip[entry] ?? (source ? await readFully(source) : null);
   if (!bytes) return { status: 404 };
-  const ext = entry.slice(entry.lastIndexOf(".") + 1).toLowerCase();
-  const type = EXT_MIME[ext] ?? "application/octet-stream";
-  return { status: 200, bytes, type };
+  return { status: 200, bytes, type: mimeOf(entry) ?? "application/octet-stream" };
 }
