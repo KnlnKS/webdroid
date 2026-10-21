@@ -1,15 +1,16 @@
 // The permission controller: which permissions a package or uid holds, as PermissionManagerService
 // checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
 // IPermissionManager over them.
-import { awaited, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, noops, driven, rt, type Gen } from "../jvm/runtime.ts";
 import { jarray, sameBytes } from "../jvm/abi.ts";
 import { after, vcall, newObj } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { type XmlNode, attrStr, attr } from "./axml.ts";
 import { appHost } from "./apphost.ts";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
-import { type PackageRecord, packages, signaturePermissions, usesSdk } from "./packages.ts";
+import { type PackageRecord, packages, usesSdk } from "./packages.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { SYSTEM_PACKAGES } from "../shell/system-packages.ts";
 import { hostService } from "./binder.ts";
 import { permissionInfo$ } from "./pm.ts";
 
@@ -49,12 +50,9 @@ export class PermissionStore {
     savedGrants.set(pkg, [...grants]);
   }
 }
-export interface PermissionAccess {
+export type PermissionAccess = {
   permissionCheck(pkg: string, names: string[]): boolean[] | Promise<boolean[]>;
   permissionGrant(pkg: string, names: string[]): void | Promise<void>;
-}
-export type PermissionCalls = {
-  [K in keyof PermissionAccess]: (...args: Parameters<PermissionAccess[K]>) => Promise<Awaited<ReturnType<PermissionAccess[K]>>>;
 };
 export function canonicalPermissionCommands(store: PermissionStore, authorize: (pkg: string) => void): PermissionAccess {
   return {
@@ -65,7 +63,7 @@ export function canonicalPermissionCommands(store: PermissionStore, authorize: (
 // only the canonical commands read the store: a process without it asks the broker's
 let permissionAccess = canonicalPermissionCommands(new PermissionStore(), () => {});
 export function usePermissionStore(store: PermissionStore) { permissionAccess = canonicalPermissionCommands(store, () => {}); }
-export function usePermissionAccess(access: PermissionCalls): void { permissionAccess = access; }
+export function usePermissionAccess(access: PermissionAccess): void { permissionAccess = access; }
 /** signature|appop|pre23 permissions, the special access a user grants in Settings */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
@@ -124,21 +122,31 @@ const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   }
   return null;
 };
-/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package */
+/** the permissions provisioning grants the system packages, which no other package holds by asking */
+const PROVISIONED = new Set<string>(SYSTEM_PACKAGES.flatMap((spec) => spec.grants));
+/** an install grants a permission by signature when its declaration's base protection level is
+ *  signature, signatureOrSystem or internal, or provisioning grants it */
+const bySignature = (name: string): boolean => PROVISIONED.has(name) || ((protectionLevel(name) ?? 0) & 0xf) >= 2;
+/** Context.enforceCallingPermission's failure, after the caller's `message` when it gives one */
+export const notHeld = (uid: number, permission: string, message?: string): Error =>
+  rt.mkThrowable("java/lang/SecurityException", `${message ? message + ": " : ""}Neither user ${uid} nor current process has ${permission}.`);
+/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package: one granted by signature is held by
+ *  a system package that requests it, as holdsPlatformPermission answers, or one signed as its declarer */
 export function checkPermission(permission: string, pkg: string): number | Promise<number> {
   const record = packages.get(pkg);
   if (record?.grants.has(permission)) return 0;
   if (!record?.requested.has(permission)) return -1;
-  if (signaturePermissions.has(permission)) return signerHolds(record, permission);
+  if (!RUNTIME_PERMISSIONS.has(permission) && !SPECIAL_ACCESS.has(permission) && bySignature(permission)) return record.system ? 0 : signerHolds(record, permission);
   return after(permissionGranted(pkg, permission), granted => granted ? 0 : -1);
 }
 /** a signature permission: held when the package is signed as the one declaring it */
 async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
   const certificates = await record.certificates();
+  if (!certificates.length) return -1;
   for (const owner of packages.values()) {
     if (!declaration(owner, permission)) continue;
     const signers = await owner.certificates();
-    if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
+    if (certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
   }
   return -1;
 }

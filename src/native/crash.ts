@@ -30,14 +30,14 @@ export function setAbortMessage(message: string | (() => string)): void { abortM
  *  parking at its next turn. */
 export function dieOfSignal(cpu: Cpu, sig: number, info: SigInfo | null = null): Promise<never> {
   if (!processExited()) {
-    const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.name})`, code = info ? `, code ${info.code}` : "";
+    const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.argv0})`, code = info ? `, code ${info.code}` : "";
     let report: Uint8Array | undefined;
     if (dumpsCore(sig)) {
       const abort = typeof abortMessage === "string" ? abortMessage : abortMessage();
       report = tombstone(cpu, sig, info, abort);
       console.error([`Fatal signal ${sig} (${name})${code} in tid ${cpu.osTid} (${cpu.name}), ${process}`,
         "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***",
-        `pid: ${cpu.pid}, tid: ${cpu.osTid}, name: ${cpu.name}  >>> ${procIdentity.name} <<<`,
+        `pid: ${cpu.pid}, tid: ${cpu.osTid}, name: ${cpu.name}  >>> ${procIdentity.argv0} <<<`,
         `signal ${sig} (${name})${code}, fault addr ${info ? "0x" + info.addr.toString(16) : "--------"}`,
         ...(abort ? [`Abort message: '${abort}'`] : []),
         "backtrace:", ...backtrace(cpu).map((frame, i) => `  #${String(i).padStart(2, "0")} ${frame}`)].join("\n"));
@@ -54,7 +54,7 @@ function tombstone(cpu: Cpu, sig: number, info: SigInfo | null, abort: string): 
   const names = cpu.a64 ? [...Array(29)].map((_, i) => `x${i}`).concat(["x29", "lr", "sp"]) : REGS32;
   return tombstoneProto({
     a64: cpu.a64, fingerprint: propertyValue("ro.build.fingerprint") ?? "", timestamp: wallMillis(), pid: cpu.pid, tid: cpu.osTid,
-    uid: procIdentity.uid, command: procIdentity.name, uptimeS: performance.now() / 1000,
+    uid: procIdentity.uid, command: procIdentity.argv0, uptimeS: performance.now() / 1000,
     signal: sig, signalName: SIGNAL_NAMES[sig] ?? "", code: info?.code ?? 0, codeName: signalCodeName(sig, info?.code ?? 0),
     faultAddress: info?.addr ?? null, abort, threadName: cpu.name,
     registers: [...names.map((name, i): [string, bigint] => [name, reg(i)]), ["pc", BigInt(cpu.pc >>> 0)]],

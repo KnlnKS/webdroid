@@ -10,7 +10,6 @@ import { concat, jarray, sameBytes } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { unbox } from "../jvm/natives/jbox.ts";
 import { hostService } from "./binder.ts";
-import { PROCESS_UID } from "./os.ts";
 import { device } from "../shell/config.ts";
 import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
 import { aes, ctr, AesGcm } from "../jvm/natives/ciphers.ts";
@@ -22,6 +21,7 @@ import {
 import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 // KeyMint's constants (android.hardware.security.keymint)
 const TAG = {
@@ -94,12 +94,12 @@ export const keystoreData: PackageState = {
 /** the entries, kept for this session where storage is unavailable; a corrupt store is empty */
 let session: Entry[] = [];
 function entries(): Entry[] {
-  const saved = savedEntries.get(String(PROCESS_UID));
+  const saved = savedEntries.get(String(procIdentity.uid));
   return saved === undefined ? session : saved ?? [];
 }
 function save(list: Entry[]) {
   session = list;
-  savedEntries.set(String(PROCESS_UID), list);
+  savedEntries.set(String(procIdentity.uid), list);
 }
 const newId = () => BigInt.asIntN(64, bytesToBig(crypto.getRandomValues(new Uint8Array(8)))).toString();
 
@@ -160,7 +160,7 @@ function certificate(key: PKey, req: Param[], purposes: number[]): Uint8Array {
 const KM = "android/system/keystore2/KeyMetadata", AUTH = "android/system/keystore2/Authorization", KER = "android/system/keystore2/KeyEntryResponse";
 function* metadata(e: Entry): Gen<JObj> {
   const auths: JObj[] = [];
-  for (const p of [...e.params.map(decodeParam), { tag: TAG.CREATION_DATETIME, kind: KIND.dateTime, v: BigInt(e.created) }, { tag: TAG.USER_ID, kind: KIND.integer, v: Math.floor(PROCESS_UID / 100000) }])
+  for (const p of [...e.params.map(decodeParam), { tag: TAG.CREATION_DATETIME, kind: KIND.dateTime, v: BigInt(e.created) }, { tag: TAG.USER_ID, kind: KIND.integer, v: Math.floor(procIdentity.uid / 100000) }])
     auths.push(setDeclared(yield newObj(AUTH), AUTH, { securityLevel: p.tag === TAG.CREATION_DATETIME ? KEYSTORE : SOFTWARE, keyParameter: yield* javaParam(p) }));
   return setDeclared(yield newObj(KM), KM, {
     key: setDeclared(yield newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null }),
@@ -401,7 +401,7 @@ const deleteKey = driven(function* (d: unknown): Gen<void> {
 const listed = driven(function* (start: string | null): Gen<unknown[]> {
   const descriptors: JObj[] = [];
   for (const alias of entries().map((e) => e.alias).filter((a) => start === null || a > start).sort())
-    descriptors.push(setDeclared(yield newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }));
+    descriptors.push(setDeclared(yield newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(procIdentity.uid), alias, blob: null }));
   return jarray(descriptors, `L${KD};`);
 });
 hostService("android.system.keystore2.IKeystoreService/default", "webdroid/KeystoreService", "android/system/keystore2/IKeystoreService$Stub", {

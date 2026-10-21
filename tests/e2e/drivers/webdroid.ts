@@ -24,8 +24,8 @@ type LaunchOpts = {
   /** Date is pinned here (default PINNED_CLOCK_MS); null keeps the wall clock. Timers, rAF and
    *  performance.now keep running either way. */
   fixedMs?: number | null;
-  /** localStorage seeded before the page boots: a flow's shared_prefs, already in wd's format */
-  storage?: [string, string][];
+  /** private files (path, text) stored before the page boots: a flow's shared_prefs */
+  files?: [string, string][];
   privateStorage?: { files: { path: string; fixture: string }[] };
   shots?: boolean;
   controlled?: boolean;
@@ -52,7 +52,7 @@ export class WebdroidDriver {
     try {
       const browser = await chromium.connect(server.wsEndpoint());
       const ctx = await browser.newContext(CONTEXT_OPTS);
-      await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
+      await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, files: opts.files ?? [], shots: !!opts.shots }) });
       if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
         Object.defineProperty(window, name, { value: undefined, configurable: true });` });
       if (opts.offline) {

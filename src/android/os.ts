@@ -68,22 +68,20 @@ rt.registerJnis("android/os/SystemClock", {
 });
 /** system_server's pid: the page realm's process, which outlives every other */
 export const SYSTEM_SERVER_PID = 1000;
-export let PROCESS_PID = SYSTEM_SERVER_PID, PROCESS_UID = 10001;
-export let PROCESS_NAME = "";
 /** set while the zygote initializes what every app inherits: it runs as root */
 let zygoteRunning = false;
 export async function asZygote(init: () => unknown): Promise<void> {
   zygoteRunning = true;
   try { await init(); } finally { zygoteRunning = false; }
 }
-export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; procIdentity.uid = uid; }
+export function setProcessIdentity(pid: number, uid: number): void { procIdentity.pid = pid; procIdentity.uid = uid; }
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
 function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
-export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
+export function setProcessName(name: string): void { procIdentity.name = procIdentity.argv0 = name; }
 /** this process's name, its package's when it was given none (the application's default process) */
-export const processName = (): string => PROCESS_NAME || appHost?.pkg || "";
+export const processName = (): string => procIdentity.name || appHost?.pkg || "";
 /** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
 export const processTransport: { signal: (pid: number, signal: number) => void | Promise<void> } = { signal: notConnected };
 // Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.
@@ -92,7 +90,7 @@ const SIGNAL_KILL = 9;
 /** Process.sendSignal: SIGKILL ends this process, as killProcess(myPid()) does; another
  *  process's pid goes to the broker */
 function sendSignal(pid: number, signal: number): void | Promise<void> {
-  if (pid !== PROCESS_PID) return processTransport.signal(pid, signal);
+  if (pid !== procIdentity.pid) return processTransport.signal(pid, signal);
   if (signal !== SIGNAL_KILL) return;
   exitProcess({ signal });
   return never();
@@ -114,7 +112,7 @@ rt.registerJnis("android/os/Process", {
   "setThreadScheduler(III)V": () => {},
   "setCanSelfBackground(Z)V": () => {},
   "setThreadGroup(II)V": () => {}, "setThreadGroupAndCpuset(II)V": () => {},
-  "setArgV0Native(Ljava/lang/String;)V": (name: string) => { procIdentity.name = name; },
+  "setArgV0Native(Ljava/lang/String;)V": (argv0: string) => { procIdentity.argv0 = argv0; },
   "getTotalMemory()J": totalMemory,
   "getFreeMemory()J": freeMemory,
   "sendSignal(II)V": sendSignal,
@@ -146,7 +144,7 @@ rt.registerJnis("android/os/Debug", {
   "getPss()J": () => BigInt(jsHeapKb()),
   "getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": memoryInfo,
   // another process's smaps are not this page's to read
-  "getMemoryInfo(ILandroid/os/Debug$MemoryInfo;)Z": (pid: number, info: JObj | null) => pid === PROCESS_PID ? (memoryInfo(info), 1) : 0,
+  "getMemoryInfo(ILandroid/os/Debug$MemoryInfo;)Z": (pid: number, info: JObj | null) => pid === procIdentity.pid ? (memoryInfo(info), 1) : 0,
 });
 // ART's debugger and runtime counters: no debugger attaches, and nothing here collects, blocks or
 // compacts, so every runtime stat is zero
@@ -443,8 +441,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (!key || key.includes("=")) throw errno("unsetenv", 22);
       delete processEnv[key];
     },
-    "getpid()I": () => PROCESS_PID,
-    "getuid()I": () => zygoteRunning ? 0 : PROCESS_UID,
+    "getpid()I": () => procIdentity.pid,
+    "getuid()I": () => zygoteRunning ? 0 : procIdentity.uid,
     // bionic's passwd entry: every id has one, named as appUserName names it
     "getpwuid(I)Landroid/system/StructPasswd;": waits((uid: number) =>
       newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh")),
@@ -465,7 +463,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
       if (path === null || name === null) rt.npe();
-      return existing("setxattr", path, () => { throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP); });
+      return existing("setxattr", path, () => { throw errno("setxattr", E.NOTSUP); });
     },
     "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => existing("statvfs", path, () => structStatVfs()),
     [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
@@ -688,9 +686,9 @@ let nextMountTable = 0n;
 const linuxNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "init()V": () => {},
   "flistxattr(IJI)I": (fd: number) => { fdPath(fd); return 0; },
-  "fgetxattr0(IJJI)I": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
-  "fremovexattr0(IJ)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
-  "fsetxattr0(IJJI)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.EOPNOTSUPP); },
+  "fgetxattr0(IJJI)I": (fd: number) => { fdPath(fd); throw unixError(E.NODATA); },
+  "fremovexattr0(IJ)V": (fd: number) => { fdPath(fd); throw unixError(E.NODATA); },
+  "fsetxattr0(IJJI)V": (fd: number) => { fdPath(fd); throw unixError(E.NOTSUP); },
   "setmntent0(JJ)J": (path: bigint) => {
     const text = vfs.read(cpath(path));
     if (!text) throw unixError(E.NOENT);
@@ -712,7 +710,7 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
   for (;;) {
     const n = unixSys(yield* awaited(javaReadFd(src, buffer)));
     if (!n) return;
-    if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(OS_CONSTANTS.ECANCELED);
+    if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(E.CANCELED);
     for (let at = 0; at < n;) at += unixSys(yield* awaited(javaWriteFd(dst, buffer.subarray(at, n))));
   }
 }));

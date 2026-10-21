@@ -16,10 +16,10 @@ import { unbox } from "../jvm/natives/jbox.ts";
 import { once } from "../jvm/suspend.ts";
 import { callingIdentity, asSystem } from "./binder.ts";
 import { uriParts } from "./net.ts";
-import { packages, type PackageRecord } from "./packages.ts";
+import { uidPackages, type PackageRecord } from "./packages.ts";
 import { notifyContent } from "./server/content.ts";
 import { locationEnabled } from "./locationmanager.ts";
-import { holdsPlatformPermission } from "./permissions.ts";
+import { holdsPlatformPermission, notHeld } from "./permissions.ts";
 import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings.ts";
 import { registerSystemProvider, matrixCursor } from "./systemproviders.ts";
 
@@ -88,9 +88,7 @@ const systemSets = Object.fromEntries(["PUBLIC_SETTINGS", "PRIVATE_SETTINGS"].ma
 type Caller = { uid: number; appId: number; record: PackageRecord | null };
 function caller(): Caller {
   const { uid } = callingIdentity();
-  let record: PackageRecord | null = null;
-  for (const r of packages.values()) if (r.uid === uid) { record = r; break; }
-  return { uid, appId: uid % 100000, record };
+  return { uid, appId: uid % 100000, record: uidPackages(uid)[0] ?? null };
 }
 const formatUid = (uid: number) => {
   const appId = uid % 100000;
@@ -122,7 +120,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
   }
   // CompatChanges ENFORCE_READ_PERMISSION_FOR_MULTI_SIM_DATA_CALL, which the AVD enforces at targetSdk 30 and 35
   if (table === "global" && name === "multi_sim_data_call" && !holds(c, "android.permission.READ_PRIVILEGED_PHONE_STATE"))
-    fail(SECURITY, `access global settings MULTI_SIM_DATA_CALL_SUBSCRIPTION: Neither user ${c.uid} nor current process has android.permission.READ_PRIVILEGED_PHONE_STATE.`);
+    throw notHeld(c.uid, "android.permission.READ_PRIVILEGED_PHONE_STATE", "access global settings MULTI_SIM_DATA_CALL_SUBSCRIPTION");
 }
 /** settings whose value another owner keeps: LocationManagerService writes location_mode with the
  *  location switch, and DatabaseHelper names the device after its model until someone renames it */

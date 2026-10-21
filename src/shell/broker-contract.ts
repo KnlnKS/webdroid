@@ -3,9 +3,8 @@
 // helpers both sides share. A process Worker imports this, never processes.ts, so it does not
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
-import type { PermissionCalls } from "../android/permissions.ts";
+import type { PermissionAccess } from "../android/permissions.ts";
 import type { UriGrantCalls } from "../android/urigrants.ts";
-import type { PreferenceCalls } from "../android/sharedprefs.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
 import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";
@@ -22,14 +21,11 @@ import type { ProcessLifeCalls } from "./process-life.ts";
 import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
 import type { SettingsAccess } from "./settings.ts";
 import { asSystem } from "../android/binder.ts";
-import { packages } from "../android/packages.ts";
 import { checkPermission } from "../android/permissions.ts";
-import { installedPath, queryReceivers } from "../android/pm.ts";
+import { queryReceivers } from "../android/pm.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import { hostUiMethods } from "./host-ui.ts";
-import { packedArchives } from "./packedarchive.ts";
 import { callError, callProxy, methodsOf, qualified, type CallFailure, type MethodTree, type ProxyOptions } from "./rpc.ts";
-import { vfs } from "./vfs.ts";
 
 /** an access interface's methods, called across a port */
 export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
@@ -51,10 +47,9 @@ export type BrokerCalls = CookieCalls & {
   /** the start state of the caller's services */
   starts: Calls<ServiceStarts>;
   pending: Calls<PendingAccess>;
-  prefs: PreferenceCalls;
   files: FilePathCalls;
   descriptors: DescriptorCalls;
-  permissions: PermissionCalls;
+  permissions: Calls<PermissionAccess>;
   settings: Calls<SettingsAccess>;
   activity: ActivityCalls;
   uriGrants: Calls<UriGrantCalls>;
@@ -86,10 +81,9 @@ export const brokerMethods = {
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
   pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "take", "peek"]),
-  prefs: methodsOf<PreferenceCalls>()(["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),
-  permissions: methodsOf<PermissionCalls>()(["permissionCheck", "permissionGrant"]),
+  permissions: methodsOf<PermissionAccess>()(["permissionCheck", "permissionGrant"]),
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
   ui: hostUiMethods,
@@ -135,10 +129,4 @@ export const unawaited = (work: Promise<unknown>) => void work.catch((error) => 
 /** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
 export function* receivers(intent: JObj): Gen<Receiver[]> {
   return (yield* awaited(queryReceivers(intent))).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
-}
-/** a removed package leaves this process's package manager, with the archive it would register again from */
-export function forgetRemoved(pkg: string): void {
-  packages.delete(pkg);
-  packedArchives.delete(installedPath(pkg));
-  vfs.delete(installedPath(pkg));
 }

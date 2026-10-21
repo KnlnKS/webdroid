@@ -6,11 +6,11 @@
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
-import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
+import { logUncaught, detached, unconnected } from "../jvm/natives/jthrowable.ts";
 import { boxInt } from "../jvm/natives/jbox.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { packages, qualifyComponent, ownedBy, uidPackages } from "./packages.ts";
-import { AccountStore, canonicalAccountCommands, type AccountAccess, type AccountAuthority, type AccountChange, type AccountKey, type AccountSummary, type StoredAccount } from "../shell/accounts.ts";
+import type { AccountKey, AccountStore, StoredAccount } from "../shell/accounts.ts";
 import { attr, attrStr, parseAXML, TV } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
 import { resolved, resString } from "./res.ts";
@@ -43,45 +43,57 @@ function authenticators(): Authenticator[] {
 const authenticatorFor = (type: string) => authenticators().find((a) => a.type === type);
 
 // ── the store, and what a caller may see and change of it
-let stopAccountUpdates = () => {};
+let accounts: AccountStore | null = null, stopAccountUpdates = () => {};
+const store = (): AccountStore => accounts ?? unconnected();
 /** AccountManagerService's broadcasts on a change, which AccountManager's listeners hear */
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
   for (const action of CHANGED) asSystem(() => after(newIntent(action), (intent) => broadcastIntent(intent, [], false))).catch(logUncaught);
 }
-export function useAccountStore(store: AccountStore): () => void {
-  stopAccountUpdates(); accountAccess = canonicalAccountCommands(store, accountAuthority);
-  return stopAccountUpdates = store.watch(accountsChanged);
+/** the broker's store, which system_server's service keeps */
+export function useAccountStore(shared: AccountStore): () => void {
+  stopAccountUpdates(); accounts = shared;
+  return stopAccountUpdates = shared.watch(accountsChanged);
 }
-function accountAuthority(): AccountAuthority {
-  const { uid } = callingIdentity();
-  return { caller: caller(uid), authenticator: (type: string) => authenticatorFor(type)?.pkg, sameUid, known: (pkg: string) => packages.has(pkg),
-    denied: (type: string): never => { throw rt.mkThrowable("java/lang/SecurityException", `uid ${uid} cannot manage accounts of type: ${type}`); } };
-}
-let accountAccess: AccountAccess;
 /** the calling uid's package, as getPackageNameForUid picks one */
 const caller = (uid = callingIdentity().uid) => uidPackages(uid)[0]?.pkg ?? "";
 const sameUid = (a: string, b: string) => ownedBy(b, packages.get(a)?.uid ?? -1);
-useAccountStore(new AccountStore());
+/** whether the caller's uid holds the authenticator of `type` */
+const manages = (type: string) => { const owner = authenticatorFor(type)?.pkg; return !!owner && sameUid(owner, caller()); };
+function denied(type: string): never { throw rt.mkThrowable("java/lang/SecurityException", `uid ${callingIdentity().uid} cannot manage accounts of type: ${type}`); }
+/** whether `pkg` sees the account: its owner's uid does, and a package it is made visible to */
+const visible = (s: StoredAccount, pkg: string) => sameUid(s.owner, pkg) || s.visibility[pkg] === 1 || s.visibility[pkg] === 2;
 /** an account's visibility to `pkg`: its owner's uid always sees it */
-const visibilityFor = (s: AccountSummary, pkg: string) => sameUid(s.owner, pkg) ? 1 : s.visibility[pkg] ?? 4;
+const visibilityFor = (s: StoredAccount, pkg: string) => sameUid(s.owner, pkg) ? 1 : s.visibility[pkg] ?? 4;
 const field = (account: JObj, name: string) => getDeclared<string>(account, "android/accounts/Account", name);
 const keyOf = (account: JObj): AccountKey => ({ name: field(account, "name"), type: field(account, "type") });
-function owned(account: JObj | null): StoredAccount | null | Promise<StoredAccount | null> {
+/** the account, of a type the caller's authenticator manages */
+function owned(account: JObj | null): StoredAccount | null {
   if (!account) throw rt.mkThrowable("java/lang/IllegalArgumentException", "account is null");
-  return accountAccess.accountRead(keyOf(account));
+  const key = keyOf(account);
+  if (!manages(key.type)) denied(key.type);
+  return store().find(key) ?? null;
 }
+/** the accounts of `type` (any, for null) that `pkg` sees, or that the caller manages */
+const listed = (type: string | null, pkg: string, managed = false) =>
+  store().records.filter((s) => (type === null || s.type === type) && (managed ? manages(s.type) : visible(s, pkg)));
 const javaAccount = (s: AccountKey) => newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", s.name, s.type);
-const accountArray = driven(function* (list: AccountSummary[]): Gen<JObj[]> {
+const accountArray = driven(function* (list: StoredAccount[]): Gen<JObj[]> {
   const out: JObj[] = [];
   for (const s of list) out.push(yield javaAccount(s));
   return jarray(out, "Landroid/accounts/Account;");
 });
-const byType = (type: string | null, pkg = caller()) => after(accountAccess.accountList({ type, pkg }), accountArray);
-const changeOwned = (account: JObj, change: (key: AccountKey) => AccountChange) => after(owned(account), s => s ? accountAccess.accountChange(change(s)) : 0);
-const drop = (s: StoredAccount | null) => s ? accountAccess.accountChange({ kind: "drop", key: s }) : 0;
-const setPassword = (account: JObj, value: string | null) => changeOwned(account, key => ({ kind: "password", key, value }));
-const setEntry = (account: JObj, field: "data" | "tokens", name: string, value: string | null) => changeOwned(account, key => ({ kind: "entry", key, field, name, value }));
+const byType = (type: string | null, pkg = caller()) => accountArray(listed(type, pkg));
+/** `apply` to an account the store still holds, persisted unless it declines: whether it changed */
+function changed(s: StoredAccount | null, apply: (s: StoredAccount) => boolean | void): number {
+  if (!s || !store().records.includes(s) || apply(s) === false) return 0;
+  store().persist();
+  return 1;
+}
+const drop = (s: StoredAccount | null) => changed(s, (s) => store().drop(s));
+const setPassword = (account: JObj, value: string | null) => changed(owned(account), (s) => { s.password = value; s.tokens = Object.create(null); });
+const setEntry = (account: JObj, field: "data" | "tokens", name: string, value: string | null) =>
+  changed(owned(account), (s) => { if (value === null) delete s[field][name]; else s[field][name] = value; });
 function* bundle(values: Record<string, string | JObj | number | boolean>): Gen<JObj> {
   const b = yield newObj("android/os/Bundle");
   for (const [key, value] of Object.entries(values)) {
@@ -201,29 +213,35 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
   }),
   [`addAccountExplicitly(${A}${S}${B}${S})Z`]: (account: JObj, password: string | null, extras: JObj | null) => rt.drive(addExplicitly(account, password, extras, null)),
   [`addAccountExplicitlyWithVisibility(${A}${S}${B}Ljava/util/Map;${S})Z`]: driven(addExplicitly),
-  [`removeAccountExplicitly(${A})Z`]: (account: JObj) => after(owned(account), drop),
-  [`accountAuthenticated(${A})Z`]: (account: JObj) => after(owned(account), s => +!!s),
-  [`someUserHasAccount(${A})Z`]: (account: JObj) => account ? after(accountAccess.accountExists(keyOf(account)), s => +s) : 0,
-  [`hasAccountAccess(${A}${S}Landroid/os/UserHandle;)Z`]: (account: JObj, pkg: string) => account ? after(accountAccess.accountList({ type: field(account, "type"), pkg }), list => +list.some(s => s.name === field(account, "name"))) : 0,
-  [`getPassword(${A})${S}`]: (account: JObj) => after(owned(account), s => s?.password ?? null),
+  [`removeAccountExplicitly(${A})Z`]: (account: JObj) => drop(owned(account)),
+  [`accountAuthenticated(${A})Z`]: (account: JObj) => +!!owned(account),
+  [`someUserHasAccount(${A})Z`]: (account: JObj) => account ? +!!store().find(keyOf(account)) : 0,
+  [`hasAccountAccess(${A}${S}Landroid/os/UserHandle;)Z`]: (account: JObj, pkg: string) => account ? +listed(field(account, "type"), pkg).some((s) => s.name === field(account, "name")) : 0,
+  [`getPassword(${A})${S}`]: (account: JObj) => owned(account)?.password ?? null,
   [`setPassword(${A}${S})V`]: setPassword,
   [`clearPassword(${A})V`]: (account: JObj) => setPassword(account, null),
-  [`getUserData(${A}${S})${S}`]: (account: JObj, key: string) => after(owned(account), s => s?.data[key] ?? null),
+  [`getUserData(${A}${S})${S}`]: (account: JObj, key: string) => owned(account)?.data[key] ?? null,
   [`setUserData(${A}${S}${S})V`]: (account: JObj, key: string, value: string | null) => setEntry(account, "data", key, value),
-  [`peekAuthToken(${A}${S})${S}`]: (account: JObj, type: string) => after(owned(account), s => s?.tokens[type] ?? null),
+  [`peekAuthToken(${A}${S})${S}`]: (account: JObj, type: string) => owned(account)?.tokens[type] ?? null,
   [`setAuthToken(${A}${S}${S})V`]: (account: JObj, type: string, token: string | null) => setEntry(account, "tokens", type, token),
-  [`invalidateAuthToken(${S}${S})V`]: (type: string, token: string | null) => accountAccess.accountChange({ kind: "invalidate", type, token }),
-  [`getPreviousName(${A})${S}`]: (account: JObj) => after(owned(account), s => s?.previousName ?? null),
-  [`getAccountVisibility(${A}${S})I`]: (account: JObj, pkg: string) => after(owned(account), s => s ? visibilityFor(s, pkg) : 0),
-  [`setAccountVisibility(${A}${S}I)Z`]: (account: JObj, pkg: string, value: number) => changeOwned(account, key => ({ kind: "visibility", key, pkg, value })),
+  [`invalidateAuthToken(${S}${S})V`]: (type: string, token: string | null) => {
+    for (const s of store().records) if (s.type === type) for (const name of Object.keys(s.tokens)) if (s.tokens[name] === token) delete s.tokens[name];
+    store().persist();
+  },
+  [`getPreviousName(${A})${S}`]: (account: JObj) => owned(account)?.previousName ?? null,
+  [`getAccountVisibility(${A}${S})I`]: (account: JObj, pkg: string) => { const s = owned(account); return s ? visibilityFor(s, pkg) : 0; },
+  [`setAccountVisibility(${A}${S}I)Z`]: (account: JObj, pkg: string, value: number) => changed(owned(account), (s) => {
+    if (!packages.has(pkg) || !Number.isInteger(value) || value < 0 || value > 4) return false;
+    if (value) s.visibility[pkg] = value; else delete s.visibility[pkg];
+  }),
   [`getPackagesAndVisibilityForAccount(${A})Ljava/util/Map;`]: driven(function* (account: JObj) {
-    const s = yield* awaited(owned(account)), map = yield newObj("java/util/HashMap");
+    const s = owned(account), map = yield newObj("java/util/HashMap");
     for (const [pkg, visibility] of Object.entries(s?.visibility ?? {})) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", pkg, boxInt(visibility));
     return map;
   }),
   [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null) {
     const map = yield newObj("java/util/HashMap");
-    for (const s of yield* awaited(accountAccess.accountList({ type, pkg, managed: true }))) {
+    for (const s of listed(type, pkg, true)) {
       yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", yield javaAccount(s), boxInt(visibilityFor(s, pkg)));
     }
     return map;
@@ -239,13 +257,14 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
   [`hasFeatures(${RESPONSE}${A}[${S}I${S})V`]: (response: JObj, account: JObj, features: string[]) =>
     session(field(account, "type"), response, (auth, s) => vcall(auth, "hasFeatures", `(${AUTH}${A}[${S})V`, s, account, features)),
   [`removeAccountAsUser(${RESPONSE}${A}ZI)V`]: (response: JObj, account: JObj, expectActivityLaunch: number) => {
-    return after(owned(account), s => session(field(account, "type"), response, (auth, r) => vcall(auth, "getAccountRemovalAllowed", `(${AUTH}${A})V`, r, account), {
+    const s = owned(account);
+    return session(field(account, "type"), response, (auth, r) => vcall(auth, "getAccountRemovalAllowed", `(${AUTH}${A})V`, r, account), {
       expectActivityLaunch: !!expectActivityLaunch,
       process: function* (result) {
-        if (!(yield* awaited(has(result, "intent"))) && (yield vcall(result, "getBoolean", "(Ljava/lang/String;)Z", "booleanResult"))) yield* awaited(drop(s));
+        if (!(yield* awaited(has(result, "intent"))) && (yield vcall(result, "getBoolean", "(Ljava/lang/String;)Z", "booleanResult"))) drop(s);
         return result;
       },
-    }));
+    });
   },
   [`confirmCredentialsAsUser(${RESPONSE}${A}${B}ZI)V`]: (response: JObj, account: JObj, options: JObj | null, expectActivityLaunch: number) =>
     session(field(account, "type"), response, (auth, s) => vcall(auth, "confirmCredentials", `(${AUTH}${A}${B})V`, s, account, options),
@@ -256,19 +275,18 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
   [`editProperties(${RESPONSE}${S}Z)V`]: (response: JObj, type: string, expectActivityLaunch: number) =>
     session(type, response, (auth, s) => vcall(auth, "editProperties", `(${AUTH}${S})V`, s, type), { expectActivityLaunch: !!expectActivityLaunch }),
   [`getAccountsByFeatures(${RESPONSE}${S}[${S}${S})V`]: driven(function* (response: JObj, type: string, features: string[] | null) {
-    const matches: AccountSummary[] = [];
-    for (const s of yield* awaited(accountAccess.accountList({ type, pkg: caller() }))) if (!features?.length || (yield* hasFeatures(yield javaAccount(s), features))) matches.push(s);
+    const matches: StoredAccount[] = [];
+    for (const s of listed(type, caller())) if (!features?.length || (yield* hasFeatures(yield javaAccount(s), features))) matches.push(s);
     yield reply(response, yield* bundle({ accounts: yield* awaited(accountArray(matches)) }));
   }),
   [`renameAccount(${RESPONSE}${A}${S})V`]: driven(function* (response: JObj, account: JObj, name: string) {
-    const s = yield* awaited(owned(account));
-    const renamed = s && (yield* awaited(accountAccess.accountChange({ kind: "rename", key: s, name })));
+    const s = owned(account), renamed = changed(s, (s) => { s.previousName = s.name; s.name = name; });
     yield reply(response, yield* bundle(renamed ? { authAccount: name, accountType: s!.type } : {}));
   }),
 }, { system: true });
 
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
-  if (yield* awaited(owned(account))) return 0;
+  if (owned(account)) return 0;
   const data: Record<string, string> = Object.create(null);
   if (extras) for (const key of (yield* awaited(toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")))) as string[]) {
     const value = yield vcall(extras, "get", "(Ljava/lang/String;)Ljava/lang/Object;", key);
@@ -279,8 +297,13 @@ function* addExplicitly(account: JObj, password: string | null, extras: JObj | n
     const pkg: string = yield vcall(entry, "getKey", "()Ljava/lang/Object;");
     visibilities[pkg] = yield vcall(yield vcall(entry, "getValue", "()Ljava/lang/Object;"), "intValue", "()I");
   }
-  return yield* awaited(accountAccess.accountChange({ kind: "add", account: { name: field(account, "name"), type: field(account, "type"), owner: authenticatorFor(field(account, "type"))!.pkg,
-    password, data, tokens: Object.create(null), visibility: visibilities } }));
+  // the type's authenticator went, or the account came, while the extras were read
+  const key = keyOf(account), owner = authenticatorFor(key.type)?.pkg;
+  if (!owner || !manages(key.type)) denied(key.type);
+  if (store().find(key)) return 0;
+  store().add({ ...key, owner, password, data, tokens: Object.create(null), visibility: visibilities });
+  store().persist();
+  return 1;
 }
 function* addAccount(response: JObj, type: string, tokenType: string | null, features: string[] | null, expectActivityLaunch: number, options: JObj | null): Gen<void> {
   const withIdentity = yield* withCaller(options, callingIdentity());
@@ -289,9 +312,9 @@ function* addAccount(response: JObj, type: string, tokenType: string | null, fea
 }
 /** a cached token answers at once unless the authenticator keeps its own; a new one is cached */
 function* getAuthToken(response: JObj, account: JObj, tokenType: string, notifyOnFailure: number, expectActivityLaunch: number, options: JObj | null): Gen<void> {
-  const identity = callingIdentity(), type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, cachedAccount = accountAccess.accountCached(keyOf(account), tokenType);
-  if (!cachedAccount) { yield fail(response, ERROR_BAD_ARGUMENTS, "account doesn't exist"); return; }
-  const s = cachedAccount.account, cached = custom ? undefined : cachedAccount.token;
+  const identity = callingIdentity(), type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, s = store().find(keyOf(account));
+  if (!s || !visible(s, caller())) { yield fail(response, ERROR_BAD_ARGUMENTS, "account doesn't exist"); return; }
+  const cached = custom ? undefined : s.tokens[tokenType];
   if (cached !== undefined) { yield reply(response, yield* bundle({ authtoken: cached, authAccount: s.name, accountType: s.type })); return; }
   const withIdentity = yield* withCaller(options, identity);
   if (notifyOnFailure) yield vcall(withIdentity, "putBoolean", "(Ljava/lang/String;Z)V", "notifyOnAuthFailure", 1);
@@ -302,7 +325,14 @@ function* getAuthToken(response: JObj, account: JObj, tokenType: string, notifyO
       if (token === null) return result;
       const name = yield* awaited(bundleString(result, "authAccount")), resultType = yield* awaited(bundleString(result, "accountType"));
       if (!name || !resultType) return new SessionError(ERROR_INVALID_RESPONSE, "the type and name should not be empty");
-      if (!custom) yield* awaited(accountAccess.accountChange({ kind: "cache", key: { name, type: resultType }, authenticatorType: type, tokenType, token }));
+      if (custom) return result;
+      // the authenticator caches a token for an account of its own type only
+      const owner = authenticatorFor(type)?.pkg;
+      if (!owner || owner !== authenticatorFor(resultType)?.pkg) denied(resultType);
+      changed(store().find({ name, type: resultType }) ?? null, (target) => {
+        if (!visible(target, caller())) return false;
+        target.tokens[tokenType] = token;
+      });
       return result;
     },
   });

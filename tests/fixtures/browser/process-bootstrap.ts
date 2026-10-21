@@ -329,24 +329,18 @@ export async function storeOwnership() {
     const grantRead=await peers[0].endpoint.permissions.permissionCheck(pkg,[permission]);grantRead[0]=false;
     const own=await ask("permissions.permissionCheck",pkg,[permission]);
     const foreignDenied=await ask("permissions.permissionGrant",foreign,[permission]) as {error:string};
-    packages.get(foreign)!.grants.add("android.permission.GRANT_RUNTIME_PERMISSIONS");
+    const held=packages.get(foreign)!;
+    packages.set(foreign,new PackageRecord(held.root,held.apk,held.path,held.uid,held.certificates,{grants:["android.permission.GRANT_RUNTIME_PERMISSIONS"]}));
     await peers[1].endpoint.permissions.permissionGrant(pkg,[extra]);
     const privileged=await ask("permissions.permissionCheck",pkg,[extra]);
-    const prefName = pkg + ":worker", policyName = "android:notification-policy:" + foreign;
-    const prefAck = await ask("prefs.preferenceChange", prefName, [{kind:"put",key:"array",value:["one"]}]);
-    await peers[0].endpoint.prefs.preferenceChange(prefName, [{kind:"put",key:"other",value:9n}]);
-    const prefCopy = await ask("prefs.preferenceRead",prefName,"array") as string[]; prefCopy.push("local");
-    const prefFresh = await peers[0].endpoint.prefs.preferenceRead(prefName,"array");
-    const prefKeys = await ask("prefs.preferenceKeys",prefName) as string[];
-    const foreignPref = await ask("prefs.preferenceChange",foreign+":private",[{kind:"put",key:"secret",value:1}]) as {error:string};
-    const emptyForeign = await ask("prefs.preferenceFiles",foreign) as {error:string};
-    broker.preferences.open(policyName).set("delegate",pkg);
-    const publicPolicy = await ask("prefs.preferenceRead",policyName,"delegate");
-    const policyWrite = await ask("prefs.preferenceChange",policyName,[{kind:"remove",key:"delegate"}]) as {error:string};
-    const prefFiles = await ask("prefs.preferenceFiles",pkg) as [string,[string,unknown][]][];
-    const prefs = {ack:prefAck,fresh:prefFresh,keys:prefKeys,foreignDenied:!!foreignPref.error,emptyForeignDenied:!!emptyForeign.error,
-      publicPolicy,policyDenied:!!policyWrite.error,files:prefFiles.map(([name])=>name)};
+    // an older build's preference files become the package's shared_prefs files once, but its platform's
+    localStorage.setItem(`wd:prefs:${pkg}:worker`,JSON.stringify({array:["one"],count:{$l:"9"}}));
+    localStorage.setItem(`wd:prefs:${pkg}:__system_power`,"{}");
     await ask("files.filePrepare",pkg);
+    const imported=`/data/data/${pkg}/shared_prefs/worker.xml`, xml=new TextDecoder().decode(vfs.read(imported) ?? undefined);
+    const prefs={set:xml.includes('<set name="array"><string>one</string></set>'),long:xml.includes('<long name="count" value="9" />'),
+      platform:vfs.exists(`/data/data/${pkg}/shared_prefs/__system_power.xml`),left:localStorage.getItem(`wd:prefs:${pkg}:worker`)};
+    vfs.delete(imported);
     const directory=`/data/data/${pkg}/databases`;
     const made=await ask("files.fileMkdir",directory),repeated=await ask("files.fileMkdir",directory);
     const ownerStat=await peers[0].endpoint.files.fileStat(directory);
@@ -378,7 +372,6 @@ export async function storeOwnership() {
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
     for(const root of [`/data/data/${pkg}`,`/data/user_de/0/${pkg}`])for(const [path] of [...vfs.entries(root)])vfs.rmdir(path);
-    broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
     await broker.files.flush();

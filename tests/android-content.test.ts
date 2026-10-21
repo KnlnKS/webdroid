@@ -8,16 +8,17 @@ import { jarray } from "../src/jvm/abi.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/server/urigrants.ts";
 import { mkUri } from "../src/android/net.ts";
-import { packages, PackageRecord, signaturePermissions } from "../src/android/packages.ts";
+import { packages, PackageRecord } from "../src/android/packages.ts";
+import { registerPackage } from "../src/android/installpackage.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { pickFiles } from "../src/shell/hostfs.ts";
 import { centralDir, zipTree } from "../src/zip.ts";
 import { mergeInstall } from "../src/shell/install.ts";
 import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
 import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";
-import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
+import { FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
-import { notConnected } from "../src/jvm/natives/jthrowable.ts";
+import { notConnected, unconnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
 import { Resources, NativeTheme, newSV, emptyApk } from "../src/android/res.ts";
 import { deviceQualifiers } from "../src/android/configuration.ts";
@@ -31,12 +32,12 @@ import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
-import { useAlarmScheduler } from "../src/android/alarm.ts";
+import { removeAlarm, setOperationAlarm, useAlarmIntents } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/rpc.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord, thrown } from "./java.ts";
-import { PROCESS_UID } from "../src/android/os.ts";
+import { scall, bootApp, packageRecord, loadPlatform, thrown } from "./java.ts";
+import { procIdentity } from "../src/shell/procfs.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -125,7 +126,7 @@ describe("package-checksums", () => {
     const archive = await parsePackageArchive(bytes);
     const path = "/data/app/checksum-test/base.apk";
     vfs.write(path, bytes);
-    registerPackage(archive, path);
+    registerPackage(archive, { path });
     const listener = new ChecksumListener();
     const pms = await hostedService("package");
     await vcall(pms, "requestPackageChecksums", "(Ljava/lang/String;ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V", archive.pkg, 0, 0, 8, await newArrayList(), listener, 0);
@@ -153,8 +154,8 @@ describe("package-installer", () => {
     const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
     const create = (name: string) => vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, name, null, 0);
     const openSession = (id: number) => vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id);
-    packages.set("test.installer", { uid: PROCESS_UID } as PackageRecord);
-    expect(await thrown(() => create("test.other"))).toBe(`java/lang/SecurityException: Package test.other does not belong to ${PROCESS_UID}`);
+    packages.set("test.installer", { uid: procIdentity.uid } as PackageRecord);
+    expect(await thrown(() => create("test.other"))).toBe(`java/lang/SecurityException: Package test.other does not belong to ${procIdentity.uid}`);
     const id = await create("test.installer");
     // another app's uid, as a transaction from it carries
     const self = await scall("android/os/Binder", "clearCallingIdentity", "()J");
@@ -188,9 +189,7 @@ describe("package-game-info", () => {
         { name: "isGame", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 1 },
       ], children: [] },
     ] };
-    const record = new PackageRecord(root, emptyApk(), "/test-game.apk", 12345, async () => []);
-    record.system = true;
-    packages.set(pkg, record);
+    packages.set(pkg, new PackageRecord(root, emptyApk(), "/test-game.apk", 12345, async () => [], { system: true }));
     try {
       const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
       const APP = "android/content/pm/ApplicationInfo";
@@ -236,7 +235,9 @@ describe("package-permissions", () => {
   const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
 
   test("PackageInfo aligns requested permission flags with actual package grants", async () => {
-    const pkg = "test.permissions", denied = "test.permissions.SIGNATURE";
+    // framework-res declares WRITE_SECURE_SETTINGS signature|privileged|development
+    await loadPlatform();
+    const pkg = "test.permissions", denied = "android.permission.WRITE_SECURE_SETTINGS";
     const int = (name: string, data: number): XmlAttr => ({ name, str: null, ns: "", resId: 0, type: TV.INT_DEC, data });
     const root: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
       { name: "uses-sdk", attrs: [int("targetSdkVersion", 35)], children: [] },
@@ -245,20 +246,20 @@ describe("package-permissions", () => {
       // requested only through API 28
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
-    const record = new PackageRecord(root, emptyApk(), "/test.apk", 12345, async () => []);
-    packages.set(pkg, record); signaturePermissions.add(denied);
+    const register = (grants: string[]) => packages.set(pkg, new PackageRecord(root, emptyApk(), "/test.apk", 12345, async () => [], { grants }));
+    register([]);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
       const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
       const info = await packageInfo(0x1000n);
       expect([...getDeclared<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
       expect([...getDeclared<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
-      record.grants.add(denied);
+      register([denied]);
       expect([...getDeclared<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
       const omitted = await packageInfo(0n);
       expect(getDeclared(omitted, PI, "requestedPermissions")).toBeNull();
       expect(getDeclared(omitted, PI, "requestedPermissionsFlags")).toBeNull();
-    } finally { packages.delete(pkg); signaturePermissions.delete(denied); }
+    } finally { packages.delete(pkg); }
   });
 });
 
@@ -384,14 +385,15 @@ describe("pending-intents", () => {
       // An alarm is system_server's: its creator's death does not cancel its operation.
       let receiveAlarm!: (request: unknown) => void;
       const delivery = new Promise(resolve => receiveAlarm = resolve);
-      broker.alarms.schedule(id,2,uptimeMillis()+50,0);
+      useAlarmIntents(broker.intents);
+      setOperationAlarm(id,2,uptimeMillis()+50,0);
       broker.fail(7701,"normal caller fixture death",NOT_CRASHED);
       broker.register(PKG,PKG + ":owner",7704);
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
       expect((await sibling.pending.peek(id))?.kind).toBe("activity");
-      broker.alarms.cancel(id);
+      removeAlarm(id);
       await sibling.pending.cancel(id);
       expect(await sibling.pending.peek(id)).toBeNull();
       const single = (await sibling.pending.create(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
@@ -402,6 +404,7 @@ describe("pending-intents", () => {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
       broker.intents.remove(PKG); broker.permissions.clear(PKG); packages.delete(foreign.pkg);
+      useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
     }
   });
 
@@ -413,7 +416,7 @@ describe("pending-intents", () => {
     const waiting = new Promise<void>(resolve => { entered = resolve; });
     const acknowledgment = new Promise<void>(resolve => { release = resolve; });
     Object.assign(pendingTransport, { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } satisfies PendingAccess);
-    useAlarmScheduler(broker.alarms);
+    useAlarmIntents(broker.intents);
     try {
       const path = "/data/data/test/pending-fd.bin";
       vfs.write(path, Uint8Array.of(7));
@@ -460,7 +463,7 @@ describe("pending-intents", () => {
       const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
       expect(iof(error, "android/app/PendingIntent$CanceledException")).toBe(true);
     } finally {
-      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmScheduler({ schedule: notConnected, cancel: notConnected });
+      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
       broker.fail(pid, "pending fixture cleanup", NOT_CRASHED); broker.intents.remove(PKG);
     }
   });

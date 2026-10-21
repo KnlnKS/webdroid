@@ -15,8 +15,8 @@ import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
 import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
 import { setManifest } from "../android/pm.ts";
-import { getPrefs } from "../android/sharedprefs.ts";
-import { PROCESS_PID, asZygote, setProcessIdentity, setProcessName } from "../android/os.ts";
+import { packageConfig, setPackageConfig } from "../android/packageconfig.ts";
+import { asZygote, setProcessIdentity, setProcessName } from "../android/os.ts";
 import { packageUid, packages, usesSdk } from "../android/packages.ts";
 import { onMain, postMain, startMainLooper } from "../android/mainloop.ts";
 import { preloadFonts } from "../android/fonts.ts";
@@ -39,6 +39,7 @@ import { toThread } from "../jvm/natives/jthrowable.ts";
 import { note, Ev } from "../timeline.ts";
 import type { TouchPointer } from "./pointer-queue.ts";
 import { keyCodes } from "../android/input-codes.ts";
+import { procIdentity } from "./procfs.ts";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 let displayChanged = () => {};
@@ -174,7 +175,7 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
   for (const d of await dexes) loadDex(d);
   mark("dexLoaded");
   await loadAppCode();
-  applicationNightOverride = nightOverride(await getPrefs(pkg, "__system_uimode").get("mode"));
+  applicationNightOverride = nightOverride(packageConfig(pkg).night);
   setDeviceNight(applicationNightOverride ?? device.night);
   await deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
@@ -206,9 +207,9 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
     setApplicationNightMode: (mode) => setApplicationNightMode(pkg, mode),
     setApplicationLocales: (locales) => setApplicationLocales(pkg, locales),
   });
-  const savedLocales = await getPrefs(pkg, "__system_locales").get("tags");
-  if (typeof savedLocales === "string" && savedLocales) await onMain(() => after(localesFromTags(savedLocales), applyApplicationLocales));
-  setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
+  const savedLocales = packageConfig(pkg).locales;
+  if (savedLocales) await onMain(() => after(localesFromTags(savedLocales), applyApplicationLocales));
+  setProcessIdentity(procIdentity.pid, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest);
   setTargetSdkVersion(target);
@@ -236,16 +237,14 @@ function applyConfigChange(): void { if (appHost) postMain(configurationChanged)
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
-function setApplicationLocales(pkg: string, locales: Locales): void | Promise<void> {
-  return after(getPrefs(pkg, "__system_locales").set("tags", locales.tags.join(",")), () => {
-    if (applyApplicationLocales(locales)) applyConfigChange();
-  });
+function setApplicationLocales(pkg: string, locales: Locales): void {
+  setPackageConfig(pkg, { locales: locales.tags.join(",") });
+  if (applyApplicationLocales(locales)) applyConfigChange();
 }
-function setApplicationNightMode(pkg: string, mode: number): void | Promise<void> {
-  return after(getPrefs(pkg, "__system_uimode").set("mode", mode), () => {
-    applicationNightOverride = nightOverride(mode);
-    applyNightMode(applicationNightOverride ?? device.night);
-  });
+function setApplicationNightMode(pkg: string, mode: number): void {
+  setPackageConfig(pkg, { night: mode });
+  applicationNightOverride = nightOverride(mode);
+  applyNightMode(applicationNightOverride ?? device.night);
 }
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
   .addEventListener("change", (e) => {

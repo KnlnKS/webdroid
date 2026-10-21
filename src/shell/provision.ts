@@ -1,11 +1,11 @@
 import { SYSTEM_PACKAGES } from "./system-packages.ts";
 import { packageArchive } from "../android/packagearchive.ts";
-import { packedArchives, systemPackage } from "./packedarchive.ts";
-import { installedPath, registerPackage } from "../android/pm.ts";
+import { systemPackage } from "./packedarchive.ts";
 import { attr, attrStr, TV } from "../android/axml.ts";
-import { resString } from "../android/res.ts";
-import { vfs } from "./vfs.ts";
-import { packages, signaturePermissions, componentState } from "../android/packages.ts";
+import { Resources, resString } from "../android/res.ts";
+import { deviceQualifiers } from "../android/configuration.ts";
+import { packages, componentState } from "../android/packages.ts";
+import { registerPackage } from "../android/installpackage.ts";
 import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { awaited, rt, type Gen } from "../jvm/runtime.ts";
@@ -19,22 +19,18 @@ export function provisionPackages(): Promise<void> {
     const packed = await systemPackage(spec), index = packed.index;
     const archive = packageArchive(packed.zip, index.certificates.map(hexBytes));
     if (archive.pkg !== spec.pkg) throw new Error(`System package identity mismatch: ${spec.file}`);
-    const record = registerPackage(archive);
-    record.system = true;
+    const application = archive.root.children.find((n) => n.name === "application");
+    const metadata = application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
+    const value = metadata && attr(metadata, "value");
+    // the signature is the package's own string, read before its record exists
+    const signature = value?.type === TV.REFERENCE ? resString(new Resources([archive.apk], deviceQualifiers()), value.data) : value?.str;
+    if (!signature || !/^(?:[a-f\d]{2})+$/i.test(signature)) throw new Error(`Invalid compatibility signature: ${spec.file}`);
+    const record = registerPackage(archive, { source: packed, system: true, grants: [...spec.grants, ...spec.defaultGrants], signatures: [hexBytes(signature)] });
     for (const name of spec.disabledComponents) {
       if (!Object.values(record.components).some(components => components.has(name))) throw new Error("Provisioned component unavailable: " + name);
       const component = { pkg: record.pkg, cls: name };
       if (componentState.get(component) === null) componentState.set(component, 2);
     }
-    for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }
-    for (const permission of spec.defaultGrants) record.grants.add(permission);
-    const metadata = record.application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
-    const value = metadata && attr(metadata, "value");
-    const signature = value?.type === TV.REFERENCE ? resString(record.res, value.data) : value?.str;
-    if (!signature || !/^(?:[a-f\d]{2})+$/i.test(signature)) throw new Error(`Invalid compatibility signature: ${spec.file}`);
-    record.compatibilityCertificates = [hexBytes(signature)];
-    packedArchives.set(installedPath(record.pkg), packed);
-    vfs.mount(installedPath(record.pkg), packed);
   })).then(() => {});
 }
 /** the system starting each package's provisioning service */

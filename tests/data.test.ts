@@ -19,11 +19,11 @@ import { decodeIntent } from "../src/android/intentipc.ts";
 import { useFocusedUid } from "../src/android/clipboard.ts";
 import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
 import { notificationTransport } from "../src/android/notification.ts";
-import type { BrokerCalls } from "../src/shell/broker-contract.ts";
+import type { BrokerCalls, Calls } from "../src/shell/broker-contract.ts";
 import { cookieManager, cookieTransport } from "../src/android/cookies.ts";
-import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions.ts";
-import { PreferenceStore, preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, getPrefs, type PreferenceCalls } from "../src/android/sharedprefs.ts";
-import { AccountStore, canonicalAccountCommands } from "../src/shell/accounts.ts";
+import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionAccess } from "../src/android/permissions.ts";
+import { AccountStore, decodeAccount } from "../src/shell/accounts.ts";
+import { useAccountStore } from "../src/android/accounts.ts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
 import { WebCookies } from "../src/shell/webcookies.ts";
 import { NativeWindow } from "../src/android/cursorwindow.ts";
@@ -47,44 +47,6 @@ const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql }
 /** the store's snapshot timers and clock under test control; the runtime's other scheduling stays real */
 const fakeTimers = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
 
-test("preference commands acknowledge Java-visible changes without overwriting other keys", async () => {
-  const pkg = "org.webdroid.test.preferencecommands";
-  await bootApp(await packageRecord(pkg));
-  const original = preferenceStore, store = new PreferenceStore(), owner = canonicalPreferenceCommands(store, name => {
-    if (!name.startsWith(pkg + ":")) throw new Error("foreign preference file");
-  });
-  const { port1, port2 } = new MessageChannel();
-  let entered!: () => void, release!: () => void;
-  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
-  const stop = serveCalls<PreferenceCalls>(port1, { ...owner,
-    preferenceChange: async (name, changes) => { entered(); await blocked; return owner.preferenceChange(name, changes); },
-  } as PreferenceCalls);
-  const client = callProxy<PreferenceCalls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]);
-  usePreferenceAccess(client.endpoint);
-  try {
-    const prefs = getPrefs(pkg, "__system_power"), service = rt.make("webdroid/DeviceIdleController");
-    const exempt = () => vcall(service, "isPowerSaveWhitelistApp", "(Ljava/lang/String;)Z", pkg);
-    expect(await exempt()).toBe(0);
-    let completed = false;
-    const write = Promise.resolve(prefs.set("exempt", 1)).then(value => { completed = true; return value; });
-    await waiting;
-    expect(completed).toBe(false);
-    expect(await owner.preferenceRead(prefs.name, "exempt")).toBeUndefined();
-    release(); await write;
-    expect(await exempt()).toBe(1);
-    await Promise.all([prefs.set("__proto__", ["kept"]), prefs.set("long", 9007199254740993n)]);
-    expect(await prefs.get("long")).toBe(9007199254740993n);
-    const values = await prefs.get("__proto__") as string[];
-    values.push("copy");
-    expect(await prefs.get("__proto__")).toEqual(["kept"]);
-    await prefs.remove("long");
-    expect(await prefs.get("long")).toBeUndefined();
-    expect(await prefs.get("exempt")).toBe(1);
-    expect(await client.endpoint.preferenceChange("foreign:file", [{kind:"put",key:"x",value:1}]).then(() => null, error => error.message)).toBe("foreign preference file");
-    expect(store.open("foreign:file").size).toBe(0);
-  } finally { release(); client.close(); stop(); usePreferenceStore(original); }
-});
-
 test("permission checks deny pending grants and Java calls await the canonical owner", async () => {
   const pkg = "org.webdroid.test.permissioncommands", fine = "android.permission.ACCESS_FINE_LOCATION";
   await bootApp(await packageRecord(pkg, { target: 34, permissions: [fine] }));
@@ -94,10 +56,10 @@ test("permission checks deny pending grants and Java calls await the canonical o
   const { port1, port2 } = new MessageChannel();
   let entered!: () => void, release!: () => void;
   const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
-  const stop = serveCalls<PermissionCalls>(port1, { ...owner,
+  const stop = serveCalls<Calls<PermissionAccess>>(port1, { ...owner,
     permissionGrant: async (target, names) => { entered(); await blocked; return owner.permissionGrant(target, names); },
-  } as PermissionCalls);
-  const client = callProxy<PermissionCalls>(port2, ["permissionCheck", "permissionGrant"]);
+  } as Calls<PermissionAccess>);
+  const client = callProxy<Calls<PermissionAccess>>(port2, ["permissionCheck", "permissionGrant"]);
   usePermissionAccess(client.endpoint);
   try {
     const service = rt.make("webdroid/PermissionManagerService"), location = rt.make("webdroid/LocationManagerService");
@@ -119,33 +81,22 @@ test("permission checks deny pending grants and Java calls await the canonical o
   } finally { release(); client.close(); stop(); usePermissionStore(new PermissionStore()); }
 });
 
-test("account commands preserve credential ownership", async () => {
-  await bootApp(await packageRecord("org.webdroid.test.accounts"));
-  const store = new AccountStore(), authority = (caller: string) => ({ caller,
-    authenticator: (type: string) => type === "test" ? "owner" : undefined,
-    sameUid: (a: string, b: string) => a === b, known: () => true,
-    denied: (): never => { throw rt.mkThrowable("java/lang/SecurityException", "account owner required"); } });
-  const owner = canonicalAccountCommands(store, () => authority("owner")), key = { name: "alice", type: "test" };
-  owner.accountChange({ kind: "add", account: { ...key, owner: "owner", password: "old", data: {}, tokens: { login: "old-token" }, visibility: { reader: 1 } } });
-  owner.accountChange({ kind: "password", key, value: "new" });
-  expect([owner.accountRead(key)?.password, store.records[0].tokens]).toEqual(["new", {}]);
-  owner.accountChange({ kind: "entry", key, field: "data", name: "__proto__", value: "data" });
-  owner.accountChange({ kind: "entry", key, field: "tokens", name: "login", value: "token" });
-  expect([store.records[0].data.__proto__, store.records[0].tokens.login]).toEqual(["data", "token"]);
-  const reader = canonicalAccountCommands(store, () => authority("reader"));
-  const visible = reader.accountList({ type: null, pkg: "reader" });
-  expect(Object.keys(visible[0]).sort()).toEqual(["id", "name", "owner", "type", "visibility"]);
-  visible[0].visibility.reader = 4;
-  expect(reader.accountCached(key, "login")?.token).toBe("token");
-  expect(await thrown(() => reader.accountRead(key))).toContain("SecurityException");
-  expect(await thrown(() => reader.accountChange({ kind: "entry", key, field: "tokens", name: "login", value: "foreign" }))).toContain("SecurityException");
-  expect(await thrown(() => reader.accountChange({ kind: "cache", key, authenticatorType: "other", tokenType: "login", token: "foreign" }))).toContain("SecurityException");
-  const held = owner.accountRead(key)!;
-  held.data.__proto__ = "copy";
-  expect(store.records[0].data.__proto__).toBe("data");
-  owner.accountChange({ kind: "rename", key: held, name: "renamed" });
-  expect(owner.accountChange({ kind: "drop", key: held })).toBe(1);
-  expect(owner.accountExists({ name: "renamed", type: "test" })).toBe(false);
+test("AccountManagerService answers an account's secrets to its authenticator only, and lists it to a package it is visible to", async () => {
+  const pkg = "org.webdroid.test.accounts", A = "Landroid/accounts/Account;";
+  await bootApp(await packageRecord(pkg));
+  expect(decodeAccount({ name: "alice", type: "test", owner: "owner", password: null, data: {}, tokens: {}, visibility: { reader: 5 } })).toBeNull();
+  const saved = decodeAccount({ name: "alice", type: "test", owner: "org.webdroid.test.authenticator", password: "secret", data: JSON.parse('{"__proto__":"data"}'), tokens: {}, visibility: { [pkg]: 1 } })!;
+  expect([Object.getPrototypeOf(saved.data), saved.data.__proto__]).toEqual([null, "data"]);
+  const store = new AccountStore(), stop = useAccountStore(store);
+  store.add(saved);
+  try {
+    const service = rt.make("webdroid/AccountManagerService"), account = await newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", "alice", "test");
+    expect(await thrown(() => vcall(service, "getPassword", `(${A})Ljava/lang/String;`, account))).toMatch(/^java\/lang\/SecurityException: uid \d+ cannot manage accounts of type: test$/);
+    expect((await vcall(service, "getAccountsForPackage", `(Ljava/lang/String;ILjava/lang/String;)[${A}`, pkg, 0, null)).length).toBe(1);
+    expect((await vcall(service, "getAccountsForPackage", `(Ljava/lang/String;ILjava/lang/String;)[${A}`, "org.webdroid.test.other", 0, null)).length).toBe(0);
+  } finally { stop(); }
+  store.remove(pkg);
+  expect(store.records.map((s) => [s.name, s.visibility])).toEqual([["alice", {}]]);
 });
 
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
@@ -155,7 +106,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousPending = {...pendingTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls,
-    previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
+    previousDescriptors = {...descriptorTransport}, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -207,7 +158,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(pendingTransport,previousPending);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
     usePathOwner(null); for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors);
-    usePermissionStore(new PermissionStore()); usePreferenceStore(previousPrefs);
+    usePermissionStore(new PermissionStore());
   }
 });
 
@@ -221,7 +172,7 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
     await vcall(service, "setPrimaryClip", `(Landroid/content/ClipData;${P})V`, source, ...caller);
     expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
     expect(await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller)).toBeNull();
-    focused = (await import("../src/android/os.ts")).PROCESS_UID;
+    focused = (await import("../src/shell/procfs.ts")).procIdentity.uid;
     expect(await vcall(service, "hasClipboardText", `(${P})Z`, ...caller)).toBe(1);
     const read = await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller);
     expect(await vcall(await vcall(read,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");

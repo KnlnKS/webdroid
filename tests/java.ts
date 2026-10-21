@@ -86,10 +86,10 @@ export async function loadPlatform(): Promise<void> {
  *  ResourcesManager builds them under the device configuration */
 export async function appResources(archive: import("../src/android/packagearchive.ts").PackageArchive, name: string): Promise<JObj> {
   const { javaConfiguration } = await import("../src/android/configuration.ts");
-  const { registerPackage } = await import("../src/android/pm.ts");
+  const { registerPackage } = await import("../src/android/installpackage.ts");
   const { vcall } = await import("../src/jvm/natives/jentry.ts");
   await loadPlatform();
-  const path = registerPackage(archive, `/data/app/${name}.apk`).path;
+  const path = registerPackage(archive, { path: `/data/app/${name}.apk` }).path;
   const apk = await scall("android/content/res/ApkAssets", "loadFromPath", "(Ljava/lang/String;)Landroid/content/res/ApkAssets;", path);
   const builder = await newObj("android/content/res/AssetManager$Builder", "()V");
   await vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);

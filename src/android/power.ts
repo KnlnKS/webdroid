@@ -4,8 +4,9 @@ import { jarray } from "../jvm/abi.ts";
 import { newObj, vcall, after, staticField } from "../jvm/natives/jentry.ts";
 import { device } from "../shell/config.ts";
 import { newIntent, putExtra, registerSystemActivity } from "./intent.ts";
-import { packages } from "./packages.ts";
-import { getPrefs } from "./sharedprefs.ts";
+import { ownedBy, packages } from "./packages.ts";
+import { persisted } from "../shell/device-storage.ts";
+import { procIdentity } from "../shell/procfs.ts";
 import { callingIdentity, enforceCallingOrSelfPermission, hostService } from "./binder.ts";
 import { stickyBroadcasts } from "./server/broadcastqueue.ts";
 
@@ -35,16 +36,20 @@ hostService("thermalservice", "webdroid/ThermalService", "android/os/IThermalSer
 // IDeviceIdleController's power-save allowlist, which PowerManager.isIgnoringBatteryOptimizations
 // reads. The system's "let this app run in the background?" dialog, answered by the grant policy runtime
 // permissions follow (permissions.ts). AOSP's activity ignores an app that did not declare the
-// permission to ask, which reads as the user declining.
-const DOZE_EXEMPTION = "__system_power";
+// permission to ask, which reads as the user declining; the dialog runs in the asking process,
+// which answers only for its own package.
+/** the allowlist, kept with each install: every package reads it, a data clear leaves it and the
+ *  package's removal takes it, as DeviceIdleController's package-removed receiver does */
+const allowlist = persisted("wd:install:", (saved) => saved === true ? true : null);
+const allowlistKey = (pkg: string) => pkg + ":deviceidle";
 registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", driven(function* (intent: JObj) {
   const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
   const pkg: string | null = data && (yield vcall(data, "getScheme", "()Ljava/lang/String;")) === "package" ? yield vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") : null;
-  if (!pkg || !packages.get(pkg)?.requested.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
-  yield* awaited(getPrefs(pkg, DOZE_EXEMPTION).set("exempt", 1));
+  if (!pkg || !ownedBy(pkg, procIdentity.uid) || !packages.get(pkg)!.requested.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
+  allowlist.set(allowlistKey(pkg), true);
   return newIntent();
 }));
-const exempt = (pkg: string) => after(getPrefs(pkg, DOZE_EXEMPTION).get("exempt"), value => +(value === 1));
+const exempt = (pkg: string) => +!!allowlist.get(allowlistKey(pkg));
 hostService("deviceidle", "webdroid/DeviceIdleController", "android/os/IDeviceIdleController$Stub", {
   "isPowerSaveWhitelistApp(Ljava/lang/String;)Z": exempt,
   "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,

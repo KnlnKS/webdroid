@@ -7,10 +7,10 @@ import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore } from "../android/accounts.ts";
 import { pendingTransport } from "../android/pendingintent.ts";
 import { uriGrantTransport } from "../android/urigrants.ts";
-import { useAlarmScheduler } from "../android/alarm.ts";
+import { useAlarmIntents } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
-import { PROCESS_PID, processTransport } from "../android/os.ts";
+import { processTransport } from "../android/os.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
 import { after } from "../jvm/natives/jentry.ts";
@@ -23,7 +23,6 @@ import { activityTransport, startActivityInProcess, taskVisibility, type ResultD
 import { executePendingIntent, publishedProvider, providerProcesses } from "../android/server/am.ts";
 import { usePermissionStore, usePermissionAccess } from "../android/permissions.ts";
 import { sqliteTransport } from "../android/sqlite.ts";
-import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
 import { useNotificationStore, notificationTransport } from "../android/notification.ts";
 import { useSettingsStore, useSettingsAccess } from "../android/settings.ts";
 import { awaited, driven, type Gen } from "../jvm/runtime.ts";
@@ -33,10 +32,12 @@ import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
-import { asBroker, brokerMethods, forgetRemoved, javaFailure, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { unregisterPackage } from "../android/installpackage.ts";
+import { asBroker, brokerMethods, javaFailure, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
 import { note, Ev } from "../timeline.ts";
+import { procIdentity } from "./procfs.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const brokerCalls = (): BrokerCalls => calls!.endpoint;
@@ -80,7 +81,6 @@ function connectRemoteStores(broker: BrokerCalls): void {
   usePathOwner(broker);
   releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   useHostUi(() => broker.ui);
-  usePreferenceAccess(broker.prefs);
   usePermissionAccess(broker.permissions);
   exitRecordTransport.records = broker.exitRecords;
   exitRecordTransport.publish = broker.processExited;
@@ -135,19 +135,18 @@ function setVisible(visible: boolean): void { note(Ev.Visible, +visible); proces
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */
 export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
-  onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
-  attachProcessBrokerPort(broker.brokerPort(PROCESS_PID), false);
-  broker.files.attach(PROCESS_PID, vfs);
-  descriptorTransport.local = broker.descriptorRights(PROCESS_PID);
+  onProcessExit((status) => broker.fail(procIdentity.pid, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
+  attachProcessBrokerPort(broker.brokerPort(procIdentity.pid), false);
+  broker.files.attach(procIdentity.pid, vfs);
+  descriptorTransport.local = broker.descriptorRights(procIdentity.pid);
   useNotificationStore(broker.notifications);
-  usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
-  useAlarmScheduler(broker.alarms);
+  useAlarmIntents(broker.intents);
   useGeolocation(broker.location);
   // system_server announces the stores' changes, and its watches of them end with it
   const stops = [useAccountStore(broker.accounts), useSettingsStore(broker.settings)];
-  if (broker.alive(PROCESS_PID)) for (const stop of stops) broker.watch(PROCESS_PID, stop);
+  if (broker.alive(procIdentity.pid)) for (const stop of stops) broker.watch(procIdentity.pid, stop);
   return createProcessEndpoint();
 }
 
@@ -157,7 +156,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     processDied: async token => life.died(token),
     cookiesChanged: async () => cookiesChanged(),
     storageChanged: async (key, value) => storageChanged(key, value),
-    packageRemoved: async pkg => forgetRemoved(pkg),
+    packageRemoved: async pkg => unregisterPackage(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device.ts")).pressBack();

@@ -23,10 +23,11 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind,
+import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installedPath, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
+import { registerPackage } from "./installpackage.ts";
 import { digestBytes } from "../jvm/natives/digest.ts";
 import { hostService, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
@@ -51,6 +52,8 @@ export function setManifest(root: XmlNode): void {
   currentPackage = packages.get(attrStr(root, "package") ?? "") ?? null;
   if (currentPackage) extractNativeLibraries(currentPackage);
 }
+/** the splits installed beside the booted package's base; this process holds no other package's */
+const ownSplits = (record: PackageRecord): readonly string[] => record === currentPackage && appHost ? appHost.splits : [];
 
 // ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
@@ -153,8 +156,7 @@ const privateFlagsExt = (record: PackageRecord) => {
 /** the ApplicationInfo PackageInfoUtils.generateApplicationInfo makes for `flags` */
 function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const ai: JObj = yield newObj(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
-  const own = record === currentPackage && appHost?.pkg === pkg ? appHost : null;
-  const splits = own?.splits.length ? own.splits : null;
+  const own = ownSplits(record), splits = own.length ? own : null;
   const abi = primaryAbi(record);
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
   const className = qualified("name");
@@ -459,10 +461,10 @@ function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: numb
 function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const pi: JObj = yield newObj(PACKAGE), root = record.root, app: JObj = yield* applicationInfo$(record, flags);
   const version = attr(root, "versionName");
-  const own = record === currentPackage && appHost?.pkg === record.pkg ? appHost : null;
+  const splits = ownSplits(record);
   const time = installTime(record.pkg);
   setDeclared(pi, PACKAGE, {
-    packageName: record.pkg, splitNames: strArray(own?.splits ?? []), splitRevisionCodes: new Int32Array(own?.splits.length ?? 0),
+    packageName: record.pkg, splitNames: strArray(splits), splitRevisionCodes: new Int32Array(splits.length),
     versionCode: intAttr(root, "versionCode", 0), versionCodeMajor: intAttr(root, "versionCodeMajor", 0),
     versionName: version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? null,
     sharedUserId: attrStr(root, "sharedUserId"), sharedUserLabel: intAttr(root, "sharedUserLabel", 0), applicationInfo: app,
@@ -517,22 +519,12 @@ rt.registerJnis("android/os/incremental/IncrementalManager", {
   "nativeIsIncrementalFd(I)Z": () => 0, "nativeIsIncrementalPath(Ljava/lang/String;)Z": () => 0,
   "nativeUnsafeGetFileSignature(Ljava/lang/String;)[B": () => null,
 });
-export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
-export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg), uid = packageUid(archive.pkg)): PackageRecord {
-  const record = new PackageRecord(archive.root, archive.apk, path, uid, () => Promise.resolve(archive.certificates));
-  packages.set(record.pkg, record);
-  for (const node of archive.root.children) if (node.name === "permission" && (intAttr(node, "protectionLevel", 0) & 3) >= 2) {
-    const name = attrStr(node, "name");
-    if (name) signaturePermissions.add(name);
-  }
-  return record;
-}
 /** the package's record, registering its persisted install on first use; synchronous when known */
 function packageRecord(pkg: string): PackageRecord | Promise<PackageRecord | null> {
   return packages.get(pkg) ?? (async () => {
     await restorePackages();
     const path = installedPath(pkg), archive = await readArchive(path);
-    return archive ? packages.get(pkg) ?? registerPackage(archive, path) : null;
+    return archive ? packages.get(pkg) ?? registerPackage(archive, { path }) : null;
   })();
 }
 async function installedPackages(): Promise<PackageRecord[]> {
@@ -541,7 +533,7 @@ async function installedPackages(): Promise<PackageRecord[]> {
   for (const [path, { content }] of vfs.entries("/data/app/")) {
     if (!(content instanceof Uint8Array) || !/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
     const archive = await readArchive(path);
-    if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
+    if (archive && !packages.has(archive.pkg)) registerPackage(archive, { path });
   }
   return [...packages.values()];
 }
@@ -557,8 +549,7 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
   if (previous && (previous.certificates.length !== archive.certificates.length ||
       previous.certificates.some((cert, i) => !sameBytes(cert, archive.certificates[i])))) throw new Error("APK signing certificate differs from installed package");
   await persistPackage(installedPath(archive.pkg), bytes);
-  vfs.write(installedPath(archive.pkg), bytes);
-  registerPackage(archive);
+  registerPackage(archive, { source: bytes });
   return archive.pkg;
 }
 
@@ -566,7 +557,7 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"], [16, "SHA-512"]];
 async function apkDigests(record: PackageRecord, includeSplits: boolean, required: number): Promise<[string | null, number, Uint8Array][]> {
   const files: [string | null, string][] = [[null, record.path]];
-  if (includeSplits && record === currentPackage && appHost) files.push(...appHost.splits.map((name): [string, string] => [name, apkPath(name)]));
+  if (includeSplits) files.push(...ownSplits(record).map((name): [string, string] => [name, apkPath(name)]));
   const result: [string | null, number, Uint8Array][] = [];
   for (const [splitName, path] of files) {
     const bytes = await vfs.readFile(path);

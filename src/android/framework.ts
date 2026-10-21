@@ -17,7 +17,7 @@ import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
 import { vfs } from "../shell/vfs.ts";
 import { BytesFile, type FileSource } from "../shell/lazyfile.ts";
 import { parseAXML } from "./axml.ts";
-import { PackageRecord, packages } from "./packages.ts";
+import { registerPackage } from "./installpackage.ts";
 import { apkCertificates } from "./packagearchive.ts";
 
 let pending: Promise<Arsc> | null = null;
@@ -106,17 +106,14 @@ export function installFramework(apk: Uint8Array): Arsc {
     // every entry, inflated on its first read: asset lists and opens see the whole archive
     const entries = new Map<string, FileSource>();
     for (const [name, e] of dir) entries.set(name, { size: e.size, read: (at, n) => files(name)!.subarray(at, at + n) });
-    const platform = new PackageRecord(parseAXML(manifest), { table: arsc, zip: {}, lazyEntries: entries },
-      "/system/framework/framework-res.apk", 1000, () => pendingCertificates ??= (async () => {
-        const certificates = await apkCertificates(apk, signingZip);
-        if (certificates.length) return certificates;
-        const response = await fetch("/vendor/platform.x509.pem");
-        if (!response.ok) throw new Error("Platform certificate unavailable");
-        const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
-        return [Uint8Array.fromBase64(encoded)];
-      })());
-    platform.system = true;
-    packages.set(platform.pkg, platform);
+    registerPackage({ root: parseAXML(manifest), apk: { table: arsc, zip: {}, lazyEntries: entries }, certificates: () => pendingCertificates ??= (async () => {
+      const certificates = await apkCertificates(apk, signingZip);
+      if (certificates.length) return certificates;
+      const response = await fetch("/vendor/platform.x509.pem");
+      if (!response.ok) throw new Error("Platform certificate unavailable");
+      const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
+      return [Uint8Array.fromBase64(encoded)];
+    })() }, { path: "/system/framework/framework-res.apk", uid: 1000, system: true });
   }
 
   // the reference device's overlays (SystemUI's Monet palette, gestural navigation) replace these defaults

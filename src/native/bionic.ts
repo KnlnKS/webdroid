@@ -201,7 +201,7 @@ function writeGlobals(): void {
   av.forEach(([type, value], i) => { mem.st64(vec + i * 16, BigInt(type)); mem.st64(vec + i * 16 + 8, BigInt(value)); });
   stp(globals + G_AUXV, vec);
   mem.st64(globals + G_GENERATION, 1n);
-  stp(globals + G_PROGNAME, mem.strdup(procIdentity.name || "app_process64"));
+  stp(globals + G_PROGNAME, mem.strdup(procIdentity.argv0 || "app_process64"));
   const env = Object.entries(processEnv), environ = mem.calloc(env.length + 1, 8);
   env.forEach(([k, v], i) => stp(environ + i * 8, mem.strdup(`${k}=${v}`)));
   stp(globals + G_ENVIRON, environ);

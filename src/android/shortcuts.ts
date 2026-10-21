@@ -7,9 +7,8 @@ import { after, vcall } from "../jvm/natives/jentry.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { wallMillis } from "../guest-clock.ts";
-import { callingIdentity, hostService, parceledList } from "./binder.ts";
+import { checkCallingPackage, hostService, parceledList } from "./binder.ts";
 import { mkComponentName } from "./intent.ts";
-import { ownedBy } from "./packages.ts";
 import { launcherActivity } from "./pm.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 
@@ -21,9 +20,7 @@ const packages = new Map<string, Map<string, JObj>>();
 /** a data clear's cleanUpPackageLocked */
 export const shortcutData: PackageState = { clear(pkg) { packages.delete(pkg); } };
 /** ShortcutService.verifyCaller, as each call starts */
-function verifyCaller(pkg: string): void {
-  if (!ownedBy(pkg, callingIdentity().uid)) throw rt.mkThrowable("java/lang/SecurityException", "Calling package name mismatch");
-}
+const verifyCaller = (pkg: string): void => checkCallingPackage(pkg, "Calling package name mismatch");
 const dynamicOf = (pkg: string) => {
   let shortcuts = packages.get(pkg);
   if (!shortcuts) packages.set(pkg, shortcuts = new Map());

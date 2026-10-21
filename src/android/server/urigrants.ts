@@ -5,7 +5,7 @@
 import { callingIdentity, hostService } from "../binder.ts";
 import { awaited, rt, JObj, driven, type Gen } from "../../jvm/runtime.ts";
 import { type JUri, mkUri, uriParts, uriText } from "../net.ts";
-import { PROCESS_UID } from "../os.ts";
+import { procIdentity } from "../../shell/procfs.ts";
 import { newObj, after } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { attrStr, type XmlNode } from "../axml.ts";
@@ -133,7 +133,7 @@ export const uriGrantCommands = (source: () => number): UriGrantCalls => ({
   revoke: (targetPkg, uri, modes) => rt.drive(revokeFrom(source(), targetPkg, uri, modes)),
 });
 // this realm's own, until the broker connects a process's to system_server's
-Object.assign(uriGrantTransport, uriGrantCommands(() => PROCESS_UID));
+Object.assign(uriGrantTransport, uriGrantCommands(() => procIdentity.uid));
 
 /** takePersistableUriPermission for `uid`: a grant it was offered as persistable, or one it already persisted */
 function takePersistable(u: string, modes: number, uid: number): void {

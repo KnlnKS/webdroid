@@ -5,12 +5,12 @@
 import { awaited, type JObj, driven, type Gen } from "../../jvm/runtime.ts";
 import { newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
-import { PROCESS_UID } from "../os.ts";
 import { runningApp } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";
 import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
 import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
+import { procIdentity } from "../../shell/procfs.ts";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
@@ -49,7 +49,7 @@ const scheduleRegistered = (receiver: JObj, intent: JObj, r: BroadcastResult, or
 function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<boolean> {
   const pkg: string | null = yield vcall(intent, "getPackage", `()${S}`);
   if (pkg && pkg !== registration.pkg) return false;
-  if (sender.uid !== SYSTEM_UID && sender.uid !== PROCESS_UID) {
+  if (sender.uid !== SYSTEM_UID && sender.uid !== procIdentity.uid) {
     if (registration.flags & RECEIVER_NOT_EXPORTED) return false;
     if (registration.permission && (yield* awaited(checkPermission(registration.permission, sender.pkg))) !== 0) return false;
   }
@@ -90,7 +90,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
 export const broadcastIntent = driven(function* (intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Gen<void> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
   const final = yield* awaited(broadcastTransport.send(copy, permissions, ordered, initial));
-  if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: PROCESS_UID, pkg: runningApp().pkg });
+  if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: procIdentity.uid, pkg: runningApp().pkg });
 });
 
 /** the methods IActivityManager adds for ActivityThread's receivers */

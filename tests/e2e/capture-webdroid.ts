@@ -73,31 +73,13 @@ export async function loadManifest(app: string): Promise<Manifest | undefined> {
   return existsSync(path) ? readJson(path) : undefined;
 }
 
-/**
- * A flow's seed prefs in webdroid's own store, so the two passes start on the same screen. The
- * flow carries the Android shared_prefs XML the emulator writes as a file; webdroid keeps prefs
- * as JSON under `wd:prefs:<pkg>:<name>` (see JSharedPrefs.persist), so parse rather than
- * duplicate the data in a second format.
- */
-export function prefsStorage(pkg: string, xml: string): [string, string] {
-  const map: Record<string, unknown> = {};
-  for (const m of xml.matchAll(/<(string|boolean|int|long|float)\s+name="([^"]+)"(?:\s+value="([^"]*)")?\s*(?:\/>|>([\s\S]*?)<\/\1>)/g)) {
-    const [, kind, name, attr, text] = m;
-    map[name] = kind === "string" ? (text ?? "")
-      : kind === "boolean" ? attr === "true"
-      : kind === "long" ? { $l: attr }
-      : Number(attr);
-  }
-  return [`wd:prefs:${pkg}:${pkg}_preferences`, JSON.stringify(map)];
-}
-
 /** A browser prepared for one flow: the goldens' geometry (unless the run is pinned elsewhere
- *  to measure cost), the flow's clock, and its seed prefs already in storage. */
+ *  to measure cost), the flow's clock, and its seed prefs already in its data, at the path the emulator pass writes them to. */
 export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
     screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
-    storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
+    files: flow.seedPrefs ? [[`/data/data/${flow.pkg}/shared_prefs/${flow.pkg}_preferences.xml`, flow.seedPrefs]] : [],
     privateStorage: flow.privateStorage,
     shots,
     controlled,

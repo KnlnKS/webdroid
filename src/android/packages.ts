@@ -49,6 +49,8 @@ function requestedPermissions(root: XmlNode, target: number): Set<string> {
   return requested;
 }
 
+/** what provisioning gives a system package: its grants and the signatures it presents in place of its own */
+export type Provisioned = { system?: boolean; grants?: Iterable<string>; signatures?: Uint8Array[] | null };
 export class PackageRecord {
   readonly root: XmlNode; readonly apk: Apk; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
   readonly pkg: string;
@@ -58,13 +60,14 @@ export class PackageRecord {
   };
   /** the permissions the package requests (PackageInfo.requestedPermissions) */
   readonly requested: Set<string>;
-  readonly grants = new Set<string>();
-  system = false;
-  compatibilityCertificates: Uint8Array[] | null = null;
+  readonly system: boolean;
+  readonly grants: ReadonlySet<string>;
+  readonly compatibilityCertificates: Uint8Array[] | null;
 
   constructor(root: XmlNode, apk: Apk, path: string,
-    uid: number, certificates: () => Promise<Uint8Array[]>) {
+    uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null }: Provisioned = {}) {
     this.root = root; this.apk = apk; this.path = path; this.uid = uid; this.certificates = certificates;
+    this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures;
     this.pkg = attrStr(root, "package") ?? "";
     this.application = root.children.find((n) => n.name === "application") ?? null;
     for (const node of this.application?.children ?? []) {
@@ -118,7 +121,7 @@ export class PackageRecord {
 }
 
 export const packages = new Map<string, PackageRecord>();
-export const signaturePermissions = new Set<string>();
+export const installedPath = (pkg: string): string => `/data/app/${pkg}/base.apk`;
 /** the uids packages were given (wd:package-uids) */
 const savedUids = persisted("wd:", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
   Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null);

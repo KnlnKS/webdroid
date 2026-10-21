@@ -1,6 +1,6 @@
 // The dev console's and e2e driver's surface `wd`; tests/e2e/drivers/webdroid.ts fires these by name. A realm's own
 // input, frames and reads are its WorkerControl: `page`, `control(x, y)`'s or `foreground()`'s.
-import { PROCESS_PID } from "../android/os.ts";
+import { procIdentity } from "./procfs.ts";
 import { vsyncScheduled } from "../android/vsync.ts";
 import { pendingTransitions } from "../android/server/atm.ts";
 import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
@@ -47,7 +47,7 @@ function harness(canvas: HTMLCanvasElement, ticks: () => number, { boot, back }:
     return [...nodes, ...await page.uiTree()];
   };
   const rotate = async (landscape: boolean) => {
-    const routed = processBroker().activities.rotate(PROCESS_PID, landscape);
+    const routed = processBroker().activities.rotate(procIdentity.pid, landscape);
     if (routed) await routed; else await rotateDevice(landscape);
   };
   return {

@@ -1,4 +1,3 @@
-import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os.ts";
 import { appHost } from "../android/apphost.ts";
 import { rt } from "../jvm/runtime.ts";
 import { processExited } from "../process-exit.ts";
@@ -19,6 +18,7 @@ import { nativeRequirements } from "./diagnostics.ts";
 import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
 import { tierStatus } from "../jvm/tier.ts";
+import { procIdentity } from "./procfs.ts";
 
 /** one finger's touch event, at `eventTime` on the guest's uptime clock */
 const touch = (action: number, x: number, y: number, eventTime?: number) => dispatchTouches(action, [{ id: 0, x, y }], eventTime);
@@ -41,10 +41,10 @@ export type WorkerPhase = "attaching" | "packages" | "platform" | "application" 
 export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: () => number) {
   return {
     aotProfile: async () => ({phase:phase(),dead:processExited(),
-      identity:{pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
+      identity:{pid:procIdentity.pid,uid:procIdentity.uid,process:procIdentity.name,pkg:appHost?.pkg ?? null},
       profile:await existingAotProfile()}),
     snapshot: async () => ({ phase: phase(), dead: processExited(), ticks: ticks(), width: SCREEN_W, height: SCREEN_H,
-      identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
+      identity: {pid:procIdentity.pid,uid:procIdentity.uid,process:procIdentity.name,pkg:appHost?.pkg ?? null},
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
       placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),

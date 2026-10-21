@@ -3,19 +3,17 @@
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
-import { Alarms } from "./alarms.ts";
 import { AccountStore } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
+import { unregisterPackage } from "../android/installpackage.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
 import { senderRecord } from "../android/pendingintent.ts";
 import { NOT_CRASHED, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
-import { logUncaught } from "../jvm/natives/jthrowable.ts";
-import { uptimeMillis } from "../guest-clock.ts";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords.ts";
 import { ActivityStack } from "./activitystack.ts";
 import type { FileSource } from "./lazyfile.ts";
@@ -25,9 +23,7 @@ import { exported, componentPermission, componentProcess, resolveProvider } from
 import { PermissionStore } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
 import type { createSQLiteSession } from "../android/sqlite.ts";
-import { preferenceStore } from "../android/sharedprefs.ts";
 import { notificationStore } from "../android/notification.ts";
-import { PROCESS_PID } from "../android/os.ts";
 import { settingsStore } from "../android/settings.ts";
 import { awaited, rt } from "../jvm/runtime.ts";
 import type { WebCookies } from "./webcookies.ts";
@@ -42,7 +38,8 @@ import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-d
 import { serveCalls, closePort } from "./rpc.ts";
 import { serveBrokerPort } from "./broker-port.ts";
 import { hostUi } from "./host-ui.ts";
-import { asBroker, forgetRemoved, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { asBroker, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { procIdentity } from "./procfs.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -92,7 +89,6 @@ export class ProcessBroker {
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
-  readonly alarms = new Alarms(this.intents, uptimeMillis, logUncaught);
   /** `codec` is the creator's: its JVM compares and merges the intents */
   async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents: ParcelData[] | undefined, codec: IntentCodec): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
@@ -130,7 +126,6 @@ export class ProcessBroker {
     if (!store) { store = import("./webcookies.ts").then(({ WebCookies }) => new WebCookies(pkg)); this.cookieStores.set(pkg, store); }
     return store;
   }
-  readonly preferences = preferenceStore;
   readonly notifications = notificationStore;
   private entries = new Map<number, ProcessRecord>();
   private byName = new Map<string, ProcessRecord>();
@@ -188,7 +183,7 @@ export class ProcessBroker {
     return entry;
   }
   /** the page's own process, which serves its endpoint once its Java has booted */
-  registerSystemServer(): ProcessRecord { return this.register("android", "system_server", PROCESS_PID); }
+  registerSystemServer(): ProcessRecord { return this.register("android", "system_server", procIdentity.pid); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
@@ -304,7 +299,7 @@ export class ProcessBroker {
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {
     this.packageSplits.delete(pkg);
-    forgetRemoved(pkg);
+    unregisterPackage(pkg);
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }
   /** `f` on each live process `which` picks, once it is ready */

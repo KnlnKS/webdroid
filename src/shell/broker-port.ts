@@ -3,12 +3,11 @@
 import { SYSTEM_SERVICES, asSystem, exportBinder, ownedSystemService } from "../android/binder.ts";
 import { intentCodec } from "../android/intentipc.ts";
 import { receiveForegroundNotification } from "../android/notification.ts";
-import { PROCESS_PID } from "../android/os.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
 import { uriGrantCommands } from "../android/server/urigrants.ts";
-import { canonicalPreferenceCommands, createAppData } from "../android/sharedprefs.ts";
+import { createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
@@ -20,6 +19,7 @@ import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } fro
 import { hostUi } from "./host-ui.ts";
 import { serveCalls } from "./rpc.ts";
 import type { ProcessBroker } from "./processes.ts";
+import { procIdentity } from "./procfs.ts";
 
 type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };
 /** `calls`, each failing once process `pid` is dead */
@@ -42,15 +42,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     if (privileged || ownedBy(pkg, caller.uid) || holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
     throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
   });
-  const authorizePreference = (name: string, write: boolean) => {
-    broker.entry(pid);
-    const notification = name.startsWith("android:notification-policy:");
-    const pkg = notification ? name.slice("android:notification-policy:".length) : name.split(":", 1)[0];
-    const publicRead = notification || name === `${pkg}:__system_power`;
-    if (privileged || ownedBy(pkg, caller.uid) || !write && publicRead) return;
-    throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
-  };
-  const preferences = canonicalPreferenceCommands(broker.preferences, authorizePreference);
   const authorizePath = (path: string): number => {
     broker.entry(pid);
     const owner = packageOfPath(path);
@@ -100,7 +91,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     },
     descriptors: broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid),
     webStorage: canonicalWebStorage(caller.pkg),
-    prefs: { ...preferences, preferenceFiles: pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); } },
     permissions,
     settings: forward(() => broker.settings, brokerMethods.settings),
     // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
@@ -129,11 +119,11 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       const sender = { pid, uid: caller.uid };
       if (request.kind === "stop" || !request.data) return receiveForegroundNotification(caller.pkg, sender, request);
       // the rights the notification did not take go back whether or not it was posted
-      await broker.withTransferred(pid, PROCESS_PID, request.data, async received => {
+      await broker.withTransferred(pid, procIdentity.pid, request.data, async received => {
         try {
           broker.entry(pid);
           await receiveForegroundNotification(caller.pkg, sender, { ...request, data: received });
-        } finally { await broker.discardDescriptors(PROCESS_PID, received, false); }
+        } finally { await broker.discardDescriptors(procIdentity.pid, received, false); }
       }, true);
     },
     ...cookieCalls(() => broker.cookies(caller.pkg), () => { broker.entry(pid); }, () => {

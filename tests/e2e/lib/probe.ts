@@ -9,8 +9,8 @@ import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types.ts";
 type ProbeConfig = {
   /** the instant Date is pinned to; null runs on the wall clock */
   fixedMs: number | null;
-  /** localStorage entries written before the page boots, when absent */
-  storage: [string, string][];
+  /** private files (path, text) stored before the page boots, when absent */
+  files: [string, string][];
   /** keep every distinct presented frame per step (--shots) */
   shots: boolean;
 };
