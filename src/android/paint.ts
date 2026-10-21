@@ -9,7 +9,7 @@ import { handle, deref, FINALIZER } from "./handles.ts";
 import { device } from "../shell/config.ts";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts.ts";
 import type { FaceMetrics } from "./sfnt.ts";
-import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics.ts";
+import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, setEdges, emptyBox } from "./graphics.ts";
 import { colorLongAt } from "./bitmap.ts";
 import { NativePath, skCommands, setSkCommands, pathAt } from "./path.ts";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter.ts";
@@ -119,15 +119,7 @@ export class NativePaint {
     return this.clears() ? "#000" : this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
   /** the paint's colour through its colour filter */
-  filteredColor(): number {
-    const filter = this.colorFilter, color = this.color;
-    if (!filter) return color;
-    if (filter.matrix) return matrixColor(filter.matrix, color);
-    // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
-    // colour replaces the paint's, keeping the alpha the two agree on
-    const f = filter.color;
-    return ((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0;
-  }
+  filteredColor(): number { return this.colorFilter ? this.colorFilter.filter(this.color) : this.color; }
 }
 /** Paint::operator=, as nSet and nInitWithPaint copy one */
 export function copyPaint(src: NativePaint, dst: NativePaint) {

@@ -67,8 +67,31 @@ export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_
  */
 export class NativeColorFilter {
   readonly matrix: Float32Array | null; readonly color: number; readonly mode: string;
+  /** the last colour a blend filtered and what it made: a paint asks for one colour draw after draw */
+  private input = 0; private output: number | null = null;
   constructor(matrix: Float32Array | null, color = 0, mode = "DST") { this.matrix = matrix; this.color = color; this.mode = mode; }
+  /** SkColorFilter::filterColor: `argb` through the filter, blended as recolor blends a bitmap */
+  filter(argb: number): number {
+    if (this.matrix) return matrixColor(this.matrix, argb);
+    const tint = this.color, mode = this.mode;
+    if (mode === "DST") return argb;
+    // how Material tints every shape it draws: the filter's colour, keeping the alpha the two agree on
+    if (mode === "SRC_IN") return ((tint & 0xffffff) | ((((tint >>> 24) * (argb >>> 24) / 255) | 0) << 24)) | 0;
+    if (this.output === null || this.input !== argb) {
+      const c = pixel ??= new OffscreenCanvas(1, 1).getContext("2d", { willReadFrequently: true })!;
+      c.globalCompositeOperation = "copy";
+      c.fillStyle = cssColor(argb);
+      c.fillRect(0, 0, 1, 1);
+      c.globalCompositeOperation = "source-over";
+      recolor(c, 1, 1, tint, null, mode);
+      const d = c.getImageData(0, 0, 1, 1).data;
+      this.input = argb;
+      this.output = (d[3] << 24 | d[0] << 16 | d[1] << 8 | d[2]) | 0;
+    }
+    return this.output;
+  }
 }
+let pixel: OffscreenCanvasRenderingContext2D | null = null;
 /**
  * A Shader's native instance: what it paints, under the local matrix it was created with (null
  * for identity). It never changes; Shader discards it and makes another when the Java side does.
