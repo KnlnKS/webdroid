@@ -70,7 +70,7 @@ export class Tiering {
     const s = this.w.slots.at(slot);
     if (!s || s.done) return;
     if (s.k === "ensure") { this.linkEnsure(slot); return; }
-    if (s.k === "method" && this.w.aot?.install(slot) && s.done) return;
+    if (s.k === "method" && this.w.aot?.provide(slot)) return;
     const group = this.compileUnit(slot, false, (cx) => {
       if (s.k !== "method") return { methods: [], built: s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
         : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name)) };
@@ -112,7 +112,7 @@ export class Tiering {
     this.settleInits();
     const cls = this.w.slots.blockClass[this.w.slots.blockOf(slot)], ci = this.w.prog.require(cls).byKey.get("<clinit>()V");
     const at = ci && this.w.slotOf(ci), clinit = at === undefined ? undefined : this.w.slots.at(at);
-    const methods = clinit?.k === "method" && !clinit.done && !(this.w.aot?.install(at!) && clinit.done) ? [clinit.m] : [];
+    const methods = clinit?.k === "method" && !clinit.done && !this.w.aot?.provide(at!) ? [clinit.m] : [];
     this.compileUnit(slot, false, (cx) => ({ methods, built: cx.buildUnit(methods, { ensures: [cls] }) }));
     if (methods.length) this.w.demand.methods.add(methods[0]);
     this.initializing.push([slot, cls, methods.length ? at! : -1]);

@@ -451,14 +451,14 @@ export class AotRuntime {
     if (note) { note(18, c); void result.then(() => note(19, this.preparationFiles(c).length ? -c : c)); }
     return result;
   }
-  /** the first call of a method the build compiled: loads its code module. Whether the method is installed afterwards is in its slot. */
-  install(slot: number): boolean {
+  /** whether the build's code of `slot` is in place, its code module loaded first if need be (the method's first call) */
+  provide(slot: number): boolean {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (!(c >= 0)) return false;
     let loaded = this.loadC(c);
     // App patches can remain valid when their platform unit is rejected.
     if (!loaded && this.cState[c] === DEAD) for (const p of this.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
-    return loaded;
+    return loaded && this.installed(slot);
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;

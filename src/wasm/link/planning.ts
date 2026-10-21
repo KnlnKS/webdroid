@@ -36,7 +36,7 @@ export class Planner {
         const t = invokeSite(this.w.prog, c, ins.b, invokeKind(ins.op)).target;
         if (t === "clone" || failed(t) || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
-        if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.install(at) && ts.done) continue;
+        if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.provide(at)) continue;
         out.push(t);
       }
     }
