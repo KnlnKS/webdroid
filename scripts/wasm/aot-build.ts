@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
+//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--force]
 // Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
@@ -25,14 +25,13 @@ const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xm
 const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024, maxHot = +flag("--max-hot", "1024") * 1024;
 const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
-const appPath = flag("--app", "");
 const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`))].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -92,12 +91,9 @@ function withSupers(names: string[]): string[] {
   return out;
 }
 const dexes = PLATFORM_PATHS.map(loadDexes);
-// an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
-const appDexes = appPath ? loadDexes(appPath) : [];
-const platform = new Program(dexes.flat()); platform.addExterns(externs);
-const prog = appDexes.length ? new Program(appDexes, platform) : platform;
+const prog = new Program(dexes.flat()); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
+const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set(dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat()) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
@@ -160,7 +156,7 @@ writeFileSync(join(out, "apps.json"), "[]");
 writeFileSync(join(out, "prefix.json"), "null");
 writeFileSync(join(out, "warm.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
-console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
+console.log(`${aot.nSeeded} classes of ${jars.length} jars (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${validation.ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();

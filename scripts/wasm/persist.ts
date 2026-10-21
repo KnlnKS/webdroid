@@ -12,8 +12,6 @@ import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { World, type WorldOptions } from "../../src/wasm/link/world.ts";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
-import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { compileModule } from "../../src/wasm/link/module.ts";
 import { UnitCompiler } from "../../src/wasm/link/unit.ts";
 import { buildApp, buildPart, mergeApp } from "../../src/wasm/link/apps.ts";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
@@ -53,20 +51,6 @@ const BASE = "aot://platform/";
 const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => current(new World(new Program(dexes, platform), { ...worldOptions(), aot: aotStore, ...opts }));
 /** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 const hosted = (dexes: DexFile[], opts: Partial<WorldOptions> = {}): World => attachHostClasses(world(dexes, opts));
-
-// A combined image links the app's default namespace as the Program resolves it.
-{
-  const dexes = loadDexes(join(out, "classes.dex"));
-  const image = world(dexes, { aot: undefined, compileOnly: true, build: { dexes: new Set([...platformDexes, ...dexes]), appDexes: new Set(dexes), dGroup: name => name, cGroup: name => name } });
-  check("combined image retains platform boot ownership", image.prog.loaderOf("java/lang/Object") === image.prog.boot, true);
-  check("combined image retains app root ownership", image.prog.loaderOf("Pst") === image.prog.root, true);
-  const cx = new Compiler(image), bytes = cx.buildUnit([image.prog.resolve("Pst", "chain", "()I")!]).bytes;
-  compileModule(bytes);
-  check("combined image app code links its default namespace statically", cx.symbolicImports.size, 0);
-  const boot = new Compiler(image);
-  boot.buildUnit([image.prog.resolve("java/lang/Object", "hashCode", "()I")!]);
-  check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
-}
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
 const ports: WorkerPort[] = [];
