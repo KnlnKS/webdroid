@@ -464,7 +464,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
       if (path === null || name === null) rt.npe();
-      return existing("setxattr", path, () => { throw errno("setxattr", OS_CONSTANTS.EOPNOTSUPP); });
+      return existing("setxattr", path, () => { throw errno("setxattr", E.NOTSUP); });
     },
     "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => existing("statvfs", path, () => structStatVfs()),
     [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
@@ -687,9 +687,9 @@ let nextMountTable = 0n;
 const linuxNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "init()V": () => {},
   "flistxattr(IJI)I": (fd: number) => { fdPath(fd); return 0; },
-  "fgetxattr0(IJJI)I": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
-  "fremovexattr0(IJ)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.ENODATA); },
-  "fsetxattr0(IJJI)V": (fd: number) => { fdPath(fd); throw unixError(OS_CONSTANTS.EOPNOTSUPP); },
+  "fgetxattr0(IJJI)I": (fd: number) => { fdPath(fd); throw unixError(E.NODATA); },
+  "fremovexattr0(IJ)V": (fd: number) => { fdPath(fd); throw unixError(E.NODATA); },
+  "fsetxattr0(IJJI)V": (fd: number) => { fdPath(fd); throw unixError(E.NOTSUP); },
   "setmntent0(JJ)J": (path: bigint) => {
     const text = vfs.read(cpath(path));
     if (!text) throw unixError(E.NOENT);
@@ -711,7 +711,7 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
   for (;;) {
     const n = unixSys(yield* awaited(javaReadFd(src, buffer)));
     if (!n) return;
-    if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(OS_CONSTANTS.ECANCELED);
+    if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(E.CANCELED);
     for (let at = 0; at < n;) at += unixSys(yield* awaited(javaWriteFd(dst, buffer.subarray(at, n))));
   }
 }));
