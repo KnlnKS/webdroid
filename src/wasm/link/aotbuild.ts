@@ -5,7 +5,7 @@ import { mid } from "../compiler/ids.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, dexSig, VERSION, type AotBuild, type AotIndex, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
+import { AotRuntime, dexSig, VERSION, type AotBuild, type AotIndex, type CHeader, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
 import { hostTakeover } from "./hostclass.ts";
 import type { Marks } from "./numbers.ts";
 import type { Touched, World } from "./world.ts";
@@ -122,7 +122,7 @@ export function packModule(header: object, wasm: Uint8Array, traced?: { w: World
 
 /** `methods` compiled as a module that installs them, and its header. A method the compiler emits invalid code for, or that a frozen World cannot number, is left out
  *  (`skipped`), to the on-demand compiler, which fails the same way if it is ever called; with `strict`, it fails the build. `validate`: V8 judges the module. */
-export function codeModule(w: World, methods: MethodInfo[], { strict = false, validate = true } = {}):
+function codeModule(w: World, methods: MethodInfo[], { strict = false, validate = true } = {}):
   { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; header: UnitHeader; skipped: Map<string, string> } {
   const skipped = new Map<string, string>();
   for (;;) {
@@ -138,6 +138,15 @@ export function codeModule(w: World, methods: MethodInfo[], { strict = false, va
     if (strict || !bad.name || skipped.has(bad.name)) throw new Error(strict && bad.name ? `${bad.name}: ${bad.message}` : bad.message);
     skipped.set(bad.name, bad.message);
   }
+}
+/** the code module of `methods`, which are of the classes of blocks `classes`, as a file (codeModule): its header says the classes' other methods are absent, and
+ *  with `platformData` that it imports class globals from the platform build's data modules whole */
+export function codeFile(w: World, classes: number[], methods: MethodInfo[], { platformData = false, ...opts }: { strict?: boolean; validate?: boolean; platformData?: boolean } = {}):
+  { file: Uint8Array; header: CHeader; bytes: Uint8Array } {
+  const { cx, built, header: unit, skipped } = codeModule(w, methods, opts), held = new Set(methods);
+  const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !held.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
+  const header: CHeader = { ...unit, classes, mods: platformData ? [...cx.deps.keys()] : [], absent };
+  return { file: packModule(header, built.bytes, { w, traces: built.traces }), header, bytes: built.bytes };
 }
 /** the data module of the classes `names` (World.classModule), and its header */
 export function dataModule(w: World, names: string[]): { bytes: Uint8Array; header: DHeader } {

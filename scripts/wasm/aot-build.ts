@@ -14,8 +14,7 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
-import type { CHeader } from "../../src/wasm/link/aot.ts";
-import { AotBuilder, codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
+import { AotBuilder, codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
@@ -110,13 +109,10 @@ const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
   const methods = blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
-  let made: ReturnType<typeof codeModule>;
-  try { made = codeModule(w, methods, { strict: true, validate }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
-  const { cx, built: { bytes, traces }, header: unit } = made;
+  let made: ReturnType<typeof codeFile>;
+  try { made = codeFile(w, blocks, methods, { strict: true, validate, platformData: true }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
+  const { file, header, bytes } = made, plain = packModule(header, bytes);
   nMethods += methods.length;
-  const header: CHeader = { ...unit, classes: blocks, mods: [...cx.deps.keys()],
-    absent: blocks.flatMap((b) => prog.get(w.slots.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.slots.blockBase[b] + m.index)) };
-  const plain = packModule(header, bytes), file = packModule(header, bytes, { w, traces });
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
 });

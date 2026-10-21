@@ -1,10 +1,9 @@
 // An app compiled ahead on top of the platform build (aot.ts `extend`): the code of the methods it is likely to run, in code modules a<k>.wasm of the classes' groups, and the
 // numbering that code relies on. A World at the platform build's state that has the app's dexes takes it as it takes the platform's own modules, and compiles the rest on demand.
 // The build may be made by shards, Worlds that each number the same seed (seedApp) and then compile their share of the modules with their numbering frozen.
-import { mid } from "../compiler/ids.ts";
-import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
+import { codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
 import { synthOf } from "./synths.ts";
-import { APP_VERSION, type AotRuntime, type AppIndex, type CHeader, type Demand } from "./aot.ts";
+import { APP_VERSION, type AotRuntime, type AppIndex, type Demand } from "./aot.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 import { LinkIds, type Marks, type Numbering } from "./numbers.ts";
@@ -111,12 +110,8 @@ function compileShard(w: World, plan: AppPlan, shard: number, frozen: boolean): 
   const files: AppBuild["files"] = [], cOf: AppIndex["cOf"] = [], patches: AppIndex["patches"] = [];
   const compile = () => plan.groups.forEach(({ methods: group, over }, module) => {
     if (plan.shardOf[module] !== shard) return;
-    const { built, header: unit, skipped } = codeModule(w, group);
     const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.slots.blockOf(w.link(c).slotBase));
-    const wanted = new Set(group);
-    const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
-    const header: CHeader = { ...unit, classes, mods: [], absent };
-    files.push([`a${module}.wasm`, packModule(header, built.bytes, { w, traces: built.traces })]);
+    files.push([`a${module}.wasm`, codeFile(w, classes, group).file]);
     if (over < 0) for (const b of classes) cOf.push([b, module]); else patches.push([module, over]);
   });
   if (frozen) w.numbers.frozen(compile); else compile();
