@@ -68,6 +68,7 @@ const RECORDERS: Record<string, { record: () => Promise<unknown>; boots?: true; 
   compat: { record: recordCompatChanges },
   osConstants: { record: recordOsConstants },
   charsets: { record: recordCharsets },
+  blocks: { record: recordUnicodeBlocks },
   input: { record: recordInputDevices },
   properties: { record: recordProperties },
   // VectorDrawableProbe's cases, which fwtest and the browser test compare against
@@ -240,6 +241,18 @@ async function recordCharsets() {
     "[name, aliases as aliases() iterates them, encoder replacement, the character each byte 0-255\n" +
     "decodes to, the bytes whose character does not encode back to them].",
     `export const SINGLE_BYTE_CHARSETS: [string, string[], number[], string, number[]][] = [\n${rows.join("\n")}\n];\n`, `${rows.length} charsets`);
+}
+
+/** ICU's Unicode blocks on the reference device, which JS has no property for */
+async function recordUnicodeBlocks() {
+  const rows = runDex("scripts/DumpUnicodeBlocks.java", { android: true }).split("\n").map((line) => {
+    const [start, ...names] = line.trim().split(" ");
+    return [start, ...new Set(names.map((n) => n.toLowerCase().replace(/[\s_-]/g, "")))].join(" ");
+  });
+  writeGenerated("src/jvm/natives/unicode-blocks.ts", ": ICU's Unicode blocks on the reference device, the first\n" +
+    "code point of each block or of a gap between blocks, with every name ICU knows the block by, matched loosely\n" +
+    "(lower case, without spaces, hyphens and underscores).",
+    `export const UNICODE_BLOCKS = ${JSON.stringify(rows.join(","))};\n`, `${rows.length} blocks and gaps`);
 }
 
 /** The device's settings tables as SettingsProvider holds them for an app (src/android/device-settings.ts).

@@ -10,6 +10,7 @@ export type StorageOwner = { pkg: string; uid: number };
 export function storageAccess(key: string, { pkg, uid }: StorageOwner): "read" | "write" | null {
   if (key === `wd:install:${pkg}` || key.startsWith(`wd:install:${pkg}:`) || key === `wd:web-cookies:${pkg}` || key === `wd:keystore2:${uid}`
     || key === `wd:package-config:${pkg}`
+    || key.startsWith(`wd:keystore2:${uid}:`)
     || key === "wd:media:flags") return "write";
   return key.startsWith("wd:install:") || key === "wd:package-uids" ? "read" : null;
 }

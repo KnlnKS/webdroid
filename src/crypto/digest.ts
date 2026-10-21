@@ -235,16 +235,22 @@ class SHA512 extends MD {
   protected out(dst: DataView) { for (let i = 0; i < this.size / 4; i++) dst.setInt32(4 * i, this.h[i]); }
 }
 
-/** BoringSSL's digest names (EVP_get_digestbyname): a factory per algorithm */
-export const DIGESTS: Record<string, () => Hash> = {
-  md5: () => new MD5(), sha1: () => new SHA1(), sha224: () => new SHA256(28), sha256: () => new SHA256(32),
-  sha384: () => new SHA512(48), sha512: () => new SHA512(64),
+/** BoringSSL's digest names (EVP_get_digestbyname): a factory per algorithm, its OID, and its name in
+ *  WebCrypto where the browser has it */
+export const DIGESTS: Record<string, { make: () => Hash; oid: string; web?: string }> = {
+  md5: { make: () => new MD5(), oid: "1.2.840.113549.2.5" },
+  sha1: { make: () => new SHA1(), oid: "1.3.14.3.2.26", web: "SHA-1" },
+  sha224: { make: () => new SHA256(28), oid: "2.16.840.1.101.3.4.2.4" },
+  sha256: { make: () => new SHA256(32), oid: "2.16.840.1.101.3.4.2.1", web: "SHA-256" },
+  sha384: { make: () => new SHA512(48), oid: "2.16.840.1.101.3.4.2.2", web: "SHA-384" },
+  sha512: { make: () => new SHA512(64), oid: "2.16.840.1.101.3.4.2.3", web: "SHA-512" },
 };
+export const digestOfOid = (oid: string) => Object.keys(DIGESTS).find((n) => DIGESTS[n].oid === oid);
 /** the digest of `parts` concatenated */
 export const hashOf = (make: () => Hash, ...parts: Uint8Array[]): Uint8Array => { const h = make(); for (const p of parts) h.update(p); return h.digest(); };
-export const md5 = (data: Uint8Array) => hashOf(DIGESTS.md5, data);
-export const sha1 = (data: Uint8Array) => hashOf(DIGESTS.sha1, data);
-export const sha256 = (data: Uint8Array) => hashOf(DIGESTS.sha256, data);
+export const md5 = (data: Uint8Array) => hashOf(DIGESTS.md5.make, data);
+export const sha1 = (data: Uint8Array) => hashOf(DIGESTS.sha1.make, data);
+export const sha256 = (data: Uint8Array) => hashOf(DIGESTS.sha256.make, data);
 
 /** HMAC (RFC 2104) over one of the digests */
 export class Hmac {
@@ -273,7 +279,6 @@ export class Hmac {
   reset() { this.inner = this.init[0].clone(); this.outer = this.init[1].clone(); }
 }
 
-const WEB_DIGEST: Record<string, string> = { sha1: "SHA-1", sha256: "SHA-256", sha384: "SHA-384", sha512: "SHA-512" };
 const WEB_MIN = 1 << 16, WEB_MAX = 1 << 26;
 /** A digest that holds its message back while none of it is hashed (up to 64 MB), so that a final over
  *  64 KB or more runs in the browser's digest, which uses the CPU's SHA instructions (V8: SHA-256 of 1 MB
@@ -312,9 +317,13 @@ export class Deferred implements Hash {
     return d.then((r) => new Uint8Array(r));
   }
   reset(): void { this.inner.reset(); this.held = this.web ? new Uint8Array(0) : null; this.n = 0; }
-  clone(): Deferred { this.flush(); return new Deferred(this.inner.clone()); }
+  clone(): Deferred {
+    const c = new Deferred(this.inner.clone(), this.web);
+    c.held = this.held?.slice(0, this.n) ?? null; c.n = this.n;
+    return c;
+  }
 }
-export const deferred = (name: string) => new Deferred(DIGESTS[name](), WEB_DIGEST[name]);
+export const deferred = (name: string) => new Deferred(DIGESTS[name].make(), DIGESTS[name].web);
 
 /** A whole file's digest under a MessageDigest name (MD5, SHA-1, SHA-256, ...); null for an algorithm
  *  the platform lacks. */

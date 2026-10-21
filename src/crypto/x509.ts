@@ -1,26 +1,36 @@
 // X.509 certificates (RFC 5280) as BoringSSL parses them for conscrypt's natives: the raw fields,
-// the extensions it caches (key usage, basic constraints, ...), and names printed per RFC 2253.
+// the extensions it caches (key usage, basic constraints, ...), and names printed per RFC 2253; and
+// the certificates KeyMint and the relay CA issue.
 
-import { concat, sameBytes } from "../abi.ts";
+import { concat, sameBytes, utf8 } from "../jvm/abi.ts";
 import {
-  children, parseOne, expect, oidToString, tlv, bytesToBig, DerError,
+  children, parseOne, readTlv, expect, oidToString, tlv, seq, oid, integer, bits, octets, derNull, bytesToBig, DerError,
   SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID, BOOLEAN, type Tlv,
 } from "./der.ts";
+import { ecdsaSign, emsaEncode, rsaApply, marshalPublicKey, EVP_PKEY_EC, EVP_PKEY_RSA, type PKey } from "./pkey.ts";
+import { sha256 } from "./digest.ts";
 
 export type Extension = { oid: string; critical: boolean; value: Uint8Array; raw: Uint8Array };
 export type Time = { ms: number; fields: [number, number, number, number, number, number] };
+type Fields = {
+  der: Uint8Array; tbs: Uint8Array; version: number; serial: Uint8Array; sigOid: string; sigParams: Uint8Array | null; signature: Uint8Array;
+  issuer: Uint8Array; subject: Uint8Array; notBefore: Time; notAfter: Time; spki: Uint8Array; keyOid: string;
+  issuerUid: Uint8Array | null; subjectUid: Uint8Array | null; exts: Extension[];
+};
+export interface X509 extends Readonly<Fields> {}
 export class X509 {
-  readonly der: Uint8Array; readonly tbs: Uint8Array; readonly serial: Uint8Array; readonly sigOid: string; readonly sigParams: Uint8Array | null; readonly signature: Uint8Array; readonly issuer: Uint8Array; readonly subject: Uint8Array; readonly notBefore: Time; readonly notAfter: Time; readonly spki: Uint8Array; readonly issuerUid: Uint8Array | null; readonly subjectUid: Uint8Array | null; readonly exts: Extension[];
-  version = 0;
-  constructor(
-    der: Uint8Array, tbs: Uint8Array, serial: Uint8Array,
-    sigOid: string, sigParams: Uint8Array | null, signature: Uint8Array,
-    issuer: Uint8Array, subject: Uint8Array, notBefore: Time, notAfter: Time,
-    spki: Uint8Array, issuerUid: Uint8Array | null, subjectUid: Uint8Array | null,
-    exts: Extension[],
-  ) { this.der = der; this.tbs = tbs; this.serial = serial; this.sigOid = sigOid; this.sigParams = sigParams; this.signature = signature; this.issuer = issuer; this.subject = subject; this.notBefore = notBefore; this.notAfter = notAfter; this.spki = spki; this.issuerUid = issuerUid; this.subjectUid = subjectUid; this.exts = exts; }
+  constructor(f: Fields) { Object.assign(this, f); }
   ext(oid: string) { return this.exts.find((e) => e.oid === oid); }
 }
+/** the signature algorithms a certificate may name: OpenSSL's name, the digest, and the key */
+export const SIG_ALGS: Record<string, { name: string; md: string; kind: "rsa" | "ec" | "pss" }> = {
+  "1.2.840.113549.1.1.4": { name: "md5WithRSAEncryption", md: "md5", kind: "rsa" }, "1.2.840.113549.1.1.5": { name: "sha1WithRSAEncryption", md: "sha1", kind: "rsa" },
+  "1.2.840.113549.1.1.14": { name: "sha224WithRSAEncryption", md: "sha224", kind: "rsa" }, "1.2.840.113549.1.1.11": { name: "sha256WithRSAEncryption", md: "sha256", kind: "rsa" },
+  "1.2.840.113549.1.1.12": { name: "sha384WithRSAEncryption", md: "sha384", kind: "rsa" }, "1.2.840.113549.1.1.13": { name: "sha512WithRSAEncryption", md: "sha512", kind: "rsa" },
+  "1.2.840.113549.1.1.10": { name: "rsassaPss", md: "", kind: "pss" }, "1.2.840.10045.4.1": { name: "ecdsa-with-SHA1", md: "sha1", kind: "ec" },
+  "1.2.840.10045.4.3.1": { name: "ecdsa-with-SHA224", md: "sha224", kind: "ec" }, "1.2.840.10045.4.3.2": { name: "ecdsa-with-SHA256", md: "sha256", kind: "ec" },
+  "1.2.840.10045.4.3.3": { name: "ecdsa-with-SHA384", md: "sha384", kind: "ec" }, "1.2.840.10045.4.3.4": { name: "ecdsa-with-SHA512", md: "sha512", kind: "ec" },
+};
 
 function time(t: Tlv): Time {
   const s = new TextDecoder().decode(t.body);
@@ -46,7 +56,7 @@ export function parseX509(der: Uint8Array): X509 {
   const inner = algorithm(f[i + 1]), outer = algorithm(sigAlgT);
   if (inner.oid !== outer.oid) throw new DerError("signature algorithm mismatch");
   const [nb, na] = children(expect(f[i + 3], SEQUENCE).body);
-  const sig = expect(sigT, BIT_STRING).body;
+  const sig = expect(sigT, BIT_STRING).body, spki = expect(f[i + 5], SEQUENCE);
   let issuerUid: Uint8Array | null = null, subjectUid: Uint8Array | null = null;
   const exts: Extension[] = [];
   for (const t of f.slice(i + 6)) {
@@ -60,11 +70,18 @@ export function parseX509(der: Uint8Array): X509 {
       }
     } else throw new DerError("unexpected field");
   }
-  const x = new X509(der.slice(), tbsT.raw.slice(), serial.slice(), outer.oid, outer.params, sig.subarray(1).slice(),
-    expect(f[i + 2], SEQUENCE).raw.slice(), expect(f[i + 4], SEQUENCE).raw.slice(), time(nb), time(na),
-    expect(f[i + 5], SEQUENCE).raw.slice(), issuerUid, subjectUid, exts);
-  x.version = version;
-  return x;
+  return new X509({
+    der: der.slice(), tbs: tbsT.raw.slice(), version, serial: serial.slice(), sigOid: outer.oid, sigParams: outer.params, signature: sig.subarray(1).slice(),
+    issuer: expect(f[i + 2], SEQUENCE).raw.slice(), subject: expect(f[i + 4], SEQUENCE).raw.slice(), notBefore: time(nb), notAfter: time(na),
+    spki: spki.raw.slice(), keyOid: algorithm(children(spki.body)[0]).oid, issuerUid, subjectUid, exts,
+  });
+}
+/** the certificates a PKCS #7 SignedData ContentInfo carries */
+export function signedDataCertificates(der: Uint8Array): Uint8Array[] {
+  const [type, content] = children(parseOne(der, SEQUENCE).body);
+  if (oidToString(expect(type, OID).body) !== "1.2.840.113549.1.7.2" || content?.tag !== 0xa0) throw new DerError("not SignedData");
+  const certs = children(readTlv(content.body).body).find((t) => t.tag === 0xa0);
+  return certs ? children(certs.body).map((t) => t.raw) : [];
 }
 
 /** a BIT STRING's bits as booleans, its unused trailing bits left out (ASN1BitStringToBooleanArray) */
@@ -74,24 +91,22 @@ export function bitBooleans(bs: Uint8Array): boolean[] {
   return out;
 }
 export const KEY_USAGE = "2.5.29.15", EXT_KEY_USAGE = "2.5.29.37", BASIC_CONSTRAINTS = "2.5.29.19", SUBJECT_ALT_NAME = "2.5.29.17", ISSUER_ALT_NAME = "2.5.29.18";
-export const basicConstraints = (x: X509): { ca: boolean; pathLen: number } | null => {
-  const e = x.ext(BASIC_CONSTRAINTS);
-  if (!e) return null;
-  const parts = children(parseOne(e.value, SEQUENCE).body);
+export function basicConstraints(value: Uint8Array): { ca: boolean; pathLen: number } {
   let ca = false, pathLen = -1;
-  for (const p of parts) {
+  for (const p of children(parseOne(value, SEQUENCE).body)) {
     if (p.tag === BOOLEAN) ca = p.body[0] !== 0;
     else if (p.tag === INTEGER) pathLen = Number(bytesToBig(p.body));
   }
   return { ca, pathLen };
-};
+}
+export const keyUsageBits = (value: Uint8Array) => bitBooleans(parseOne(value, BIT_STRING).body);
 // the extensions BoringSSL understands; any other critical one sets EXFLAG_CRITICAL
 const SUPPORTED = new Set(["2.16.840.1.113730.1.1", KEY_USAGE, SUBJECT_ALT_NAME, BASIC_CONSTRAINTS, "2.5.29.30", "2.5.29.32", EXT_KEY_USAGE, "2.5.29.36",
   "2.5.29.54", "1.3.6.1.5.5.7.1.1", "1.3.6.1.5.5.7.1.14", "1.3.6.1.5.5.7.1.3", "1.3.6.1.5.5.7.1.7", "2.5.29.33"]);
 const EXFLAG_BCONS = 0x1, EXFLAG_KUSAGE = 0x2, EXFLAG_XKUSAGE = 0x4, EXFLAG_CA = 0x10, EXFLAG_SI = 0x20, EXFLAG_V1 = 0x40, EXFLAG_CRITICAL = 0x200, EXFLAG_SS = 0x2000;
 export function exFlags(x: X509, selfSigned: () => boolean): number {
   let flags = 0;
-  const bc = basicConstraints(x);
+  const bce = x.ext(BASIC_CONSTRAINTS), bc = bce && basicConstraints(bce.value);
   if (x.version === 0) flags |= EXFLAG_V1;
   if (bc) { flags |= EXFLAG_BCONS; if (bc.ca) flags |= EXFLAG_CA; }
   if (x.ext(KEY_USAGE)) flags |= EXFLAG_KUSAGE;
@@ -176,4 +191,36 @@ export function tbsWithout(x: X509, oid: string): Uint8Array {
     return kept.length ? tlv(0xa3, tlv(SEQUENCE, concat(kept))) : new Uint8Array(0);
   });
   return tlv(SEQUENCE, concat(parts));
+}
+
+// ── issuing
+/** UTCTime through 2049 and GeneralizedTime after (RFC 5280 §4.1.2.5) */
+export function derTime(ms: number): Uint8Array {
+  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0"), y = d.getUTCFullYear();
+  const rest = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
+  return y >= 1950 && y < 2050 ? tlv(0x17, utf8.enc.encode(p(y % 100) + rest)) : tlv(0x18, utf8.enc.encode(String(y).padStart(4, "0") + rest));
+}
+/** a Name of one UTF8String attribute per RDN, first RDN first */
+export const x500Name = (attrs: [string, string][]) => seq(...attrs.map(([o, v]) => tlv(0x31, seq(oid(o), tlv(0x0c, utf8.enc.encode(v))))));
+export const extension = (id: string, critical: boolean, value: Uint8Array) => seq(oid(id), ...(critical ? [tlv(BOOLEAN, [0xff])] : []), octets(value));
+/** the critical keyUsage extension with bits `on` set (0 digitalSignature, 5 keyCertSign, ...) */
+export function keyUsage(on: number[]): Uint8Array {
+  const last = Math.max(-1, ...on), b = new Uint8Array(1 + ((last + 8) >> 3));
+  for (const i of on) b[1 + (i >> 3)] |= 0x80 >> (i & 7);
+  b[0] = last < 0 ? 0 : 7 - (last & 7);
+  return extension(KEY_USAGE, true, tlv(BIT_STRING, b));
+}
+/** a v3 certificate for `key`, signed over SHA-256 by `signer`, or with an empty signature without one
+ *  (as KeyMint issues for a key that may not sign); a bigint serial is encoded, bytes are its content */
+export function buildCertificate(c: { serial: bigint | Uint8Array; issuer: Uint8Array; subject: Uint8Array; notBefore: number; notAfter: number; key: PKey; exts: Uint8Array[]; signer: PKey | null }): Uint8Array {
+  const by = c.signer ?? c.key, sigAlg = by.type === EVP_PKEY_EC ? seq(oid("1.2.840.10045.4.3.2")) : seq(oid("1.2.840.113549.1.1.11"), derNull());
+  const tbs = seq(tlv(0xa0, integer(2n)), typeof c.serial === "bigint" ? integer(c.serial) : tlv(INTEGER, c.serial), sigAlg, c.issuer,
+    seq(derTime(c.notBefore), derTime(c.notAfter)), c.subject, marshalPublicKey(c.key), tlv(0xa3, seq(...c.exts)));
+  return seq(tbs, sigAlg, bits(c.signer ? signatureOver(c.signer, tbs) : new Uint8Array(0)));
+}
+function signatureOver(s: PKey, tbs: Uint8Array): Uint8Array {
+  const d = sha256(tbs);
+  if (s.type === EVP_PKEY_EC) return ecdsaSign(s.ec.curve, s.ec.priv!, d);
+  if (s.type === EVP_PKEY_RSA) return rsaApply(s.rsa, emsaEncode(s.rsa, { kind: "pkcs1", md: "sha256" }, d)!, true)!;
+  throw new DerError("unsupported signing key");
 }

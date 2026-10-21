@@ -8,11 +8,11 @@ import { vcall } from "./jentry.ts";
 import { boxInt } from "./jbox.ts";
 import { region } from "./jmemory.ts";
 import { nc, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
-import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
-  KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509.ts";
-import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey.ts";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der.ts";
-import { hashOf, sha1 } from "./digest.ts";
+import { parseX509, X509, SIG_ALGS, bitBooleans, basicConstraints, keyUsageBits, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
+  signedDataCertificates, KEY_USAGE, EXT_KEY_USAGE, BASIC_CONSTRAINTS, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "../../crypto/x509.ts";
+import { parsePublicKey, rsaApply, rsaBytes, emsaVerify, ecdsaVerify, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC, type RsaPad } from "../../crypto/pkey.ts";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER } from "../../crypto/der.ts";
+import { DIGESTS, digestOfOid, hashOf, sha1 } from "../../crypto/digest.ts";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
 const x509Of = (h: bigint): X509 => {
@@ -36,7 +36,7 @@ nc(`X509_get_subject_name(J${X})[B`, (h: bigint) => i8(x509Of(h).subject.slice()
 nc(`X509_get_notBefore(J${X})J`, (h: bigint) => weakHandle(x509Of(h).notBefore));
 nc(`X509_get_notAfter(J${X})J`, (h: bigint) => weakHandle(x509Of(h).notAfter));
 nc("ASN1_TIME_to_Calendar(JLjava/util/Calendar;)V", (h: bigint, cal: JObj) => {
-  const o = deref<WeakRef<Time> | Time>(h), t = o instanceof WeakRef ? o.deref() : o;
+  const t = deref<Time | undefined>(h);
   if (!t?.fields) throw rt.mkThrowable("java/lang/NullPointerException", "asn1Time == null");
   const [y, mo, d, hh, mm, ss] = t.fields;
   return vcall(cal ?? rt.npe(), "set", "(IIIIII)V", y, mo - 1, d, hh, mm, ss);
@@ -47,7 +47,7 @@ nc(`get_X509_signature(J${X})[B`, (h: bigint) => i8(x509Of(h).signature.slice())
 nc(`get_X509_tbs_cert(J${X})[B`, (h: bigint) => i8(x509Of(h).tbs.slice()));
 nc(`get_X509_tbs_cert_without_ext(J${X}Ljava/lang/String;)[B`, (h: bigint, _c: JObj, o: string) => i8(tbsWithout(x509Of(h), o)));
 nc(`i2d_X509_PUBKEY(J${X})[B`, (h: bigint) => i8(x509Of(h).spki.slice()));
-nc(`get_X509_pubkey_oid(J${X})Ljava/lang/String;`, (h: bigint) => oidToString(children(children(parseOne(x509Of(h).spki).body)[0].body)[0].body));
+nc(`get_X509_pubkey_oid(J${X})Ljava/lang/String;`, (h: bigint) => x509Of(h).keyOid);
 nc(`X509_get_pubkey(J${X})J`, (h: bigint) => {
   return orDer(() => newKey(parsePublicKey(x509Of(h).spki)), (e) => /unsupported|unknown curve/.test(e.message)
     ? rt.mkThrowable("java/security/NoSuchAlgorithmException", "X509_get_pubkey") : sslError("java/security/InvalidKeyException", ASN1, 109, "DECODE_ERROR"));
@@ -63,13 +63,13 @@ nc(`X509_get_ext_oid(J${X}Ljava/lang/String;)[B`, (h: bigint, _c: JObj, o: strin
 const decoded = <T>(f: () => T): T => orDer(f, decodeError);
 nc(`get_X509_ex_kusage(J${X})[Z`, (h: bigint) => {
   const e = x509Of(h).ext(KEY_USAGE);
-  return e ? decoded(() => Uint8Array.from(bitBooleans(parseOne(e.value, 3).body), Number)) : null;
+  return e ? decoded(() => Uint8Array.from(keyUsageBits(e.value), Number)) : null;
 });
 nc(`get_X509_ex_xkusage(J${X})[Ljava/lang/String;`, (h: bigint) => {
   const e = x509Of(h).ext(EXT_KEY_USAGE);
   return e ? jarray(decoded(() => extKeyUsage(e.value)), "Ljava/lang/String;") : null;
 });
-nc(`get_X509_ex_pathlen(J${X})I`, (h: bigint) => decoded(() => basicConstraints(x509Of(h)))?.pathLen ?? -1);
+nc(`get_X509_ex_pathlen(J${X})I`, (h: bigint) => { const e = x509Of(h).ext(BASIC_CONSTRAINTS); return e ? decoded(() => basicConstraints(e.value)).pathLen : -1; });
 nc(`get_X509_ex_flags(J${X})I`, (h: bigint) => {
   const x = x509Of(h);
   return exFlags(x, () => { try { return verify(x, parsePublicKey(x.spki)) === null; } catch { return false; } });
@@ -89,22 +89,14 @@ nc(`X509_cmp(J${X}J${X})I`, (a: bigint, _x: JObj, b: bigint) => {
   return cmp(sha1(da), sha1(db)) || cmp(da, db);
 });
 
-// signature algorithms a certificate names
-const SIG_ALGS: Record<string, { md: string; kind: "rsa" | "ec" | "pss" }> = {
-  "1.2.840.113549.1.1.4": { md: "md5", kind: "rsa" }, "1.2.840.113549.1.1.5": { md: "sha1", kind: "rsa" }, "1.2.840.113549.1.1.14": { md: "sha224", kind: "rsa" },
-  "1.2.840.113549.1.1.11": { md: "sha256", kind: "rsa" }, "1.2.840.113549.1.1.12": { md: "sha384", kind: "rsa" }, "1.2.840.113549.1.1.13": { md: "sha512", kind: "rsa" },
-  "1.2.840.10045.4.1": { md: "sha1", kind: "ec" }, "1.2.840.10045.4.3.1": { md: "sha224", kind: "ec" }, "1.2.840.10045.4.3.2": { md: "sha256", kind: "ec" },
-  "1.2.840.10045.4.3.3": { md: "sha384", kind: "ec" }, "1.2.840.10045.4.3.4": { md: "sha512", kind: "ec" }, "1.2.840.113549.1.1.10": { md: "", kind: "pss" },
-};
-const HASH_OIDS: Record<string, string> = { "1.3.14.3.2.26": "sha1", "2.16.840.1.101.3.4.2.4": "sha224", "2.16.840.1.101.3.4.2.1": "sha256", "2.16.840.1.101.3.4.2.2": "sha384", "2.16.840.1.101.3.4.2.3": "sha512" };
 /** RSASSA-PSS-params: the hash, MGF1 hash and salt length (defaults SHA-1, SHA-1, 20) */
-function pssParams(p: Uint8Array | null): { md: string; mgf: string; salt: number } {
-  const out = { md: "sha1", mgf: "sha1", salt: 20 };
+function pssParams(p: Uint8Array | null): RsaPad & { kind: "pss" } {
+  const out = { kind: "pss" as const, md: "sha1", mgf: "sha1", salt: 20 };
   if (!p) return out;
   for (const t of children(parseOne(p, SEQUENCE).body)) {
     const inner = readTlv(t.body);
-    if (t.tag === 0xa0) out.md = HASH_OIDS[oidToString(children(inner.body)[0].body)] ?? "";
-    else if (t.tag === 0xa1) out.mgf = HASH_OIDS[oidToString(children(children(inner.body)[1].body)[0].body)] ?? "";
+    if (t.tag === 0xa0) out.md = digestOfOid(oidToString(children(inner.body)[0].body)) ?? "";
+    else if (t.tag === 0xa1) out.mgf = digestOfOid(oidToString(children(children(inner.body)[1].body)[0].body)) ?? "";
     else if (t.tag === 0xa2) out.salt = Number(bytesToBig(inner.body));
   }
   if (!out.md || !out.mgf) throw new DerError("unsupported PSS hash");
@@ -118,18 +110,14 @@ function verify(x: X509, key: Key): JObj | null {
   if ("wrapper" in key) return wrong();
   if (alg.kind === "ec") {
     if (key.type !== EVP_PKEY_EC) return wrong();
-    return ecdsaVerify(key.ec.curve, key.ec.pub, hashOf(digestNamed(alg.md), x.tbs), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
+    return ecdsaVerify(key.ec.curve, key.ec.pub, hashOf(DIGESTS[alg.md].make, x.tbs), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
   }
   if (key.type !== EVP_PKEY_RSA) return wrong();
-  const r = key.rsa, n = rsaBytes(r), s = x.signature;
-  if (s.length !== n || bytesToBig(s) >= r.n) return sslError("javax/crypto/BadPaddingException", 4, 145, "WRONG_SIGNATURE_LENGTH");
-  const em = bigToBytes(rsaPublic(r, bytesToBig(s)), n);
-  if (alg.kind === "pss") {
-    const p = pssParams(x.sigParams);
-    return pssVerify(hashOf(digestNamed(p.md), x.tbs), em, bitLength(r.n) - 1, digestNamed(p.md), digestNamed(p.mgf), p.salt) ? null : sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
-  }
-  const want = pkcs1SignPad(n, alg.md, hashOf(digestNamed(alg.md), x.tbs));
-  if (want && sameBytes(want, em)) return null;
+  const r = key.rsa, s = x.signature, em = s.length === rsaBytes(r) ? rsaApply(r, s, false) : null;
+  if (!em) return sslError("javax/crypto/BadPaddingException", 4, 145, "WRONG_SIGNATURE_LENGTH");
+  const pad = alg.kind === "pss" ? pssParams(x.sigParams) : { kind: "pkcs1" as const, md: alg.md };
+  if (emsaVerify(r, pad, hashOf(DIGESTS[pad.md].make, x.tbs), em)) return null;
+  if (alg.kind === "pss") return sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
   return em[0] === 0 && em[1] === 1 ? sslError("javax/crypto/BadPaddingException", 4, 105, "BAD_SIGNATURE") : sslError("javax/crypto/BadPaddingException", 4, 107, "BLOCK_TYPE_IS_NOT_01");
 }
 nc(`X509_verify(J${X}Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)V`, (h: bigint, _c: JObj, ref: JObj) => {
@@ -140,7 +128,7 @@ nc(`X509_check_issued(J${X}J${X})I`, (issuerH: bigint, _a: JObj, subjectH: bigin
   const issuer = x509Of(issuerH), subject = x509Of(subjectH);
   if (!sameBytes(issuer.subject, subject.issuer)) return 29; // X509_V_ERR_SUBJECT_ISSUER_MISMATCH
   const ku = issuer.ext(KEY_USAGE);
-  if (ku && !bitBooleans(parseOne(ku.value, 3).body)[5]) return 32; // X509_V_ERR_KEYUSAGE_NO_CERTSIGN
+  if (ku && !keyUsageBits(ku.value)[5]) return 32; // X509_V_ERR_KEYUSAGE_NO_CERTSIGN
   return 0;
 });
 
@@ -227,12 +215,7 @@ nc("i2d_PKCS7([J)[B", (hs: BigInt64Array) => {
 const PKCS7_CERTS = 1;
 function pkcs7Certs(der: Uint8Array, which: number): BigInt64Array {
   if (which !== PKCS7_CERTS) throw rt.mkThrowable("java/lang/RuntimeException", "CRLs in PKCS#7 are unsupported");
-  return handles(decoded(() => {
-    const [type, content] = children(parseOne(der, SEQUENCE).body);
-    if (oidToString(type.body) !== OID_SIGNED_DATA || content?.tag !== 0xa0) throw new DerError("not SignedData");
-    const certs = children(readTlv(content.body).body).find((t: Tlv) => t.tag === 0xa0);
-    return certs ? children(certs.body).map((t) => parse(t.raw.slice())) : [];
-  }));
+  return handles(decoded(() => signedDataCertificates(der).map((c) => parse(c.slice()))));
 }
 nc("d2i_PKCS7_bio(JI)[J", driven(function* (h: bigint, which: number): Gen { return pkcs7Certs(yield* readDer(bioOf(h)), which); }));
 nc("PEM_read_bio_PKCS7(JI)[J", driven(function* (h: bigint, which: number): Gen {
@@ -305,14 +288,8 @@ function printPublic(k: Key, indent: number): string {
 nc("EVP_PKEY_print_public(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)Ljava/lang/String;", (ref: JObj) => printPublic(keyOf(ref), 0));
 nc("EVP_PKEY_print_params(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)Ljava/lang/String;", (ref: JObj) => {
   const k = keyOf(ref);
-  return k.type === EVP_PKEY_EC ? `ECDSA-Parameters: (${bitLength((("wrapper" in k) ? k.curve! : k.ec.curve).p)} bit)\n` : "";
+  return k.type === EVP_PKEY_EC ? `ECDSA-Parameters: (${bitLength(("wrapper" in k ? k.curve : k.ec.curve).p)} bit)\n` : "";
 });
-const SIG_NAMES: Record<string, string> = {
-  "1.2.840.113549.1.1.4": "md5WithRSAEncryption", "1.2.840.113549.1.1.5": "sha1WithRSAEncryption", "1.2.840.113549.1.1.14": "sha224WithRSAEncryption",
-  "1.2.840.113549.1.1.11": "sha256WithRSAEncryption", "1.2.840.113549.1.1.12": "sha384WithRSAEncryption", "1.2.840.113549.1.1.13": "sha512WithRSAEncryption",
-  "1.2.840.113549.1.1.10": "rsassaPss", "1.2.840.10045.4.1": "ecdsa-with-SHA1", "1.2.840.10045.4.3.1": "ecdsa-with-SHA224",
-  "1.2.840.10045.4.3.2": "ecdsa-with-SHA256", "1.2.840.10045.4.3.3": "ecdsa-with-SHA384", "1.2.840.10045.4.3.4": "ecdsa-with-SHA512",
-};
 const KEY_NAMES: Record<string, string> = { "1.2.840.113549.1.1.1": "rsaEncryption", "1.2.840.10045.2.1": "id-ecPublicKey", "1.3.101.110": "X25519" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const timeText = ({ fields: [y, mo, d, h, mi, s] }: Time) =>
@@ -330,11 +307,10 @@ function extensionText(oidText: string, value: Uint8Array): [string, string] | n
       return [oidText === SUBJECT_ALT_NAME ? "X509v3 Subject Alternative Name" : "X509v3 Issuer Alternative Name",
         generalNames(value).map(([t, v]) => typeof v === "string" ? `${GN_PREFIX[t]}:${v}` : "othername:<unsupported>").join(", ")];
     case EXT_KEY_USAGE: return ["X509v3 Extended Key Usage", extKeyUsage(value).map((o) => EKU_NAMES[o] ?? o).join(", ")];
-    case KEY_USAGE: return ["X509v3 Key Usage", bitBooleans(parseOne(value, 3).body).flatMap((b, i) => b && KU_NAMES[i] ? [KU_NAMES[i]] : []).join(", ")];
-    case "2.5.29.19": {
-      const parts = children(parseOne(value, SEQUENCE).body);
-      const ca = parts.some((p) => p.tag === 1 && p.body[0] !== 0), len = parts.find((p) => p.tag === INTEGER);
-      return ["X509v3 Basic Constraints", `CA:${ca ? "TRUE" : "FALSE"}${len ? `, pathlen:${bytesToBig(len.body)}` : ""}`];
+    case KEY_USAGE: return ["X509v3 Key Usage", keyUsageBits(value).flatMap((b, i) => b && KU_NAMES[i] ? [KU_NAMES[i]] : []).join(", ")];
+    case BASIC_CONSTRAINTS: {
+      const { ca, pathLen } = basicConstraints(value);
+      return ["X509v3 Basic Constraints", `CA:${ca ? "TRUE" : "FALSE"}${pathLen >= 0 ? `, pathlen:${pathLen}` : ""}`];
     }
     case "2.5.29.14": return ["X509v3 Subject Key Identifier", upperHex(parseOne(value, 4).body)];
     case "2.5.29.35": {
@@ -346,7 +322,7 @@ function extensionText(oidText: string, value: Uint8Array): [string, string] | n
 }
 nc(`X509_print_ex(JJ${X}JJ)V`, (bio: bigint, h: bigint) => {
   const x = x509Of(h), b = bioOf(bio);
-  const serial = bytesToBig(x.serial), keyAlg = oidToString(children(children(parseOne(x.spki).body)[0].body)[0].body);
+  const serial = bytesToBig(x.serial);
   let key: string;
   try { key = printPublic(parsePublicKey(x.spki), 16); } catch { key = "                Unable to load Public Key\n"; }
   const exts = x.exts.map((e) => {
@@ -355,14 +331,14 @@ nc(`X509_print_ex(JJ${X}JJ)V`, (bio: bigint, h: bigint) => {
     const [name, text] = t ?? [e.oid, colonHex(e.value, 0, 18).replace(/\n/g, "\n                ")];
     return `            ${name}: ${e.critical ? "critical" : ""}\n                ${text}\n`;
   }).join("");
-  const sigName = SIG_NAMES[x.sigOid] ?? x.sigOid;
+  const sigName = SIG_ALGS[x.sigOid]?.name ?? x.sigOid;
   const text = "Certificate:\n    Data:\n"
     + `        Version: ${x.version + 1} (0x${x.version.toString(16)})\n`
     + (x.serial.length <= 8 && !(x.serial[0] & 0x80) ? `        Serial Number: ${serial} (0x${serial.toString(16)})\n`
       : `        Serial Number:\n${colonHex(x.serial[0] === 0 && x.serial.length > 1 ? x.serial.subarray(1) : x.serial, 12, 20)}\n`)
     + `    Signature Algorithm: ${sigName}\n`
     + `        Issuer: ${oneLine(x.issuer)}\n        Validity\n            Not Before: ${timeText(x.notBefore)}\n            Not After : ${timeText(x.notAfter)}\n`
-    + `        Subject: ${oneLine(x.subject)}\n        Subject Public Key Info:\n            Public Key Algorithm: ${KEY_NAMES[keyAlg] ?? keyAlg}\n${key}`
+    + `        Subject: ${oneLine(x.subject)}\n        Subject Public Key Info:\n            Public Key Algorithm: ${KEY_NAMES[x.keyOid] ?? x.keyOid}\n${key}`
     + (x.exts.length ? `        X509v3 extensions:\n${exts}\n` : "")
     + `    Signature Algorithm: ${sigName}\n${colonHex(x.signature, 9, 18)}\n`;
   const bytes = new TextEncoder().encode(text);

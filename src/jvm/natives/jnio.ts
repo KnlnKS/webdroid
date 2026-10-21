@@ -3,7 +3,7 @@
 // buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
 // read-only mapping or a live lease, jmemory.ts), else a heap buffer's array.
 
-import { rt, type JObj, declaredField, getDeclared, waits } from "../runtime.ts";
+import { rt, type JObj, declaredField, instanceField, getDeclared, setDeclared, waits } from "../runtime.ts";
 import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared } from "../../native/mappings.ts";
@@ -17,23 +17,18 @@ export { isExternal };
 /** a java.nio.Buffer */
 export type JBuffer = JObj;
 type Fields = Record<string, any>;
-let F: { position: string; limit: string; capacity: string; mark: string; address: string; shift: string } | undefined;
-const fields = () => F ??= Object.fromEntries(["position", "limit", "capacity", "mark", "address", "_elementSizeShift"]
-  .map((n) => [n === "_elementSizeShift" ? "shift" : n, declaredField("java/nio/Buffer", n)])) as NonNullable<typeof F>;
-export const position = (b: JBuffer): number => (b as Fields)[fields().position];
-export const limit = (b: JBuffer): number => (b as Fields)[fields().limit];
-export const capacity = (b: JBuffer): number => (b as Fields)[fields().capacity];
-export const elementShift = (b: JBuffer): number => (b as Fields)[fields().shift];
+const BUFFER = "java/nio/Buffer", positionField = instanceField<number>(BUFFER, "position"), limitField = instanceField<number>(BUFFER, "limit");
+const markField = instanceField<number>(BUFFER, "mark");
+export const position = positionField.get, limit = limitField.get, setLimit = limitField.set;
+export const capacity = instanceField<number>(BUFFER, "capacity").get, elementShift = instanceField<number>(BUFFER, "_elementSizeShift").get;
 /** Buffer.position(int), for a position within the limit */
 export function setPosition(b: JBuffer, p: number): void {
-  const o = b as Fields, f = fields();
-  o[f.position] = p;
-  if (o[f.mark] > p) o[f.mark] = -1;
+  positionField.set(b, p);
+  if (markField.get(b) > p) markField.set(b, -1);
 }
-export const setLimit = (b: JBuffer, l: number): void => { (b as Fields)[fields().limit] = l; };
 export const isBuffer = (o: unknown): o is JBuffer => !!o && typeof o === "object" && !!iof(o, "java/nio/Buffer");
 /** Buffer.address: a direct buffer's memory, 0 for a heap buffer */
-export const addressOf = (b: JBuffer): bigint => (b as Fields)[fields().address];
+export const addressOf = instanceField<bigint>(BUFFER, "address").get;
 
 /** where a buffer class keeps its elements: a heap buffer's array and offset, a view's buffer and byte offset */
 interface Layout { hb?: string; offset?: string; bb?: string; byteOffset?: string }
@@ -113,12 +108,7 @@ export const allocateDirect = (n: number): JBuffer | Promise<JBuffer> => scall("
 export const directView = (b: JBuffer, readOnly = false): JBuffer | Promise<JBuffer> =>
   after(newObj("java/nio/DirectByteBuffer", "(JI)V", addressOf(b), capacity(b)), (v: JBuffer) => readOnly ? vcall(v, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;") : v);
 /** ByteBuffer.order(nativeOrder()) */
-export function nativeOrder(b: JBuffer): JBuffer {
-  const o = b as Fields;
-  o[declaredField("java/nio/ByteBuffer", "bigEndian")] = 0;
-  o[declaredField("java/nio/ByteBuffer", "nativeByteOrder")] = 1;
-  return b;
-}
+export const nativeOrder = (b: JBuffer): JBuffer => setDeclared(b, "java/nio/ByteBuffer", { bigEndian: 0, nativeByteOrder: 1 });
 /** a direct buffer holding a copy of `bytes` */
 export const directCopy = (bytes: Uint8Array): JBuffer | Promise<JBuffer> =>
   after(allocateDirect(bytes.length), (b) => { bufferBytes(b).set(bytes); return b; });

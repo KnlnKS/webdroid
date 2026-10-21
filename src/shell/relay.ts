@@ -93,8 +93,9 @@ export class Relay {
   connected = false;
   applicationProtocol: string | null = null;
   eof = false;
-  /** why the relay could not connect: its close frame's reason */
+  /** why the relay could not connect: its close frame's reason and code (4001: TCP connected, TLS did not) */
   failure = "";
+  failureCode = 0;
   localEndpoint: RelayEndpoint | null = null;
   readonly ready: Promise<void>;
 
@@ -117,7 +118,7 @@ export class Relay {
         wake();
       };
       const failed = (event: Event) => {
-        if (!settled) this.failure = (event as CloseEvent).reason ?? "";
+        if (!settled) { this.failure = (event as CloseEvent).reason ?? ""; this.failureCode = (event as CloseEvent).code ?? 0; }
         done();
         if (!settled) { settled = true; reject(new Error("connect failed")); }
       };
@@ -132,27 +133,9 @@ export class Relay {
   /** the bytes that have arrived, without waiting (0 when none have) */
   take(out: Uint8Array, off: number, len: number, peek = false): number { return this.q.take(out, off, len, peek); }
 
-  /** wait until a read can complete without blocking, or `ms` elapses — SO_TIMEOUT's contract,
-   *  which a caller probing an idle connection depends on to not wait forever */
-  async waitReadable(ms: number): Promise<boolean> {
-    if (this.q.length || this.eof) return true;
-    await new Promise<void>((resolve) => {
-      const fire = () => { clearTimeout(timer); resolve(); };
-      const timer = setTimeout(() => { this.waiters.delete(fire); resolve(); }, ms);
-      this.waiters.add(fire);
-    });
-    return this.q.length > 0 || this.eof;
-  }
-
   subscribe(waiter: () => void): () => void {
     this.waiters.add(waiter);
     return () => this.waiters.delete(waiter);
-  }
-
-  async read(out: Uint8Array, off: number, len: number): Promise<number> {
-    if (len === 0) return 0;
-    while (this.q.length === 0 && !this.eof) await new Promise<void>((resolve) => this.waiters.add(resolve));
-    return this.q.length ? this.q.take(out, off, len) : -1;
   }
 
   write(bytes: Uint8Array): boolean {

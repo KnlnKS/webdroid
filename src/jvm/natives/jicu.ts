@@ -6,9 +6,28 @@ import { rt, driven, waits, type Gen } from "../runtime.ts";
 import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry.ts";
 import type { JavaClass } from "../tier.ts";
 import { jarray } from "../abi.ts";
-import { cString, icuItem, icuRead } from "./icudata.ts";
+import { PLATFORM_DATA } from "../bootclasspath.ts";
+import { vfs } from "../../shell/vfs.ts";
+import { readFully } from "../../shell/lazyfile.ts";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
+
+// the ICU data as ICU4C reads it: items of the common data file, for natives that answer from the
+// data without ICU4J's loaders
+const ICU_DATA = Object.keys(PLATFORM_DATA).find((path) => path.endsWith(".dat"))!;
+const icuRead = async (at: number, length: number) => {
+  const bytes = await readFully(vfs.source(ICU_DATA)!, at, length);
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+};
+const cString = (view: DataView, at: number) => { let s = ""; for (let c; (c = view.getUint8(at)); at++) s += String.fromCharCode(c); return s; };
+/** udata_open: an item of the common data, found in its table of contents, as its header's offset */
+async function icuItem(name: string): Promise<number> {
+  const header = (await icuRead(0, 2)).getUint16(0, true), first = await icuRead(header, 12), count = first.getUint32(0, true);
+  const toc = await icuRead(0, header + first.getUint32(8, true)), path = `${ICU_DATA.slice(ICU_DATA.lastIndexOf("/") + 1, -4)}/${name}`;
+  for (let i = 0; i < count; i++)
+    if (cString(toc, header + toc.getUint32(header + 4 + 8 * i, true)) === path) return header + toc.getUint32(header + 8 + 8 * i, true);
+  throw new Error(`no ${path} in ${ICU_DATA}`);
+}
 
 /** ScopedIcuLocale: an ICU locale ID or language tag, as ICU canonicalizes either */
 const ulocale = (name: string) => newObj("android/icu/util/ULocale", `(${STRING})V`, name ?? rt.npe());
@@ -57,8 +76,8 @@ const unicodeVersion = constant(async () => {
 const cldrVersion = constant(async () => versionString(Object.assign([0, 0, 0, 0], (await icuRootString("supplementalData.res", "cldrVersion")).split(".").map(Number))));
 const tzdbVersion = constant(() => scall("android/icu/util/TimeZone", "getTZDataVersion", `()${STRING}`));
 
-const names = (cls: string, name: string) => after(scall(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
-const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`));
+const names = (cls: string, name: string) => waits(() => after(scall(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING)));
+const ofLocale = (method: string) => waits((name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`)));
 const displayOf = (method: string) => driven(function* (target: string, display: string): Gen {
   return vcall(yield ulocale(target), method, `(${ULOCALE})${STRING}`, yield ulocale(display));
 });
@@ -82,11 +101,11 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
       return jarray(out, STRING);
     }),
     [`getCldrVersion()${STRING}`]: cldrVersion,
-    [`getDefaultLocale()${STRING}`]: () => after(scall("android/icu/util/ULocale", "getDefault", `()${ULOCALE}`), (l) => vcall(l, "getName", `()${STRING}`)),
+    [`getDefaultLocale()${STRING}`]: waits(() => after(scall("android/icu/util/ULocale", "getDefault", `()${ULOCALE}`), (l) => vcall(l, "getName", `()${STRING}`))),
     [`getISO3Country(${STRING})${STRING}`]: ofLocale("getISO3Country"),
     [`getISO3Language(${STRING})${STRING}`]: ofLocale("getISO3Language"),
-    [`getISOCountriesNative()[${STRING}`]: () => names("android/icu/util/ULocale", "getISOCountries"),
-    [`getISOLanguagesNative()[${STRING}`]: () => names("android/icu/util/ULocale", "getISOLanguages"),
+    [`getISOCountriesNative()[${STRING}`]: names("android/icu/util/ULocale", "getISOCountries"),
+    [`getISOLanguagesNative()[${STRING}`]: names("android/icu/util/ULocale", "getISOLanguages"),
     [`getIcuVersion()${STRING}`]: icuVersion,
     [`getScript(${STRING})${STRING}`]: ofLocale("getScript"),
     [`getUnicodeVersion()${STRING}`]: unicodeVersion,
@@ -106,10 +125,10 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
     [`setDefaultNative(${STRING})V`]: () => {},
   },
   "com/android/icu/util/CaseMapperNative": {
-    [`toLowerCase(${STRING}${STRING})${STRING}`]: (s: string, tag: string) =>
-      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toLowerCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
-    [`toUpperCase(${STRING}${STRING})${STRING}`]: (s: string, tag: string) =>
-      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toUpperCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
+    [`toLowerCase(${STRING}${STRING})${STRING}`]: waits((s: string, tag: string) =>
+      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toLowerCase", `(${ULOCALE}${STRING})${STRING}`, l, s))),
+    [`toUpperCase(${STRING}${STRING})${STRING}`]: waits((s: string, tag: string) =>
+      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toUpperCase", `(${ULOCALE}${STRING})${STRING}`, l, s))),
   },
   "com/android/icu/text/TimeZoneNamesNative": {
     // each row is [id, long standard, short standard, long daylight, short daylight], named as of now

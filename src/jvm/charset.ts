@@ -2,7 +2,7 @@
 // CharsetICU codecs reach them through NativeConverter (jnio.ts), and String's encode and decode
 // (a VM built-in) through encodeString/decodeString. The single-byte tables are the device's.
 import { utf8, charsToString } from "./abi.ts";
-import { rt, declaredField } from "./runtime.ts";
+import { rt, peerField } from "./runtime.ts";
 import { SINGLE_BYTE_CHARSETS } from "./charset-tables.ts";
 
 type Kind = "utf8" | "utf16" | "utf32" | "ascii" | "latin1" | "table";
@@ -56,13 +56,13 @@ export function charsetNamed(name: string): CharsetInfo | null {
   return cs;
 }
 
-let charsetName: string | undefined, lastCharset: unknown, lastInfo: CharsetInfo;
+const charsetName = peerField<unknown>("java/nio/charset/Charset", "name");
+let lastCharset: unknown, lastInfo: CharsetInfo;
 /** the charset named by a string or a Charset, or UnsupportedEncodingException */
 function charsetInfo(value: unknown): CharsetInfo {
   // the last one answers again without the name's keyed load and lookup
   if (value === lastCharset) return lastInfo;
-  const name = typeof value === "string" ? value : value && typeof value === "object"
-    ? (value as Record<string, unknown>)[charsetName ??= declaredField("java/nio/charset/Charset", "name")] : null;
+  const name = typeof value === "string" ? value : value && typeof value === "object" ? charsetName(value) : null;
   if (typeof name !== "string") throw rt.mkThrowable("java/lang/NullPointerException", "charset");
   const cs = charsetNamed(name);
   if (!cs) throw rt.mkThrowable("java/io/UnsupportedEncodingException", name);

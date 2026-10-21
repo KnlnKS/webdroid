@@ -11,14 +11,14 @@ import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { unbox } from "../jvm/natives/jbox.ts";
 import { hostService } from "./binder.ts";
 import { device } from "../shell/config.ts";
-import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
-import { aes, ctr, AesGcm } from "../jvm/natives/ciphers.ts";
+import { DIGESTS, Hmac, hashOf } from "../crypto/digest.ts";
+import { aes, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, AesGcm } from "../crypto/ciphers.ts";
 import {
-  CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
-  oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength,
-  EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
-} from "../jvm/natives/pkey.ts";
-import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
+  CURVES, mul, generateEc, generateRsa, ecdsaSign, ecdsaVerify, rsaBytes, rsaApply, rsaVerify, emsaEncode, emeEncode, emeDecode,
+  parsePrivateKey, parsePublicKey, marshalPrivateKey, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC, type PKey, type RsaPad,
+} from "../crypto/pkey.ts";
+import { bigToBytes, bytesToBig } from "../crypto/der.ts";
+import { buildCertificate, x500Name, keyUsage } from "../crypto/x509.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
 import { procIdentity } from "../shell/procfs.ts";
@@ -80,27 +80,30 @@ const all = (ps: Param[], tag: number) => ps.filter((p) => p.tag === tag).map((p
 const one = (ps: Param[], tag: number) => ps.find((p) => p.tag === tag)?.v;
 const num = (ps: Param[], tag: number) => { const v = one(ps, tag); return v === undefined ? undefined : Number(v); };
 
-// ── entries, per app uid, persisted as JSON
+// ── entries, per app uid, each persisted as JSON under its own key: a whole-list write from one
+// process would drop the entries another process of the uid had just added
 type Entry = { id: string; alias: string; params: [number, number, string][]; material?: string; cert?: string; chain?: string; created: number; modified: number };
 const encodeParam = (p: Param): [number, number, string] =>
   [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
-const savedEntries = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
+const savedEntry = persisted("wd:keystore2:", (saved) => saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Entry : null);
+/** the store before entries had keys of their own, one list per uid */
+const savedList = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
 /** AppDataHelper.clearKeystoreData: every key of the app's uid */
 export const keystoreData: PackageState = {
-  clear(_pkg, uid) { if (uid !== undefined) savedEntries.remove(String(uid)); },
+  clear(_pkg, uid) { if (uid !== undefined) for (const key of [String(uid), ...savedEntry.keys(uid + ":")]) savedEntry.remove(key); },
 };
-/** the entries, kept for this session where storage is unavailable; a corrupt store is empty */
-let session: Entry[] = [];
+/** the entries, kept for this session where storage is unavailable; a corrupt entry is skipped */
+const session = new Map<string, Entry>();
 function entries(): Entry[] {
-  const saved = savedEntries.get(String(procIdentity.uid));
-  return saved === undefined ? session : saved ?? [];
+  const uid = String(procIdentity.uid), list = savedList.get(uid);
+  if (list === undefined) return [...session.values()];
+  if (list) { for (const e of list) put(e); savedList.remove(uid); }
+  return savedEntry.keys(uid + ":").flatMap((key) => savedEntry.get(key) ?? []);
 }
-function save(list: Entry[]) {
-  session = list;
-  savedEntries.set(String(procIdentity.uid), list);
-}
+function put(e: Entry) { session.set(e.id, e); savedEntry.set(`${procIdentity.uid}:${e.id}`, e); }
+function drop(e: Entry) { session.delete(e.id); savedEntry.remove(`${procIdentity.uid}:${e.id}`); }
 const newId = () => BigInt.asIntN(64, bytesToBig(crypto.getRandomValues(new Uint8Array(8)))).toString();
 
 const KD = "android/system/keystore2/KeyDescriptor";
@@ -129,31 +132,15 @@ function characteristics(req: Param[], origin: number, extra: Param[] = []): Par
 }
 
 // ── certificates KeyMint issues for asymmetric keys (self-signed by the key when it may sign)
-const utcOrGeneralized = (ms: number) => {
-  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
-  const body = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`, y = d.getUTCFullYear();
-  return y >= 1950 && y < 2050 ? tlv(0x17, new TextEncoder().encode(p(y % 100) + body)) : tlv(0x18, new TextEncoder().encode(y + body));
-};
-const OID_ECDSA_SHA256 = "1.2.840.10045.4.3.2", OID_RSA_SHA256 = "1.2.840.113549.1.1.11";
+const KEY_USAGE_BITS: [number, number][] = [[PURPOSE.SIGN, 0], [PURPOSE.ENCRYPT, 2], [PURPOSE.DECRYPT, 2], [PURPOSE.AGREE_KEY, 4]];
 function certificate(key: PKey, req: Param[], purposes: number[]): Uint8Array {
   const serial = one(req, TAG.CERTIFICATE_SERIAL) as Uint8Array | undefined, subject = one(req, TAG.CERTIFICATE_SUBJECT) as Uint8Array | undefined;
-  const name = subject?.length ? subject : seq(tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, new TextEncoder().encode("Android Keystore Key")))));
-  const notBefore = Number(one(req, TAG.CERTIFICATE_NOT_BEFORE) ?? 0n), notAfter = Number(one(req, TAG.CERTIFICATE_NOT_AFTER) ?? 2461449600000n);
-  const canSign = purposes.includes(PURPOSE.SIGN);
-  const ku = [purposes.includes(PURPOSE.SIGN), false, purposes.includes(PURPOSE.ENCRYPT) || purposes.includes(PURPOSE.DECRYPT), false, purposes.includes(PURPOSE.AGREE_KEY)];
-  const last = ku.lastIndexOf(true), kuBits = ku.reduce((a, on, i) => a | (on ? 0x80 >> i : 0), 0);
-  const keyUsage = seq(oid("2.5.29.15"), tlv(1, [0xff]), octets(tlv(3, last < 0 ? [0] : [7 - last, kuBits])));
-  const sigAlg = key.type === EVP_PKEY_EC ? seq(oid(OID_ECDSA_SHA256)) : seq(oid(OID_RSA_SHA256), derNull());
-  const tbs = seq(tlv(0xa0, integer(2n)), serial?.length ? tlv(2, serial) : integer(1n), sigAlg, name,
-    seq(utcOrGeneralized(notBefore), utcOrGeneralized(notAfter)), name, marshalPublicKey(key), tlv(0xa3, seq(keyUsage)));
-  let signature: Uint8Array = new Uint8Array(0);
-  if (canSign) {
-    const h = DIGESTS.sha256(); h.update(tbs);
-    const digest = h.digest();
-    if (key.type === EVP_PKEY_EC) signature = ecdsaSign(key.ec.curve, key.ec.priv!, digest);
-    else if (key.type === EVP_PKEY_RSA) signature = bigToBytes(rsaPrivate(key.rsa, bytesToBig(pkcs1SignPad(rsaBytes(key.rsa), "sha256", digest)!)), rsaBytes(key.rsa));
-  }
-  return seq(tbs, sigAlg, bits(signature));
+  const name = subject?.length ? subject : x500Name([["2.5.4.3", "Android Keystore Key"]]);
+  return buildCertificate({
+    serial: serial?.length ? serial : 1n, issuer: name, subject: name, key, signer: purposes.includes(PURPOSE.SIGN) ? key : null,
+    notBefore: Number(one(req, TAG.CERTIFICATE_NOT_BEFORE) ?? 0n), notAfter: Number(one(req, TAG.CERTIFICATE_NOT_AFTER) ?? 2461449600000n),
+    exts: [keyUsage(KEY_USAGE_BITS.flatMap(([p, bit]) => purposes.includes(p) ? [bit] : []))],
+  });
 }
 
 // ── KeyMetadata / KeyEntryResponse
@@ -187,7 +174,7 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
     const byCurve = num(ps, TAG.EC_CURVE), name = byCurve !== undefined ? CURVE_BY_EC[byCurve] : size !== undefined ? CURVE_BY_SIZE[size] : undefined;
     const curve = CURVES.find((c) => c.name === name);
     if (!curve) throw ERR.UNSUPPORTED_EC_CURVE;
-    const d = randomScalar(curve.n), key: PKey = { type: EVP_PKEY_EC, ec: { curve, pub: mul(curve, d, G(curve)) as [bigint, bigint], priv: d } };
+    const key: PKey = { type: EVP_PKEY_EC, ec: generateEc(curve) };
     const extra: Param[] = [];
     if (size === undefined) extra.push({ tag: TAG.KEY_SIZE, kind: KIND.integer, v: bitLength(curve.p) });
     if (byCurve === undefined) extra.push({ tag: TAG.EC_CURVE, kind: KIND.ecCurve, v: CURVE_BY_EC.indexOf(curve.name) });
@@ -196,8 +183,7 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
   if (alg === ALG.RSA) {
     const bitsN = size ?? 2048, e = BigInt((one(ps, TAG.RSA_PUBLIC_EXPONENT) as bigint | undefined) ?? 65537n);
     if (bitsN < 512 || bitsN > 8192 || bitsN % 8) throw ERR.UNSUPPORTED_KEY_SIZE;
-    const pair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: bitsN, publicExponent: new Uint8Array(bigToBytes(e)), hash: "SHA-256" }, true, ["sign"]) as CryptoKeyPair;
-    const key = parsePrivateKey(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
+    const key: PKey = { type: EVP_PKEY_RSA, rsa: await generateRsa(bitsN, e) };
     return { material: marshalPrivateKey(key)!, extra: [], key };
   }
   throw ERR.UNSUPPORTED_ALGORITHM;
@@ -206,7 +192,8 @@ function* store(alias: string, req: Param[], origin: number, made: { material: U
   const now = Date.now(), purposes = all(req, TAG.PURPOSE).map(Number);
   const e: Entry = { id: newId(), alias, params: characteristics(req, origin, made.extra).map(encodeParam), material: made.material.toBase64(), created: now, modified: now };
   if (made.key) e.cert = certificate(made.key, req, purposes).toBase64();
-  save([...entries().filter((x) => x.alias !== alias), e]);
+  for (const x of entries()) if (x.alias === alias) drop(x);
+  put(e);
   return yield* metadata(e);
 }
 /** `body`'s answer, a KeyMint error code it throws as the ServiceSpecificException keystore2 sends */
@@ -229,28 +216,19 @@ function blockCipher(op: Op, data: Uint8Array): Uint8Array {
   }
   const bc = aes(key);
   if (mode === MODE.CTR) { const out = data.slice(); ctr(bc, op.nonce!.slice(), out, new Uint8Array(16), 16); return out; }
-  let buf = data;
-  if (enc && pad === PAD.PKCS7) { const n = 16 - (data.length % 16); buf = concat([data, new Uint8Array(n).fill(n)]); }
+  const buf = enc && pad === PAD.PKCS7 ? pkcs7Pad(data, 16) : data;
   if (buf.length % 16) throw ERR.INVALID_INPUT_LENGTH;
-  const out = buf.slice(), iv = op.nonce?.slice() ?? new Uint8Array(16);
-  for (let off = 0; off < out.length; off += 16) {
-    if (mode === MODE.ECB) { enc ? bc.encrypt(out, off) : bc.decrypt(out, off); continue; }
-    if (enc) { for (let i = 0; i < 16; i++) out[off + i] ^= iv[i]; bc.encrypt(out, off); iv.set(out.subarray(off, off + 16)); }
-    else { const next = out.slice(off, off + 16); bc.decrypt(out, off); for (let i = 0; i < 16; i++) out[off + i] ^= iv[i]; iv.set(next); }
-  }
-  if (!enc && pad === PAD.PKCS7) {
-    const n = out[out.length - 1];
-    if (!n || n > 16 || n > out.length || !out.subarray(out.length - n).every((b) => b === n)) throw ERR.INVALID_ARGUMENT;
-    return out.slice(0, out.length - n);
-  }
-  return out;
+  if (mode === MODE.ECB) ecb(bc, buf, enc); else cbc(bc, buf, op.nonce?.slice() ?? new Uint8Array(16), enc);
+  const m = enc || pad !== PAD.PKCS7 ? buf : pkcs7Unpad(buf, 16);
+  if (!m) throw ERR.INVALID_ARGUMENT;
+  return m;
 }
 function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
   const alg = num(op.e.params.map(decodeParam), TAG.ALGORITHM)!, ps = op.params, data = concat(op.input);
   if (alg === ALG.AES) return blockCipher(op, data);
   const digestName = DIGEST_NAMES[num(ps, TAG.DIGEST) ?? 0] ?? null;
   if (alg === ALG.HMAC) {
-    const mac = new Hmac(DIGESTS[digestName ?? "sha256"], Uint8Array.fromBase64(op.e.material!));
+    const mac = new Hmac(DIGESTS[digestName ?? "sha256"].make, Uint8Array.fromBase64(op.e.material!));
     mac.update(data);
     const full = mac.digest();
     if (op.purpose === PURPOSE.SIGN) return full.subarray(0, (num(ps, TAG.MAC_LENGTH) ?? full.length * 8) / 8);
@@ -258,7 +236,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
     return null;
   }
   const key = keyOf(op.e);
-  const digest = digestName ? (() => { const h = DIGESTS[digestName](); h.update(data); return h.digest(); })() : data;
+  const digest = digestName ? hashOf(DIGESTS[digestName].make, data) : data;
   if (key.type === EVP_PKEY_EC) {
     const c = key.ec.curve;
     if (op.purpose === PURPOSE.SIGN) return ecdsaSign(c, key.ec.priv!, digest);
@@ -271,35 +249,39 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
     throw ERR.INCOMPATIBLE_PURPOSE;
   }
   if (key.type !== EVP_PKEY_RSA) throw ERR.UNSUPPORTED_ALGORITHM;
-  const r = key.rsa, k = rsaBytes(r), pad = num(ps, TAG.PADDING) ?? PAD.NONE, hash = () => DIGESTS[digestName ?? "sha1"]();
-  const mgfName = DIGEST_NAMES[num(ps, TAG.RSA_OAEP_MGF_DIGEST) ?? 2] ?? "sha1";
+  const r = key.rsa, k = rsaBytes(r), pad = num(ps, TAG.PADDING) ?? PAD.NONE, md = digestName ?? "sha1";
   if (op.purpose === PURPOSE.SIGN || op.purpose === PURPOSE.VERIFY) {
-    const em = pad === PAD.RSA_PSS && digestName ? pssEncode(digest, bitLength(r.n) - 1, hash, hash, digest.length)
-      : pad === PAD.RSA_PKCS1_1_5_SIGN ? pkcs1SignPad(k, digestName, digest) : pad === PAD.NONE ? concat([new Uint8Array(Math.max(0, k - digest.length)), digest]) : null;
-    if (op.purpose === PURPOSE.SIGN) {
-      if (!em) throw ERR.INCOMPATIBLE_PADDING_MODE;
-      const block = em.length < k ? concat([new Uint8Array(k - em.length), em]) : em;
-      return bigToBytes(rsaPrivate(r, bytesToBig(block)), k);
+    const p: RsaPad | null = pad === PAD.RSA_PSS && digestName ? { kind: "pss", md, mgf: md, salt: -1 } : pad === PAD.RSA_PKCS1_1_5_SIGN ? { kind: "pkcs1", md: digestName }
+      : pad === PAD.NONE ? { kind: "none" } : null;
+    if (!p) throw ERR.INCOMPATIBLE_PADDING_MODE;
+    // an unpadded input shorter than the key is zero-padded on the left
+    if (pad === PAD.NONE && digest.length > k) throw ERR.INVALID_INPUT_LENGTH;
+    const m = pad === PAD.NONE ? concat([new Uint8Array(k - digest.length), digest]) : digest;
+    if (op.purpose === PURPOSE.VERIFY) {
+      if (!signature || !rsaVerify(r, p, m, signature)) throw ERR.VERIFICATION_FAILED;
+      return null;
     }
-    const got = signature && signature.length === k ? bigToBytes(rsaPublic(r, bytesToBig(signature)), k) : null;
-    const ok = got && (pad === PAD.RSA_PSS ? pssVerify(digest, got, bitLength(r.n) - 1, hash, hash, -1) : !!em && sameBytes(em, got));
-    if (!ok) throw ERR.VERIFICATION_FAILED;
-    return null;
+    const em = emsaEncode(r, p, m);
+    if (!em) throw ERR.INCOMPATIBLE_PADDING_MODE;
+    return rsaApply(r, em, true) ?? invalid();
   }
+  const mgf = DIGEST_NAMES[num(ps, TAG.RSA_OAEP_MGF_DIGEST) ?? 2] ?? "sha1";
+  const p: RsaPad = pad === PAD.RSA_OAEP ? { kind: "oaep", md, mgf, label: new Uint8Array(0) } : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? { kind: "pkcs1", md: null } : { kind: "none" };
   if (op.purpose === PURPOSE.DECRYPT) {
     if (data.length !== k) throw ERR.INVALID_INPUT_LENGTH;
-    const em = bigToBytes(rsaPrivate(r, bytesToBig(data)), k);
-    const m = pad === PAD.RSA_OAEP ? oaepDecode(k, em, hash, DIGESTS[mgfName], new Uint8Array(0)) : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? pkcs1Unpad(em, 2) : em;
+    const m = emeDecode(r, p, rsaApply(r, data, true) ?? invalid());
     if (!m) throw ERR.UNKNOWN_ERROR;
     return m;
   }
   if (op.purpose === PURPOSE.ENCRYPT) {
-    const em = pad === PAD.RSA_OAEP ? oaepEncode(k, data, hash, DIGESTS[mgfName], new Uint8Array(0)) : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? pkcs1EncryptPad(k, data) : data;
+    const em = emeEncode(r, p, data);
     if (!em || em.length !== k) throw ERR.INVALID_INPUT_LENGTH;
-    return bigToBytes(rsaPublic(r, bytesToBig(em)), k);
+    return rsaApply(r, em, false) ?? invalid();
   }
   throw ERR.INCOMPATIBLE_PURPOSE;
 }
+/** an RSA input at or above the modulus */
+const invalid = (): never => { throw ERR.INVALID_ARGUMENT; };
 const out = (b: Uint8Array | null) => b && b.length ? new Int8Array(b) : null;
 class JKeystoreOperation extends JObj { op: Op | null = null; }
 const live = (self: JKeystoreOperation) => {
@@ -396,7 +378,7 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
 const teeLevel = once(() => newObj("webdroid/KeystoreSecurityLevel"));
 const deleteKey = driven(function* (d: unknown): Gen<void> {
   const e = yield* find(d);
-  save(entries().filter((x) => x !== e));
+  drop(e);
 });
 const listed = driven(function* (start: string | null): Gen<unknown[]> {
   const descriptors: JObj[] = [];
@@ -413,18 +395,12 @@ hostService("android.system.keystore2.IKeystoreService/default", "webdroid/Keyst
   }),
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
   "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": waits((d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
-    const k = descriptor(d), list = entries();
-    let e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
-    if (!e) {
-      if (k.domain !== DOMAIN.APP || k.alias === null || cert !== null || chain === null) return failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
-      e = { id: newId(), alias: k.alias, params: [], created: Date.now(), modified: Date.now() };
-      list.push(e);
-    }
-    e.cert = cert ? new Uint8Array(cert).toBase64() : undefined;
-    e.chain = chain ? new Uint8Array(chain).toBase64() : undefined;
-    e.modified = Date.now();
-    if (!e.material && !e.cert && !e.chain) list.splice(list.indexOf(e), 1);
-    save(list);
+    const k = descriptor(d), list = entries(), now = Date.now();
+    const e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
+    if (!e && (k.domain !== DOMAIN.APP || k.alias === null || cert !== null || chain === null)) return failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
+    const next: Entry = { ...e ?? { id: newId(), alias: k.alias!, params: [], created: now }, modified: now,
+      cert: cert ? new Uint8Array(cert).toBase64() : undefined, chain: chain ? new Uint8Array(chain).toBase64() : undefined };
+    if (next.material || next.cert || next.chain) put(next); else drop(next);
   }),
   "listEntries(IJ)[Landroid/system/keystore2/KeyDescriptor;": () => listed(null),
   "listEntriesBatched(IJLjava/lang/String;)[Landroid/system/keystore2/KeyDescriptor;": (_domain: number, _ns: bigint, start: string | null) => listed(start),

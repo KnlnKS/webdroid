@@ -15,8 +15,7 @@ import { writeWhole } from "./generated.ts";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 async function packArchive(bytes: Uint8Array, directory: string): Promise<PackedArchiveIndex> {
-  await verifyApkSignature(bytes);
-  const archive = await parsePackageArchive(bytes), entries = centralDir(bytes);
+  const archive = await parsePackageArchive(bytes, await verifyApkSignature(bytes)), entries = centralDir(bytes);
   await mkdir(directory, { recursive: true });
   const write = async (data: Uint8Array, extension: string): Promise<string> => {
     const file = hash(data) + extension;

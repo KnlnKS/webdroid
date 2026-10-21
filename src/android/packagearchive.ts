@@ -4,7 +4,7 @@ import { ZipEntryFile } from "../shell/install.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Arsc } from "./arsc.ts";
 import type { Apk } from "./res.ts";
-import { apkSigningBlock, signingSequence as sequence } from "./apksignature.ts";
+import { apkSigners } from "./apksignature.ts";
 
 export interface PackageArchive {
   root: XmlNode;
@@ -13,42 +13,19 @@ export interface PackageArchive {
   certificates: Uint8Array[];
 }
 
-// APK v2/v3 encodes nested length-prefixed sequences; certificates are DER, not the
-// signature over signedData. Android's Signature API exposes those certificate bytes.
-function first(bytes: Uint8Array): Uint8Array {
-  if (bytes.length < 4) throw new Error("truncated APK signing field");
-  const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
-  if (size > bytes.length - 4) throw new Error("invalid APK signing field length");
-  return bytes.subarray(4, 4 + size);
-}
+/** the certificates Android's Signature API exposes: each v3 (else v2) signer's first, else those of
+ *  the v1 signature blocks' PKCS #7 SignedData */
 export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uint8Array>): Promise<Uint8Array[]> {
-  const block = apkSigningBlock(bytes);
-  for (const id of [0x7109871a, 0xf05368c0, 0x1b93ad61]) {
-    const encoded = block?.blocks.get(id);
-    if (!encoded) continue;
-    const signers = first(encoded);
-    return sequence(signers).map((signer) => {
-      const signedData = first(signer), digests = first(signedData);
-      const certificate = sequence(first(signedData.subarray(digests.length + 4)))[0];
-      if (!certificate) throw new Error("APK signer has no certificate");
-      return certificate.slice();
-    });
-  }
-  const entries = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
-  if (!entries.length) return [];
-  const forge = (await import("../forge.ts")).default;
-  return entries.flatMap((name) => {
-    const block = zip[name];
-    let binary = "";
-    for (const byte of block) binary += String.fromCharCode(byte);
-    const message = forge.pkcs7.messageFromAsn1(forge.asn1.fromDer(binary));
-    if (!("certificates" in message) || !Array.isArray(message.certificates)) return [];
-    return message.certificates.map((cert) => Uint8Array.from(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes(), (c) => c.charCodeAt(0)));
-  });
+  const signers = apkSigners(bytes)?.schemes[0]?.signers;
+  if (signers) return signers.map((s) => s.certificates[0].slice());
+  const names = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
+  if (!names.length) return [];
+  const { signedDataCertificates } = await import("../crypto/x509.ts");
+  return names.flatMap((name) => signedDataCertificates(zip[name]).map((c) => c.slice()));
 }
-export async function parsePackageArchive(bytes: Uint8Array): Promise<PackageArchive> {
+export async function parsePackageArchive(bytes: Uint8Array, certificates?: Uint8Array[]): Promise<PackageArchive> {
   const zip = zipTree(bytes);
-  return packageArchive(zip, await apkCertificates(bytes, zip));
+  return packageArchive(zip, certificates ?? await apkCertificates(bytes, zip));
 }
 export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[], lazyEntries = new Map<string, FileSource>()): PackageArchive {
   if (!zip["AndroidManifest.xml"]) throw new Error("APK has no AndroidManifest.xml");

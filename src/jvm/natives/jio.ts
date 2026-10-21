@@ -1,6 +1,6 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { awaited, rt, type JObj, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
+import { awaited, rt, type JObj, driven, instanceField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
 import { concat } from "../abi.ts";
 import { vcall, after, newObj } from "./jentry.ts";
 import { E, ERRSTR } from "../../native/abi.ts";
@@ -14,7 +14,7 @@ import { fdFile } from "../../native/fs.ts";
 import { openFd as openFile, javaFdSource, javaIsSocketFd, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
   javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fd.ts";
 import { inoOf } from "../../native/kernel.ts";
-import { fdLease } from "../../android/fd-scope.ts";
+import { fdLease, guardJavaDescriptor, unguardJavaDescriptor } from "../../android/fd-scope.ts";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
@@ -50,23 +50,11 @@ export function* writeThrough(out: unknown, storage: Int8Array, bytes: Uint8Arra
 }
 
 const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
+const descriptor = instanceField<number>(FILE_DESCRIPTOR, "descriptor");
+const scopeClosed = (d: JObj, fd: number) => { if (descriptor.get(d) === fd) setFdInt(d, -1); };
 /** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */
-let descriptorProp: string | undefined;
-const descriptor = () => descriptorProp ??= declaredField(FILE_DESCRIPTOR, "descriptor");
-const scopedDescriptors = new WeakMap<JObj, ReturnType<typeof fdLease>>();
-export function fdInt(d: JObj | null): number {
-  if (!d) return -1;
-  const fd = (d as unknown as Record<string, number>)[descriptor()];
-  const prior = scopedDescriptors.get(d);
-  if (prior && fd >= 0) return prior.fd;
-  const lease = fdLease(fd);
-  if (lease?.owner) {
-    scopedDescriptors.set(d, lease);
-    lease.onClose(() => { if ((d as unknown as Record<string, number>)[descriptor()] === fd) setFdInt(d, -1); });
-  }
-  return fd;
-}
-export function setFdInt(d: JObj, fd: number): void { scopedDescriptors.delete(d); (d as unknown as Record<string, number>)[descriptor()] = fd; }
+export const fdInt = (d: JObj | null): number => d ? guardJavaDescriptor(d, descriptor.get(d), scopeClosed) : -1;
+export function setFdInt(d: JObj, fd: number): void { unguardJavaDescriptor(d); descriptor.set(d, fd); }
 /** jniCreateFileDescriptor: a `new FileDescriptor()` given `fd` through setInt$, which also
  *  records whether it appends */
 export function mkFd(fd: number): JObj | Promise<JObj> {
@@ -118,7 +106,7 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
     if (!st) lastError(-E.BADF, "GetLength failed");
     return BigInt(st!.size);
   }),
-  "position0()J": function () { return after(javaLseekFd(streamFd(this),0,1),result => BigInt(lastError(result,"Seek failed"))); },
+  "position0()J": waits(function (this: JObj) { return after(javaLseekFd(streamFd(this), 0, 1), (result) => BigInt(lastError(result, "Seek failed"))); }),
   "skip0(J)J": driven(function* (this: JObj, n: bigint): Gen {
     const fd = streamFd(this), cur = yield* awaited(javaLseekFd(fd, 0, 1));
     if (cur === -E.SPIPE) throw rt.mkThrowable("java/io/FileInputStream$UseManualSkipException", null);
@@ -212,7 +200,7 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
   "closeIntFD(I)V": waits((fd: number) => after(javaCloseFd(fd),n => {lastError(n,"Close failed");})),
 });
 const MAP_RO = 0, MAP_PV = 2;
-let channelFd: string | undefined;
+const channelFd = instanceField<JObj>("sun/nio/ch/FileChannelImpl", "fd");
 rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   "initIDs()J": () => 4096n,
   "position0(Ljava/io/FileDescriptor;J)J": waits((d: JObj, offset: bigint) =>
@@ -222,7 +210,7 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   // An immutable file maps read-only outside guest memory, paged in as read; any other mapping is
   // guest memory holding the file's bytes, a shared one kept coherent with the file (mappings.ts)
   "map0(IJJ)J": waits(function (this: JObj, prot: number, position: bigint, length: bigint) {
-    const fd = openFd((this as unknown as Record<string, JObj>)[channelFd ??= declaredField("sun/nio/ch/FileChannelImpl", "fd")]);
+    const fd = openFd(channelFd.get(this));
     const start = Number(position), n = Number(length);
     const remote = openFile(fd)?.remote;
     if (remote) {

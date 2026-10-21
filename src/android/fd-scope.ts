@@ -33,6 +33,18 @@ class FdLease {
   closed(): void { for (const callback of this.callbacks) callback(); this.callbacks.clear(); }
 }
 export const fdLease = (fd: number) => leases.get(fd);
+const guarded = new WeakMap<object, FdLease>();
+/** the descriptor a Java FileDescriptor holding `fd` may use: one a scope owns stays bound to that
+ *  scope's lease, so once the scope closes it the Java object reads -1 (`closed` resets its int)
+ *  rather than whatever later reuses the number */
+export function guardJavaDescriptor<D extends object>(d: D, fd: number, closed: (d: D, fd: number) => void): number {
+  const prior = guarded.get(d);
+  if (prior && fd >= 0) return prior.fd;
+  const lease = leases.get(fd);
+  if (lease?.owner) { guarded.set(d, lease); lease.onClose(() => closed(d, fd)); }
+  return fd;
+}
+export const unguardJavaDescriptor = (d: object) => { guarded.delete(d); };
 /** Kernel grants are independent of temporary Java decoding ownership. */
 export function detachFdScope(fd: number): void { const lease = leases.get(fd); if (lease) lease.owner = undefined; }
 fdEvents.closed = (fd) => { const lease = leases.get(fd); leases.delete(fd); lease?.closed(); };

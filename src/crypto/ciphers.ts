@@ -4,11 +4,10 @@
 import { be32, le32 } from "./digest.ts";
 
 export interface BlockCipher {
+  readonly block: number;
   /** transform one block in place at `off` */
   encrypt(b: Uint8Array, off: number): void;
   decrypt(b: Uint8Array, off: number): void;
-  /** CBC over whole blocks in place, chaining from and updating `iv`, where the cipher has a word path */
-  cbc?(data: Uint8Array, iv: Uint8Array, encrypting: boolean): void;
 }
 
 // ── AES
@@ -42,6 +41,7 @@ function putWords(b: Uint8Array, off: number, w: Int32Array) {
 }
 
 class Aes implements BlockCipher {
+  readonly block = 16;
   private ek: Int32Array; private dk: Int32Array; private rounds: number;
   /** the last block's output, as four big-endian words */
   readonly out = new Int32Array(4);
@@ -149,6 +149,7 @@ const S = [
 const bits = (b: Uint8Array, off: number, n: number) => Uint8Array.from({ length: n }, (_, i) => (b[off + (i >> 3)] >> (7 - (i & 7))) & 1);
 const perm = (src: Uint8Array, table: number[]) => Uint8Array.from(table, (i) => src[i - 1]);
 class Des implements BlockCipher {
+  readonly block = 8;
   private keys: Uint8Array[] = [];
   constructor(key: Uint8Array, off = 0) {
     const k = perm(bits(key, off, 64), PC1);
@@ -185,9 +186,43 @@ export function des(key: Uint8Array): BlockCipher {
   if (key.length === 8) return new Des(key);
   const k1 = new Des(key, 0), k2 = new Des(key, 8), k3 = key.length === 24 ? new Des(key, 16) : k1;
   return {
+    block: 8,
     encrypt(b, off) { k1.encrypt(b, off); k2.decrypt(b, off); k3.encrypt(b, off); },
     decrypt(b, off) { k3.decrypt(b, off); k2.encrypt(b, off); k1.decrypt(b, off); },
   };
+}
+
+/** ECB over whole blocks in place */
+export function ecb(bc: BlockCipher, data: Uint8Array, encrypting: boolean) {
+  for (let off = 0; off < data.length; off += bc.block) encrypting ? bc.encrypt(data, off) : bc.decrypt(data, off);
+}
+/** CBC over whole blocks in place, chaining from and updating `iv` */
+export function cbc(bc: BlockCipher, data: Uint8Array, iv: Uint8Array, encrypting: boolean) {
+  if (bc instanceof Aes) return bc.cbc(data, iv, encrypting);
+  const n = bc.block;
+  for (let off = 0; off < data.length; off += n) {
+    if (encrypting) {
+      for (let i = 0; i < n; i++) data[off + i] ^= iv[i];
+      bc.encrypt(data, off);
+      iv.set(data.subarray(off, off + n));
+    } else {
+      const next = data.slice(off, off + n);
+      bc.decrypt(data, off);
+      for (let i = 0; i < n; i++) data[off + i] ^= iv[i];
+      iv.set(next);
+    }
+  }
+}
+/** `data` with PKCS#7 padding to whole `n`-byte blocks */
+export function pkcs7Pad(data: Uint8Array, n: number): Uint8Array {
+  const out = new Uint8Array(data.length + n - data.length % n);
+  out.set(data);
+  return out.fill(out.length - data.length, data.length);
+}
+/** `data` without its PKCS#7 padding, or null where that is malformed */
+export function pkcs7Unpad(data: Uint8Array, n: number): Uint8Array | null {
+  const pad = data[data.length - 1];
+  return pad >= 1 && pad <= n && pad <= data.length && data.subarray(data.length - pad).every((v) => v === pad) ? data.subarray(0, data.length - pad) : null;
 }
 
 /** RC4's keystream XORed over `data` in place */

@@ -1,8 +1,5 @@
 {
  "javax/microedition/khronos/egl/EGL11": [
   "missing eglSwapInterval(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z"
- ],
- "javax/net/ssl/SSLSocket": [
-  "missing setHandshakeTimeout(I)V"
  ]
 }
