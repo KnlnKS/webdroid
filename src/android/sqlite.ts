@@ -14,8 +14,6 @@ import { handle, deref, release } from "./handles.ts";
 import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow.ts";
 import { processFailure, processError, type ProcessFailure } from "../shell/process-port.ts";
-import type { PackageState } from "../shell/packagedata.ts";
-import { storedKeys, storedText, storeText } from "../shell/device-storage.ts";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 /** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
@@ -128,7 +126,6 @@ async function save(file: SharedDatabase) {
     vfs.write(file.path, bytes);
     file.mtime = vfs.mtime(file.path);
     await vfs.flush();
-    storeText("wd:db:" + file.path, null);
   } catch (e) { console.warn("[sqlite] persist failed", e); }
 }
 /** an Emscripten file no longer at its path, once its last connection closes */
@@ -136,17 +133,6 @@ function retire(file: SharedDatabase) {
   if (file.connections.size) return;
   if (file.saving) clearTimeout(file.saving);
   C.FS.unlink(file.name);
-}
-/** the snapshots an older build kept for an app's databases, which go with its data */
-export const legacySnapshotData: PackageState = {
-  clear(pkg) {
-    for (const root of ["/data/data/", "/data/user/0/", "/data/user_de/0/"]) for (const key of storedKeys("wd:db:" + root + pkg + "/")) storeText(key, null);
-  },
-};
-/** a snapshot an older build kept in localStorage */
-function legacySnapshot(path: string): Uint8Array | null {
-  const raw = storedText("wd:db:" + path);
-  try { return raw ? Uint8Array.fromBase64(raw) : null; } catch { return null; }
 }
 
 // ── collations: register_android_functions' UNICODE and register_localized_collators' LOCALIZED (ICU, primary strength)
@@ -168,7 +154,7 @@ async function openConnection(path: string, readOnly: boolean, create: boolean, 
   await loadSql();
   let file: SharedDatabase | undefined;
   if (path !== ":memory:" && !isCurrent(file = sqliteStore.files.get(path))) {
-    const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null) ?? legacySnapshot(path);
+    const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
     const cantOpen = !data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"));
     if (cantOpen) throw raise(SQLITE_CANTOPEN, "unable to open database file", "Could not open database");
     if (!isCurrent(file = sqliteStore.files.get(path))) {
