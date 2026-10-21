@@ -16,7 +16,7 @@ import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./sh
 import { fontNatives } from "./fonts.ts";
 import { paintAdvance } from "./minikin.ts";
 import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
-import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
+import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE, NativeBitmapShader } from "./graphics.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
 import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, saveLayer, unsupported } from "./canvas.ts";
@@ -25,13 +25,13 @@ export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): vo
   const plan = nc.planDraw(p);
   if (plan.raster && tryBitmapPath(nc, p, plan.raster, path)) return;
   if (!path.inverseFill) {
-    nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path, plan);
+    nc.drawShape(p, (c, clip) => clip ? c.clip(path.path(), path.fillRule) : c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path, plan);
     return;
   }
   const bounds = canvasLocalBounds(nc.ctx);
   if (!bounds) return;
   return after(inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]), ([inverse, rule]) => {
-    nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
+    nc.drawShape(p, (c, clip) => clip ? c.clip(inverse, rule) : c.fill(inverse, rule), (c) => c.stroke(path.path()));
   });
 }
 function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
@@ -39,7 +39,8 @@ function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, 
   if ((!width || !height) && p.style !== 1) return;
   const plan = nc.planDraw(p);
   if (plan.raster && tryBitmapRect(nc, p, plan.raster, left, top, left + width, top + height)) return;
-  nc.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height),
+  nc.drawShape(p, (c, clip) => { if (!clip) c.fillRect(left, top, width, height); else { c.beginPath(); c.rect(left, top, width, height); c.clip(); } },
+    (c) => c.strokeRect(left, top, width, height),
     () => shapePath((g) => g.addRect(left, top, left + width, top + height, 0)), plan);
 }
 /** a shape as SkCanvas makes it a path, for a path effect */
@@ -76,7 +77,7 @@ function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, s
   path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
   // SkPathPriv::CreateDrawArcPath: a whole oval, or the arc, through the centre when it is used
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => {
+  nc.drawShape(p, (c, clip) => clip ? c.clip(path) : c.fill(path), (c) => c.stroke(path), () => shapePath((g) => {
     if (!useCenter && Math.abs(sweep) >= 360) return g.addOval(left, top, right, bottom, sweep < 0 ? 1 : 0);
     if (useCenter) g.moveTo(cx, cy);
     g.arcTo(left, top, right, bottom, start, sweep, !useCenter);
@@ -99,7 +100,7 @@ export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number,
   if (plan.raster && tryBitmapRoundRect(nc, p, plan.raster, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
   path.roundRect(left, top, width, height, radii(rx, ry));
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)), plan);
+  nc.drawShape(p, (c, clip) => clip ? c.clip(path) : c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)), plan);
 }
 /** the ring between two round rects, each with one radius pair or one per corner (as a 2D
  *  context's roundRect takes them) */
@@ -108,7 +109,7 @@ function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: numbe
   const ring = new Path2D();
   ring.roundRect(ol, ot, or - ol, ob - ot, outer);
   ring.roundRect(il, it, ir - il, ib - it, inner);
-  nc.drawShape(p, (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
+  nc.drawShape(p, (x, clip) => clip ? x.clip(ring, "evenodd") : x.fill(ring, "evenodd"), (x) => x.stroke(ring));
 }
 /** android_graphics_Canvas: an offset/count pair outside the array draws nothing and throws */
 function checkPts(pts: Float32Array, off: number, n: number) {
@@ -127,7 +128,7 @@ function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n:
 }
 const NOOP = () => {};
 /** SkDraw::drawPoints: lines stroked (style 1) and points filled (0), whatever the paint's style */
-function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D) => void, plan?: DrawPlan) {
+function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D, clip?: boolean) => void, plan?: DrawPlan) {
   const was = p.style;
   p.style = style;
   try { nc.drawShape(p, style ? NOOP : draw, style ? draw : NOOP, undefined, plan); } finally { p.style = was; }
@@ -158,16 +159,16 @@ function pointPath(ctx: Ctx2D, x: number, y: number, p: NativePaint) {
 }
 function drawPoints(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
   checkPts(pts, off, n);
-  drawAs(nc, p, 0, (c) => {
+  drawAs(nc, p, 0, (c, clip) => {
     c.beginPath();
     for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(c, pts[i], pts[i + 1], p);
-    c.fill();
+    if (clip) c.clip(); else c.fill();
   });
 }
 function drawRegion(nc: NativeCanvas, region: NativeRegion, p: NativePaint) {
   const path = new Path2D();
   region.forEachRect((l, t, r, b) => path.rect(l, t, r - l, b - t));
-  nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+  nc.drawShape(p, (c, clip) => clip ? c.clip(path) : c.fill(path), (c) => c.stroke(path));
 }
 /** SkiaCanvas::punchHole: the round rect cleared to `alpha` of transparency (DST_OUT with black) */
 function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, alpha: number) {
@@ -375,7 +376,7 @@ const DRAWS: Record<string, unknown> = {
   "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawLines(nc, pts, off, n, nc.paint(p)); },
   "nDrawPoint(JFFJ)V": (h: bigint, x: number, y: number, p: bigint) => {
     const nc = drawingCanvas(h), paint = nc.paint(p);
-    drawAs(nc, paint, 0, (c) => { c.beginPath(); pointPath(c, x, y, paint); c.fill(); });
+    drawAs(nc, paint, 0, (c, clip) => { c.beginPath(); pointPath(c, x, y, paint); if (clip) c.clip(); else c.fill(); });
   },
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, n: number, p: bigint) => { const nc = drawingCanvas(h); drawPoints(nc, pts, off, n, nc.paint(p)); },
   "nDrawPath(JJJ)V": (h: bigint, path: bigint, p: bigint) => { const nc = drawingCanvas(h); return drawPath(nc, pathAt(path), nc.paint(p)); },
@@ -429,7 +430,12 @@ const DRAWS: Record<string, unknown> = {
   // glyph runs from a font's outlines, which HarfBuzz reads (shaping.ts)
   "nDrawGlyphs(J[I[FIIIJJ)V": (h: bigint, ids: Int32Array, positions: Float32Array, idOffset: number, posOffset: number, count: number, font: bigint, p: bigint) => {
     const nc = drawingCanvas(h), paint = nc.paint(p);
-    return drawGlyphs((fill, stroke) => nc.drawShape(paint, fill, stroke), ids, idOffset, positions, posOffset, count, font, paint);
+    return drawGlyphs((fill, stroke) => {
+      // a run's fill cannot clip to its outlines, so a shader that fills under a clip draws through their coverage
+      const plan = nc.planDraw(paint), shader = paint.shader;
+      plan.viaMask ||= shader instanceof NativeBitmapShader || !!shader?.local;
+      nc.drawShape(paint, fill, stroke, undefined, plan);
+    }, ids, idOffset, positions, posOffset, count, font, paint);
   },
   // meshes, vertices with per-vertex colours and bitmap meshes need triangle rasterization a 2D
   // context does not have
