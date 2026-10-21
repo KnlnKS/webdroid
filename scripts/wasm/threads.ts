@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { world } from "./lib.ts";
+import { cli } from "../args.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
@@ -91,7 +92,7 @@ const show = async (f: () => unknown) => { try { return String(await deadline(Pr
 const expect = (what: string, got: unknown, want: unknown) => suite.check(what, String(got), String(want));
 
 // ---------- the Java cases against the JDK
-const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
+const only = cli("pnpm wasm threads [case,case,... | substrate]", {}).positionals[0]?.split(","), substrate = !only || only.includes("substrate");
 if (substrate || only?.includes("nativeCallback")) {
   expect("native callback after a wait reenters its caller's monitor", await show(() => callbackEntry.scall("Th", "callbackOwner", "(I)I", 41)), "42");
   expect("settled native callback releases its strand", w.sched.strands.filter(Boolean).length, 1);

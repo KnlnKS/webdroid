@@ -9,9 +9,10 @@ import { world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { ROOT, platformJars } from "./paths.ts";
 import { filesIn } from "../java.ts";
+import { cli } from "../args.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 
-const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);
+const { positionals: [dexDir, runner, cls, filter = ""] } = cli("conformone.ts <dex directory> <runner class> <class> [filter]", {}, { min: 3 });
 const dexFiles = filesIn(dexDir, /\.dex$/).sort();
 await mountPlatform(ROOT);
 const jars = platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "core-icu4j", "conscrypt");

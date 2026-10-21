@@ -2,8 +2,9 @@
 // drives it through the entry seam. Run: pnpm fwtest [prefix ...]
 import { DEFAULT_CUTS } from "../fwtest/cuts.ts";
 import { BYTECODE, isBytecode } from "../../src/jvm/provenance.ts";
+import { cli } from "../args.ts";
 
-const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const { positionals: CUTS } = cli("pnpm fwtest [prefix ...]", {});
 BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 
 // imported after the policy is set: rt.register consults it, so the specs never land

@@ -7,8 +7,9 @@ import { mountPlatform, startProcess } from "./harness.ts";
 import { G1_DIR, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { shellIn } from "../java.ts";
+import { cli } from "../args.ts";
 
-const [workload, filter] = process.argv.slice(2);
+const { positionals: [workload, filter] } = cli("pnpm wasm watdump <workload> <method-name-filter>", {}, { min: 2 });
 const dex = join(G1_DIR, "classes.dex");
 await mountPlatform(ROOT);
 const w = world(program([dex, ...PLATFORM_PATHS]));

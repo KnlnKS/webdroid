@@ -1,9 +1,10 @@
 // Disassemble a method: pnpm dis <apk> <class> [methodName]
 import { loadDexes } from "./dexes.ts";
+import { cli } from "./args.ts";
 import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes.ts";
 import { descToName } from "../src/jvm/abi.ts";
 
-const [apk, clsName, methodName] = process.argv.slice(2);
+const { positionals: [apk, clsName, methodName] } = cli("pnpm dis <apk> <class> [methodName]", {}, { min: 2 });
 for (const dex of loadDexes(apk)) {
   const dname = dex.name;
   for (let i = 0; i < dex.classDefCount; i++) {

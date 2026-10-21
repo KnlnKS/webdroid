@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { BASE_URL, CONTEXT_OPTS, launchOptions, openWebdroid, readProcesses, waitForApp, webdroidUrl } from "../page.ts";
 import { AOT_ROOT } from "../aot-key.ts";
+import { cli } from "../args.ts";
 import type { AotProfile } from "../../src/shell/aot-profile.ts";
 
-const classes = process.argv.includes("--classes");
-const apks = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const { values: { classes }, positionals: apks } = cli("WEBDROID_URL=... pnpm wasm aot-profile [--classes] [apk ...]", { classes: { type: "boolean" } });
 const SETTLE_MS = 10_000;
 /** the classes in the order of how many launches used them; Maps keep the order of first use among equals */
 const byUse = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([name]) => name);

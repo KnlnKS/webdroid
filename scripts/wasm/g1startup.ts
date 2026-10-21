@@ -8,11 +8,12 @@ import { program, world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { G1_DIR, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
+import { cli } from "../args.ts";
 
 const dir = process.env.WEBDROID_AOT, dex = join(G1_DIR, "classes.dex"), files = new Set<string>();
 if (!dir) throw new Error("set WEBDROID_AOT to a build made with --app");
 await mountPlatform(ROOT);
-for (const workload of process.argv.slice(2)) {
+for (const workload of cli("WEBDROID_AOT=DIR pnpm wasm g1startup <workload ...>", {}, { min: 1 }).positionals) {
   const w = world(program([dex, ...PLATFORM_PATHS]));
   await startProcess(w);
   const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));

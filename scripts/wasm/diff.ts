@@ -8,6 +8,7 @@ import { descToName } from "../../src/jvm/abi.ts";
 import { insnLen } from "../../src/jvm/opcodes.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
+import { cli } from "../args.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
@@ -45,7 +46,8 @@ const small: Record<string, number[]> = {
   copy: [0, 1, 3, 8], fieldsInt: [0, 1, 5, 100], fieldsLong: [0, 1, 5], fieldsFloat: [0, 1, 5], fieldsFloatShort: [0, 5], fieldsFloatLong: [0], fieldsDouble: [0, 1, 5], fieldsOther: [0, 1, 5, 100], errWiden: [0], errType: [0], errNull: [0], errReceiver: [0], errRefType: [0], errNullBox: [0], errNarrow: [0], errFinal: [0], forName: [0], direct: [0, 1, 5, 40], directBulk: [0, 1, 5, 40], thread: [0, 3], unicode: [0, 1, 4, 30], refs: [0, 3], cat: [0, 1, 12, 120], mapKeys: [0, 1, 5, 40, 1000], enc: [0, 1, 5, 20], statics: [0, 5], dispatch: [0, 1, 2, 9], map: [0, 1, 5, 40], err: [-1, 0, 2, 3, 4], err2: [-1, 0, 4, 5], err3: [-1, 0, 2, 3, 5],
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
-const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
+const { positionals: [filter] } = cli("pnpm wasm diff [method-name-filter,...]", {});
+const cases = genCases(methods.filter((m) => !filter || filter.split(",").some((f) => m.name.includes(f))), small);
 const jdk = onJdk(out, cases.map(caseLine));
 const suite = checker("diff"), { blocked } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
