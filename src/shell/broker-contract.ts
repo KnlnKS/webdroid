@@ -3,7 +3,7 @@
 // helpers both sides share. A process Worker imports this, never processes.ts, so it does not
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
-import type { PermissionCalls } from "../android/permissions.ts";
+import type { PermissionAccess } from "../android/permissions.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
 import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";
@@ -48,7 +48,7 @@ export type BrokerCalls = CookieCalls & {
   pending: Calls<PendingAccess>;
   files: FilePathCalls;
   descriptors: DescriptorCalls;
-  permissions: PermissionCalls;
+  permissions: Calls<PermissionAccess>;
   settings: Calls<SettingsAccess>;
   activity: ActivityCalls;
   ui: HostUi;
@@ -81,7 +81,7 @@ export const brokerMethods = {
   pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "operation", "kind", "flags", "creator"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),
-  permissions: methodsOf<PermissionCalls>()(["permissionCheck", "permissionGrant"]),
+  permissions: methodsOf<PermissionAccess>()(["permissionCheck", "permissionGrant"]),
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
   ui: hostUiMethods,

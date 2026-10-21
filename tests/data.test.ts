@@ -19,9 +19,9 @@ import { decodeIntent } from "../src/android/intentipc.ts";
 import { useFocusedUid } from "../src/android/clipboard.ts";
 import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
 import { notificationTransport } from "../src/android/notification.ts";
-import type { BrokerCalls } from "../src/shell/broker-contract.ts";
+import type { BrokerCalls, Calls } from "../src/shell/broker-contract.ts";
 import { cookieManager, cookieTransport } from "../src/android/cookies.ts";
-import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions.ts";
+import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionAccess } from "../src/android/permissions.ts";
 import { AccountStore, decodeAccount } from "../src/shell/accounts.ts";
 import { useAccountStore } from "../src/android/accounts.ts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
@@ -56,10 +56,10 @@ test("permission checks deny pending grants and Java calls await the canonical o
   const { port1, port2 } = new MessageChannel();
   let entered!: () => void, release!: () => void;
   const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
-  const stop = serveCalls<PermissionCalls>(port1, { ...owner,
+  const stop = serveCalls<Calls<PermissionAccess>>(port1, { ...owner,
     permissionGrant: async (target, names) => { entered(); await blocked; return owner.permissionGrant(target, names); },
-  } as PermissionCalls);
-  const client = callProxy<PermissionCalls>(port2, ["permissionCheck", "permissionGrant"]);
+  } as Calls<PermissionAccess>);
+  const client = callProxy<Calls<PermissionAccess>>(port2, ["permissionCheck", "permissionGrant"]);
   usePermissionAccess(client.endpoint);
   try {
     const service = rt.make("webdroid/PermissionManagerService"), location = rt.make("webdroid/LocationManagerService");

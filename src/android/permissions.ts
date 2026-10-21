@@ -50,12 +50,9 @@ export class PermissionStore {
     savedGrants.set(pkg, [...grants]);
   }
 }
-export interface PermissionAccess {
+export type PermissionAccess = {
   permissionCheck(pkg: string, names: string[]): boolean[] | Promise<boolean[]>;
   permissionGrant(pkg: string, names: string[]): void | Promise<void>;
-}
-export type PermissionCalls = {
-  [K in keyof PermissionAccess]: (...args: Parameters<PermissionAccess[K]>) => Promise<Awaited<ReturnType<PermissionAccess[K]>>>;
 };
 export function canonicalPermissionCommands(store: PermissionStore, authorize: (pkg: string) => void): PermissionAccess {
   return {
@@ -66,7 +63,7 @@ export function canonicalPermissionCommands(store: PermissionStore, authorize: (
 // only the canonical commands read the store: a process without it asks the broker's
 let permissionAccess = canonicalPermissionCommands(new PermissionStore(), () => {});
 export function usePermissionStore(store: PermissionStore) { permissionAccess = canonicalPermissionCommands(store, () => {}); }
-export function usePermissionAccess(access: PermissionCalls): void { permissionAccess = access; }
+export function usePermissionAccess(access: PermissionAccess): void { permissionAccess = access; }
 /** signature|appop|pre23 permissions, the special access a user grants in Settings */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
