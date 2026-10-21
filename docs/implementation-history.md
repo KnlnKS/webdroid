@@ -871,6 +871,13 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 ### Second code-quality pass (2026-10-20)
 
+- EGL's single core refuses attributes outside EGL 1.5 table 3.4 with `EGL_BAD_ATTRIBUTE`, as the spec says. AndEngine's
+  chooser (flappybird) asks for `EGL_SAMPLES` first and, finding no config, retries with `EGL_COVERAGE_BUFFERS_NV`, and
+  any false return kills its GLThread. Devices answer the first query, so the table has multisampled configs (4 samples,
+  sorted after the single-sample ones) whose contexts get an antialiased WebGL2 drawing buffer.
+- A retrying native (`retries`) is called again through one `run` closure built inside the wrapper's try block: the
+  call text refers to the block-scoped host values of object arguments, which a closure outside it could not see.
+
 - **Scope**. A second review of `knlnks/bytecode-wasm` against `main` was implemented in 15 worktree lanes merged one at a time (binder, webview, resources, linker, shell, text-input, compiler, tooling, device, libcore, graphics, native, gl-media, VM runtime). The findings are recorded under their topics with this date. Not done: one broker accessor in place of the per-module transport slots, a registration record that makes an intrinsic shadowing a native impossible, the main thread's context loader as one realm-start step, reflection names passed as strings, one intrinsic registry, and the compiler's `vtOf`/`idOf`/`natives` pass-throughs (about 45 call sites for three one-line methods).
 - **Tooling**. Tools boot Java headlessly through `scripts/wasm/lib.ts` (`platform()`/`world()` attach natives and host classes by default) and `scripts/tier.ts`. `scripts/page.ts` is the one way to open webdroid, and "up" means the foreground app process drew its first frame within a deadline. gen-framework runs `--only <recorders>` from one RECORDERS table. jbench compares with ART's recorded answers (`Bench.expected.json`), and BLOCKED fails. lat counts realms whose diagnostics did not arrive. `pnpm aot` writes empty `apps.json`/`prefix.json`, so bundled app builds need `aot-profile`.
 

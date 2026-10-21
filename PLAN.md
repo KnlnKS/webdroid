@@ -9,7 +9,7 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 - **Java runs only on the Wasm tier.** The DEX-to-JavaScript tier and the cold interpreter were deleted on
   2026-10-13; there is no other tier to compare against or fall back to. `knlnks/bytecode-wasm` carries the whole
-  backend and is about 2,090 commits ahead of `main`.
+  backend and is about 2,990 commits ahead of `main`.
 - **The platform runs from AOSP bytecode** of one API-35 reference build (bytecode-first stages A–F complete):
   libcore, resources, graphics, text, the view stack, windows, `android.content` and ActivityThread, over TS
   system services and natives. 64-bit processes run the reference build's bionic; text measures on HarfBuzz
@@ -52,12 +52,11 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 ## Gate state
 
-After the code-quality pass (2026-10-20, `06f79ff3a`; history, "Code-quality pass (2026-10-20)"): typecheck passes, along
-with 1,180 unit tests, all 16 `wasm all` suites, `fwtest` (31 of 31), desccheck (two baseline mismatches), `build:prod`
-and the Worker dry run. On an unprofiled build (`pnpm aot`) the `--jobs 1` quick gate reaches 7 of 7 flows in 160 s with
-no missing APIs, errors or required natives. Matched cold and warm `lat` passes against `c1354b8f7`, both sides built
-from the same `hot.json`, put every Calculator M, FitNotes and Komikku tap within 150 ms with first-frame medians
-within 3% of the base; Mihon's launch was unavailable on both sides.
+After the second code-quality pass (2026-10-20; history, "Second code-quality pass (2026-10-20)"): typecheck passes,
+along with 1,187 unit tests, all `wasm all` suites, `fwtest` (31 of 31), desccheck (no mismatches), `build:prod` and the
+Worker dry run. After `pnpm aot` the `--jobs 1` quick gate reaches 7 of 7 flows in 165 s. `lat` puts every FitNotes
+and Komikku tap within 150 ms; Mihon's launch is unavailable because its live update check shows "New version
+available!" over the onboarding screen the scenario expects.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
