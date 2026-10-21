@@ -112,7 +112,7 @@ describe("conscrypt-natives", () => {
     }
     for (const name of ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"])
       for (const n of [0, 55, 56, 64, 111, 112, 129, 5000]) {
-        const data = rnd(n), h = DIGESTS[name]();
+        const data = rnd(n), h = DIGESTS[name].make();
         h.update(data.subarray(0, n >> 1)); h.update(data.subarray(n >> 1));
         same(h.digest(), nc.createHash(name).update(data).digest());
       }

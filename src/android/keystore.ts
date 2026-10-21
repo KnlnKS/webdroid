@@ -12,12 +12,11 @@ import { unbox } from "../jvm/natives/jbox.ts";
 import { hostService } from "./binder.ts";
 import { PROCESS_UID } from "./os.ts";
 import { device } from "../shell/config.ts";
-import { DIGESTS, Hmac } from "../crypto/digest.ts";
+import { DIGESTS, Hmac, hashOf } from "../crypto/digest.ts";
 import { aes, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, AesGcm } from "../crypto/ciphers.ts";
 import {
-  CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
-  oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength,
-  EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
+  CURVES, mul, generateEc, generateRsa, ecdsaSign, ecdsaVerify, rsaBytes, rsaApply, rsaVerify, emsaEncode, emeEncode, emeDecode,
+  parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC, type PKey, type RsaPad,
 } from "../crypto/pkey.ts";
 import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../crypto/der.ts";
 import type { PackageState } from "../shell/packagedata.ts";
@@ -148,10 +147,9 @@ function certificate(key: PKey, req: Param[], purposes: number[]): Uint8Array {
     seq(utcOrGeneralized(notBefore), utcOrGeneralized(notAfter)), name, marshalPublicKey(key), tlv(0xa3, seq(keyUsage)));
   let signature: Uint8Array = new Uint8Array(0);
   if (canSign) {
-    const h = DIGESTS.sha256(); h.update(tbs);
-    const digest = h.digest();
+    const digest = hashOf(DIGESTS.sha256.make, tbs);
     if (key.type === EVP_PKEY_EC) signature = ecdsaSign(key.ec.curve, key.ec.priv!, digest);
-    else if (key.type === EVP_PKEY_RSA) signature = bigToBytes(rsaPrivate(key.rsa, bytesToBig(pkcs1SignPad(rsaBytes(key.rsa), "sha256", digest)!)), rsaBytes(key.rsa));
+    else if (key.type === EVP_PKEY_RSA) signature = rsaApply(key.rsa, emsaEncode(key.rsa, { kind: "pkcs1", md: "sha256" }, digest)!, true)!;
   }
   return seq(tbs, sigAlg, bits(signature));
 }
@@ -187,7 +185,7 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
     const byCurve = num(ps, TAG.EC_CURVE), name = byCurve !== undefined ? CURVE_BY_EC[byCurve] : size !== undefined ? CURVE_BY_SIZE[size] : undefined;
     const curve = CURVES.find((c) => c.name === name);
     if (!curve) throw ERR.UNSUPPORTED_EC_CURVE;
-    const d = randomScalar(curve.n), key: PKey = { type: EVP_PKEY_EC, ec: { curve, pub: mul(curve, d, G(curve)) as [bigint, bigint], priv: d } };
+    const key: PKey = { type: EVP_PKEY_EC, ec: generateEc(curve) };
     const extra: Param[] = [];
     if (size === undefined) extra.push({ tag: TAG.KEY_SIZE, kind: KIND.integer, v: bitLength(curve.p) });
     if (byCurve === undefined) extra.push({ tag: TAG.EC_CURVE, kind: KIND.ecCurve, v: CURVE_BY_EC.indexOf(curve.name) });
@@ -196,8 +194,7 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
   if (alg === ALG.RSA) {
     const bitsN = size ?? 2048, e = BigInt((one(ps, TAG.RSA_PUBLIC_EXPONENT) as bigint | undefined) ?? 65537n);
     if (bitsN < 512 || bitsN > 8192 || bitsN % 8) throw ERR.UNSUPPORTED_KEY_SIZE;
-    const pair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: bitsN, publicExponent: new Uint8Array(bigToBytes(e)), hash: "SHA-256" }, true, ["sign"]) as CryptoKeyPair;
-    const key = parsePrivateKey(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)));
+    const key: PKey = { type: EVP_PKEY_RSA, rsa: await generateRsa(bitsN, e) };
     return { material: marshalPrivateKey(key)!, extra: [], key };
   }
   throw ERR.UNSUPPORTED_ALGORITHM;
@@ -241,7 +238,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
   if (alg === ALG.AES) return blockCipher(op, data);
   const digestName = DIGEST_NAMES[num(ps, TAG.DIGEST) ?? 0] ?? null;
   if (alg === ALG.HMAC) {
-    const mac = new Hmac(DIGESTS[digestName ?? "sha256"], Uint8Array.fromBase64(op.e.material!));
+    const mac = new Hmac(DIGESTS[digestName ?? "sha256"].make, Uint8Array.fromBase64(op.e.material!));
     mac.update(data);
     const full = mac.digest();
     if (op.purpose === PURPOSE.SIGN) return full.subarray(0, (num(ps, TAG.MAC_LENGTH) ?? full.length * 8) / 8);
@@ -249,7 +246,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
     return null;
   }
   const key = keyOf(op.e);
-  const digest = digestName ? (() => { const h = DIGESTS[digestName](); h.update(data); return h.digest(); })() : data;
+  const digest = digestName ? hashOf(DIGESTS[digestName].make, data) : data;
   if (key.type === EVP_PKEY_EC) {
     const c = key.ec.curve;
     if (op.purpose === PURPOSE.SIGN) return ecdsaSign(c, key.ec.priv!, digest);
@@ -262,35 +259,39 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
     throw ERR.INCOMPATIBLE_PURPOSE;
   }
   if (key.type !== EVP_PKEY_RSA) throw ERR.UNSUPPORTED_ALGORITHM;
-  const r = key.rsa, k = rsaBytes(r), pad = num(ps, TAG.PADDING) ?? PAD.NONE, hash = () => DIGESTS[digestName ?? "sha1"]();
-  const mgfName = DIGEST_NAMES[num(ps, TAG.RSA_OAEP_MGF_DIGEST) ?? 2] ?? "sha1";
+  const r = key.rsa, k = rsaBytes(r), pad = num(ps, TAG.PADDING) ?? PAD.NONE, md = digestName ?? "sha1";
   if (op.purpose === PURPOSE.SIGN || op.purpose === PURPOSE.VERIFY) {
-    const em = pad === PAD.RSA_PSS && digestName ? pssEncode(digest, bitLength(r.n) - 1, hash, hash, digest.length)
-      : pad === PAD.RSA_PKCS1_1_5_SIGN ? pkcs1SignPad(k, digestName, digest) : pad === PAD.NONE ? concat([new Uint8Array(Math.max(0, k - digest.length)), digest]) : null;
-    if (op.purpose === PURPOSE.SIGN) {
-      if (!em) throw ERR.INCOMPATIBLE_PADDING_MODE;
-      const block = em.length < k ? concat([new Uint8Array(k - em.length), em]) : em;
-      return bigToBytes(rsaPrivate(r, bytesToBig(block)), k);
+    const p: RsaPad | null = pad === PAD.RSA_PSS && digestName ? { kind: "pss", md, mgf: md, salt: -1 } : pad === PAD.RSA_PKCS1_1_5_SIGN ? { kind: "pkcs1", md: digestName }
+      : pad === PAD.NONE ? { kind: "none" } : null;
+    if (!p) throw ERR.INCOMPATIBLE_PADDING_MODE;
+    // an unpadded input shorter than the key is zero-padded on the left
+    if (pad === PAD.NONE && digest.length > k) throw ERR.INVALID_INPUT_LENGTH;
+    const m = pad === PAD.NONE ? concat([new Uint8Array(k - digest.length), digest]) : digest;
+    if (op.purpose === PURPOSE.VERIFY) {
+      if (!signature || !rsaVerify(r, p, m, signature)) throw ERR.VERIFICATION_FAILED;
+      return null;
     }
-    const got = signature && signature.length === k ? bigToBytes(rsaPublic(r, bytesToBig(signature)), k) : null;
-    const ok = got && (pad === PAD.RSA_PSS ? pssVerify(digest, got, bitLength(r.n) - 1, hash, hash, -1) : !!em && sameBytes(em, got));
-    if (!ok) throw ERR.VERIFICATION_FAILED;
-    return null;
+    const em = emsaEncode(r, p, m);
+    if (!em) throw ERR.INCOMPATIBLE_PADDING_MODE;
+    return rsaApply(r, em, true) ?? invalid();
   }
+  const mgf = DIGEST_NAMES[num(ps, TAG.RSA_OAEP_MGF_DIGEST) ?? 2] ?? "sha1";
+  const p: RsaPad = pad === PAD.RSA_OAEP ? { kind: "oaep", md, mgf, label: new Uint8Array(0) } : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? { kind: "pkcs1", md: null } : { kind: "none" };
   if (op.purpose === PURPOSE.DECRYPT) {
     if (data.length !== k) throw ERR.INVALID_INPUT_LENGTH;
-    const em = bigToBytes(rsaPrivate(r, bytesToBig(data)), k);
-    const m = pad === PAD.RSA_OAEP ? oaepDecode(k, em, hash, DIGESTS[mgfName], new Uint8Array(0)) : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? pkcs1Unpad(em, 2) : em;
+    const m = emeDecode(r, p, rsaApply(r, data, true) ?? invalid());
     if (!m) throw ERR.UNKNOWN_ERROR;
     return m;
   }
   if (op.purpose === PURPOSE.ENCRYPT) {
-    const em = pad === PAD.RSA_OAEP ? oaepEncode(k, data, hash, DIGESTS[mgfName], new Uint8Array(0)) : pad === PAD.RSA_PKCS1_1_5_ENCRYPT ? pkcs1EncryptPad(k, data) : data;
+    const em = emeEncode(r, p, data);
     if (!em || em.length !== k) throw ERR.INVALID_INPUT_LENGTH;
-    return bigToBytes(rsaPublic(r, bytesToBig(em)), k);
+    return rsaApply(r, em, false) ?? invalid();
   }
   throw ERR.INCOMPATIBLE_PURPOSE;
 }
+/** an RSA input at or above the modulus */
+const invalid = (): never => { throw ERR.INVALID_ARGUMENT; };
 const out = (b: Uint8Array | null) => b && b.length ? new Int8Array(b) : null;
 class JKeystoreOperation extends JObj { op: Op | null = null; }
 const live = (self: JKeystoreOperation) => {

@@ -14,12 +14,12 @@ import { randomBytes } from "../../native/kernel.ts";
 import { after, scall } from "./jentry.ts";
 import { concat, i8, jarray, u8, sameBytes } from "../abi.ts";
 import {
-  CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, x25519, X25519_BASE,
-  rsaBytes, rsaPublic, rsaPrivate, pkcs1SignPad, pssEncode, pssVerify, oaepEncode, oaepDecode, pkcs1EncryptPad, pkcs1Unpad, digestNamed,
+  CURVES, curveByName, curveOfParams, G, mul, onCurve, generateEc, bitLength, ecdsaSign, ecdsaVerify, x25519, X25519_BASE,
+  rsaBytes, rsaApply, generateRsa, emsaEncode, rsaVerify, emeEncode, emeDecode, pkcs1Unpad,
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
-  type Curve, type Point, type Rsa, type EcKey, type PKey,
+  type Curve, type Point, type Rsa, type RsaPad, type PKey,
 } from "../../crypto/pkey.ts";
-import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
+import { bigToBytes, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
@@ -66,7 +66,7 @@ nc("RAND_bytes([B)V", (b: Int8Array | null) => {
 // ── message digests (EVP_MD, EVP_MD_CTX)
 type MdDesc = { name: string; make: () => Hash; size: number; block: number };
 const mdByName = new Map<string, MdDesc>();
-for (const [name, make] of Object.entries(DIGESTS)) { const h = make(); mdByName.set(name, { name, make, size: h.size, block: h.block }); }
+for (const [name, { make }] of Object.entries(DIGESTS)) { const h = make(); mdByName.set(name, { name, make, size: h.size, block: h.block }); }
 const mdOf = (h: bigint): MdDesc => {
   const md = deref<MdDesc>(h);
   if (!md?.make) throw rt.mkThrowable("java/lang/NullPointerException", "md == null");
@@ -311,7 +311,7 @@ nc("chacha20_encrypt_decrypt([BI[BII[B[BI)V", (input: Int8Array, inOff: number, 
 
 // ── EVP_PKEY: RSA, EC and X25519 keys; a key an opaque Java PrivateKey backs signs and decrypts
 // through conscrypt's CryptoUpcalls, as BoringSSL's custom key methods do
-type Wrapped = { type: typeof EVP_PKEY_RSA | typeof EVP_PKEY_EC; wrapper: JObj; rsa?: Rsa; curve?: Curve };
+type Wrapped = { type: typeof EVP_PKEY_RSA; wrapper: JObj; rsa: Rsa } | { type: typeof EVP_PKEY_EC; wrapper: JObj; curve: Curve };
 export type Key = PKey | Wrapped;
 const RSA = 4, EC = 15, EVP = 6;
 export const keyOf = (ref: JObj) => ptr<Key>(ref);
@@ -337,13 +337,9 @@ nc("EVP_marshal_private_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[B", 
 /** the key a public key marshals from: a wrapped RSA key's modulus and exponent */
 function publicOf(k: Key): PKey {
   if (!("wrapper" in k)) return k;
-  if (k.type === EVP_PKEY_RSA) return { type: EVP_PKEY_RSA, rsa: k.rsa! };
+  if (k.type === EVP_PKEY_RSA) return { type: EVP_PKEY_RSA, rsa: k.rsa };
   throw sslError("java/lang/RuntimeException", EVP, 124, "INTERNAL_ERROR");
 }
-/** an RSA key's numbers; a wrapped key has only the public ones */
-const rsaNumbers = (k: Key): Rsa => "wrapper" in k ? k.rsa! : (k as { rsa: Rsa }).rsa;
-/** an EC key's curve and points; a wrapped key has only its curve */
-const ecNumbers = (k: Key): EcKey => "wrapper" in k ? { curve: k.curve! } as EcKey : (k as { ec: EcKey }).ec;
 nc("EVP_PKEY_type(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) => keyOf(ref).type);
 nc("EVP_PKEY_free(J)V", (h: bigint) => release(h));
 nc("EVP_PKEY_cmp(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (a: JObj, b: JObj) => {
@@ -351,11 +347,12 @@ nc("EVP_PKEY_cmp(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;Lcom/android/org/
   if (x.type !== y.type) return -1;
   return +sameBytes(marshalPublicKey(publicOf(x)), marshalPublicKey(publicOf(y)));
 });
-const rsaOf = (ref: JObj): Rsa => {
-  const k = keyOf(ref);
+/** an RSA key's numbers; a wrapped key has only the public ones */
+const rsaKey = (k: Key): Rsa => {
   if (k.type !== EVP_PKEY_RSA) throw sslError("java/security/InvalidKeyException", EVP, 124, "EXPECTING_AN_RSA_KEY");
-  return rsaNumbers(k);
+  return k.rsa;
 };
+const rsaOf = (ref: JObj) => rsaKey(keyOf(ref));
 nc("EVP_PKEY_new_RSA([B[B[B[B[B[B[B[B)J", (...f: (Int8Array | null)[]) => {
   const [n, e, d, p, q, dp, dq, qinv] = f.map(bnArg);
   if (n === undefined) throw rt.mkThrowable("java/lang/NullPointerException", "n == null");
@@ -370,35 +367,35 @@ nc("get_RSA_private_params(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[[B", 
   return jarray([r.n, r.e, r.d, r.p, r.q, r.dp, r.dq, r.qinv].map((v) => v === undefined || (v === 0n && r.e === 0n) ? null : javaBytes(v)), "[B");
 });
 nc("RSA_size(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) => rsaBytes(rsaOf(ref)));
-// key generation is the browser's, whose primes are the same FIPS 186 construction BoringSSL's are
-nc("RSA_generate_key_ex(I[B)J", async (bits: number, e: Int8Array) => {
-  const pair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: bits, publicExponent: new Uint8Array(u8(e)), hash: "SHA-256" }, true, ["sign"]) as CryptoKeyPair;
-  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-  const n = (s?: string) => bytesToBig(Uint8Array.fromBase64(s!, { alphabet: "base64url" }));
-  return newKey({ type: EVP_PKEY_RSA, rsa: { n: n(jwk.n), e: n(jwk.e), d: n(jwk.d), p: n(jwk.p), q: n(jwk.q), dp: n(jwk.dp), dq: n(jwk.dq), qinv: n(jwk.qi) } });
-});
+nc("RSA_generate_key_ex(I[B)J", async (bits: number, e: Int8Array) => newKey({ type: EVP_PKEY_RSA, rsa: await generateRsa(bits, fromSigned(u8(e))) }));
 const RSA_PKCS1_PADDING = 1, RSA_NO_PADDING = 3, RSA_PKCS1_OAEP_PADDING = 4, RSA_PKCS1_PSS_PADDING = 6;
 const rsaErr = (cls: string, reason: number, name: string) => sslError(cls, RSA, reason, name);
-/** the modulus-sized integer an RSA input encodes, checked against the modulus */
-function rsaInput(k: Rsa, m: Uint8Array): bigint {
+// EVP_PKEY_CTX: the padding parameters of an RSA encryption or signature
+type RsaParams = { key: Key; padding: number; oaepMd: string; mgf1Md: string | null; label: Uint8Array; saltLen: number };
+const pkeyCtx = (key: Key, padding = RSA_PKCS1_PADDING): RsaParams => ({ key, padding, oaepMd: "sha1", mgf1Md: null, label: new Uint8Array(0), saltLen: -2 });
+/** the padding the parameters name, for a signature over `md` or (without one) an encryption */
+function padOf(p: RsaParams, md: string | null = null): RsaPad {
+  if (p.padding === RSA_PKCS1_PADDING) return { kind: "pkcs1", md };
+  if (p.padding === RSA_NO_PADDING) return { kind: "none" };
+  if (p.padding === RSA_PKCS1_OAEP_PADDING && !md) return { kind: "oaep", md: p.oaepMd, mgf: p.mgf1Md ?? p.oaepMd, label: p.label };
+  if (p.padding === RSA_PKCS1_PSS_PADDING && md) return { kind: "pss", md, mgf: p.mgf1Md ?? md, salt: p.saltLen };
+  throw rsaErr("java/lang/RuntimeException", 143, "UNKNOWN_PADDING_TYPE");
+}
+/** the key applied to a modulus-length input below the modulus */
+function rsaRun(k: Rsa, m: Uint8Array, priv: boolean): Uint8Array {
   if (m.length !== rsaBytes(k)) throw rsaErr("javax/crypto/BadPaddingException", 112, "DATA_LEN_NOT_EQUAL_TO_MOD_LEN");
-  const v = bytesToBig(m);
-  if (v >= k.n) throw rsaErr("javax/crypto/BadPaddingException", 115, "DATA_TOO_LARGE_FOR_MODULUS");
-  return v;
+  const r = rsaApply(k, m, priv);
+  if (!r) throw rsaErr("javax/crypto/BadPaddingException", 115, "DATA_TOO_LARGE_FOR_MODULUS");
+  return r;
 }
-function rsaEncryptPadded(k: Rsa, m: Uint8Array, padding: number, oaep?: RsaParams): Uint8Array {
-  const len = rsaBytes(k);
-  const em = padding === RSA_PKCS1_PADDING ? pkcs1EncryptPad(len, m) : padding === RSA_NO_PADDING ? m
-    : padding === RSA_PKCS1_OAEP_PADDING ? oaepEncode(len, m, digestNamed(oaep!.oaepMd), digestNamed(oaep!.mgf1Md ?? oaep!.oaepMd), oaep!.label) : null;
+function rsaEncrypt(k: Rsa, m: Uint8Array, pad: RsaPad): Uint8Array {
+  const em = emeEncode(k, pad, m);
   if (!em) throw rsaErr("javax/crypto/IllegalBlockSizeException", 114, "DATA_TOO_LARGE_FOR_KEY_SIZE");
-  return bigToBytes(rsaPublic(k, rsaInput(k, em)), len);
+  return rsaRun(k, em, false);
 }
-function rsaDecryptPadded(k: Rsa, c: Uint8Array, padding: number, oaep?: RsaParams): Uint8Array {
-  const len = rsaBytes(k), em = bigToBytes(rsaPrivate(k, rsaInput(k, c)), len);
-  if (padding === RSA_NO_PADDING) return em;
-  const m = padding === RSA_PKCS1_PADDING ? pkcs1Unpad(em, 2)
-    : padding === RSA_PKCS1_OAEP_PADDING ? oaepDecode(len, em, digestNamed(oaep!.oaepMd), digestNamed(oaep!.mgf1Md ?? oaep!.oaepMd), oaep!.label) : null;
-  if (!m) throw padding === RSA_PKCS1_OAEP_PADDING ? rsaErr("javax/crypto/BadPaddingException", 133, "OAEP_DECODING_ERROR") : rsaErr("javax/crypto/BadPaddingException", 137, "PKCS_DECODING_ERROR");
+function unpadded(k: Rsa, pad: RsaPad, em: Uint8Array): Uint8Array {
+  const m = emeDecode(k, pad, em);
+  if (!m) throw pad.kind === "oaep" ? rsaErr("javax/crypto/BadPaddingException", 133, "OAEP_DECODING_ERROR") : rsaErr("javax/crypto/BadPaddingException", 137, "PKCS_DECODING_ERROR");
   return m;
 }
 /** the four raw RSA natives: (flen, from, to, key, padding) → bytes written */
@@ -411,16 +408,16 @@ function rsaRaw(op: "pubenc" | "privdec" | "privenc" | "pubdec") {
         : scall(UPCALLS, "rsaSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", k.wrapper, padding, i8(input));
       return after(call, (r: Int8Array | null) => { if (!r) throw rsaErr("java/security/SignatureException", 124, "INTERNAL_ERROR"); return finish(u8(r)); });
     }
-    const r = rsaOf(ref), len = rsaBytes(r);
-    if (op === "pubenc") return finish(rsaEncryptPadded(r, input, padding));
-    if (op === "privdec") return finish(rsaDecryptPadded(r, input, padding));
+    const r = rsaKey(k), pad = padOf(pkeyCtx(k, padding));
+    if (op === "pubenc") return finish(rsaEncrypt(r, input, pad));
+    if (op === "privdec") return finish(unpadded(r, pad, rsaRun(r, input, true)));
     if (op === "privenc") {
-      const em = padding === RSA_NO_PADDING ? input : pkcs1SignPad(len, null, input);
+      const em = emsaEncode(r, pad, input);
       if (!em) throw rsaErr("java/security/SignatureException", 114, "DATA_TOO_LARGE_FOR_KEY_SIZE");
-      return finish(bigToBytes(rsaPrivate(r, rsaInput(r, em)), len));
+      return finish(rsaRun(r, em, true));
     }
-    const em = bigToBytes(rsaPublic(r, rsaInput(r, input)), len);
-    if (padding === RSA_NO_PADDING) return finish(em);
+    const em = rsaRun(r, input, false);
+    if (pad.kind === "none") return finish(em);
     const m = pkcs1Unpad(em, 1);
     if (!m) throw rsaErr("java/security/SignatureException", 107, "BLOCK_TYPE_IS_NOT_01");
     return finish(m);
@@ -431,12 +428,8 @@ nc("RSA_private_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I",
 nc("RSA_private_encrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("privenc"));
 nc("RSA_public_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("pubdec"));
 
-// EVP_PKEY_CTX: the padding parameters of an RSA encryption or signature
-type RsaParams = { key: Key; padding: number; oaepMd: string; mgf1Md: string | null; label: Uint8Array; saltLen: number };
-const pkeyCtx = (key: Key): RsaParams => ({ key, padding: RSA_PKCS1_PADDING, oaepMd: "sha1", mgf1Md: null, label: new Uint8Array(0), saltLen: -2 });
-const unwrapped = <T>(h: bigint): T => { const o = deref<T | WeakRef<object>>(h); return (o instanceof WeakRef ? o.deref() : o) as T; };
 const params = (h: bigint): RsaParams => {
-  const p = unwrapped<RsaParams>(h);
+  const p = deref<RsaParams>(h);
   if (!p?.key) throw rt.mkThrowable("java/lang/NullPointerException", "ctx == null");
   return p;
 };
@@ -449,19 +442,12 @@ nc("EVP_PKEY_CTX_set_rsa_mgf1_md(JJ)V", (h: bigint, md: bigint) => { params(h).m
 nc("EVP_PKEY_CTX_set_rsa_oaep_md(JJ)V", (h: bigint, md: bigint) => { params(h).oaepMd = mdOf(md).name; });
 nc("EVP_PKEY_CTX_set_rsa_oaep_label(J[B)V", (h: bigint, label: Int8Array | null) => { params(h).label = label ? u8(label).slice() : new Uint8Array(0); });
 const pkeyCrypt = (encrypt: boolean) => waits((ref: JObj, out: Int8Array, outOff: number, input: Int8Array, inOff: number, inLen: number) => {
-  const p = ptr<RsaParams>(ref), k = p.key, data = region(input, inOff, inLen).slice();
-  const finish = (r: Uint8Array) => { region(out, outOff, r.length).set(r); return r.length; };
-  if (!encrypt && "wrapper" in k) {
-    // the upcall decrypts without padding; the padding is removed here
-    return after(scall(UPCALLS, "rsaDecryptWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", k.wrapper, RSA_NO_PADDING, i8(data)), (em: Int8Array) => {
-      const len = rsaBytes(k.rsa!), m = p.padding === RSA_PKCS1_OAEP_PADDING
-        ? oaepDecode(len, u8(em), digestNamed(p.oaepMd), digestNamed(p.mgf1Md ?? p.oaepMd), p.label) : pkcs1Unpad(u8(em), 2);
-      if (!m) throw rsaErr("javax/crypto/BadPaddingException", 137, "PKCS_DECODING_ERROR");
-      return finish(m);
-    });
-  }
-  const r = rsaNumbers(k);
-  return finish(encrypt ? rsaEncryptPadded(r, data, p.padding, p) : rsaDecryptPadded(r, data, p.padding, p));
+  const p = ptr<RsaParams>(ref), k = p.key, r = rsaKey(k), pad = padOf(p), data = region(input, inOff, inLen).slice();
+  const finish = (m: Uint8Array) => { region(out, outOff, m.length).set(m); return m.length; };
+  // a wrapped key's upcall decrypts without padding; the padding is removed here
+  if (!encrypt && "wrapper" in k)
+    return after(scall(UPCALLS, "rsaDecryptWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", k.wrapper, RSA_NO_PADDING, i8(data)), (em: Int8Array) => finish(unpadded(r, pad, u8(em))));
+  return finish(encrypt ? rsaEncrypt(r, data, pad) : unpadded(r, pad, rsaRun(r, data, true)));
 });
 nc("EVP_PKEY_encrypt(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY_CTX;[BI[BII)I", pkeyCrypt(true));
 nc("EVP_PKEY_decrypt(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY_CTX;[BI[BII)I", pkeyCrypt(false));
@@ -483,7 +469,6 @@ nc("EVP_DigestVerifyInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/a
 const directUpdate = (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveHash(ref).update(b); });
 for (const n of ["EVP_DigestUpdateDirect", "EVP_DigestSignUpdateDirect", "EVP_DigestVerifyUpdateDirect"]) nc(`${n}(Lcom/android/org/conscrypt/NativeRef\$EVP_MD_CTX;JI)V`, directUpdate);
 nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveMac(ref).update(b); }));
-const saltFor = (p: RsaParams, hLen: number, emLen: number) => p.saltLen === -1 ? hLen : p.saltLen === -2 ? emLen - hLen - 2 : p.saltLen;
 nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", waits((ref: JObj) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s?.signing) throw runtimeError("EVP_DigestSignFinal: not initialized for signing");
@@ -495,32 +480,18 @@ nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", wa
     if (ec.priv === undefined) throw sslError("java/security/InvalidKeyException", EC, 123, "MISSING_PRIVATE_KEY");
     return i8(ecdsaSign(ec.curve, ec.priv, digest));
   }
-  const r = rsaNumbers(key), len = rsaBytes(r), bitsN = bitLength(r.n);
-  const em = p.padding === RSA_PKCS1_PSS_PADDING
-    ? pssEncode(digest, bitsN - 1, c.md!.make, digestNamed(p.mgf1Md ?? c.md!.name), saltFor(p, digest.length, (bitsN - 1 + 7) >> 3))
-    : pkcs1SignPad(len, c.md!.name, digest);
+  const r = rsaKey(key), em = emsaEncode(r, padOf(p, c.md!.name), digest);
   if (!em) throw rsaErr("java/security/SignatureException", 118, "DIGEST_TOO_BIG_FOR_RSA_KEY");
-  const block = em.length < len ? concat([new Uint8Array(len - em.length), em]) : em;
-  if ("wrapper" in key) return scall(UPCALLS, "rsaSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", key.wrapper, RSA_NO_PADDING, i8(block));
-  return i8(bigToBytes(rsaPrivate(r, bytesToBig(block)), len));
+  if ("wrapper" in key) return scall(UPCALLS, "rsaSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", key.wrapper, RSA_NO_PADDING, i8(em));
+  return i8(rsaRun(r, em, true));
 }));
 nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z", (ref: JObj, sig: Int8Array, off: number, len: number) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s || s.signing) throw runtimeError("EVP_DigestVerifyFinal: not initialized for verifying");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params, sg = region(sig, off, len);
   c.hash = deferred(c.md!.name);
-  if (key.type === EVP_PKEY_EC) { const e = ecNumbers(key); return +(e.pub !== undefined && ecdsaVerify(e.curve, e.pub, digest, sg)); }
-  const r = rsaNumbers(key), n = rsaBytes(r);
-  if (sg.length !== n) return 0;
-  const v = bytesToBig(sg);
-  if (v >= r.n) return 0;
-  const em = bigToBytes(rsaPublic(r, v), n);
-  if (p.padding === RSA_PKCS1_PSS_PADDING) {
-    const bitsN = bitLength(r.n);
-    return +pssVerify(digest, em, bitsN - 1, c.md!.make, digestNamed(p.mgf1Md ?? c.md!.name), p.saltLen);
-  }
-  const want = pkcs1SignPad(n, c.md!.name, digest);
-  return +(want !== null && sameBytes(want, em));
+  if (key.type === EVP_PKEY_EC) return +(!("wrapper" in key) && ecdsaVerify(key.ec.curve, key.ec.pub, digest, sg));
+  return +rsaVerify(rsaKey(key), padOf(p, c.md!.name), digest, sg);
 });
 
 // ── EC groups, points and keys
@@ -557,15 +528,13 @@ nc("EC_POINT_get_affine_coordinates(Lcom/android/org/conscrypt/NativeRef$EC_GROU
   if (!p) throw sslError("java/lang/RuntimeException", EC, 106, "POINT_AT_INFINITY");
   return jarray([javaBytes(p[0]), javaBytes(p[1])], "[B");
 });
-const ecOf = (ref: JObj): EcKey => {
+/** an EC key's curve and points; a wrapped key has only its curve */
+const ecOf = (ref: JObj): { curve: Curve; pub?: [bigint, bigint]; priv?: bigint } => {
   const k = keyOf(ref);
   if (k.type !== EVP_PKEY_EC) throw sslError("java/security/InvalidKeyException", EVP, 124, "EXPECTING_AN_EC_KEY_KEY");
-  return ecNumbers(k);
+  return "wrapper" in k ? { curve: k.curve } : k.ec;
 };
-nc("EC_KEY_generate_key(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;)J", (g: JObj) => {
-  const curve = groupOf(g), d = randomScalar(curve.n);
-  return newKey({ type: EVP_PKEY_EC, ec: { curve, pub: mul(curve, d, G(curve)) as [bigint, bigint], priv: d } });
-});
+nc("EC_KEY_generate_key(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;)J", (g: JObj) => newKey({ type: EVP_PKEY_EC, ec: generateEc(groupOf(g)) }));
 nc("EVP_PKEY_new_EC_KEY(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;Lcom/android/org/conscrypt/NativeRef$EC_POINT;[B)J", (g: JObj, pubRef: JObj | null, priv: Int8Array | null) => {
   const curve = groupOf(g), d = priv ? fromSigned(u8(priv)) : undefined;
   if (d !== undefined && (d <= 0n || d >= curve.n)) throw sslError("java/security/InvalidKeyException", EC, 115, "WRONG_ORDER");
@@ -575,7 +544,11 @@ nc("EVP_PKEY_new_EC_KEY(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;Lcom/andro
   return newKey({ type: EVP_PKEY_EC, ec: { curve, pub, priv: d } });
 });
 nc("EC_KEY_get1_group(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle({ curve: ecOf(ref).curve } satisfies Group));
-nc("EC_KEY_get_public_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => { const e = ecOf(ref); return ownedHandle({ curve: e.curve, pt: e.pub } satisfies EcPoint); });
+nc("EC_KEY_get_public_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => {
+  const e = ecOf(ref);
+  if (!e.pub) throw runtimeError("EC_POINT_dup");
+  return ownedHandle({ curve: e.curve, pt: e.pub } satisfies EcPoint);
+});
 nc("EC_KEY_get_private_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[B", (ref: JObj) => { const d = ecOf(ref).priv; return d === undefined ? null : javaBytes(d); });
 nc("EC_KEY_marshal_curve_name(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;)[B", (ref: JObj) => {
   const c = groupOf(ref);
@@ -601,13 +574,13 @@ nc("ECDSA_sign([B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", waits((dig
 }));
 nc("ECDSA_verify([B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (digest: Int8Array, sig: Int8Array, ref: JObj) => {
   const e = ecOf(ref);
-  return +ecdsaVerify(e.curve, e.pub, u8(digest), u8(sig));
+  return +(!!e.pub && ecdsaVerify(e.curve, e.pub, u8(digest), u8(sig)));
 });
 nc("ECDH_compute_key([BILcom/android/org/conscrypt/NativeRef$EVP_PKEY;Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (out: Int8Array, off: number, pubRef: JObj, privRef: JObj) => {
   const pub = ecOf(pubRef), priv = ecOf(privRef);
   if (pub.curve.p !== priv.curve.p || pub.curve.n !== priv.curve.n) throw sslError("java/security/InvalidKeyException", EC, 106, "INCOMPATIBLE_OBJECTS");
   if (priv.priv === undefined) throw sslError("java/security/InvalidKeyException", EC, 123, "MISSING_PRIVATE_KEY");
-  const s = mul(priv.curve, priv.priv, pub.pub);
+  const s = pub.pub ? mul(priv.curve, priv.priv, pub.pub) : null;
   if (!s) throw sslError("java/lang/IllegalStateException", EC, 106, "POINT_AT_INFINITY");
   const secret = bigToBytes(s[0], priv.curve.bytes);
   region(out, off, secret.length).set(secret);

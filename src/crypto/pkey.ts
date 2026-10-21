@@ -4,7 +4,7 @@
 
 import { modInverse, modPow } from "./bigint.ts";
 import { DIGESTS, hashOf, type Hash } from "./digest.ts";
-import { concat, hexBytes, sameBytes } from "../jvm/abi.ts";
+import { concat, sameBytes } from "../jvm/abi.ts";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
   bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
@@ -176,6 +176,10 @@ export function randomScalar(n: bigint): bigint {
     if (k !== 0n) return k;
   }
 }
+export function generateEc(curve: Curve): EcKey {
+  const d = randomScalar(curve.n);
+  return { curve, pub: mul(curve, d, G(curve)) as [bigint, bigint], priv: d };
+}
 /** a point in X9.62 form: 04‖X‖Y, or compressed 02/03‖X */
 export function decodePoint(c: Curve, b: Uint8Array): [bigint, bigint] {
   if (b[0] === 4 && b.length === 1 + 2 * c.bytes) return [bytesToBig(b.subarray(1, 1 + c.bytes)), bytesToBig(b.subarray(1 + c.bytes))];
@@ -269,8 +273,8 @@ export const X25519_BASE = toLe(9n);
 // ── RSA
 export type Rsa = { n: bigint; e: bigint; d?: bigint; p?: bigint; q?: bigint; dp?: bigint; dq?: bigint; qinv?: bigint };
 export const rsaBytes = (k: Rsa) => (bitLength(k.n) + 7) >> 3;
-export const rsaPublic = (k: Rsa, m: bigint) => modPow(m, k.e, k.n);
-export function rsaPrivate(k: Rsa, c: bigint): bigint {
+const rsaPublic = (k: Rsa, m: bigint) => modPow(m, k.e, k.n);
+function rsaPrivate(k: Rsa, c: bigint): bigint {
   if (k.p && k.q && k.dp && k.dq && k.qinv) {
     const m1 = modPow(c % k.p, k.dp, k.p), m2 = modPow(c % k.q, k.dq, k.q);
     const h = md(k.qinv * (m1 - m2), k.p);
@@ -279,13 +283,60 @@ export function rsaPrivate(k: Rsa, c: bigint): bigint {
   if (k.d === undefined) throw new DerError("no private exponent");
   return modPow(c, k.d, k.n);
 }
-const DIGEST_INFO: Record<string, string> = {
-  md5: "3020300c06082a864886f70d020505000410", sha1: "3021300906052b0e03021a05000414", sha224: "302d300d06096086480165030402040500041c",
-  sha256: "3031300d060960864801650304020105000420", sha384: "3041300d060960864801650304020205000430", sha512: "3051300d060960864801650304020305000440",
-};
+/** `m` raised to the public or private exponent, as many bytes as the modulus; null for m ≥ n */
+export function rsaApply(k: Rsa, m: Uint8Array, priv: boolean): Uint8Array | null {
+  const v = bytesToBig(m);
+  return v < k.n ? bigToBytes(priv ? rsaPrivate(k, v) : rsaPublic(k, v), rsaBytes(k)) : null;
+}
+/** a key from the browser, whose primes are the same FIPS 186 construction BoringSSL's are */
+export async function generateRsa(bits: number, e: bigint): Promise<Rsa> {
+  const pair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: bits, publicExponent: new Uint8Array(bigToBytes(e)), hash: "SHA-256" }, true, ["sign"]) as CryptoKeyPair;
+  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey), n = (s?: string) => bytesToBig(Uint8Array.fromBase64(s!, { alphabet: "base64url" }));
+  return { n: n(jwk.n), e: n(jwk.e), d: n(jwk.d), p: n(jwk.p), q: n(jwk.q), dp: n(jwk.dp), dq: n(jwk.dq), qinv: n(jwk.qi) };
+}
+/** RFC 8017's paddings: PKCS #1 v1.5 (a signature's over a DigestInfo for `md`, or over the bare input
+ *  without one); PSS, whose salt length -1 is the digest's and -2 the longest the key allows (when
+ *  verifying, any); OAEP; and none */
+export type RsaPad =
+  | { kind: "pkcs1"; md: string | null }
+  | { kind: "pss"; md: string; mgf: string; salt: number }
+  | { kind: "oaep"; md: string; mgf: string; label: Uint8Array }
+  | { kind: "none" };
+/** the message a signature over `digest` encodes, as many bytes as the modulus; null when the
+ *  padding does not fit the key */
+export function emsaEncode(k: Rsa, pad: RsaPad, digest: Uint8Array): Uint8Array | null {
+  const len = rsaBytes(k), emBits = bitLength(k.n) - 1;
+  if (pad.kind === "none") return digest;
+  if (pad.kind === "pkcs1") return pkcs1SignPad(len, pad.md, digest);
+  if (pad.kind !== "pss") return null;
+  const salt = pad.salt === -1 ? digest.length : pad.salt === -2 ? ((emBits + 7) >> 3) - digest.length - 2 : pad.salt;
+  const em = pssEncode(digest, emBits, DIGESTS[pad.md].make, DIGESTS[pad.mgf].make, salt);
+  return em && em.length < len ? concat([new Uint8Array(len - em.length), em]) : em;
+}
+export function emsaVerify(k: Rsa, pad: RsaPad, digest: Uint8Array, em: Uint8Array): boolean {
+  if (pad.kind === "pss") return pssVerify(digest, em, bitLength(k.n) - 1, DIGESTS[pad.md].make, DIGESTS[pad.mgf].make, pad.salt);
+  const want = emsaEncode(k, pad, digest);
+  return want !== null && sameBytes(want, em);
+}
+/** whether `sig` is a signature over `digest` */
+export function rsaVerify(k: Rsa, pad: RsaPad, digest: Uint8Array, sig: Uint8Array): boolean {
+  const em = sig.length === rsaBytes(k) ? rsaApply(k, sig, false) : null;
+  return em !== null && emsaVerify(k, pad, digest, em);
+}
+/** the message an encryption of `m` encodes; null when `m` is too long for the key */
+export function emeEncode(k: Rsa, pad: RsaPad, m: Uint8Array): Uint8Array | null {
+  const len = rsaBytes(k);
+  return pad.kind === "pkcs1" ? pkcs1EncryptPad(len, m) : pad.kind === "oaep" ? oaepEncode(len, m, DIGESTS[pad.md].make, DIGESTS[pad.mgf].make, pad.label)
+    : pad.kind === "none" ? m : null;
+}
+/** the message a decrypted `em` carries; null when its padding is malformed */
+export function emeDecode(k: Rsa, pad: RsaPad, em: Uint8Array): Uint8Array | null {
+  return pad.kind === "pkcs1" ? pkcs1Unpad(em, 2) : pad.kind === "oaep" ? oaepDecode(rsaBytes(k), em, DIGESTS[pad.md].make, DIGESTS[pad.mgf].make, pad.label)
+    : pad.kind === "none" ? em : null;
+}
 /** EMSA-PKCS1-v1_5 of an already computed digest (the digest name picks the DigestInfo; null for none) */
-export function pkcs1SignPad(k: number, digestName: string | null, digest: Uint8Array): Uint8Array | null {
-  const t = digestName ? concat([hexBytes(DIGEST_INFO[digestName]), digest]) : digest;
+function pkcs1SignPad(k: number, digestName: string | null, digest: Uint8Array): Uint8Array | null {
+  const t = digestName ? seq(seq(oid(DIGESTS[digestName].oid), derNull()), octets(digest)) : digest;
   if (t.length + 11 > k) return null;
   const em = new Uint8Array(k).fill(0xff);
   em[0] = 0; em[1] = 1; em[k - t.length - 1] = 0; em.set(t, k - t.length);
@@ -302,9 +353,9 @@ function mgf1(make: () => Hash, seed: Uint8Array, len: number): Uint8Array {
   return out;
 }
 /** EMSA-PSS-ENCODE (RFC 8017 §9.1.1) */
-export function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): Uint8Array | null {
+function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): Uint8Array | null {
   const emLen = (emBits + 7) >> 3, hLen = mHash.length;
-  if (emLen < hLen + saltLen + 2) return null;
+  if (saltLen < 0 || emLen < hLen + saltLen + 2) return null;
   const salt = crypto.getRandomValues(new Uint8Array(saltLen));
   const H = hashOf(hash, new Uint8Array(8), mHash, salt);
   const db = new Uint8Array(emLen - hLen - 1);
@@ -315,7 +366,7 @@ export function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, m
   return concat([db, H, Uint8Array.of(0xbc)]);
 }
 /** EMSA-PSS-VERIFY; saltLen -1 is the digest length and -2 recovers it */
-export function pssVerify(mHash: Uint8Array, em: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): boolean {
+function pssVerify(mHash: Uint8Array, em: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): boolean {
   const emLen = (emBits + 7) >> 3, hLen = mHash.length;
   if (em.length > emLen) { if (em[0] !== 0) return false; em = em.subarray(1); }
   if (emLen < hLen + 2 || em[emLen - 1] !== 0xbc) return false;
@@ -332,7 +383,7 @@ export function pssVerify(mHash: Uint8Array, em: Uint8Array, emBits: number, has
   return sameBytes(hashOf(hash, new Uint8Array(8), mHash, salt), H);
 }
 /** RSAES-OAEP encoding (RFC 8017 §7.1.1) */
-export function oaepEncode(k: number, m: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
+function oaepEncode(k: number, m: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
   const lHash = hashOf(hash, label), hLen = lHash.length;
   if (m.length > k - 2 * hLen - 2) return null;
   const db = new Uint8Array(k - hLen - 1);
@@ -344,7 +395,7 @@ export function oaepEncode(k: number, m: Uint8Array, hash: () => Hash, mgf: () =
   for (let i = 0; i < hLen; i++) seed[i] ^= seedMask[i];
   return concat([Uint8Array.of(0), seed, db]);
 }
-export function oaepDecode(k: number, em: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
+function oaepDecode(k: number, em: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
   const lHash = hashOf(hash, label), hLen = lHash.length;
   if (em.length !== k || k < 2 * hLen + 2 || em[0] !== 0) return null;
   const seed = em.slice(1, 1 + hLen), db = em.slice(1 + hLen);
@@ -358,7 +409,7 @@ export function oaepDecode(k: number, em: Uint8Array, hash: () => Hash, mgf: () 
   return i < db.length && db[i] === 1 ? db.slice(i + 1) : null;
 }
 /** RSAES-PKCS1-v1_5 (type 2) */
-export function pkcs1EncryptPad(k: number, m: Uint8Array): Uint8Array | null {
+function pkcs1EncryptPad(k: number, m: Uint8Array): Uint8Array | null {
   if (m.length > k - 11) return null;
   const em = new Uint8Array(k);
   em[1] = 2;
@@ -375,7 +426,6 @@ export function pkcs1Unpad(em: Uint8Array, type: 1 | 2): Uint8Array | null {
   else { while (i < em.length && em[i] !== 0) i++; if (i < 10) return null; }
   return i < em.length && em[i] === 0 ? em.slice(i + 1) : null;
 }
-export const digestNamed = (name: string): (() => Hash) => DIGESTS[name];
 
 // ── keys and their encodings
 export type EcKey = { curve: Curve; pub: [bigint, bigint]; priv?: bigint };

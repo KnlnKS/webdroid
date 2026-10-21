@@ -11,7 +11,7 @@ import { vfs } from "../../shell/vfs.ts";
 import { BytesFile } from "../../shell/lazyfile.ts";
 import { md5, sha1, sha256 } from "../../crypto/digest.ts";
 import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "../../crypto/der.ts";
-import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "../../crypto/pkey.ts";
+import { CURVES, generateEc, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "../../crypto/pkey.ts";
 
 const P256 = CURVES.find((c) => c.name === "prime256v1")!;
 const name = (cn: string) => seq(tlv(0x31, seq(oid("2.5.4.10"), tlv(0x0c, utf8.enc.encode("webdroid")))), tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, utf8.enc.encode(cn)))));
@@ -25,8 +25,7 @@ const serial = () => integer(bytesToBig(crypto.getRandomValues(new Uint8Array(12
 
 type Keyed = { ec: EcKey; spki: Uint8Array; keyId: Uint8Array };
 function newKey(): Keyed {
-  const d = randomScalar(P256.n), ec: EcKey = { curve: P256, pub: mul(P256, d, G(P256)) as [bigint, bigint], priv: d };
-  const spki = marshalPublicKey({ type: EVP_PKEY_EC, ec });
+  const ec = generateEc(P256), spki = marshalPublicKey({ type: EVP_PKEY_EC, ec });
   return { ec, spki, keyId: sha1(spki.subarray(-65)) };
 }
 function signed(tbs: Uint8Array, by: EcKey): Uint8Array {
