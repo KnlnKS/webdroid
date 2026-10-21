@@ -144,6 +144,8 @@ export interface HostLoop {
   due(): boolean;
   /** runs `fn` after `ms`; the function cancels */
   after(ms: number, fn: () => void): () => void;
+  /** the wall clock Java reads (System.currentTimeMillis), which `after` keeps time by */
+  now(): number;
 }
 let turnStart = 0;
 /** the loop of a World given none, which only compiles: timers alone. The hosts that run Java pass their own (boot.ts) */
@@ -151,6 +153,7 @@ export const defaultLoop: HostLoop = {
   yield: () => new Promise<void>((r) => setTimeout(() => { turnStart = performance.now(); r(); }, 0)),
   due: () => performance.now() - turnStart >= 8,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
+  now: Date.now,
 };
 
 /** what the host knows of a Java Thread */
@@ -432,7 +435,7 @@ export class Sched {
     return new Promise<St>((resolve) => {
       let cancel: (() => void) | null = null;
       const done = () => { cancel?.(); th.parked = null; th.waiting = 0; th.permit = false; resolve(St.Ok); };
-      if (timed) cancel = this.loop.after(absolute ? Math.max(0, time - Date.now()) : time / 1e6, done);
+      if (timed) cancel = this.loop.after(absolute ? Math.max(0, time - this.loop.now()) : time / 1e6, done);
       th.parked = done; th.waiting = timed ? 4 : 3;
     });
   }

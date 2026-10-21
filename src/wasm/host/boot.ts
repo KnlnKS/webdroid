@@ -2,6 +2,7 @@
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark, perf } from "../../perf.ts";
 import { switchValue } from "../../switches.ts";
+import { wallMillis } from "../../guest-clock.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
@@ -62,6 +63,7 @@ export const hostLoop: HostLoop = {
   yield: (soon) => soon ? wakeSoon() : yieldToLoop(),
   due: () => turnElapsed() >= 8,
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
+  now: () => wallMillis(),
 };
 
 /** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */
