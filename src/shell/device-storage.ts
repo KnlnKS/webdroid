@@ -8,6 +8,7 @@ export type StorageOwner = { pkg: string; uid: number };
  *  and writes the device's MediaStore flags, as its in-process MediaProvider does. */
 export function storageAccess(key: string, { pkg, uid }: StorageOwner): "read" | "write" | null {
   if (key === `wd:install:${pkg}` || key.startsWith(`wd:install:${pkg}:`) || key === `wd:web-cookies:${pkg}` || key === `wd:keystore2:${uid}`
+    || key.startsWith(`wd:keystore2:${uid}:`)
     || key === "wd:media:flags") return "write";
   return key.startsWith("wd:install:") || key === "wd:package-uids" ? "read" : null;
 }

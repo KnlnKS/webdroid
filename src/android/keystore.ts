@@ -80,27 +80,30 @@ const all = (ps: Param[], tag: number) => ps.filter((p) => p.tag === tag).map((p
 const one = (ps: Param[], tag: number) => ps.find((p) => p.tag === tag)?.v;
 const num = (ps: Param[], tag: number) => { const v = one(ps, tag); return v === undefined ? undefined : Number(v); };
 
-// ── entries, per app uid, persisted as JSON
+// ── entries, per app uid, each persisted as JSON under its own key: a whole-list write from one
+// process would drop the entries another process of the uid had just added
 type Entry = { id: string; alias: string; params: [number, number, string][]; material?: string; cert?: string; chain?: string; created: number; modified: number };
 const encodeParam = (p: Param): [number, number, string] =>
   [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
-const savedEntries = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
+const savedEntry = persisted("wd:keystore2:", (saved) => saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Entry : null);
+/** the store before entries had keys of their own, one list per uid */
+const savedList = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
 /** AppDataHelper.clearKeystoreData: every key of the app's uid */
 export const keystoreData: PackageState = {
-  clear(_pkg, uid) { if (uid !== undefined) savedEntries.remove(String(uid)); },
+  clear(_pkg, uid) { if (uid !== undefined) for (const key of [String(uid), ...savedEntry.keys(uid + ":")]) savedEntry.remove(key); },
 };
-/** the entries, kept for this session where storage is unavailable; a corrupt store is empty */
-let session: Entry[] = [];
+/** the entries, kept for this session where storage is unavailable; a corrupt entry is skipped */
+const session = new Map<string, Entry>();
 function entries(): Entry[] {
-  const saved = savedEntries.get(String(PROCESS_UID));
-  return saved === undefined ? session : saved ?? [];
+  const uid = String(PROCESS_UID), list = savedList.get(uid);
+  if (list === undefined) return [...session.values()];
+  if (list) { for (const e of list) put(e); savedList.remove(uid); }
+  return savedEntry.keys(uid + ":").flatMap((key) => savedEntry.get(key) ?? []);
 }
-function save(list: Entry[]) {
-  session = list;
-  savedEntries.set(String(PROCESS_UID), list);
-}
+function put(e: Entry) { session.set(e.id, e); savedEntry.set(`${PROCESS_UID}:${e.id}`, e); }
+function drop(e: Entry) { session.delete(e.id); savedEntry.remove(`${PROCESS_UID}:${e.id}`); }
 const newId = () => BigInt.asIntN(64, bytesToBig(crypto.getRandomValues(new Uint8Array(8)))).toString();
 
 const KD = "android/system/keystore2/KeyDescriptor";
@@ -189,7 +192,8 @@ function* store(alias: string, req: Param[], origin: number, made: { material: U
   const now = Date.now(), purposes = all(req, TAG.PURPOSE).map(Number);
   const e: Entry = { id: newId(), alias, params: characteristics(req, origin, made.extra).map(encodeParam), material: made.material.toBase64(), created: now, modified: now };
   if (made.key) e.cert = certificate(made.key, req, purposes).toBase64();
-  save([...entries().filter((x) => x.alias !== alias), e]);
+  for (const x of entries()) if (x.alias === alias) drop(x);
+  put(e);
   return yield* metadata(e);
 }
 /** `body`'s answer, a KeyMint error code it throws as the ServiceSpecificException keystore2 sends */
@@ -374,7 +378,7 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
 const teeLevel = once(() => newObj("webdroid/KeystoreSecurityLevel"));
 const deleteKey = driven(function* (d: unknown): Gen<void> {
   const e = yield* find(d);
-  save(entries().filter((x) => x !== e));
+  drop(e);
 });
 const listed = driven(function* (start: string | null): Gen<unknown[]> {
   const descriptors: JObj[] = [];
@@ -391,18 +395,12 @@ hostService("android.system.keystore2.IKeystoreService/default", "webdroid/Keyst
   }),
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
   "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": waits((d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
-    const k = descriptor(d), list = entries();
-    let e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
-    if (!e) {
-      if (k.domain !== DOMAIN.APP || k.alias === null || cert !== null || chain === null) return failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
-      e = { id: newId(), alias: k.alias, params: [], created: Date.now(), modified: Date.now() };
-      list.push(e);
-    }
-    e.cert = cert ? new Uint8Array(cert).toBase64() : undefined;
-    e.chain = chain ? new Uint8Array(chain).toBase64() : undefined;
-    e.modified = Date.now();
-    if (!e.material && !e.cert && !e.chain) list.splice(list.indexOf(e), 1);
-    save(list);
+    const k = descriptor(d), list = entries(), now = Date.now();
+    const e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
+    if (!e && (k.domain !== DOMAIN.APP || k.alias === null || cert !== null || chain === null)) return failure(RESPONSE.KEY_NOT_FOUND, "Key not found");
+    const next: Entry = { ...e ?? { id: newId(), alias: k.alias!, params: [], created: now }, modified: now,
+      cert: cert ? new Uint8Array(cert).toBase64() : undefined, chain: chain ? new Uint8Array(chain).toBase64() : undefined };
+    if (next.material || next.cert || next.chain) put(next); else drop(next);
   }),
   "listEntries(IJ)[Landroid/system/keystore2/KeyDescriptor;": () => listed(null),
   "listEntriesBatched(IJLjava/lang/String;)[Landroid/system/keystore2/KeyDescriptor;": (_domain: number, _ns: bigint, start: string | null) => listed(start),
