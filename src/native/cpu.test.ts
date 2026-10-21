@@ -3,7 +3,8 @@ import { NODE_ARGS, run } from "../../scripts/node.ts";
 import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64, slice } from "./cpu.ts";
 import { dispositions, sigHandler } from "./signals.ts";
-import { defineHost } from "./host.ts";
+import { defineHost, lookupHost } from "./host.ts";
+import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
 import { futex } from "./pthread.ts";
 import { E, RET_SENTINEL } from "./abi.ts";
@@ -413,6 +414,13 @@ for (const a64 of [true, false]) test(`${a64 ? "ARM64" : "ARM32"} sigtimedwait f
     expect(await waiting).toBe(12);
     expect(mem.ld32(info)).toBe(12);
     expect(cpu.sigQueued).toBeNull();
+    if (a64) return;
+    // the ARM32 libc's sigwait waits as the kernel's call does, answering the signal through its pointer
+    libcInit();
+    const waited = cpu.call(lookupHost("sigwait", "libc.so")!, [set, info]);
+    cpu.kill(12);
+    expect(await waited).toBe(0);
+    expect(mem.ld32(info)).toBe(12);
   } finally { mem.free(storage); cpu.dispose(); setA64(false); }
 });
 

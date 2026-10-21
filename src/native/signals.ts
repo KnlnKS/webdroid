@@ -5,7 +5,7 @@
 // behind is crash.ts's.
 
 import { mem, anchor } from "./mem.ts";
-import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
+import { stp, ldp, ldWord, stWord, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
 import { fail, readTimeout, wrapped } from "./kernel.ts";
 import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu.ts";
@@ -177,11 +177,19 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
   raise: wrapped((cpu, a) => signalThread(cpu, a.i())),
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
-  sigwait: () => new Promise<never>(() => {}),
   sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals.keys()) & 0xffffffffn)); return 0; },
   pthread_sigqueue: () => 0, killpg: () => 0,
 };
 for (const suffix of ["", "64"]) {
+  // a sigset_t is a word, a sigset64_t the kernel's 8 bytes
+  const setAt = (p: number): bigint => suffix ? mem.ld64(p) : BigInt(mem.ld32(p) >>> 0);
+  // sigwait answers the error itself
+  SIGNAL_LIBC["sigwait" + suffix] = (cpu, a) => {
+    const set = setAt(a.p()), out = anchor(a.p());
+    return complete(sigtimedwait(cpu, set, () => 0, -1), (sig) => { if (sig < 0) return -sig; mem.st32(out(), sig); return 0; });
+  };
+  SIGNAL_LIBC["sigwaitinfo" + suffix] = wrapped((cpu, a) => sigtimedwait(cpu, setAt(a.p()), anchor(a.p()), -1));
+  SIGNAL_LIBC["sigtimedwait" + suffix] = wrapped((cpu, a) => { const set = setAt(a.p()), info = anchor(a.p()); return sigtimedwait(cpu, set, info, readTimeout(a.p())); });
   SIGNAL_LIBC["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : 4); return 0; };
   SIGNAL_LIBC["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : 4); return 0; };
   for (const op of ["add", "del", "ismember"]) SIGNAL_LIBC[(op === "ismember" ? "sigismember" : "sig" + op + "set") + suffix] = (cpu, a) => {
