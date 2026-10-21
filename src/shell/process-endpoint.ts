@@ -6,7 +6,7 @@ import { usePathOwner } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore } from "../android/accounts.ts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent.ts";
-import { useAlarmScheduler } from "../android/alarm.ts";
+import { useAlarmIntents } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
 import { processTransport } from "../android/os.ts";
@@ -147,7 +147,7 @@ export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
   useNotificationStore(broker.notifications);
   usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
-  useAlarmScheduler(broker.alarms);
+  useAlarmIntents(broker.intents);
   useGeolocation(broker.location);
   // system_server announces the stores' changes, and its watches of them end with it
   const stops = [useAccountStore(broker.accounts), useSettingsStore(broker.settings)];

@@ -17,7 +17,7 @@ import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
 import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";
 import { FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
-import { notConnected } from "../src/jvm/natives/jthrowable.ts";
+import { notConnected, unconnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
 import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
@@ -30,7 +30,7 @@ import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
-import { useAlarmScheduler } from "../src/android/alarm.ts";
+import { removeAlarm, setOperationAlarm, useAlarmIntents } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
@@ -374,14 +374,15 @@ describe("pending-intents", () => {
       // An alarm is system_server's: its creator's death does not cancel its operation.
       let receiveAlarm!: (request: unknown) => void;
       const delivery = new Promise(resolve => receiveAlarm = resolve);
-      broker.alarms.schedule(id,2,uptimeMillis()+50,0);
+      useAlarmIntents(broker.intents);
+      setOperationAlarm(id,2,uptimeMillis()+50,0);
       broker.fail(7701,"normal caller fixture death",NOT_CRASHED);
       broker.register(PKG,PKG + ":owner",7704);
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
       expect(await sibling.pending.kind(id)).toBe("activity");
-      broker.alarms.cancel(id);
+      removeAlarm(id);
       await sibling.pending.cancel(id);
       expect(await sibling.pending.creator(id)).toBeNull();
       const single = (await sibling.pending.create(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
@@ -391,6 +392,7 @@ describe("pending-intents", () => {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
       broker.intents.remove(PKG); broker.permissions.clear(PKG); packages.delete(foreign.pkg);
+      useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
     }
   });
 
@@ -402,7 +404,7 @@ describe("pending-intents", () => {
     const waiting = new Promise<void>(resolve => { entered = resolve; });
     const acknowledgment = new Promise<void>(resolve => { release = resolve; });
     Object.assign(pendingTransport, { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } satisfies PendingAccess);
-    useAlarmScheduler(broker.alarms);
+    useAlarmIntents(broker.intents);
     try {
       const path = "/data/data/test/pending-fd.bin";
       vfs.write(path, Uint8Array.of(7));
@@ -441,7 +443,7 @@ describe("pending-intents", () => {
       const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
       expect(iof(error, "android/app/PendingIntent$CanceledException")).toBe(true);
     } finally {
-      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmScheduler({ schedule: notConnected, cancel: notConnected });
+      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
       broker.fail(pid, "pending fixture cleanup", NOT_CRASHED); broker.intents.remove(PKG);
     }
   });

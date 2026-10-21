@@ -3,7 +3,6 @@
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
-import { Alarms } from "./alarms.ts";
 import { AccountStore } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
@@ -13,8 +12,6 @@ import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
 import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
-import { logUncaught } from "../jvm/natives/jthrowable.ts";
-import { uptimeMillis } from "../guest-clock.ts";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords.ts";
 import { ActivityStack } from "./activitystack.ts";
 import type { FileSource } from "./lazyfile.ts";
@@ -84,7 +81,6 @@ export class ProcessBroker {
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
-  readonly alarms = new Alarms(this.intents, uptimeMillis, logUncaught);
   /** `codec` is the creator's: its JVM compares and merges the intents */
   async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents: ParcelData[] | undefined, codec: IntentCodec): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
