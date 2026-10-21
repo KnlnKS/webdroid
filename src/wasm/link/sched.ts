@@ -140,18 +140,20 @@ for (const cls of ["jdk/internal/misc/Unsafe", "sun/misc/Unsafe"]) {
 export interface HostLoop {
   /** the next turn of the event loop; `soon` ahead of strands that only yielded */
   yield(soon: boolean): Promise<void>;
-  /** whether the current turn has held the thread long enough that a yield is due */
+  /** whether the current turn has held the thread for TURN_MS, when a yield is due */
   due(): boolean;
   /** runs `fn` after `ms`; the function cancels */
   after(ms: number, fn: () => void): () => void;
   /** the wall clock Java reads (System.currentTimeMillis), which `after` keeps time by */
   now(): number;
 }
+/** how long a strand runs before it gives other strands and the event loop their turn (ms) */
+export const TURN_MS = 8;
 let turnStart = 0;
 /** the loop of a World given none, which only compiles: timers alone. The hosts that run Java pass their own (boot.ts) */
 export const defaultLoop: HostLoop = {
   yield: () => new Promise<void>((r) => setTimeout(() => { turnStart = performance.now(); r(); }, 0)),
-  due: () => performance.now() - turnStart >= 8,
+  due: () => performance.now() - turnStart >= TURN_MS,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
   now: Date.now,
 };
@@ -243,15 +245,24 @@ export class Sched {
   }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
+  /** gives up the turn for `reason`. A collection waits for a turn of the timer queue, between which the engine runs its finalizers; a yield (a loop's fuel,
+   *  Thread.yield) and a lazy link wait for the event loop once the turn is due. Before then the main thread runs on, and another thread's yield lets the strands
+   *  that became ready run first */
+  turn(reason: "yield" | "collect" | "link"): St | Promise<St> {
+    if (reason === "collect") return new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); });
+    const main = this.current().thread === this.main;
+    if (this.loop.due()) return this.loop.yield(main).then(() => St.Ok);
+    return main || reason === "link" ? St.Ok : Promise.resolve(St.Ok);
+  }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
    * Delivery preparation may wait before the turn expires. Restore the caller before compilation and again in the resumed stub. */
   admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
     const s = this.current();
     if (!this.canWait(s)) return run();
     const thr = this.g.thr.value, depth = this.g.depth.value;
-    const delivery = prepare?.(), due = this.loop.due();
-    if (!delivery && !due) return run();
-    const pending = due ? Promise.all([delivery, this.loop.yield(s.thread === this.main)]) : delivery!;
+    const delivery = prepare?.(), turn = this.turn("link");
+    if (!delivery && turn === St.Ok) return run();
+    const pending = turn === St.Ok ? delivery! : Promise.all([delivery, turn]);
     this.suspensions++; s.nested = 0;
     this.idle();
     return pending.then(() => { this.become(s, depth, thr); run(); }, error => { this.become(s, depth, thr); throw error; });
@@ -419,9 +430,8 @@ export class Sched {
       case Block.Wait: return a < 0 || b < 0 ? St.Neg : b > 999999 ? St.Nanos : this.monitors.wait(obj!, s, a, false);
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);
       case Block.Park: return this.park(s, a, b !== 0);
-      // b: a turn of the timer queue rather than of the yield channel, which the engine runs its finalizers between
-      // before its turn is due the main thread keeps running; other threads let any strand that became ready run first
-      case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : s.thread === this.main ? St.Ok : Promise.resolve(St.Ok);
+      case Block.Yield: return this.turn("yield");
+      case Block.Collect: return this.turn("collect");
       case Block.Init: return this.initWait(s, a);
       case Block.Net: return (this.w.opts.net?.wait?.(this.w) ?? Promise.resolve()).then(() => St.Ok);
     }

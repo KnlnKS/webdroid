@@ -138,7 +138,7 @@ def("allocSlow", (cx) => ({ params: [], results: [], body: (c) => {
   for (let turn = 0; turn < 2; turn++) {
     c.call(cx.imp.heapCheck).if_();
     emitSync(cx, c, Sync.CanSuspend); c.if_();
-    emitBlock(cx, c, Block.Yield, null, null, () => c.i32(1)); c.drop().end();
+    emitBlock(cx, c, Block.Collect); c.drop().end();
   }
   c.call(cx.imp.heapCheck).if_().i64(BigInt(ALLOC_WINDOW)); cx.callThrower(c, "oom"); c.end();
   c.end().end();
