@@ -2,13 +2,14 @@ import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os.ts";
 import { appHost } from "../android/apphost.ts";
 import { rt } from "../jvm/runtime.ts";
 import { processExited } from "../process-exit.ts";
-import { dispatchPointer, pressBack, testFrame, SCREEN_W, SCREEN_H } from "./device.ts";
+import { dispatchTouches, pressBack, testFrame, SCREEN_W, SCREEN_H } from "./device.ts";
 import { yieldStats, timedParks } from "../jvm/yield.ts";
 import { webViewInfo } from "../android/webframes.ts";
 import { mainDbg, onMain } from "../android/mainloop.ts";
-import { guestSleep } from "../guest-clock.ts";
+import { guestNow, guestSleep, uptimeMillis } from "../guest-clock.ts";
+import { device } from "./config.ts";
+import { ACTION_DOWN, ACTION_MOVE, ACTION_UP } from "../android/input-codes.ts";
 import { dumpWindows } from "./uiautomator.ts";
-import { swipe } from "./gesture.ts";
 import { imeInput, imeAction, imeState } from "../android/ime.ts";
 import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync.ts";
 import { pendingTransitions } from "../android/server/atm.ts";
@@ -18,6 +19,9 @@ import { nativeRequirements } from "./diagnostics.ts";
 import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
 import { tierStatus } from "../jvm/tier.ts";
+
+/** one finger's touch event, at `eventTime` on the guest's uptime clock */
+const touch = (action: number, x: number, y: number, eventTime?: number) => dispatchTouches(action, [{ id: 0, x, y }], eventTime);
 
 /** the vsyncs this realm's shown display has had while its process lives; `frame` runs first on each shown frame */
 export function countVsyncs(frame?: () => void): () => number {
@@ -65,11 +69,23 @@ export function workerControl(logs: string[], phase: () => string, ticks: () => 
       // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past. The
       // finger lifts on time however long the app takes to handle the press, as on a touchscreen:
       // a late UP would read as a long press.
-      const down = dispatchPointer(0, x, y);
+      const down = touch(ACTION_DOWN, x, y);
       await guestSleep(60);
-      await Promise.all([down, dispatchPointer(1, x, y)]);
+      await Promise.all([down, touch(ACTION_UP, x, y)]);
     },
-    swipe,
+    // Each sample keeps its scheduled uptime however late it is delivered, so catch-up samples do not
+    // turn a constant-speed drag into an accelerating fling.
+    swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400): Promise<void> => {
+      const steps = Math.max(2, Math.round(ms * device.refreshRate / 1000));
+      const t0 = guestNow(), eventStart = uptimeMillis();
+      void touch(ACTION_DOWN, x1, y1, eventStart);
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        await guestSleep(Math.max(0, t0 + ms * t - guestNow()));
+        void touch(ACTION_MOVE, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, eventStart + ms * t);
+      }
+      await touch(ACTION_UP, x2, y2, eventStart + ms);
+    },
     type: async (text: string) => { await imeInput(text, text.length, text.length, false, imeState().generation); },
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),

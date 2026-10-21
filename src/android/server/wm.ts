@@ -271,7 +271,8 @@ function updateFocus(): void {
   }
   for (const changed of inputWatchers) changed();
 }
-let touchTarget: WindowState | null = null;
+/** the window the gesture went down on, and when */
+let touchTarget: WindowState | null = null, touchDown = 0n;
 function touchedWindow(x: number, y: number): WindowState | null {
   for (const ws of topFirst()) {
     const f = flags(ws);
@@ -314,10 +315,10 @@ let spare: Pointers | null = null;
  *  every pointer down, a finger each, in id order. The window touched at DOWN gets the whole
  *  gesture (a split touch across windows is not modeled), in its own coordinates. Resolves whether
  *  it handled the event. */
-export const dispatchTouch = (action: number, pointers: readonly TouchPointer[], downTime: bigint, eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
+export const dispatchTouch = (action: number, pointers: readonly TouchPointer[], eventTime: bigint): Promise<boolean> => onInputThread(function* (): Gen<boolean> {
   const masked = action & 0xff;
-  if (masked === ACTION_DOWN) touchTarget = touchedWindow(pointers[0].x, pointers[0].y);
-  const ws = touchTarget;
+  if (masked === ACTION_DOWN) { touchTarget = touchedWindow(pointers[0].x, pointers[0].y); touchDown = eventTime; }
+  const ws = touchTarget, downTime = touchDown;
   if (masked === ACTION_UP || masked === ACTION_CANCEL) touchTarget = null;
   if (!ws?.channel) return false;
   const f = pointerFields ??= { id: declaredField(PP, "id"), toolType: declaredField(PP, "toolType"), x: declaredField(PC, "x"),

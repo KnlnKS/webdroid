@@ -191,7 +191,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   /**
    * One step of the wheel gesture, once per frame. AOSP drains input in Choreographer's input
    * phase, ahead of animation and layout, and this has to for the same reason: a trackpad fires up
-   * to 120 times a second while dispatchPointer resolves through the serialized main-looper queue,
+   * to 120 times a second while a dispatch resolves through the serialized main-looper queue,
    * so one MOVE per event builds a backlog and the gesture visibly lags the fingers. Accumulate
    * instead, and dispatch where the fingers have reached once the previous one has landed.
    */

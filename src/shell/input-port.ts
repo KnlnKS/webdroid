@@ -23,7 +23,7 @@ export async function serveInput(input: MessagePort, view: MessagePort): Promise
   const changed = (state: ImeState) => page.endpoint.state(state);
   ime.imeTransport.changed = changed;
   const close = serveCalls<InputCalls>(input, {
-    pointer: async (action, pointers) => { await dispatchTouches(action, pointers); },
+    pointer: dispatchTouches,
     input: (generation, text, start, end, composing) => ime.imeInput(text, start, end, composing, generation),
     selection: (generation, start, end) => ime.imeSelection(start, end, generation),
     finish: generation => ime.imeFinishComposition(generation),
