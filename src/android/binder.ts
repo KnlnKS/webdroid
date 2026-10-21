@@ -15,6 +15,7 @@ import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, set
 import { jarray, i8, u8 } from "../jvm/abi.ts";
 import { handle, release, FINALIZER } from "./handles.ts";
 import { procIdentity } from "../shell/procfs.ts";
+import { ownedBy } from "./packages.ts";
 
 const F_GETFL = 3, O_RDONLY = 0;
 /** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
@@ -278,6 +279,10 @@ export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityTh
 export const enforceCallingOrSelfPermission = driven(function* (permission: string, message: string | null): Gen<void> {
   yield vcall(yield* awaited(serviceContext()), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 });
+/** the caller's claim to `pkg`: installed under its uid, or a SecurityException (AppOpsManager.checkPackage's message by default) */
+export function checkCallingPackage(pkg: string | null, message?: string, uid = callingIdentity().uid): void {
+  if (!ownedBy(pkg, uid)) throw rt.mkThrowable("java/lang/SecurityException", message ?? `Package ${pkg} does not belong to ${uid}`);
+}
 const oneWay = new Map<number, Promise<unknown>>();
 /** a thread of this process's binder pool, which another process's calls into it run on */
 export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + procIdentity.pid });

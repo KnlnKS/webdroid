@@ -1,7 +1,7 @@
 // The permission controller: which permissions a package or uid holds, as PermissionManagerService
 // checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
 // IPermissionManager over them.
-import { awaited, JObj, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, noops, driven, rt, type Gen } from "../jvm/runtime.ts";
 import { jarray, sameBytes } from "../jvm/abi.ts";
 import { after, vcall, newObj } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
@@ -130,6 +130,9 @@ const PROVISIONED = new Set<string>(SYSTEM_PACKAGES.flatMap((spec) => spec.grant
 /** an install grants a permission by signature when its declaration's base protection level is
  *  signature, signatureOrSystem or internal, or provisioning grants it */
 const bySignature = (name: string): boolean => PROVISIONED.has(name) || ((protectionLevel(name) ?? 0) & 0xf) >= 2;
+/** Context.enforceCallingPermission's failure, after the caller's `message` when it gives one */
+export const notHeld = (uid: number, permission: string, message?: string): Error =>
+  rt.mkThrowable("java/lang/SecurityException", `${message ? message + ": " : ""}Neither user ${uid} nor current process has ${permission}.`);
 /** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package: one granted by signature is held by
  *  a system package that requests it, as holdsPlatformPermission answers, or one signed as its declarer */
 export function checkPermission(permission: string, pkg: string): number | Promise<number> {

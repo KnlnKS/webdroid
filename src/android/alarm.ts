@@ -3,12 +3,12 @@
 // OnAlarmListener's fires by a call to its IAlarmListener, unless the listener's process died first.
 // Exact alarms need the permission AlarmManagerService asks for.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
-import { asBinder, callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
+import { asBinder, callingIdentity, checkCallingPackage, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { operationId } from "./pendingintent.ts";
 import type { Alarms } from "../shell/alarms.ts";
 import { clearGuestTimeout, setSystemTimeout, uptimeMillis, wallMillis, type GuestTimer } from "../guest-clock.ts";
-import { ownedBy, packages, usesSdk } from "./packages.ts";
+import { packages, usesSdk } from "./packages.ts";
 
 /** the PendingIntent alarms' scheduler, which system_server's realm takes from the broker */
 let scheduler: Pick<Alarms, "schedule" | "cancel"> = { schedule: notConnected, cancel: notConnected };
@@ -24,10 +24,6 @@ function canScheduleExact(pkg: string): boolean {
   return target < 31 || target >= 33 && record.requested.has("android.permission.USE_EXACT_ALARM")
     || target < 34 && record.requested.has("android.permission.SCHEDULE_EXACT_ALARM");
 }
-/** AppOpsManager.checkPackage, as set() makes it of its caller */
-function checkPackage(pkg: string, uid: number): void {
-  if (!ownedBy(pkg, uid)) throw rt.mkThrowable("java/lang/SecurityException", `Package ${pkg} does not belong to ${uid}`);
-}
 /** each listener's pending alarm by the listener's binder; its process's death removes it */
 const listenerAlarms = new Map<unknown, { timer: GuestTimer; unwatch: () => void }>();
 function removeListener(binder: unknown): void {
@@ -40,8 +36,8 @@ const WINDOW_EXACT = 0n;
 hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$Stub", {
   "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":
     driven(function* (pkg: string, type: number, at: bigint, window: bigint, interval: bigint, _flags: number, operation: JObj | null, listener: JObj | null): Gen<void> {
-      const { pid, uid } = callingIdentity();
-      checkPackage(pkg, uid);
+      const { pid } = callingIdentity();
+      checkCallingPackage(pkg);
       if (type < 0 || type > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid alarm type " + type);
       if (window === WINDOW_EXACT && !canScheduleExact(pkg))
         throw rt.mkThrowable("java/lang/SecurityException", `Caller ${pkg} needs to hold android.permission.SCHEDULE_EXACT_ALARM or android.permission.USE_EXACT_ALARM to set exact alarms.`);

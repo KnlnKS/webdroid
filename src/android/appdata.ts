@@ -9,7 +9,7 @@ import { encodeIntent } from "./intentipc.ts";
 import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent.ts";
 import { longVersionCode, queryReceivers } from "./pm.ts";
 import { packages } from "./packages.ts";
-import { checkUidPermission } from "./permissions.ts";
+import { checkUidPermission, notHeld } from "./permissions.ts";
 import { sendIntent } from "./pendingintent.ts";
 import type { PackageDataChange } from "../shell/packagedata.ts";
 import type { Receiver } from "../shell/broker-contract.ts";
@@ -60,7 +60,6 @@ const DELETE_PACKAGES = "android.permission.DELETE_PACKAGES";
 /** whether the caller may delete packages without asking the user */
 export const mayDeletePackages = () => after(checkUidPermission(DELETE_PACKAGES, callingIdentity().uid), (result) => result === 0);
 /** Context.enforcePermission's failure */
-export const notHeld = (uid: number, permission: string) => rt.mkThrowable("java/lang/SecurityException", `Neither user ${uid} nor current process has ${permission}.`);
 export function enforceDeletePackages(): unknown {
   const { uid } = callingIdentity();
   return after(mayDeletePackages(), (may) => { if (!may) throw notHeld(uid, DELETE_PACKAGES); });

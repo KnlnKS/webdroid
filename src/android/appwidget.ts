@@ -4,10 +4,10 @@
 // parseAppWidgetProviderInfo does (decoded from the reference AVD's services.jar); no host has
 // bound a widget id, so every id is unknown, updates to one reach nothing, and pinning is
 // unsupported.
-import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime.ts";
+import { awaited, JObj, getDeclared, setDeclared, noops, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry.ts";
-import { callingIdentity, parceledList, hostService, serviceContext } from "./binder.ts";
-import { ownedBy, GET_META_DATA, MATCH_DIRECT_BOOT_AWARE, MATCH_DIRECT_BOOT_UNAWARE } from "./packages.ts";
+import { checkCallingPackage, parceledList, hostService, serviceContext } from "./binder.ts";
+import { GET_META_DATA, MATCH_DIRECT_BOOT_AWARE, MATCH_DIRECT_BOOT_UNAWARE } from "./packages.ts";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";
@@ -77,11 +77,9 @@ function* installedProviders(): Gen<JObj[]> {
   }
   return providers;
 }
-/** AppWidgetServiceImpl.enforceCallFromPackage */
-function enforceCallFromPackage(pkg: string): void {
-  if (!ownedBy(pkg, callingIdentity().uid)) throw rt.mkThrowable("java/lang/SecurityException", `Package ${pkg} does not belong to ${callingIdentity().uid}`);
-}
 
+/** AppWidgetServiceImpl.enforceCallFromPackage */
+const enforceCallFromPackage = (pkg: string): void => checkCallingPackage(pkg);
 const enforceProviderPackage = driven(function* (provider: JObj): Gen<void> {
   enforceCallFromPackage(yield vcall(provider, "getPackageName", `()${S}`));
 });

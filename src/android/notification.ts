@@ -13,7 +13,7 @@ import { systemResource } from "./resnative.ts";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll.ts";
 import { csText } from "../jvm/natives/jchars.ts";
 import { jarray, stringHash } from "../jvm/abi.ts";
-import { hostService, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
+import { hostService, hostedService, callingIdentity, checkCallingPackage, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, releaseRights, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder.ts";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { postMain } from "./mainloop.ts";
 import { preferenceStore, Prefs } from "./sharedprefs.ts";
@@ -24,7 +24,7 @@ import { StoredParcel } from "../shell/stored-parcel.ts";
 import { processRights } from "../native/process-fd.ts";
 import { appHost } from "./apphost.ts";
 import { coverTop, foreground } from "./server/atm.ts";
-import { permissionGranted, grantPrompted } from "./permissions.ts";
+import { permissionGranted, grantPrompted, checkUidPermission, notHeld } from "./permissions.ts";
 import { procIdentity } from "../shell/procfs.ts";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
@@ -115,15 +115,13 @@ function* sliceItems(slice: JObj | null): Gen<JObj[]> {
 // ── callers
 const SYSTEM_UIDS = new Set([0, 1000, 1001]);
 function checkCallerIsSameApp(pkg: string | null, uid = callingIdentity().uid): void {
-  if (!(uid === 0 && pkg === "root") && !ownedBy(pkg, uid)) fail("java/lang/SecurityException", `Package ${pkg} is not owned by uid ${uid}`);
+  if (!(uid === 0 && pkg === "root")) checkCallingPackage(pkg, `Package ${pkg} is not owned by uid ${uid}`, uid);
 }
 function checkCallerIsSystemOrSameApp(pkg: string | null): void {
   if (!SYSTEM_UIDS.has(callingIdentity().uid)) checkCallerIsSameApp(pkg);
 }
 /** a permission no app holds here: Context.enforceCallingPermission's failure */
-function denyPermission(permission: string, message: string): never {
-  return fail("java/lang/SecurityException", `${message}: Neither user ${callingIdentity().uid} nor current process has ${permission}.`);
-}
+function denyPermission(permission: string, message: string): never { throw notHeld(callingIdentity().uid, permission, message); }
 function enforceSystemOrSystemUIOrSamePackage(pkg: string | null, message: string): void {
   if (SYSTEM_UIDS.has(callingIdentity().uid) || ownedBy(pkg, callingIdentity().uid)) return;
   denyPermission("android.permission.STATUS_BAR_SERVICE", message);
@@ -134,13 +132,9 @@ function enforceSystemOrSystemUI(message: string): void {
 /** Do Not Disturb policy access: granted only in Settings, which no app here can reach */
 function denyPolicyAccess(): never { return fail("java/lang/SecurityException", "Notification policy access denied"); }
 const targetSdk = (pkg: string) => packages.get(pkg)?.sdk.target ?? 10000;
-const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null;
 /** PermissionHelper.hasPermission: the uid holds POST_NOTIFICATIONS */
-function hasPermission(uid: number): boolean | Promise<boolean> {
-  if (SYSTEM_UIDS.has(uid)) return true;
-  const pkg = packageOf(uid);
-  return pkg !== null && !!packages.get(pkg)?.requested.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
-}
+const hasPermission = (uid: number): boolean | Promise<boolean> =>
+  SYSTEM_UIDS.has(uid) || after(checkUidPermission(POST_NOTIFICATIONS, uid), (result) => result === 0);
 /** the system's view of packages: the application's PackageManager over the hosted service */
 function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
 

@@ -13,7 +13,8 @@ import { sendIntent } from "./pendingintent.ts";
 import { callingIdentity, newStub, binderEscape, parceledList } from "./binder.ts";
 import { packages } from "./packages.ts";
 import { checkUidPermission } from "./permissions.ts";
-import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata.ts";
+import { deleteObserver, deleteVersioned, mayDeletePackages } from "./appdata.ts";
+import { notHeld } from "./permissions.ts";
 import { putExtra, type JIntent } from "./intent.ts";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
