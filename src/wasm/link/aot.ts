@@ -473,14 +473,14 @@ export class AotRuntime {
     if (note) { note(18, c); void result.then(() => note(19, this.preparationFiles(c).length ? -c : c)); }
     return result;
   }
-  /** whether the build's code of `slot` is in place, its code module loaded first if need be (the method's first call) */
+  /** whether the build's code of `slot` is in place, its code module loaded first if need be (the method's first call): not once something undid it */
   provide(slot: number): boolean {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (!(c >= 0)) return false;
     let loaded = this.loadC(c);
     // App patches can remain valid when their platform unit is rejected.
     if (!loaded && this.cState[c] === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
-    return loaded && this.installed(slot);
+    return loaded && !!this.w.slots.at(slot)?.done;
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;

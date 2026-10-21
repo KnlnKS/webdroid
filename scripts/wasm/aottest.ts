@@ -223,6 +223,8 @@ const modules = /^[cd]\d+\.wasm$/;
   check("late C counts first miss once", w.stats.aot.missed, misses);
   check("late C retains original globals", w.link("java/util/ArrayList").exports, globals);
   check("late C Java result", w.entry("Aot", "plain", "()I")(), 0);
+  w.tiers.invalidate(slot);
+  check("undone build code is not provided again", w.aot!.provide(slot), false);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("late C still invalidates for subclass", w.entry("Aot2", "sub", "()I")(), 1);
 }
