@@ -133,7 +133,6 @@ export class Cpu {
   readonly pid: number;
   readonly osTid: number;
   stackBase = 0; stackTop = 0;
-  errnoAddr = 0;
   env = 0;
   /** the pthread key table: TLS_KEYS guest pointers, read and written by the core */
   tlsTab = 0;
@@ -173,7 +172,6 @@ export class Cpu {
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
-    this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
     this.tlsTab = this.threadData + 264;
     this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
     this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
@@ -220,6 +218,9 @@ export class Cpu {
   /** exclusive monitor: set by LDXR, consumed by STXR; a slice must not end between them */
   get excl(): number { return this.u32[OFF_EXCL >> 2]; }
   set excl(v: number) { this.u32[OFF_EXCL >> 2] = v; }
+  /** where the guest libc keeps this thread's errno, which the host's and the core's failures set */
+  get errnoAddr(): number { return this.u32[OFF_ERRNO >> 2]; }
+  set errnoAddr(v: number) { this.u32[OFF_ERRNO >> 2] = v; }
   get tlsBase(): number { return this.u32[OFF_TLS >> 2]; }
   set tlsBase(v: number) { this.u32[OFF_TLS >> 2] = v; this.u32[(OFF_TLS >> 2) + 1] = 0; }
   /** the thread pointer as the guest holds it: a guest libc's TLS block may lie in a plane */
@@ -433,9 +434,11 @@ export class Cpu {
   /** the host's binding of this thread to the guest libc: TPIDR, pthread_self() and errno's address */
   bindThread(tp: number, self: number, errno: number): void {
     this.tlsBase = tp; this.pthreadSelf = self;
-    this.errnoAddr = errno; this.u32[OFF_ERRNO >> 2] = errno;
+    this.errnoAddr = errno;
     this.libc = "host";
   }
+  /** clone(CLONE_SETTLS): the guest libc made this thread, with `tls` its thread pointer */
+  cloned(tls: bigint): void { this.tlsVa = tls; this.libc = "guest"; threadHooks?.cloned(this); }
 
   ensureStack(): void {
     if (!this.stackTop) {
@@ -851,8 +854,9 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 /** the guest libc's state for a thread the host created: `start` binds it (bindThread) before its
- *  first instruction, `end` tears it down when its Java thread ends */
-let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void> } | null = null;
+ *  first instruction, `end` tears it down when its Java thread ends; `cloned` finds a thread's the
+ *  guest libc created */
+let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void>; cloned: (cpu: Cpu) => void } | null = null;
 export function setThreadHooks(hooks: NonNullable<typeof threadHooks>): void { threadHooks = hooks; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

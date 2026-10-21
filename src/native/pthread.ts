@@ -248,7 +248,7 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
   if (!stack) return -E.INVAL;
   const cpu = newThread(parent);
   cpu.forkFrom(parent, stack);
-  if (flags & CLONE_SETTLS) { cpu.tlsVa = tls; cpu.libc = "guest"; }
+  if (flags & CLONE_SETTLS) cpu.cloned(tls);
   if (flags & CLONE_PARENT_SETTID) mem.st32(ptid, cpu.osTid);
   if (flags & CLONE_CHILD_CLEARTID) cpu.clearChildTid = BigInt(mem.va(ctid));
   void launch(cpu, async () => cpu.run(), () => {
